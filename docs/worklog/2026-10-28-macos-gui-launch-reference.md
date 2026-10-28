@@ -109,3 +109,60 @@ entry point passes; no human command was run by an agent. The exact human comman
 in the chat handoff. The next human action is this offline supplemental review, not setup/capture
 or another experiment. Once used privately, this new directory inherits the same no-inspection
 boundary as the original kit.
+
+## Supplemental result and canonical relationship producer
+
+The human shared version-1 `GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC` labels. Provenance and original
+controls pass. The control's native vector exactly matches the declared clean input; only the
+known CF text-encoding variable is added by main entry. Finder changes values under existing
+names, with unchanged duplicate structure and unchanged CF text encoding. No private variable
+names or values are necessary to distinguish these observation times, and none were requested
+or read. Control has RETAINED_MATCH fork evidence; Finder has NOT_RETAINED, with no claim that
+no fork happened. The original environment FAIL labels are not grounds to discard native exec.
+
+Implemented a bounded internal `macos_launch_kind="finder"` intent through the existing canonical
+process action owner. It requires a fresh literal regular-app bundle executable, exact live
+launchd PID 1, the selected relationship profile and a current authenticated local Type-2 GUI
+session. The producer consumes that exact audit origin and explicit no-other-responsible
+lifetime, represented as self when native projection is otherwise complete. A missing/legacy
+profile, unknown credentials, wrong parent, expired session or foreign audit origin rejects
+before allocation. Generic user/system launches retain their previous semantics. The intent
+participates in stable action identity, normal state publication and exact state checkpoint
+round trip; it uses no emitter repair or host inspection.
+
+This slice intentionally retains aggregate birth semantics and no native fork/exec phase. It
+does not reconstruct environment/cwd, infer script or image-validation results, manufacture
+descriptor objects, or treat non-TTY stdio as proof of controlling-terminal absence. Existing
+explicit POSIX session planning is a model choice, not a calibrated Finder default. There is
+no authored scenario/Studio launch-method field and no automatic Finder classification for
+generic GUI, Terminal, browser or vendor/helper launches. Behavior revision 345 records the
+new explicit relationship producer; no product version changes.
+
+### Completing the reference without new collection
+
+The first fixed report omitted several distinctions already present in the controlled native
+records: the process-field image before exec, PID/session/group relationships, controlling tty,
+cwd category, native FD extent, dyld path, slice/script/entitlement shape and signature agreement.
+Those matter to the next canonical birth-to-exec contract; native-versus-own agreement alone
+does not answer them. The version-2 offline supplement classifies them with fixed labels only.
+It retains the original code/app/codec/provenance checks, reads the same bounded files, writes
+nothing and starts no subprocess, app, role lookup or collector. No names, identifiers, counts,
+flag/signature values, paths or vectors are exported. It does not claim an unobserved fork or
+automatically close a generation gate. No original or used reviewer directory was opened by
+an agent. The human should run this next offline classification, without setup/capture.
+
+### Verification and next handoff
+
+Focused selections pass 21 Finder intent/engine/state/legacy-profile checks, all 797
+private-reference checks, 19 process-parent preflight, 24 process-state and 23 behavior-manifest
+checks. The adjacent GUI-audit/metadata selection also passed (53 tests).
+Full Ruff/format, whitespace, all 99 config files (zero findings) and the revision-345 digest/base
+comparison pass. No full generation, assessment panel, live collection or native-file inspection
+was performed. Native codec and capture/probe code remain unchanged.
+
+Prepared version-2 code-only reviewer: `/private/tmp/eforge-gui-launch-kit-lp8zhuj8`. The isolated
+`-I -B --help` check passes; agents ran no human command. The human's next command is
+`review-existing --private-run` in this new copy, with the original outer kit selected at the
+hidden prompt. It does not use either reviewer copy as the original capture root. The original
+kit and previously used reviewer remain untouched and private. Only the resulting fixed JSON
+should be shared; no repeat Finder launch or disclosure of changed environment keys is needed.

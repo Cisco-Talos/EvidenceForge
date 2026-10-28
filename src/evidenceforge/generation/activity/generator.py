@@ -16996,7 +16996,7 @@ class ActivityGenerator:
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
         exec_script: MacosExecScript | None = None,
-        macos_launch_kind: Literal["user", "system"] | None = None,
+        macos_launch_kind: Literal["user", "system", "finder"] | None = None,
         macos_terminal: Literal["allocate", "absent"] | None = None,
         macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
     ) -> int:
@@ -17023,6 +17023,8 @@ class ActivityGenerator:
             new_posix_session: Model an explicit session-creating POSIX launch.
             arguments: Exact argv for a fresh Mac launch; never inferred from display text.
             exec_script: Explicit shebang file or known absence; never inferred from argv.
+            macos_launch_kind: Explicit clean user/system metadata, or bounded Finder
+                parent/audit/self-responsibility without inferred exec-time metadata.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need

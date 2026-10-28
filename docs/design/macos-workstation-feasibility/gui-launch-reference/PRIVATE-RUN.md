@@ -154,6 +154,15 @@ The direct control's native exec vector is also checked against the kit's declar
 These checks compare kernel exec evidence with a later main-entry snapshot; they do not assume
 that a difference invalidates the kernel vector or that application startup made a specific change.
 
+The version-2 supplemental report also includes `control_launch` and `finder_launch`. These
+classify existing native process/image relationships, whether session/group IDs identify the
+child as leader, controlling-tty presence (separate from stdio), standard-only FD inventory and
+extent, cwd as root/declared HOME/other, script absence, native slice, null entitlements and
+signature agreement. No raw IDs, paths, signature/flag values, environment keys or counts appear.
+These distinctions were absent from the original fixed report but are needed before constructing
+a canonical GUI birth-to-exec contract. They use the same already captured controlled evidence;
+do not repeat setup, capture, Finder launch or any live lookup for this follow-up.
+
 `RETAINED_MATCH` establishes a matching retained fork. `NOT_RETAINED` says only that the bounded
 evidence contains none; it does not prove no fork happened or distinguish launch mechanism from
 filter/buffer limitations. Failed original collection controls leave supplemental comparisons

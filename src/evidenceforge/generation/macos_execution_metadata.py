@@ -61,6 +61,15 @@ class MacosPreparedExecution:
     descriptors: MacosExecDescriptorObservation | None
 
 
+@dataclass(frozen=True, slots=True)
+class MacosFinderLaunchRelationships:
+    """Qualified parent/audit/responsibility only; remaining launch facts stay unknown."""
+
+    parent: ProcessIdentity
+    credentials: PosixProcessCredentials
+    responsibility: ProcessResponsibility
+
+
 class MacosExecutionMetadataProducer:
     """Immutable per-run directory/launch owner, with no host filesystem lookups."""
 
@@ -234,6 +243,58 @@ class MacosExecutionMetadataProducer:
             credentials.effective_gid,
             *expected,
         )
+
+    def finder_launch_relationships(
+        self,
+        state: StateManager,
+        hostname: str,
+        principal: str,
+        *,
+        parent_pid: int,
+        logon_id: str,
+        at: datetime,
+        credentials: PosixProcessCredentials | None,
+    ) -> MacosFinderLaunchRelationships:
+        """Consume a declared regular Finder launch without inventing its exec inputs.
+
+        The bounded reference establishes a launchd parent and self responsibility.
+        Existing authenticated GUI-login authority owns the audit origin. The
+        native self token is the projection of explicitly no other responsible
+        lifetime; it is not a recursive reference to the new process itself.
+        Environment, cwd, descriptor objects and controlling-terminal state are
+        deliberately outside this relationship contract.
+        """
+        parent = state.get_process_identity_at(hostname, parent_pid, at)
+        session = state.get_session_at(logon_id, at)
+        if (
+            self.profile.finder_launch_relationships != "launchd_self"
+            or self.profile.gui_audit_origin != "authenticated_local_account"
+            or parent is None
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or parent.initial_image != "/sbin/launchd"
+            or session is None
+            or session.session_kind != "interactive"
+            or session.logon_type != 2
+            or session.audit_origin is None
+            or not self._known_from <= at < self._known_until
+        ):
+            raise StateError("Finder launch requires its qualified launchd and GUI login owners")
+        credentials = self.gui_launch_credentials(
+            state,
+            hostname,
+            principal,
+            logon_id=logon_id,
+            at=at,
+            credentials=credentials,
+        )
+        if (
+            credentials is None
+            or credentials.audit_uid is None
+            or credentials.audit_session_id is None
+        ):
+            raise StateError("Finder launch requires its exact authenticated audit credentials")
+        return MacosFinderLaunchRelationships(parent, credentials, ProcessResponsibility(None))
 
     def launch(
         self,

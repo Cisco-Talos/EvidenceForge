@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 344
+current_revision: 345
 history_start_revision: 1
-behavior_surface_sha256: 1108f0e7e7498b84c8f39f02c577896ba28a85c158b9e1b643c5f6fa3f89b84a
+behavior_surface_sha256: 382458185c6be6c697437dd58ea3c658a6cc1fce06a3e38be23e4cab86d42929
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3274,3 +3274,12 @@ changes:
     formats:
       - all
     summary: Corrects directional passive transport/TLS histories and negotiated metadata; models bounded Mac query runtimes through canonical lifetime profiles.
+  - revision: 345
+    id: macos-explicit-finder-launch-relationships
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - gui-audit-responsibility
+    formats:
+      - ecar
+    summary: Adds an explicit Finder relationship intent with exact launchd/local-GUI audit ownership and self responsibility, preserving unknown exec inputs and aggregate birth semantics without widening native ES admission.

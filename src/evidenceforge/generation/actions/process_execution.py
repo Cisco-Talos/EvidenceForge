@@ -284,7 +284,9 @@ class ProcessExecutionRequest:
     new_posix_session: bool = field(default=False, kw_only=True)
     arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
     exec_script: MacosExecScript | None = field(default=None, kw_only=True)
-    macos_launch_kind: Literal["user", "system"] | None = field(default=None, kw_only=True)
+    macos_launch_kind: Literal["user", "system", "finder"] | None = field(
+        default=None, kw_only=True
+    )
     macos_terminal: Literal["allocate", "absent"] | None = field(default=None, kw_only=True)
     macos_standard_io: Literal["terminal", "null", "inherit"] | None = field(
         default=None, kw_only=True
@@ -315,7 +317,7 @@ class ProcessExecutionRequest:
                 or not self.require_exact_parent
                 or self.arguments is None
                 or self.reuse_intent is not None
-                or self.macos_launch_kind not in {"user", "system", None}
+                or self.macos_launch_kind not in {"user", "system", "finder", None}
                 or self.macos_terminal not in {"allocate", "absent", None}
                 or self.macos_standard_io not in {"terminal", "null", "inherit", None}
                 or (self.macos_terminal is not None and not self.new_posix_session)
@@ -323,6 +325,24 @@ class ProcessExecutionRequest:
                 raise ValueError(
                     "Modeled Mac launch metadata requires a fresh literal exact-parent intent"
                 )
+        if self.macos_launch_kind == "finder" and (
+            type(self.parent_pid) is not int
+            or self.parent_pid != 1
+            or self.exec_script is not None
+            or self.macos_terminal is not None
+            or self.macos_standard_io is not None
+            or not self.process_name.startswith("/")
+            or canonical_native_path(self.process_name, "macos") != self.process_name
+            or ".app/Contents/MacOS/" not in self.process_name
+            or not self.process_name.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or "/" in self.process_name.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or not self.arguments
+            or self.arguments[0] != self.process_name
+        ):
+            raise ValueError(
+                "Finder relationship intent requires launchd and a literal app-bundle executable; "
+                "script, descriptor and controlling-terminal facts remain separate"
+            )
 
         validate_macos_exec_script(
             self.exec_script,

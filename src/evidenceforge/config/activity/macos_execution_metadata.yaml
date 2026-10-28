@@ -8,6 +8,10 @@ system_responsibility: none # clean service launch with no other responsible lif
 # One canonical origin per explicit GUI login, shared across terminal POSIX sessions.
 # Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.
 gui_audit_origin: authenticated_local_account
+# Human-reviewed regular Finder test-app relationship, not every GUI/helper class.
+# This selects parent/audit/responsibility only: no inferred exec environment,
+# descriptor backing, controlling terminal, POSIX session creation or native fork.
+finder_launch_relationships: launchd_self
 # Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
 ssh_command_descriptors: standard_pipes
 # Explicit nominal completed results for these exact invocations only. This is a

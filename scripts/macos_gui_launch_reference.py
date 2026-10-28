@@ -219,10 +219,42 @@ class EnvironmentDifference(Model):
     controlled_initial_vector: Check = "INCONCLUSIVE"
 
 
+class ExistingLaunchFacts(Model):
+    """Existing native relationship classes needed for birth/exec planning, never values."""
+
+    before_image_role: Literal["TEST_APP", "LAUNCHD", "XPCPROXY", "OTHER", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    before_target_file_object: Check = "INCONCLUSIVE"
+    before_target_signature: Check = "INCONCLUSIVE"
+    signature_matches_control: Check = "INCONCLUSIVE"
+    parent_is_boot_pid: Check = "INCONCLUSIVE"
+    audit_origin_preserved: Check = "INCONCLUSIVE"
+    posix_credentials_preserved: Check = "INCONCLUSIVE"
+    parentage_preserved: Check = "INCONCLUSIVE"
+    session_identity: Literal["PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    group_identity: Literal["PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    posix_membership_preserved: Check = "INCONCLUSIVE"
+    controlling_terminal_before: Literal["ABSENT", "PRESENT", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    controlling_terminal_target: Literal["ABSENT", "PRESENT", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    only_standard_descriptors: Check = "INCONCLUSIVE"
+    native_last_fd_standard: Check = "INCONCLUSIVE"
+    working_directory: Literal["ROOT", "DECLARED_HOME", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    working_directory_untruncated: Check = "INCONCLUSIVE"
+    script_absent: Check = "INCONCLUSIVE"
+    native_slice: Literal["ARM64_GENERIC", "ARM64_OTHER", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    entitlements: Literal["NULL", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    dyld_path_matches_target: Check = "INCONCLUSIVE"
+
+
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+    review_version: Annotated[int, Field(strict=True, ge=2, le=2)] = 2
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -232,6 +264,8 @@ class ExistingReviewReport(Model):
     original_collection_controls: Check = "INCONCLUSIVE"
     control_environment: EnvironmentDifference = Field(default_factory=EnvironmentDifference)
     finder_environment: EnvironmentDifference = Field(default_factory=EnvironmentDifference)
+    control_launch: ExistingLaunchFacts = Field(default_factory=ExistingLaunchFacts)
+    finder_launch: ExistingLaunchFacts = Field(default_factory=ExistingLaunchFacts)
     control_fork: Literal["RETAINED_MATCH", "NOT_RETAINED", "INCONSISTENT", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
     )
@@ -300,6 +334,104 @@ def compare_environment(
         )
         if controlled
         else "INCONCLUSIVE",
+    )
+
+
+def _signature(process: dict) -> tuple:
+    return tuple(
+        process[key]
+        for key in (
+            "codesigning_flags",
+            "is_platform_binary",
+            "cs_validation_category",
+            "signing_id",
+            "team_id",
+            "cdhash",
+        )
+    )
+
+
+def inspect_existing_launch(
+    before: dict, payload: dict, image: Image, *, control_signature: tuple | None = None
+) -> ExistingLaunchFacts:
+    """Classify already validated private v11 data without names, IDs, flags or paths."""
+    target = payload["target"]
+    pid = _token(target)[5]
+
+    def membership(value: int) -> str:
+        return (
+            "ZERO"
+            if value == 0
+            else "PROCESS_LEADER"
+            if value == pid
+            else "PARENT_PID"
+            if value == target["ppid"]
+            else "OTHER"
+        )
+
+    old_file, new_file = before["executable"]["stat"], target["executable"]["stat"]
+    homes = [entry.split("=", 1)[1] for entry in payload["env"] if entry.startswith("HOME=")]
+    cwd = payload["cwd"]["path"]
+    return ExistingLaunchFacts(
+        before_image_role=(
+            "TEST_APP"
+            if _owned(before, image)
+            else "LAUNCHD"
+            if before["executable"]["path"] == "/sbin/launchd"
+            and before["executable"]["path_truncated"] is False
+            else "XPCPROXY"
+            if before["executable"]["path"] == "/usr/libexec/xpcproxy"
+            and before["executable"]["path_truncated"] is False
+            else "OTHER"
+        ),
+        before_target_file_object=_check(
+            (old_file["st_dev"], old_file["st_ino"]) == (new_file["st_dev"], new_file["st_ino"])
+        ),
+        before_target_signature=_check(_signature(before) == _signature(target)),
+        signature_matches_control=_check(_signature(target) == control_signature)
+        if control_signature is not None
+        else "INCONCLUSIVE",
+        parent_is_boot_pid=_check(
+            target["ppid"] == 1 and _token(target, "parent_audit_token")[5] == 1
+        ),
+        audit_origin_preserved=_check(
+            (_token(before)[0], _token(before)[6]) == (_token(target)[0], _token(target)[6])
+        ),
+        posix_credentials_preserved=_check(_token(before)[1:5] == _token(target)[1:5]),
+        parentage_preserved=_check(
+            (before["ppid"], before["original_ppid"]) == (target["ppid"], target["original_ppid"])
+            and _token(before, "parent_audit_token") == _token(target, "parent_audit_token")
+        ),
+        session_identity=membership(target["session_id"]),
+        group_identity=membership(target["group_id"]),
+        posix_membership_preserved=_check(
+            (before["session_id"], before["group_id"]) == (target["session_id"], target["group_id"])
+        ),
+        controlling_terminal_before="ABSENT" if before["tty"] is None else "PRESENT",
+        controlling_terminal_target="ABSENT" if target["tty"] is None else "PRESENT",
+        only_standard_descriptors=_check(
+            len(payload["fds"]) == 3 and {fd["fd"] for fd in payload["fds"]} == {0, 1, 2}
+        ),
+        native_last_fd_standard=_check(payload["last_fd"] == 2),
+        working_directory="INCONCLUSIVE"
+        if payload["cwd"]["path_truncated"]
+        else "ROOT"
+        if cwd == "/"
+        else "DECLARED_HOME"
+        if len(homes) == 1 and cwd == homes[0]
+        else "OTHER",
+        working_directory_untruncated=_check(payload["cwd"]["path_truncated"] is False),
+        script_absent=_check(payload["script"] is None),
+        native_slice="OTHER"
+        if payload["image_cputype"] != 16777228
+        else "ARM64_GENERIC"
+        if payload["image_cpusubtype"] == 0
+        else "ARM64_OTHER",
+        entitlements="NULL" if payload["entitlements"] is None else "OTHER",
+        dyld_path_matches_target=_check(
+            payload["dyld_exec_path"] == target["executable"]["path"]
+            and target["executable"]["path_truncated"] is False
+        ),
     )
 
 
@@ -1172,6 +1304,7 @@ def review_existing(root: Path) -> ExistingReviewReport:
     values: dict = {"provenance": "PASS", "original_collection_controls": _check(controls)}
     if not controls:
         return ExistingReviewReport(**values)
+    control_signature = None
     for case in ("control", "finder"):
         raw = _read(run / f"{case}-events.jsonl", MAX_RETAINED * (MAX_LINE + 1))
         rows = [line for line in raw.splitlines() if line]
@@ -1202,6 +1335,14 @@ def review_existing(root: Path) -> ExistingReviewReport:
         values[f"{case}_environment"] = compare_environment(
             environment, main, controlled=case == "control"
         )
+        values[f"{case}_launch"] = inspect_existing_launch(
+            execs[0]["process"],
+            execs[0]["event"]["exec"],
+            manifest.image,
+            control_signature=control_signature,
+        )
+        if case == "control":
+            control_signature = _signature(execs[0]["event"]["exec"]["target"])
         values[f"{case}_fork"] = (
             "RETAINED_MATCH"
             if checked.fork_linkage == "PASS"

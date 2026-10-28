@@ -981,10 +981,24 @@ class ProcessExecutionService:
             return shell_root
         provider = self.identity.macos_execution_metadata
         metadata = None
+        finder = None
         terminal = None
         standard_io = None
+        if request.macos_launch_kind == "finder" and provider is None:
+            raise StateError("Finder launch requires the qualified Mac relationship producer")
         if provider is not None and _get_os_category(request.system.os) == "macos":
-            if request.macos_launch_kind is not None:
+            if request.macos_launch_kind == "finder":
+                finder = provider.finder_launch_relationships(
+                    self.state_manager,
+                    request.system.hostname,
+                    launch.actor.username,
+                    parent_pid=launch.parent_pid,
+                    logon_id=launch.actor.logon_id,
+                    at=ensure_utc(launch.time),
+                    credentials=credentials,
+                )
+                credentials = finder.credentials
+            elif request.macos_launch_kind is not None:
                 metadata = provider.launch(
                     request.system.hostname,
                     launch.actor.username,
@@ -1045,6 +1059,7 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
+                responsibility=finder.responsibility if finder is not None else None,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -1087,6 +1102,7 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
+                responsibility=finder.responsibility if finder is not None else None,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity

@@ -536,14 +536,16 @@ def test_controlled_environment_is_checked_against_exec_time_not_main_entry() ->
     assert kit.compare_environment((), (), controlled=True).controlled_initial_vector == "FAIL"
 
 
-@pytest.mark.parametrize("model", [kit.EnvironmentDifference, kit.ExistingReviewReport])
+@pytest.mark.parametrize(
+    "model", [kit.EnvironmentDifference, kit.ExistingLaunchFacts, kit.ExistingReviewReport]
+)
 def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model]) -> None:
     for field in model.model_fields:
         with pytest.raises(ValidationError):
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "1", 2, None])
+@pytest.mark.parametrize("value", [True, "2", 1, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -615,6 +617,9 @@ def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
     assert report.finder_environment.only_cf_text_encoding_differs == "PASS"
     assert report.control_fork == "RETAINED_MATCH"
     assert report.finder_fork == "NOT_RETAINED"
+    assert report.finder_launch.signature_matches_control == "PASS"
+    assert report.finder_launch.controlling_terminal_target == "ABSENT"
+    assert report.finder_launch.only_standard_descriptors == "PASS"
     assert report.fork_absence_proves_no_fork == "NO"
     assert report.collectors == "NOT_STARTED" and report.apps == "NOT_LAUNCHED"
     serialized = report.model_dump_json()
@@ -695,3 +700,99 @@ def test_human_existing_review_cli_returns_only_fixed_diagnostics(
     assert report["finder_fork"] == "NOT_RETAINED"
     assert _CANARY not in result.out + result.err
     assert str(run) not in result.out + result.err
+
+
+@pytest.mark.parametrize("membership", ["PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER"])
+def test_existing_native_membership_is_reported_as_a_relationship(membership: str) -> None:
+    rows = _rows()
+    before = rows[1]["process"]
+    payload = rows[1]["event"]["exec"]
+    target = payload["target"]
+    value = {"PROCESS_LEADER": 1200, "PARENT_PID": 1190, "ZERO": 0, "OTHER": 42}[membership]
+    target.update(session_id=value, group_id=value)
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.session_identity == result.group_identity == membership
+    assert result.posix_membership_preserved == (
+        "PASS" if (before["session_id"], before["group_id"]) == (value, value) else "FAIL"
+    )
+    assert _CANARY not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("role", ["TEST_APP", "LAUNCHD", "XPCPROXY", "OTHER"])
+def test_before_image_classification_does_not_export_its_path(role: str) -> None:
+    rows = _rows()
+    before = rows[1]["process"]
+    before["executable"]["path"] = (
+        "/sbin/launchd"
+        if role == "LAUNCHD"
+        else "/usr/libexec/xpcproxy"
+        if role == "XPCPROXY"
+        else f"/tmp/{_CANARY}"
+    )
+    if role != "TEST_APP":
+        before["executable"]["stat"]["st_ino"] += 1
+    report = kit.inspect_existing_launch(before, rows[1]["event"]["exec"], _IMAGE)
+    assert report.before_image_role == role
+    assert report.before_target_file_object == ("PASS" if role == "TEST_APP" else "FAIL")
+    assert _CANARY not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("location", ["ROOT", "DECLARED_HOME", "OTHER", "INCONCLUSIVE"])
+def test_working_directory_classification_uses_only_private_relationships(location: str) -> None:
+    rows = _rows()
+    payload = rows[1]["event"]["exec"]
+    payload["env"].append(f"HOME=/Users/{_CANARY}")
+    payload["cwd"]["path"] = (
+        "/"
+        if location == "ROOT"
+        else f"/Users/{_CANARY}"
+        if location == "DECLARED_HOME"
+        else _CANARY
+    )
+    payload["cwd"]["path_truncated"] = location == "INCONCLUSIVE"
+    report = kit.inspect_existing_launch(rows[1]["process"], payload, _IMAGE)
+    assert report.working_directory == location
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_launch_diagnostics_preserve_tty_signature_and_descriptor_unknowns() -> None:
+    rows = _rows()
+    payload = rows[1]["event"]["exec"]
+    target, before = payload["target"], rows[1]["process"]
+    # Std streams can be non-TTY even while a controlling tty exists.
+    target["tty"] = deepcopy(target["executable"])
+    payload["fds"].reverse()
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.controlling_terminal_before == "ABSENT"
+    assert result.controlling_terminal_target == "PRESENT"
+    assert result.only_standard_descriptors == "PASS"
+    assert result.native_last_fd_standard == "PASS"
+    target["cdhash"] = "b" * 40
+    payload["fds"].append({"fd": 9, "fdtype": 1})
+    payload["last_fd"] = 9
+    result = kit.inspect_existing_launch(
+        before, payload, _IMAGE, control_signature=kit._signature(before)
+    )
+    assert result.before_target_signature == result.signature_matches_control == "FAIL"
+    assert result.only_standard_descriptors == result.native_last_fd_standard == "FAIL"
+    assert "b" * 40 not in result.model_dump_json()
+
+
+def test_native_relationship_checks_bind_before_after_and_exact_parent_tokens() -> None:
+    rows = _rows()
+    before, payload = rows[1]["process"], rows[1]["event"]["exec"]
+    target = payload["target"]
+    target["ppid"] = target["original_ppid"] = 1
+    target["parent_audit_token"]["pid"] = 1
+    payload["dyld_exec_path"] = target["executable"]["path"]
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.parent_is_boot_pid == result.audit_origin_preserved == "PASS"
+    assert result.posix_credentials_preserved == "PASS"
+    assert result.parentage_preserved == "FAIL"
+    assert result.dyld_path_matches_target == "PASS"
+    target["parent_audit_token"]["pid"] = 2
+    target["audit_token"]["asid"] += 1
+    target["audit_token"]["euid"] += 1
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.parent_is_boot_pid == result.audit_origin_preserved == "FAIL"
+    assert result.posix_credentials_preserved == "FAIL"
