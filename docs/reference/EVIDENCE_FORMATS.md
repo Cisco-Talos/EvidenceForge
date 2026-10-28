@@ -696,6 +696,15 @@ nonnull entitlements do not qualify. Exit requires an explicit canonical complet
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
 
+Qualified local-terminal and non-PTY SSH commands use canonical fork/exec with the same argv,
+image, identity and timestamp in eCAR and ES. The current terminal policy explicitly assigns
+its app lifetime as the owner of login/shell/command descendants; older or already-unknown
+ownership remains unknown. This does not qualify the terminal app's own launch/entitlement
+export. A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
+own exec; it does not automatically generate the commands inside that argument. Unquoted shell
+operators and substitutions require a separate execution plan, and effect-bearing launches
+retain their existing gates. This bounded coverage is not yet the all-process guarantee.
+
 An explicit internal GUI transition can render xpcproxy replacing its image with an app under
 launchd, adopting an authenticated local audit origin and forming its own process group within
 the boot POSIX session. PID/lifetime stay unchanged. This requires exact canonical session

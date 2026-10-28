@@ -246,3 +246,35 @@ image execution. A proposed strict guarantee should require complete canonical e
 accounting and lossless active ES collection, failing validation/generation on unsupported or
 unknown expected native phases instead of silently omitting them. Such strict enforcement is
 not implemented by this milestone and has not been approved as a new roadmap commitment.
+
+## Human-shared version-3 classification
+
+The human subsequently ran the prepared offline reviewer and shared only its fixed JSON.
+Provenance and original controls pass; no agent read the private kit or any native records.
+The reviewer copy `/private/tmp/eforge-gui-launch-kit-t9ksukqt` is now human-used and private.
+
+Finder preimage: XPCPROXY; audit user UNATTRIBUTED_SENTINEL; audit session OTHER (nonzero and
+distinct from the target session); preimage SID and PGID both PARENT_PID. Target's audit user
+matches the real user; target SID remains PARENT_PID and target PGID is PROCESS_LEADER. The
+responsibility classification is SAME_PID_OTHER_IDENTITY, meaning the responsible token equals
+neither full before nor full target audit token. This does not establish which token fields
+differ, a distinct lifetime, or a specific sampling mechanism. Do not assume zero preimage ASID,
+substitute either execution token, or change canonical ownership to make this comparison pass.
+Existing Finder environment, image/signature, cwd, script/slice/entitlement, terminal and fork
+labels are unchanged. No native source gate closes automatically from these classes alone.
+
+Control preimage remains OTHER, with REAL_USER audit user, TARGET_SESSION audit session,
+OTHER responsibility/session relationship and PARENT_PID group. Its established audit/POSIX
+preservation and controlling tty remain unchanged. No new capture or private-field disclosure
+was requested after this report. The highest-priority process coverage effort is now tracked
+in [its focused worklog](2026-10-28-macos-es-exec-completeness.md).
+
+The prepared v4 offline reviewer resolves this specific whole-token ambiguity with fixed
+field comparisons for both responsibility tokens. It exports no token words or native values;
+the maximum-word label is intentionally neutral rather than assign audit-user semantics to
+unrelated fields. Numerical version position is classified only for the controlled PID and
+does not assert chronology or a sampling mechanism. All 187 GUI reference tests pass, including
+mixed-token, field-schema canary and unsigned-word rejection cases. The new code-only copy is
+`/private/tmp/eforge-gui-launch-kit-0q2jr2hb`; isolated help passes and no human command was run by
+an agent. The original outer kit is still the review target. No capture or native GUI admission
+change is part of this follow-up; human input is needed to resolve the actual field pattern.

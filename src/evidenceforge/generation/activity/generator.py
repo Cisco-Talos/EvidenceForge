@@ -150,6 +150,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
 )
 from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -6016,6 +6017,8 @@ class ActivityGenerator:
             command_line=command_line,
         )
         if reserved is None:
+            return None
+        if not self._is_within_scenario_window(reserved):
             return None
         session = self.state_manager.get_session(logon_id)
         deadline = _session_activity_end_time(session) if session is not None else None
@@ -15689,7 +15692,8 @@ class ActivityGenerator:
                 or lifecycle_process.identity.hostname != identity.hostname
                 or lifecycle_process.identity.pid != identity.pid
                 or lifecycle_process.identity.started_at != identity.started_at
-                or lifecycle_process.identity.image != identity.image
+                or lifecycle_process.current_view.image != identity.image
+                or lifecycle_process.current_view.execution_ordinal != identity.execution_ordinal
             ):
                 raise StateError("Generic logoff process lifecycle prestate drifted")
 
@@ -16999,6 +17003,7 @@ class ActivityGenerator:
         macos_launch_kind: Literal["user", "system", "finder"] | None = None,
         macos_terminal: Literal["allocate", "absent"] | None = None,
         macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
+        macos_responsibility: ProcessResponsibility | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -17025,6 +17030,8 @@ class ActivityGenerator:
             exec_script: Explicit shebang file or known absence; never inferred from argv.
             macos_launch_kind: Explicit clean user/system metadata, or bounded Finder
                 parent/audit/self-responsibility without inferred exec-time metadata.
+            macos_responsibility: Explicit canonical launch-owner fact for the modeled
+                terminal chain; unknown is preserved when no owner was established.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -17069,6 +17076,7 @@ class ActivityGenerator:
             macos_launch_kind=macos_launch_kind,
             macos_terminal=macos_terminal,
             macos_standard_io=macos_standard_io,
+            macos_responsibility=macos_responsibility,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -25402,6 +25410,11 @@ class ActivityGenerator:
             start = ensure_utc(session.start_time) + timedelta(milliseconds=1)
         parent_pid = 1
         terminal_pid: int | None = None
+        provider = self.macos_execution_metadata
+        owns_terminal_chain = (
+            provider is not None
+            and provider.profile.terminal_responsibility == "terminal_application"
+        )
         terminal_processes = [
             process
             for process in self.state_manager.get_processes_for_session(logon_id)
@@ -25424,6 +25437,28 @@ class ActivityGenerator:
             if index == 0 and existing_terminal is not None:
                 terminal_pid = parent_pid = existing_terminal.pid
                 continue
+            responsibility: ProcessResponsibility | None = None
+            if owns_terminal_chain:
+                if index == 0:
+                    responsibility = ProcessResponsibility(None)
+                elif terminal_pid is not None:
+                    terminal_identity = self.state_manager.get_process_identity(
+                        target_system.hostname, terminal_pid
+                    )
+                    if (
+                        terminal_identity is not None
+                        and terminal_identity.principal == user.username
+                        and terminal_identity.logon_id == logon_id
+                        and terminal_identity.responsibility == ProcessResponsibility(None)
+                    ):
+                        responsibility = ProcessResponsibility(
+                            ResponsibleProcessReference(
+                                terminal_identity.hostname,
+                                terminal_identity.object_id,
+                                terminal_identity.pid,
+                                terminal_identity.started_at,
+                            )
+                        )
             pid = self.generate_process(
                 user=user,
                 system=target_system,
@@ -25441,6 +25476,7 @@ class ActivityGenerator:
                 macos_launch_kind="user",
                 macos_terminal="allocate" if index == 1 else None,
                 macos_standard_io="terminal" if index == 1 else "null" if index == 0 else "inherit",
+                macos_responsibility=responsibility,
             )
             if pid <= 0:
                 return None

@@ -72,9 +72,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P0 — highest priority, user-approved:** Guarantee that every modeled successful Mac
-  exec in a supported profile, during active lossless ES collection, produces its corresponding
-  native exec record or fails generation with actionable missing requirements. Establish a
+- [ ] **P0 — highest priority, user-approved:** Represent every modeled Mac process starting
+  in the simulation window in ES, with the appropriate fork/exec evidence during complete
+  lossless collection; every successful exec must have its native exec record or generation
+  must fail with actionable missing requirements. Start with small measured workloads, then establish a
   complete canonical execution census, migrate aggregate launch producers, complete native
   metadata and enforce exact output reconciliation. Unsupported launch paths must reject;
   passing diagnostics on a subset is insufficient. Preserve explicit collection exclusions and

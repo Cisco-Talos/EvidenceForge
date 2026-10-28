@@ -9,6 +9,34 @@ from evidenceforge.events.identity import validate_process_arguments
 from evidenceforge.models.exceptions import StateError
 
 
+def literal_shell_child_arguments(image: str, command: str) -> tuple[str, ...] | None:
+    """Decode a literal child invocation without expanding or executing shell syntax.
+
+    A quoted interpreter command is one literal argument to that interpreter.
+    This describes its exec only; it does not expand any commands in its input.
+    Unquoted operators, substitutions, globs and concatenated quoting stay unknown.
+    """
+    if not command or len(command) > 65536 or any(char in command for char in "\0\n"):
+        return None
+    try:
+        arguments = tuple(shlex.split(command))
+        words = shlex.split(command, posix=False)
+    except ValueError:
+        return None
+    if not arguments or arguments[0] != image or len(words) != len(arguments):
+        return None
+    for word in words:
+        if len(word) >= 2 and word[0] == word[-1] == "'":
+            continue
+        if len(word) >= 2 and word[0] == word[-1] == '"':
+            if any(char in word[1:-1] for char in "$`\\"):
+                return None
+            continue
+        if any(char in word for char in "|;&><$`()'*?[]~{}#\\\""):
+            return None
+    return arguments
+
+
 def catalog_direct_exec_arguments(image: str, command: str) -> tuple[str, ...]:
     """Decode a literal direct-exec template, preserving canonical quoting.
 

@@ -219,6 +219,26 @@ class EnvironmentDifference(Model):
     controlled_initial_vector: Check = "INCONCLUSIVE"
 
 
+TokenRelation = Literal["BOTH", "BEFORE", "TARGET", "ZERO", "MAX_WORD", "OTHER", "INCONCLUSIVE"]
+TokenPosition = Literal[
+    "BOTH", "BEFORE", "TARGET", "LESS_THAN_BOTH", "GREATER_THAN_BOTH", "BETWEEN", "INCONCLUSIVE"
+]
+
+
+class AuditTokenFieldRelations(Model):
+    """Predefined field comparisons only; no token numbers or native keys are exported."""
+
+    audit_user: TokenRelation = "INCONCLUSIVE"
+    effective_user: TokenRelation = "INCONCLUSIVE"
+    effective_group: TokenRelation = "INCONCLUSIVE"
+    real_user: TokenRelation = "INCONCLUSIVE"
+    real_group: TokenRelation = "INCONCLUSIVE"
+    pid: TokenRelation = "INCONCLUSIVE"
+    audit_session: TokenRelation = "INCONCLUSIVE"
+    pid_version: TokenRelation = "INCONCLUSIVE"
+    same_pid_version_position: TokenPosition = "INCONCLUSIVE"
+
+
 class ExistingLaunchFacts(Model):
     """Existing native relationship classes needed for birth/exec planning, never values."""
 
@@ -245,6 +265,12 @@ class ExistingLaunchFacts(Model):
         "UNSET",
         "INCONCLUSIVE",
     ] = "INCONCLUSIVE"
+    before_responsibility_fields: AuditTokenFieldRelations = Field(
+        default_factory=AuditTokenFieldRelations
+    )
+    target_responsibility_fields: AuditTokenFieldRelations = Field(
+        default_factory=AuditTokenFieldRelations
+    )
     before_session_identity: Literal[
         "PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER", "INCONCLUSIVE"
     ] = "INCONCLUSIVE"
@@ -281,7 +307,7 @@ class ExistingLaunchFacts(Model):
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=3, le=3)] = 3
+    review_version: Annotated[int, Field(strict=True, ge=4, le=4)] = 4
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -378,6 +404,62 @@ def _signature(process: dict) -> tuple:
     )
 
 
+def compare_responsible_token_fields(
+    responsible: tuple[int, ...], before: tuple[int, ...], target: tuple[int, ...]
+) -> AuditTokenFieldRelations:
+    """Explain an otherwise ambiguous same-PID token without sharing any identifiers.
+
+    Numeric position is classified only for a token with the controlled process PID.
+    It makes no assertion about execution chronology, counter wrapping or sampling cause.
+    """
+    for token in (responsible, before, target):
+        if len(token) != 8 or any(
+            type(value) is not int or not 0 <= value < 2**32 for value in token
+        ):
+            raise ValueError("Token comparison requires eight validated unsigned words")
+    fields = (
+        "audit_user",
+        "effective_user",
+        "effective_group",
+        "real_user",
+        "real_group",
+        "pid",
+        "audit_session",
+        "pid_version",
+    )
+    relations: dict[str, str] = {}
+    for field, value, old, new in zip(fields, responsible, before, target, strict=True):
+        relations[field] = (
+            "BOTH"
+            if value == old == new
+            else "BEFORE"
+            if value == old
+            else "TARGET"
+            if value == new
+            else "ZERO"
+            if value == 0
+            else "MAX_WORD"
+            if value == 2**32 - 1
+            else "OTHER"
+        )
+    if responsible[5] == before[5] == target[5]:
+        value, old, new = responsible[7], before[7], target[7]
+        relations["same_pid_version_position"] = (
+            "BOTH"
+            if value == old == new
+            else "BEFORE"
+            if value == old
+            else "TARGET"
+            if value == new
+            else "LESS_THAN_BOTH"
+            if value < min(old, new)
+            else "GREATER_THAN_BOTH"
+            if value > max(old, new)
+            else "BETWEEN"
+        )
+    return AuditTokenFieldRelations.model_validate(relations)
+
+
 def inspect_existing_launch(
     before: dict, payload: dict, image: Image, *, control_signature: tuple | None = None
 ) -> ExistingLaunchFacts:
@@ -435,6 +517,12 @@ def inspect_existing_launch(
             else "SAME_PID_OTHER_IDENTITY"
             if responsible[5] == old_token[5]
             else "OTHER"
+        ),
+        before_responsibility_fields=compare_responsible_token_fields(
+            responsible, old_token, new_token
+        ),
+        target_responsibility_fields=compare_responsible_token_fields(
+            _token(target, "responsible_audit_token"), old_token, new_token
         ),
         before_session_identity=membership(before["session_id"], before["ppid"]),
         before_group_identity=membership(before["group_id"], before["ppid"]),

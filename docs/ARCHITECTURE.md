@@ -1326,6 +1326,15 @@ unknown launcher/exec metadata stays unavailable. This internal transition does 
 GUI births into native execs or add an authored launch-method field. See the
 [Finder contract](design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).
 
+The modeled local terminal chain can explicitly assign the app lifetime as the responsible
+owner of its login, shell and command descendants. That fact is carried by the existing process
+request/State contract, participates in stable intent identity and survives existing checkpoint
+encoding. Unknown/reused unqualified app ownership is not rewritten. Literal shell children,
+including a shell with a quoted command input, reuse the same canonical fork/exec and native
+publication owner as non-PTY SSH commands. Parsing preserves literal argv only; it performs no
+expansion or inner-command execution. Session teardown validates the lifecycle current runtime
+view while preserving the immutable birth image and lifetime identity.
+
 
 The internal `macos_policy_refusal` occurrence is produced only by an explicit authored `process.outcome: policy_refused`. The process-policy action bundle plans and commits an authenticated State cohort allocation, then publishes through the ordinary dispatcher. `MacosPolicyRefusalTarget` is an attempt identity, not a `ProcessIdentity`: its shared-namespace PID is reserved at the observation instant without claiming a birth or lifetime. State retains a bounded exact target/initiator/logging-TID receipt and checkpoints both it and the allocator state. `MacosKernelLogObservation` binds the host boot to its kernel writer and distinct deployment-owned AppleSystemPolicy image. Its source projector renders PID/UID zero and the absolute-style Default/log tracepoint using explicitly modeled profile offsets. Ordinary collection, timing, host sorting and checkpoint spools own export. No eCAR create or ES fork/exec/exit is requested. The pre-child `denied` and returning `exec_failed` paths remain separate; no refusal cause or target exec stage is inferred.
 

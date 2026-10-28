@@ -84,6 +84,15 @@ launcher's prior audit origin was default/unattributed or already associated wit
 session. A complete launcher producer needs those classes. The checker uses the same existing
 capture and exports fixed relationships only, without numeric values or new collection.
 
+The human's version-3 result now establishes an unattributed preimage audit user with a
+nonzero audit session distinct from the target's; preimage SID and PGID both identify the
+parent PID. Its responsible token has the same PID as the controlled process but matches
+neither full before nor full target token. That result does not establish a different process
+lifetime or identify which credential/version fields differ. Version 4 compares each of the
+eight predefined token fields with both snapshots, with fixed labels only; numerical version
+position is reported only for the controlled PID and does not assert temporal order. This
+uses the existing capture, with no new collection, live query, native values or extra keys.
+
 ## Canonical relationship implementation
 
 Generation behavior revision 345 adds an internal explicit `macos_launch_kind="finder"` process

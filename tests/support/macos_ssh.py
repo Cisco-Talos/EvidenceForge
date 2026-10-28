@@ -8,6 +8,20 @@ from pathlib import Path
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 
+MACOS_NATIVE_QUERY_COMMANDS: tuple[str, ...] = (
+    "/usr/bin/id",
+    "/usr/bin/sw_vers",
+    "/usr/bin/uname -a",
+    "/sbin/ifconfig -a",
+    "/bin/ps aux",
+    "/usr/bin/dscl . -list /Users",
+    "/bin/pwd",
+    "/bin/ls -la /Users/test_user/Documents",
+    "/usr/bin/du -sh /Users/test_user/Documents",
+    "/bin/df -h",
+    '/usr/bin/find /Users/test_user/Documents -maxdepth 2 -type f -name "*.pdf"',
+)
+
 
 def macos_ssh_scenario(
     scenarios_dir: Path, *, macos_receiver: bool = False, authored_close: bool = False

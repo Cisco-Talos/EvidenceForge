@@ -35,6 +35,7 @@ from evidenceforge.events.identity import ProcessIdentity, validate_process_argu
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
 from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
@@ -291,6 +292,7 @@ class ProcessExecutionRequest:
     macos_standard_io: Literal["terminal", "null", "inherit"] | None = field(
         default=None, kw_only=True
     )
+    macos_responsibility: ProcessResponsibility | None = field(default=None, kw_only=True)
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -308,6 +310,15 @@ class ProcessExecutionRequest:
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
 
+        if self.macos_responsibility is not None and (
+            type(self.macos_responsibility) is not ProcessResponsibility
+            or self.macos_launch_kind != "user"
+            or platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.arguments is None
+            or self.reuse_intent is not None
+        ):
+            raise ValueError("Mac responsibility requires a fresh literal exact-parent user launch")
         if any(
             value is not None
             for value in (self.macos_launch_kind, self.macos_terminal, self.macos_standard_io)
@@ -392,6 +403,11 @@ class ProcessExecutionRequest:
         session_suffix = ":new_posix_session" if self.new_posix_session else ""
         arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
         script_suffix = f":script={self.exec_script!r}" if self.exec_script is not None else ""
+        responsibility_suffix = (
+            f":responsibility={self.macos_responsibility!r}"
+            if self.macos_responsibility is not None
+            else ""
+        )
         native_suffix = (
             f":macos={self.macos_launch_kind}:{self.macos_terminal}:{self.macos_standard_io}"
             if any(
@@ -419,7 +435,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}{responsibility_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

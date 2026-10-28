@@ -13,8 +13,119 @@ from statistics import median
 import pytest
 import yaml
 
-from tests.support.macos_ssh import macos_ssh_scenario
+from tests.support.macos_ssh import MACOS_NATIVE_QUERY_COMMANDS, macos_ssh_scenario
 from tests.support.output_equivalence import deterministic_bundle_files
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("launch", ["local", "ssh", "occupied_local"])
+def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
+    tmp_path: Path, scenarios_dir: Path, launch: str
+) -> None:
+    scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(
+        mode="json", exclude_none=True
+    )
+    scenario["time_window"]["duration"] = "25m"
+    scenario["output"]["logs"].append({"format": "macos_endpoint_security"})
+    hostname = "SSH-TEST" if launch == "ssh" else "TEST-01"
+    if launch == "local":
+        # The SSH client occupies this local shell until its remote session closes.
+        # Test local commands without simultaneously handing that shell to SSH.
+        scenario["storyline"] = [
+            event for event in scenario["storyline"] if event["id"] != "remote-session"
+        ]
+    for ordinal, command in enumerate(MACOS_NATIVE_QUERY_COMMANDS):
+        scenario["storyline"].append(
+            {
+                "id": f"coverage-command-{ordinal}",
+                "time": f"+{11 * 60 + ordinal * 20}s",
+                "actor": "test_user",
+                "system": hostname,
+                "activity": f"Invented {launch} external command with complete ES collection",
+                "events": [
+                    {
+                        "type": "process",
+                        "process_name": command.split()[0],
+                        "command_line": command,
+                    }
+                ],
+            }
+        )
+    path = tmp_path / "scenario.yaml"
+    path.write_text(yaml.safe_dump(scenario))
+    output = tmp_path / "complete-commands"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "evidenceforge",
+            "generate",
+            str(path),
+            "--output",
+            str(output),
+            "--seed",
+            "347",
+            "--checkpoint-hours",
+            "0",
+            "--project-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+    accepted = [
+        event
+        for event in truth["events"]
+        if (event.get("storyline_id") or "").startswith("coverage-command-")
+    ]
+    assert len(accepted) == len(MACOS_NATIVE_QUERY_COMMANDS)
+    if launch == "occupied_local":
+        assert all(
+            not event["emitted"]
+            and event["skipped_reason"] == "foreground_shell_unavailable"
+            and event["attributes"].get("pid") is None
+            for event in accepted
+        )
+        return
+    assert all(event["emitted"] and event["attributes"]["pid"] > 0 for event in accepted)
+    native = [
+        record["event"]["exec"]
+        for path in (output / "data").rglob("macos_endpoint_security.ndjson")
+        if any(part == hostname or part.startswith(f"{hostname}.") for part in path.parts)
+        for line in path.read_text().splitlines()
+        if (record := json.loads(line))["event_type"] == 9
+    ]
+    for event in accepted:
+        matches = [
+            execution
+            for execution in native
+            if execution["target"]["audit_token"]["pid"] == event["attributes"]["pid"]
+            and execution["target"]["executable"]["path"] == event["attributes"]["process_name"]
+        ]
+        assert len(matches) == 1, event["storyline_id"]
+    host = next(
+        item for item in truth["macos_native_coverage"]["hosts"] if item["hostname"] == hostname
+    )
+    commands = [
+        action
+        for action in host["authored_actions"]
+        if action["storyline_cluster_id"].startswith("coverage-command-")
+    ]
+    assert len(commands) == len(accepted)
+    assert all(
+        sum(
+            count["count"]
+            for count in action["observations"]
+            if count["phase"] == "exec"
+            and count["reason"] == "supported"
+            and count["status"] in {"visible", "delayed"}
+        )
+        == 1
+        for action in commands
+    )
 
 
 @pytest.mark.slow
@@ -186,6 +297,13 @@ def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_life
                 continue
             identity = row["objectID"]
             if row.get("action") == "CREATE":
+                starts[identity] = row
+            elif (
+                row.get("action") == "MODIFY"
+                and row.get("properties", {}).get("operation") == "exec"
+            ):
+                # A fork CREATE still carries the parent's image. Measure the
+                # command from its own image activation, not the inherited image.
                 starts[identity] = row
             elif row.get("action") == "TERMINATE" and identity in starts:
                 start = starts[identity]

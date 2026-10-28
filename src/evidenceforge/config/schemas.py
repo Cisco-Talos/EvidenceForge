@@ -4244,6 +4244,10 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     system_audit_origin: Literal["default_unattributed"] | None = None
     system_responsibility: Literal["none"] | None = None
     gui_audit_origin: Literal["authenticated_local_account"] | None = None
+    terminal_responsibility: Literal["terminal_application"] | None = Field(
+        default=None,
+        description="Explicit modeled terminal-app ownership of its login/shell/command chain",
+    )
     finder_launch_relationships: Literal["launchd_self"] | None = None
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)

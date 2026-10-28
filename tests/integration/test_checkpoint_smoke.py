@@ -416,17 +416,22 @@ def test_short_generation_checkpoint_suspension_and_resume(
     if endpoint_forks:
         from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 
-        rows = [
-            json.loads(line)
+        native_by_source = {
+            name: [json.loads(line) for line in content.splitlines()]
             for name, content in resumed_files.items()
             if name.endswith("/macos_endpoint_security.ndjson")
-            for line in content.splitlines()
+        }
+        receiver = [
+            row for name, rows in native_by_source.items() if "/SSH-TEST." in name for row in rows
         ]
-        assert len(rows) == 6
-        for row in rows:
-            decode_endpoint_security_record(json.dumps(row))
-            assert row["version"] == 11 and row["event_type"] == 11
-        sequences = [row["seq_num"] for row in rows]
+        assert len(receiver) == 6 and all(row["event_type"] == 11 for row in receiver)
+        for rows in native_by_source.values():
+            for row in rows:
+                decode_endpoint_security_record(json.dumps(row))
+                assert row["version"] == 11 and row["event_type"] in {9, 11, 15}
+            global_sequences = [row["global_seq_num"] for row in rows]
+            assert global_sequences == sorted(set(global_sequences))
+        sequences = [row["seq_num"] for row in receiver]
         assert sequences == list(range(sequences[0], sequences[0] + 6))
     if denied_launch or failed_exec:
         assert b"invented-blocked-helper" not in b"".join(
@@ -510,16 +515,19 @@ def test_short_generation_checkpoint_suspension_and_resume(
             if "/TEST-01." in name and name.endswith("/ecar.json")
         )
         rows = [json.loads(line) for line in client_ecar.splitlines()]
-        clients = [
-            row
+        clients = {
+            row["objectID"]: row
             for row in rows
             if row["object"] == "PROCESS"
-            and row["action"] == "CREATE"
+            and (
+                row["action"] == "CREATE"
+                or (row["action"] == "MODIFY" and row["properties"].get("operation") == "exec")
+            )
             and row["properties"]["image_path"] == "/usr/bin/ssh"
-        ]
+        }
         assert len(clients) >= 2
         terminated = {row["objectID"] for row in rows if row["action"] == "TERMINATE"}
-        assert all(row["objectID"] in terminated for row in clients)
+        assert clients.keys() <= terminated
     elif smb_server is not None:
         client_ecar = next(
             content

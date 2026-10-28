@@ -537,7 +537,13 @@ def test_controlled_environment_is_checked_against_exec_time_not_main_entry() ->
 
 
 @pytest.mark.parametrize(
-    "model", [kit.EnvironmentDifference, kit.ExistingLaunchFacts, kit.ExistingReviewReport]
+    "model",
+    [
+        kit.EnvironmentDifference,
+        kit.AuditTokenFieldRelations,
+        kit.ExistingLaunchFacts,
+        kit.ExistingReviewReport,
+    ],
 )
 def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model]) -> None:
     for field in model.model_fields:
@@ -545,7 +551,7 @@ def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "3", 1, 2, None])
+@pytest.mark.parametrize("value", [True, "4", 1, 2, 3, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -849,3 +855,58 @@ def test_before_audit_session_and_responsibility_never_export_native_identifiers
     assert result.before_audit_session == origin
     assert result.before_responsibility == responsibility
     assert _CANARY not in result.model_dump_json()
+
+
+def test_responsible_token_field_comparison_explains_mixed_snapshots_without_values() -> None:
+    before = (2**32 - 1, 501, 20, 501, 20, 31001, 77, 41)
+    target = (501, 501, 20, 501, 20, 31001, 88, 43)
+    responsible = (2**32 - 1, 0, 0, 501, 20, 31001, 88, 42)
+    result = kit.compare_responsible_token_fields(responsible, before, target)
+    assert result.model_dump() == {
+        "audit_user": "BEFORE",
+        "effective_user": "ZERO",
+        "effective_group": "ZERO",
+        "real_user": "BOTH",
+        "real_group": "BOTH",
+        "pid": "BOTH",
+        "audit_session": "TARGET",
+        "pid_version": "OTHER",
+        "same_pid_version_position": "BETWEEN",
+    }
+    assert not any(isinstance(value, int) for value in result.model_dump().values())
+
+
+@pytest.mark.parametrize(
+    "version,label",
+    [
+        (40, "LESS_THAN_BOTH"),
+        (41, "BEFORE"),
+        (42, "BETWEEN"),
+        (43, "TARGET"),
+        (44, "GREATER_THAN_BOTH"),
+    ],
+)
+def test_responsible_token_numeric_position_does_not_assert_execution_order(
+    version: int, label: str
+) -> None:
+    before = (501, 501, 20, 501, 20, 31001, 77, 41)
+    target = (*before[:-1], 43)
+    result = kit.compare_responsible_token_fields((*before[:-1], version), before, target)
+    assert result.same_pid_version_position == label
+    foreign = (*before[:5], 31002, before[6], version)
+    assert (
+        kit.compare_responsible_token_fields(foreign, before, target).same_pid_version_position
+        == "INCONCLUSIVE"
+    )
+
+
+@pytest.mark.parametrize("token", [(0,) * 7, (0,) * 9, (True,) * 8, (-1,) * 8, (2**32,) * 8])
+def test_responsible_token_comparison_rejects_invalid_words(token: tuple) -> None:
+    with pytest.raises(ValueError, match="eight validated unsigned words"):
+        kit.compare_responsible_token_fields(token, (0,) * 8, (0,) * 8)
+
+
+def test_maximum_word_comparison_does_not_assign_audit_user_semantics_to_other_fields() -> None:
+    result = kit.compare_responsible_token_fields((2**32 - 1,) * 8, (0,) * 8, (1,) * 8)
+    assert set(result.model_dump(exclude={"same_pid_version_position"}).values()) == {"MAX_WORD"}
+    assert result.same_pid_version_position == "INCONCLUSIVE"

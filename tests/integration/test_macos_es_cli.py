@@ -67,15 +67,24 @@ def test_nonempty_native_cli_is_deterministic_filter_independent_and_ingestible(
         )
         assert result.returncode == 0, result.stdout + result.stderr
         paths = sorted((output / "data").rglob("macos_endpoint_security.ndjson"))
-        assert len(paths) == 1
+        assert {path.parent.name.split(".")[0] for path in paths} == {"TEST-01", "SSH-TEST"}
         snapshots.append({str(path.relative_to(output)): path.read_bytes() for path in paths})
-        records = list(get_parser("macos_endpoint_security").parse_file(paths[0]))
-        assert len(records) == 3 and all(not record.parse_errors for record in records)
+        records_by_host = {
+            path.parent.name.split(".")[0]: list(
+                get_parser("macos_endpoint_security").parse_file(path)
+            )
+            for path in paths
+        }
+        receiver = records_by_host["SSH-TEST"]
+        assert len(receiver) == 3 and all(record.fields["event_type"] == 11 for record in receiver)
+        assert records_by_host["TEST-01"]
+        records = [record for source in records_by_host.values() for record in source]
+        assert all(not record.parse_errors for record in records)
         schema, constraints = ParseabilityScorer()._score_both({"macos_endpoint_security": records})
         assert schema.score == constraints.score == 100
         for record in records:
             decode_endpoint_security_record(record.raw)
-            assert record.fields["event_type"] == 11 and record.fields["version"] == 11
+            assert record.fields["event_type"] in {9, 11, 15} and record.fields["version"] == 11
         manifest = json.loads((output / "GENERATION_MANIFEST.json").read_text())
         assert "macos_endpoint_security" in manifest["formats"]
     assert snapshots[0] == snapshots[1] == snapshots[2]

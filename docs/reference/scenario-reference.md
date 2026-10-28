@@ -2003,6 +2003,12 @@ descriptors or exit results omit the affected phase without padding. Existing co
 still govern source visibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
 for remaining gaps and the distinction between decoding and generation admission.
 
+Existing `process` events for qualified literal local-terminal and non-PTY SSH commands can
+produce native fork/exec records without a new authoring field. A quoted shell command argument
+can produce the shell's own exec, but its inner commands are not automatically expanded into
+child events. Author those activities explicitly when needed. Baseline activity uses the same
+process owner; the complete all-process coverage contract remains in progress.
+
 The internal authenticated xpcproxy-to-app exec contract is not a new authored event or a
 `launch_method` field. Ordinary GUI `process` entries retain aggregate birth semantics until
 a complete qualified launcher producer is selected; an app-bundle path alone does not request

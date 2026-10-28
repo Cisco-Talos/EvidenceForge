@@ -3037,6 +3037,18 @@ applications:
     categories: [macos_command]
     personas: []
     system_types: [workstation]
+  - id: macos-uname
+    display_name: macOS system query
+    platforms:
+      macos:
+        image_path: /usr/bin/uname
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.uname, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/uname, /usr/bin/uname -a, /usr/bin/uname -sr, /usr/bin/uname -m]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
   - id: macos-ifconfig
     display_name: macOS interface query
     platforms:

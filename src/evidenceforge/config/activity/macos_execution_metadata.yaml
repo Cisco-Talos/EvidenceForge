@@ -8,6 +8,10 @@ system_responsibility: none # clean service launch with no other responsible lif
 # One canonical origin per explicit GUI login, shared across terminal POSIX sessions.
 # Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.
 gui_audit_origin: authenticated_local_account
+# Selected canonical ownership for this modeled terminal chain. The app owns
+# its login/shell/command descendants. This is not a native Terminal capture or
+# qualification of the app's own exec/entitlement export. Old profiles stay unknown.
+terminal_responsibility: terminal_application
 # Human-reviewed regular Finder test-app relationship, not every GUI/helper class.
 # This selects parent/audit/responsibility only: no inferred exec environment,
 # descriptor backing, controlling terminal, POSIX session creation or native fork.
@@ -92,6 +96,7 @@ code_validation:
       - syspolicyd
       - sw_vers
       - tccd
+      - uname
       - zsh
     codesigning_flags: 603979777 # 0x24000001
     is_platform_binary: true

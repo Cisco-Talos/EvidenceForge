@@ -62,6 +62,7 @@ from evidenceforge.generation.actions.posix_process import (
 )
 from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
+from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
     _get_rng,
@@ -1059,7 +1060,9 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
-                responsibility=finder.responsibility if finder is not None else None,
+                responsibility=(
+                    finder.responsibility if finder is not None else request.macos_responsibility
+                ),
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -1102,7 +1105,9 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
-                responsibility=finder.responsibility if finder is not None else None,
+                responsibility=(
+                    finder.responsibility if finder is not None else request.macos_responsibility
+                ),
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity
@@ -1132,7 +1137,7 @@ class ProcessExecutionService:
 
         This bounded path shares process admission, lifetime and completion owners.
         It never infers native exec evidence. Incomplete local GUI audit metadata,
-        shell syntax and effect-bearing launches retain aggregate birth semantics.
+        unexpanded shell operators and effect-bearing launches retain aggregate birth semantics.
         """
         if (
             _get_os_category(request.system.os) != "macos"
@@ -1153,7 +1158,6 @@ class ProcessExecutionService:
                     for token in request.prepared_effects.artifact_publications
                 )
             )
-            or any(char in launch.actor.command_line for char in "|;&><$`()\n")
         ):
             return None
         parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
@@ -1195,19 +1199,12 @@ class ProcessExecutionService:
             is None
         ):
             return None
-        try:
-            arguments = tuple(shlex.split(launch.actor.command_line))
-            quoted_words = shlex.split(launch.actor.command_line, posix=False)
-        except ValueError:
-            return None
+        arguments = (
+            request.arguments
+            if request.arguments is not None
+            else literal_shell_child_arguments(launch.actor.image, launch.actor.command_line)
+        )
         if not arguments or arguments[0] != launch.actor.image:
-            return None
-        if any(
-            any(char in word for char in "*?[]~{}#")
-            and not (len(word) >= 2 and word[0] in {"'", '"'} and word[-1] == word[0])
-            for word in quoted_words
-        ):
-            # Unresolved shell expansion is not an exact direct-exec argv.
             return None
         gap = self.activity_timing.sample_profile_gap(
             "macos.shell_fork_before_exec",

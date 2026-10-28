@@ -172,6 +172,16 @@ unset tokens. Matching a PID does not establish a lifetime. These labels help fi
 producer without guessing its prior attribution. They read the same existing bounded evidence;
 no additional capture, app launch or variable-name/value disclosure is needed.
 
+Version 4 explains an ambiguous same-PID responsibility token field by field. Both the
+message process and exec target receive a fixed comparison for audit user, effective/real
+user/group, PID, audit session and PID version. Labels are only `BOTH`, `BEFORE`, `TARGET`,
+`ZERO`, `MAX_WORD`, `OTHER` or `INCONCLUSIVE`. The maximum-word label gives no field-specific
+meaning to that technical constant. For the controlled PID only, PID-version
+position can be before/target/equal/between/less-than-both/greater-than-both. This is a numeric
+comparison, not proof of temporal order or an explanation of the exporter's sampling. No token
+words, account names, IDs, counts, paths, timestamps or foreign-process version positions appear.
+It reads the same bounded original capture with the same provenance controls and starts nothing.
+
 `RETAINED_MATCH` establishes a matching retained fork. `NOT_RETAINED` says only that the bounded
 evidence contains none; it does not prove no fork happened or distinguish launch mechanism from
 filter/buffer limitations. Failed original collection controls leave supplemental comparisons

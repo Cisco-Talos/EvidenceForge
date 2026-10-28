@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 346
+current_revision: 347
 history_start_revision: 1
-behavior_surface_sha256: 36c274cee818a2ae9c7d4d6b410e2396d765c54e92cbff3e088b0508be414471
+behavior_surface_sha256: b12117a15c284e0781a6d45aaa675df0378322d18d3392bc0e1450bd66177f57
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3295,3 +3295,15 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Supports authenticated xpcproxy-to-app audit adoption and own-group creation within one exec, preserving ordinary exec rules, exact membership recovery and complete native snapshot gates.
+  - revision: 347
+    id: macos-ordinary-command-native-coverage
+    impact: localized
+    domains:
+      - installed-executable-catalog
+      - canonical-process-execution
+      - terminal-responsibility
+      - session-process-teardown
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Supplies the modeled uname executable and terminal-chain responsibility; preserves literal quoted or explicit argv through local/SSH fork-exec, bounds authored reservations and closes the current execution without rewriting its birth.

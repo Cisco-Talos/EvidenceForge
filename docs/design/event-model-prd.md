@@ -712,6 +712,13 @@ Use `tests/fixtures/scenarios/retail-store-ftp-attack.yaml` as the primary compa
 
 `process_exec` requires source host, process, lifecycle and exact before/after identity roles; it is a dependent State mutation consumed by eCAR and qualified native ES projection. The post-exec subject and pre-exec actor share one lifetime. Ordinary exec preserves audit origin and POSIX membership. A separately authenticated local GUI adoption may bind the exact GUI session's origin and a new own process group during xpcproxy-to-app replacement; it cannot change real/effective credentials or invent a fork. Authored `process` semantics are unchanged. See the architecture's POSIX exec publication section for exact cohort ownership and the evidence-format reference for the EvidenceForge eCAR extension.
 
+Qualified literal local-terminal and non-PTY SSH process launches share canonical fork/exec
+production. The terminal chain explicitly owns its descendants through an exact responsible
+lifetime reference under the current modeled policy. A quoted interpreter input remains one
+argv element and does not itself expand into child activities. Consumers such as session teardown
+must use the lifecycle current execution view for image/ordinal facts rather than compare the
+current image against the immutable birth image. Full process coverage enforcement remains open.
+
 The internal `process_audit_bind`, `process_privilege_drop` and `process_service_drop` kinds preserve lifetime and execution identity while projecting exact authenticated State credential patches. The eCAR modification extension distinguishes these aggregate transitions; native event families and authored entry points remain separate gates.
 
 The bounded macOS workstation SSH receiver reuses `ssh_session` and existing process/session contexts. Distinct fork, exec, audit adoption, service/user credential changes and termination remain bundle-owned canonical phases. The shared continuation owns startup recovery and terminal execution for automatic or paired authored logout; SCP/SFTP receiver helpers are not yet admitted. This adds no authored event type or native log-format claim.

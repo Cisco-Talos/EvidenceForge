@@ -8,6 +8,7 @@ from datetime import timedelta
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.actions.process_execution import ProcessExecutionRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
@@ -34,6 +35,38 @@ def test_explicit_argument_identity_preserves_omitted_request_defaults() -> None
     explicit = replace(request, arguments=("/usr/bin/login", "-fp", "alex"))
     assert explicit.stable_id != request.stable_id
     assert explicit.stable_id == replace(explicit).stable_id
+
+
+def test_explicit_launch_responsibility_participates_in_intent_identity() -> None:
+    request = replace(
+        _request(), macos_launch_kind="user", arguments=("/usr/bin/login", "-fp", "alex")
+    )
+    assert request.stable_id == replace(request, macos_responsibility=None).stable_id
+    assert (
+        replace(request, macos_responsibility=ProcessResponsibility(None)).stable_id
+        != request.stable_id
+    )
+
+
+@pytest.mark.parametrize("damage", ["linux", "kind", "parent", "arguments", "type"])
+def test_explicit_launch_responsibility_requires_exact_mac_user_intent(damage: str) -> None:
+    changes: dict[str, object] = {
+        "macos_launch_kind": "user",
+        "arguments": ("/usr/bin/login", "-fp", "alex"),
+        "macos_responsibility": ProcessResponsibility(None),
+    }
+    if damage == "linux":
+        changes["system"] = _system("Ubuntu 24.04")
+    elif damage == "kind":
+        changes["macos_launch_kind"] = None
+    elif damage == "parent":
+        changes["require_exact_parent"] = False
+    elif damage == "arguments":
+        changes["arguments"] = None
+    else:
+        changes["macos_responsibility"] = "self"
+    with pytest.raises(ValueError, match="responsibility"):
+        replace(_request(), **changes)
 
 
 @pytest.mark.parametrize(

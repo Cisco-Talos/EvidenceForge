@@ -37,6 +37,8 @@ def _engine(tmp_path: Path) -> GenerationEngine:
         }
     )
     engine = GenerationEngine(scenario, tmp_path)
+    # Exercise the public engine's ordered source ingress when visits are out of order.
+    engine._chronological_es_delivery = True
     engine._initialize()
     engine._execute_typed_event(
         LogonEventSpec(logon_type=2), _user(), _system(), _TIME, "Interactive login", {"logon"}

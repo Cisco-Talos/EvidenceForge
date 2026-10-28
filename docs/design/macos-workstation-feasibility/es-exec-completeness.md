@@ -16,6 +16,14 @@ cannot satisfy the contract.
 The practical goal also requires useful successful workloads. A strict check that merely rejects
 all ordinary Mac activity is an intermediate guard, not completion of this effort.
 
+The user further clarified that the goal covers every modeled process starting during the
+simulation window, including background services and helpers. Complete ES collection must be
+active throughout that window. A fork-only child needs fork evidence; each image activation
+needs exec evidence, including a replacement within an existing PID. These are different
+occurrences, not an assumption of one exec per PID. Apple's [fork](https://developer.apple.com/documentation/endpointsecurity/es_event_fork_t)
+and [exec](https://developer.apple.com/documentation/endpointsecurity/es_event_exec_t) event
+contracts describe those separate observations.
+
 ## What counts
 
 Count actual image activations, including multiple execs in one process lifetime. Use canonical
@@ -44,7 +52,54 @@ after the collection window to make a lifecycle look complete.
 
 ## Implementation order and acceptance
 
-### 1. Establish complete accounting and enforcement
+### 1. Measure and repair a small real generation workload
+
+Start with ordinary local commands, SSH commands, a service start and a GUI app launch. List
+the intended successful process starts/executions independently of native publication and
+compare them with actual generated ES records. Repair the concrete missing producers or
+metadata, retaining the comparison as a regression test. Then expand the same test to baseline
+activity. Add infrastructure only when a specific omission requires it.
+
+An 11-command local/SSH workload is the first implemented slice. This is not acceptance of
+all process starts: the terminal/bootstrap processes, services, GUI applications and helpers
+must receive their own entries rather than being hidden by the command-only denominator.
+
+### 2. Complete shared metadata and ordinary launch producers
+
+Use the workload failures to prioritize defects by accepted workload coverage. Extend canonical
+executable, file, signing, image-security, audit, parent/responsible, thread, environment, cwd
+and descriptor owners. Unknown values must remain distinct from empty/absent values. Enumerable
+application and launch policies belong in versioned configuration. Native emitters render
+these shared facts.
+
+Convert shell commands, service/launchd activity, SSH client/receiver/command processes and
+background helpers to explicit birth/exec contracts. Finish ordinary supported workloads before
+expanding unusual applications. Each producer must work for both storyline and baseline through
+the same action owner. Do not preserve a silent aggregate fallback in the covered scope.
+
+Literal commands already have a bounded path. Pipelines, redirections, substitutions, scripts,
+PTY commands and helper trees require explicit subprocess, argv and descriptor ownership. A
+display command string cannot substitute for that execution plan. Reject constructs without a
+supported plan until implemented.
+
+### 3. Connect GUI launch activity
+
+Finish the Finder launchd/xpcproxy birth-to-exec producer using the existing authenticated GUI
+exec transition. The same PID/lifetime survives image replacement; do not model the app as an
+invented child of xpcproxy or assert a native fork from missing evidence. Supply every modeled
+launcher/app execution's own metadata and connect authored and baseline activity explicitly.
+
+The human's version-3 offline report resolves the preimage audit/session/group classes from
+the existing capture. Its same-PID responsibility token differs from both execution tokens;
+do not replace it with either token without establishing that source observation's semantics.
+Broader Dock/Spotlight, application/helper and signing/entitlement classes require bounded
+qualification where current evidence and primary format contracts do not establish needed facts.
+Reuse shared contracts when justified; do not extrapolate the Finder test automatically.
+
+Expose launch intent where the authored model needs it. CLI, Studio, validation, authoring
+references and effective application policies must agree on supported choices and failures.
+
+### 4. Establish complete accounting and enforcement
 
 Inventory every Mac-reachable process allocation, registration, birth, execution and lifecycle
 path, including initialization, baseline, storyline, causal effects, SSH, services and helpers.
@@ -68,40 +123,7 @@ output-replacement behavior. Make accounting streaming/disk-backed or bounded by
 checkpoint journals, not an in-memory list growing with scenario duration. Prove rollback,
 restart and exact recovery before relying on totals.
 
-### 2. Complete shared metadata and ordinary launch producers
-
-Use the census to prioritize defects by accepted workload coverage. Extend canonical executable,
-file, signing, image-security, audit, parent/responsible, thread, environment, cwd and descriptor
-owners. Unknown values must remain distinct from empty/absent values. Enumerable application and
-launch policies belong in versioned configuration. Native emitters render these shared facts.
-
-Convert shell commands, service/launchd activity, SSH client/receiver/command processes and
-background helpers to explicit birth/exec contracts. Finish ordinary supported workloads before
-expanding unusual applications. Each producer must work for both storyline and baseline through
-the same action owner. Do not preserve a silent aggregate fallback in the covered scope.
-
-Literal commands already have a bounded path. Pipelines, redirections, substitutions, scripts,
-PTY commands and helper trees require explicit subprocess, argv and descriptor ownership. A
-display command string cannot substitute for that execution plan. Reject constructs without a
-supported plan until implemented.
-
-### 3. Connect GUI launch activity
-
-Finish the Finder launchd/xpcproxy birth-to-exec producer using the existing authenticated GUI
-exec transition. The same PID/lifetime survives image replacement; do not model the app as an
-invented child of xpcproxy or assert a native fork from missing evidence. Supply every modeled
-launcher/app execution's own metadata and connect authored and baseline activity explicitly.
-
-The prepared version-3 offline classifier can resolve remaining preimage relationship classes
-from the existing private capture. It needs human execution, not another live collection. Broader
-Dock/Spotlight, application/helper and signing/entitlement classes require bounded qualification
-where current evidence and primary format contracts do not establish the needed facts. Reuse
-shared contracts when justified; do not extrapolate the Finder test automatically.
-
-Expose launch intent where the authored model needs it. CLI, Studio, validation, authoring
-references and effective application policies must agree on supported choices and failures.
-
-### 4. Prove the guarantee on useful workloads
+### 5. Prove the guarantee on useful workloads
 
 Build a finite acceptance matrix covering every inventoried producer and supported launch
 family, across authored and baseline activity. Include shell/local/SSH, services, helpers, GUI,
