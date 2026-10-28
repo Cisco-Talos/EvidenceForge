@@ -225,6 +225,33 @@ class ExistingLaunchFacts(Model):
     before_image_role: Literal["TEST_APP", "LAUNCHD", "XPCPROXY", "OTHER", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
     )
+    before_audit_user: Literal[
+        "UNATTRIBUTED_SENTINEL",
+        "ROOT_USER",
+        "REAL_USER",
+        "TARGET_AUDIT_USER",
+        "OTHER",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    before_audit_session: Literal["DEFAULT_ZERO", "TARGET_SESSION", "OTHER", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    before_responsibility: Literal[
+        "SELF",
+        "PARENT",
+        "TARGET_EXECUTION",
+        "SAME_PID_OTHER_IDENTITY",
+        "OTHER",
+        "UNSET",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    before_session_identity: Literal[
+        "PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER", "INCONCLUSIVE"
+    ] = "INCONCLUSIVE"
+    before_group_identity: Literal[
+        "PROCESS_LEADER", "PARENT_PID", "ZERO", "OTHER", "INCONCLUSIVE"
+    ] = "INCONCLUSIVE"
+    target_audit_user_is_real_user: Check = "INCONCLUSIVE"
     before_target_file_object: Check = "INCONCLUSIVE"
     before_target_signature: Check = "INCONCLUSIVE"
     signature_matches_control: Check = "INCONCLUSIVE"
@@ -254,7 +281,7 @@ class ExistingLaunchFacts(Model):
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=2, le=2)] = 2
+    review_version: Annotated[int, Field(strict=True, ge=3, le=3)] = 3
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -358,21 +385,60 @@ def inspect_existing_launch(
     target = payload["target"]
     pid = _token(target)[5]
 
-    def membership(value: int) -> str:
+    def membership(value: int, ppid: int) -> str:
         return (
             "ZERO"
             if value == 0
             else "PROCESS_LEADER"
             if value == pid
             else "PARENT_PID"
-            if value == target["ppid"]
+            if value == ppid
             else "OTHER"
         )
 
     old_file, new_file = before["executable"]["stat"], target["executable"]["stat"]
+    old_token, new_token = _token(before), _token(target)
+    responsible, parent = (
+        _token(before, "responsible_audit_token"),
+        _token(before, "parent_audit_token"),
+    )
     homes = [entry.split("=", 1)[1] for entry in payload["env"] if entry.startswith("HOME=")]
     cwd = payload["cwd"]["path"]
     return ExistingLaunchFacts(
+        before_audit_user=(
+            "UNATTRIBUTED_SENTINEL"
+            if old_token[0] == 2**32 - 1
+            else "ROOT_USER"
+            if old_token[0] == 0
+            else "REAL_USER"
+            if old_token[0] == old_token[3]
+            else "TARGET_AUDIT_USER"
+            if old_token[0] == new_token[0]
+            else "OTHER"
+        ),
+        before_audit_session=(
+            "DEFAULT_ZERO"
+            if old_token[6] == 0
+            else "TARGET_SESSION"
+            if old_token[6] == new_token[6]
+            else "OTHER"
+        ),
+        before_responsibility=(
+            "UNSET"
+            if not any(responsible)
+            else "SELF"
+            if responsible == old_token
+            else "PARENT"
+            if responsible == parent
+            else "TARGET_EXECUTION"
+            if responsible == new_token
+            else "SAME_PID_OTHER_IDENTITY"
+            if responsible[5] == old_token[5]
+            else "OTHER"
+        ),
+        before_session_identity=membership(before["session_id"], before["ppid"]),
+        before_group_identity=membership(before["group_id"], before["ppid"]),
+        target_audit_user_is_real_user=_check(new_token[0] == new_token[3]),
         before_image_role=(
             "TEST_APP"
             if _owned(before, image)
@@ -402,8 +468,8 @@ def inspect_existing_launch(
             (before["ppid"], before["original_ppid"]) == (target["ppid"], target["original_ppid"])
             and _token(before, "parent_audit_token") == _token(target, "parent_audit_token")
         ),
-        session_identity=membership(target["session_id"]),
-        group_identity=membership(target["group_id"]),
+        session_identity=membership(target["session_id"], target["ppid"]),
+        group_identity=membership(target["group_id"], target["ppid"]),
         posix_membership_preserved=_check(
             (before["session_id"], before["group_id"]) == (target["session_id"], target["group_id"])
         ),

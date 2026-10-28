@@ -154,7 +154,7 @@ The direct control's native exec vector is also checked against the kit's declar
 These checks compare kernel exec evidence with a later main-entry snapshot; they do not assume
 that a difference invalidates the kernel vector or that application startup made a specific change.
 
-The version-2 supplemental report also includes `control_launch` and `finder_launch`. These
+The version-2 and later supplemental reports also include `control_launch` and `finder_launch`. These
 classify existing native process/image relationships, whether session/group IDs identify the
 child as leader, controlling-tty presence (separate from stdio), standard-only FD inventory and
 extent, cwd as root/declared HOME/other, script absence, native slice, null entitlements and
@@ -162,6 +162,15 @@ signature agreement. No raw IDs, paths, signature/flag values, environment keys 
 These distinctions were absent from the original fixed report but are needed before constructing
 a canonical GUI birth-to-exec contract. They use the same already captured controlled evidence;
 do not repeat setup, capture, Finder launch or any live lookup for this follow-up.
+
+Version 3 adds the launcher's **before-exec** audit-origin and responsibility classes plus its
+individual session/group relationships. A changed audit origin alone does not identify its old
+class. The checker reports sentinel/root/real-user/target/other relationships and default-zero/
+target/other audit-session classes, without exporting numbers. Responsibility distinguishes the
+before snapshot, parent, target execution, same PID with a different identity, and unrelated or
+unset tokens. Matching a PID does not establish a lifetime. These labels help finish the launcher
+producer without guessing its prior attribution. They read the same existing bounded evidence;
+no additional capture, app launch or variable-name/value disclosure is needed.
 
 `RETAINED_MATCH` establishes a matching retained fork. `NOT_RETAINED` says only that the bounded
 evidence contains none; it does not prove no fork happened or distinguish launch mechanism from

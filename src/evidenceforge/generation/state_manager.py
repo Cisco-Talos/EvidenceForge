@@ -2372,6 +2372,7 @@ class ActionCohortProcessExecution:
     thread_counter: tuple[str, int] | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
     descriptors_after: MacosDescriptorTable | None = None
+    gui_session: SessionIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3811,6 +3812,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
         macos_ssh_standard_io: bool = False,
+        macos_gui_session: SessionIdentity | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3841,7 +3843,17 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         if timestamp <= normalized.execution_started_at:
             raise StateError("Process execution must follow the current execution start")
         self._manager._validate_process_credentials(credentials, platform)
-        if credentials is not None and (
+        gui_relationships = None
+        if macos_gui_session is not None:
+            if birth is not None:
+                raise StateError("GUI exec adoption requires its already live launcher")
+            gui_relationships = self._manager._plan_macos_gui_exec_relationships(
+                normalized, macos_gui_session, timestamp, image=image
+            )
+            if credentials is not None and credentials != gui_relationships[0]:
+                raise StateError("GUI exec credentials disagree with its authenticated login")
+            credentials = gui_relationships[0]
+        elif credentials is not None and (
             normalized.credentials is None or credentials.origin != normalized.credentials.origin
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
@@ -3925,6 +3937,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             execution_ordinal=normalized.execution_ordinal + 1,
             lifetime_image=normalized.initial_image,
             executed_at=timestamp,
+            job_control=gui_relationships[1] if gui_relationships else normalized.job_control,
+            responsibility=gui_relationships[2] if gui_relationships else normalized.responsibility,
         )
         descriptors = (
             birth._payload.initial_descriptors
@@ -3954,6 +3968,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 thread_counter=thread_counter,
                 _capability=_ActionCohortCapability(),
                 descriptors_after=descriptors_after,
+                gui_session=macos_gui_session,
             )
         )
         return after
@@ -4868,6 +4883,11 @@ def _action_cohort_semantic_preimage(
                 + (
                     (("macos-exec-descriptors-v1", patch.descriptors_after),)
                     if patch.descriptors_after is not None
+                    else ()
+                )
+                + (
+                    (("macos-gui-exec-v1", patch.gui_session),)
+                    if patch.gui_session is not None
                     else ()
                 )
                 for patch in process_executions
@@ -7534,6 +7554,10 @@ class StateManager:
                 type(execution.target) is not ProcessIdentity
                 or type(execution.after) is not ProcessIdentity
                 or type(execution.retired_threads) is not tuple
+                or (
+                    execution.gui_session is not None
+                    and type(execution.gui_session) is not SessionIdentity
+                )
                 or any(type(thread) is not ThreadIdentity for thread in execution.retired_threads)
                 or (
                     execution.thread_counter is not None
@@ -12954,7 +12978,20 @@ class StateManager:
                     raise StateError(
                         "Process execution with worker threads requires explicit thread replacement"
                     )
-                if after.credentials != before.credentials and (
+                gui_relationships = None
+                if execution.gui_session is not None:
+                    if birth is not None:
+                        raise StateError("GUI exec adoption requires its already live launcher")
+                    gui_relationships = self._plan_macos_gui_exec_relationships(
+                        before, execution.gui_session, after.execution_started_at, image=after.image
+                    )
+                    if (
+                        after.credentials,
+                        after.job_control,
+                        after.responsibility,
+                    ) != gui_relationships:
+                        raise StateError("GUI exec changed its exact authenticated relationships")
+                elif after.credentials != before.credentials and (
                     before.credentials is None
                     or after.credentials is None
                     or after.credentials.origin != before.credentials.origin
@@ -12986,6 +13023,10 @@ class StateManager:
                     execution_ordinal=before.execution_ordinal + 1,
                     lifetime_image=before.initial_image,
                     executed_at=after.executed_at,
+                    job_control=gui_relationships[1] if gui_relationships else before.job_control,
+                    responsibility=(
+                        gui_relationships[2] if gui_relationships else before.responsibility
+                    ),
                 )
                 if after != expected or after.execution_started_at <= before.execution_started_at:
                     raise StateError("Process execution changed lifetime ownership or ordinal")
@@ -13253,7 +13294,9 @@ class StateManager:
                 ):
                     raise StateError("New responsibility cannot follow its same-cohort owner exit")
 
-            self._validate_posix_membership_sequence(plan._processes, plan._process_terminations)
+            self._validate_posix_membership_sequence(
+                plan._processes, plan._process_terminations, plan._process_executions
+            )
 
             member_frontiers = [
                 value
@@ -13846,6 +13889,12 @@ class StateManager:
                 process_rows.get(execution.target.object_id)
                 or self._processes_by_object_id[execution.target.object_id]
             )
+            if execution.gui_session is not None:
+                capture_membership(execution.target.job_control)
+                capture_membership(execution.after.job_control)
+                capture_indexed(
+                    self._running_processes, (execution.target.hostname, execution.target.pid)
+                )  # type: ignore[arg-type]
         for replacement in exec_threads:
             capture_mapping(self._thread_id_counters, replacement.replacement.hostname)  # type: ignore[arg-type]
             for thread in (*replacement.retired, replacement.replacement):
@@ -15609,6 +15658,18 @@ class StateManager:
             if execution.after.execution_directory is not None:
                 self._append_process_directory(process, execution.after.execution_directory)
             process.credentials = execution.after.credentials
+            if execution.gui_session is not None:
+                change = PosixJobControlChange(
+                    "setpgid",
+                    execution.target.job_control,
+                    execution.after.job_control,
+                    execution.after.execution_started_at,
+                )
+                self._commit_posix_membership(change.before, change.after, change.changed_at)
+                process.job_control = change.after
+                process.job_control_history = (*process.job_control_history, change)
+                process.responsibility = execution.after.responsibility
+                self._running_processes.refresh((process.system, process.pid))
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
                 self._macos_audit_pid_versions[process.system] = max(
@@ -16127,10 +16188,74 @@ class StateManager:
             raise StateError("New POSIX group must use its creating process identity")
         membership_updates(self._posix_job_control_reservations, before, after, change.changed_at)
 
+    def _plan_macos_gui_exec_relationships(
+        self, before: ProcessIdentity, owner: SessionIdentity, at: datetime, *, image: str
+    ) -> tuple[PosixProcessCredentials, PosixGroupIdentity, ProcessResponsibility]:
+        """Authenticate a local GUI exec adoption without a general credential rewrite."""
+        if type(owner) is not SessionIdentity:
+            raise StateError("GUI exec adoption requires its exact session identity")
+        self._validate_action_live_process_identity(before)
+        session = self.get_session_at(owner.logon_id, at)
+        parent = self.get_process_identity_at(before.hostname, before.parent_pid, at)
+        old = before.credentials
+        if (
+            self._pid_os.get(before.hostname) != "macos"
+            or before.image != "/usr/libexec/xpcproxy"
+            or ".app/Contents/MacOS/" not in image
+            or before.parent_pid != 1
+            or parent is None
+            or parent.image != "/sbin/launchd"
+            or parent.job_control is None
+            or parent.job_control.session.sid != 1
+            or parent.job_control.session.leader_object_id != parent.object_id
+            or before.parentage is None
+            or before.parentage.original_pid != 1
+            or before.parentage.current is None
+            or before.parentage.current.object_id != parent.object_id
+            or before.job_control is None
+            or before.job_control.session != parent.job_control.session
+            or before.job_control.pgid == before.pid
+            or old is None
+            or session is None
+            or session.system != before.hostname
+            or session.username != before.principal
+            or before.logon_id != owner.logon_id
+            or self.get_session_identity(owner.logon_id) != owner
+            or owner.session_kind != "interactive"
+            or session.logon_type != 2
+            or session.auth_protocol != "local"
+            or session.audit_origin is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+            or (old.real_uid, old.effective_uid) != (session.effective_uid,) * 2
+            or (old.real_gid, old.effective_gid) != (session.effective_gid,) * 2
+            or at < session.audit_origin.created_at
+        ):
+            raise StateError("GUI exec adoption lost its launchd, local account or login authority")
+        origin = session.audit_origin
+        if (old.audit_uid, old.audit_session_id) == (origin.audit_uid, origin.audit_session_id):
+            raise StateError("GUI exec adoption requires a distinct launcher audit origin")
+        credentials = replace(
+            old, audit_uid=origin.audit_uid, audit_session_id=origin.audit_session_id
+        )
+        group = PosixGroupIdentity(before.job_control.session, before.pid, before.object_id, at)
+        change = PosixJobControlChange("setpgid", before.job_control, group, at)
+        self._validate_posix_job_control_patch(
+            ActionCohortProcessActivityPatch(
+                target=before,
+                activity_time=at,
+                job_control_change=change,
+                job_control_actor=before,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return credentials, group, ProcessResponsibility(None)
+
     def _validate_posix_membership_sequence(
         self,
         starts: tuple[ProcessMaterializationPlan, ...],
         closes: tuple[ActionCohortProcessTermination, ...] = (),
+        executions: tuple[ActionCohortProcessExecution, ...] = (),
     ) -> None:
         # Overlay only touched numeric buckets; never copy or scan the process table.
         updates: dict[ReservationKey, ReservationRows] = {}
@@ -16145,6 +16270,16 @@ class StateManager:
                     lifetime_boundary=True,
                 )
             )
+        for execution in executions:
+            if execution.gui_session is not None:
+                updates.update(
+                    membership_updates(
+                        view,
+                        execution.target.job_control,
+                        execution.after.job_control,
+                        execution.after.execution_started_at,
+                    )
+                )
         for plan in closes:
             updates.update(
                 membership_updates(

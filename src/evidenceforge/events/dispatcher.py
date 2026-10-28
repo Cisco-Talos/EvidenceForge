@@ -6311,6 +6311,10 @@ class EventDispatcher:
                     execution is None
                     or execution.target != before
                     or execution.after != after
+                    or (
+                        execution.gui_session is not None
+                        and event.identity_plan.session != execution.gui_session
+                    )
                     or after.object_id in observed_executions
                 ):
                     raise EventContractError(
@@ -6602,6 +6606,11 @@ class EventDispatcher:
             *(identity.object_id for identity in process_starts.values()),
             *(item.identity.object_id for item in state_plan.process_terminations),
             *(item.target.object_id for item in state_plan.process_executions),
+            *(
+                item.gui_session.object_id
+                for item in state_plan.process_executions
+                if item.gui_session is not None
+            ),
             *(item.identity.object_id for item in state_plan.session_terminalizations),
             *(
                 self._action_cohort_target_identity(patch.target).object_id

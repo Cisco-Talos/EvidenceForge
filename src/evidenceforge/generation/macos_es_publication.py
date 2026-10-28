@@ -226,6 +226,33 @@ def prepared_macos_es_process_publication(
                 for item in cohort.process_executions
                 if item.after == event.identity_plan.subject
             )
+            if execution.target.executable_version is None:
+                return "executable_version_unknown"
+            if execution.gui_session is not None:
+                for snapshot in (execution.target, execution.after):
+                    if (
+                        snapshot.credentials is None
+                        or snapshot.credentials.audit_uid is None
+                        or snapshot.credentials.audit_session_id is None
+                        or snapshot.audit_pid_version is None
+                        or snapshot.job_control is None
+                        or snapshot.parentage is None
+                        or snapshot.responsibility is None
+                        or snapshot.image_security is None
+                        or snapshot.image_security.validation_category is None
+                        or dispatcher.resolve_loaded_process_binary_identity(
+                            snapshot
+                        ).code_signature
+                        is None
+                    ):
+                        return "gui_exec_metadata_unknown"
+                if (
+                    execution.after.environment is None
+                    or execution.after.execution_directory is None
+                    or execution.after.exec_image is None
+                    or execution.after.exec_script is None
+                ):
+                    return "gui_exec_metadata_unknown"
             binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
             if binary.code_signature is None or binary.code_signature.entitlements == "unknown":
                 return "entitlements_unknown"

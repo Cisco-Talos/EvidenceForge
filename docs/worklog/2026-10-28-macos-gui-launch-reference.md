@@ -166,3 +166,83 @@ Prepared version-2 code-only reviewer: `/private/tmp/eforge-gui-launch-kit-lp8zh
 hidden prompt. It does not use either reviewer copy as the original capture root. The original
 kit and previously used reviewer remain untouched and private. Only the resulting fixed JSON
 should be shared; no repeat Finder launch or disclosure of changed environment keys is needed.
+
+## Version-2 result: authenticated GUI exec adoption
+
+The human's fixed version-2 report preserves provenance/collection PASS. Finder's exec process
+image is XPCPROXY; target replaces its image within the same PID/birth, with a different audit
+PID version. Both parent tokens/PPIDs identify boot PID 1 and parentage is preserved. Real and
+effective UID/GID are unchanged, while audit origin differs. Target SID is the parent PID and
+PGID is the target PID; overall POSIX membership differs. Both Finder snapshots have no
+controlling tty. The standard-only inventory/extent, root cwd, no-script, generic-arm64, null-
+entitlement and matching dyld-path checks pass. Target signing identity matches the control
+and differs from the preimage. Control keeps audit/membership and a controlling tty despite
+non-TTY standard descriptors. No private records or values were opened or copied by agents.
+
+The prior ordinary-exec invariant cannot represent that audit/group transition. Added an
+explicit `macos_gui_session` authority to the canonical exec builder and sealed execution member.
+It authenticates the exact active local GUI origin/account and live launchd-parented xpcproxy;
+real/effective credentials remain fixed. This bounded form retains the boot POSIX session,
+creates the process's own group at exec and sets self responsibility. Ordinary exec has no
+new rewrite permission. Event structure and exact dispatcher binding require the same session.
+The metadata producer accepts this form only under the qualified policy, with explicit exec-
+time environment/cwd and its existing image/script/descriptor constraints.
+
+Group reservations, indexes and temporal history commit with the image/audit change. The
+reversible journal captures every touched membership/index key. Full checkpoint restoration
+retains old/new snapshots and allocator history, and can continue/close the execution identically.
+No extra fork, audit-bind or setpgid source occurrence is invented. Complete invented facts
+exercise native v11 publication and known exit; missing launcher/exec facts remain counter-only
+unsupported phases. `gui_exec_metadata_unknown` explains that gap, and unknown loaded preimage
+versions use `executable_version_unknown`. Native filtering and interrupted-write recovery
+preserve canonical state and avoid duplicate source/group mutations. Revision 346 records this
+change; no product version, native codec, collection or host setting changes.
+
+Public Apple XNU source confirms that spawn attributes can adopt an audit-session port and
+change process group with image activation. That supports the transition shape without proving
+the private run's exact userspace call/flags. References and the human-only scope are retained
+in the Finder relationship contract.
+
+### What still needs private classification
+
+Version 2 compares before/after audit origin, but does not identify the launcher's prior audit
+class or responsibility. A complete producer must not assume an unset audit user, zero audit
+session, or self responsibility. The version-3 offline supplement classifies these existing
+fields and the preimage's individual SID/PGID relationships. It distinguishes a responsible
+token matching the target execution from a distinct process or an identical before snapshot;
+PID equality alone remains insufficient. Only predefined relationship labels are exported.
+This is the same capture and bounded reader, with no new collection, live lookup or app launch.
+Agents must not run it on a used kit or inspect any private directory. Generic authored and
+baseline Finder launches are not yet converted to a complete native launcher/exec producer;
+nonnull entitlements and broader GUI/ULF/app families remain outside this reference.
+
+### Verification and handoff for revision 346
+
+The focused execution/native/audit/job-control/checkpoint selection passes **1,093 tests**
+(22 existing slow cases deselected). All **821 private-reference tests** pass separately,
+including version-3 fixed-output canaries. The new GUI transition selection has 18 tests covering
+atomic rollback, prior/current snapshots, full checkpoint continuation/close, authority rejection,
+v11 exec plus known exit, absent metadata, filtering and interrupted native-write recovery.
+All 99 config files, full Ruff/format, whitespace and the revision-346 digest/base checks pass.
+No whole routine/slow suite, new assessment, actual native capture, app launch, private directory
+inspection or native-log read was performed. Probe/capture code and native codec are unchanged.
+
+Prepared version-3 code-only reviewer: `/private/tmp/eforge-gui-launch-kit-t9ksukqt`. Its isolated
+`-I -B --help` entry point passes. Only the human may run `review-existing --private-run`, after
+closing agents, selecting the original outer kit at the hidden prompt. No setup/capture/sudo or
+new Finder launch is required. All used kits and private results remain untouched by agents.
+
+### User's coverage-guarantee question
+
+The answer remains no. Current source coverage is bounded, not a census of every simulated
+process: exact process cohorts and explicit authored aggregates are accounted, while some
+background aggregate paths are outside that diagnostic. Generic GUI/service starts still need
+canonical launcher/exec producers. Dock/Spotlight, PTY/helper paths, unqualified binary/signing
+facts and unknown terminal outcomes remain separate gaps. Deliberate collection windows,
+source filtering and modeled loss are distinct from those implementation/qualification limits.
+Do not imply that every eCAR process row has a corresponding native exec, or that every launch
+attempt creates a process. Shell builtins, reused apps and no-child refusals differ from actual
+image execution. A proposed strict guarantee should require complete canonical execution
+accounting and lossless active ES collection, failing validation/generation on unsupported or
+unknown expected native phases instead of silently omitting them. Such strict enforcement is
+not implemented by this milestone and has not been approved as a new roadmap commitment.

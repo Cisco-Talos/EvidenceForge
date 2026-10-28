@@ -7,8 +7,9 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Protocol
 
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
+from evidenceforge.events.responsibility import ProcessResponsibility
 
 
 class _ProcessTransitionOccurrence(Protocol):
@@ -23,6 +24,50 @@ class _ProcessTransitionOccurrence(Protocol):
 def _validate_transition_time(event: _ProcessTransitionOccurrence) -> None:
     if type(event.timestamp) is not datetime or event.timestamp.utcoffset() is None:
         raise ValueError("Process transition requires an aware canonical timestamp")
+
+
+def macos_gui_exec_relationships_match(
+    before: ProcessIdentity, after: ProcessIdentity, session: SessionIdentity | None
+) -> bool:
+    """Recognize bounded GUI exec structure, without authorizing a State mutation.
+
+    The exact cohort must separately authenticate the local GUI session and its
+    audit origin. This only admits the observed xpcproxy-to-app relationship:
+    preserved POSIX credentials/session, adopted audit origin, a new own process
+    group and explicit self responsibility. It grants no general exec exception.
+    """
+    old, new = before.credentials, after.credentials
+    return (
+        type(session) is SessionIdentity
+        and session.session_kind == "interactive"
+        and session.hostname == before.hostname == after.hostname
+        and session.logon_id == before.logon_id == after.logon_id
+        and session.principal == before.principal == after.principal
+        and session.started_at <= after.execution_started_at
+        and before.image == "/usr/libexec/xpcproxy"
+        and after.image.startswith("/")
+        and ".app/Contents/MacOS/" in after.image
+        and before.parent_pid == after.parent_pid == 1
+        and before.parentage is not None
+        and before.parentage.original_pid == 1
+        and before.parentage == after.parentage
+        and old is not None
+        and new is not None
+        and (old.real_uid, old.effective_uid, old.real_gid, old.effective_gid)
+        == (new.real_uid, new.effective_uid, new.real_gid, new.effective_gid)
+        and new.audit_uid is not None
+        and new.audit_session_id is not None
+        and (old.audit_uid, old.audit_session_id) != (new.audit_uid, new.audit_session_id)
+        and before.job_control is not None
+        and after.job_control is not None
+        and before.job_control.session == after.job_control.session
+        and after.job_control.session.sid == after.parent_pid
+        and before.job_control.pgid != before.pid
+        and after.job_control.pgid == after.pid
+        and after.job_control.leader_object_id == after.object_id
+        and after.job_control.started_at == after.execution_started_at
+        and after.responsibility == ProcessResponsibility(None)
+    )
 
 
 def process_exec_identities(
@@ -43,6 +88,9 @@ def process_exec_identities(
     ):
         raise ValueError("Process exec requires exact before/after process identity roles")
     before, after = plan.actor, plan.subject
+    gui = getattr(
+        event.src_host, "os_category", None
+    ) == "macos" and macos_gui_exec_relationships_match(before, after, plan.session)
     if (
         after.execution_ordinal != before.execution_ordinal + 1
         or after.execution_started_at != event.timestamp
@@ -65,14 +113,19 @@ def process_exec_identities(
             credentials=before.credentials,
             audit_pid_version=before.audit_pid_version,
             primary_thread=before.primary_thread,
+            job_control=before.job_control if gui else after.job_control,
+            responsibility=before.responsibility if gui else after.responsibility,
         )
         != before
     ):
         raise ValueError("Process exec must advance one execution within the same lifetime")
-    if (before.credentials is None) != (after.credentials is None) or (
-        before.credentials is not None
-        and after.credentials is not None
-        and before.credentials.origin != after.credentials.origin
+    if not gui and (
+        (before.credentials is None) != (after.credentials is None)
+        or (
+            before.credentials is not None
+            and after.credentials is not None
+            and before.credentials.origin != after.credentials.origin
+        )
     ):
         raise ValueError("Process exec must preserve known real and audit credentials")
     _validate_process_context(event, after, platforms={"linux", "macos"})

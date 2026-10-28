@@ -696,6 +696,13 @@ nonnull entitlements do not qualify. Exit requires an explicit canonical complet
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
 
+An explicit internal GUI transition can render xpcproxy replacing its image with an app under
+launchd, adopting an authenticated local audit origin and forming its own process group within
+the boot POSIX session. PID/lifetime stay unchanged. This requires exact canonical session
+authority and complete pre/post snapshots; it creates no synthetic fork. The complete Finder
+launcher producer is still separate from ordinary authored/baseline GUI births, and this adds no
+GUI Unified Log messages. Unknown launcher/exec metadata remains unavailable.
+
 The ordinary completion owner preserves explicit normal/signal outcomes for an exact live
 execution. Frozen policy also declares nominal zero results for the exact natural query
 invocations `/usr/bin/id`, `/usr/bin/sw_vers`, and `/usr/bin/sw_vers -productVersion`. This is
@@ -707,7 +714,7 @@ counts, source decisions, the first blocking qualification reason and per-author
 counts for exact process cohorts and explicit authored aggregate births. The Markdown ground truth shows the host summary.
 `aggregate_birth_only` is diagnostic and consumes no ES sequence; `entitlements_unknown`,
 `entitlements_present`, `descriptors_unknown`, `thread_replacement_unknown` and
-`exit_outcome_unknown` and `executable_version_unknown` explain unavailable phases. Deliberate filtering, loss and collection
+`exit_outcome_unknown`, `executable_version_unknown` and `gui_exec_metadata_unknown` explain unavailable phases. Deliberate filtering, loss and collection
 windows remain separate source decisions. Older queued snapshots may report `not_recorded`.
 This is a workload coverage account, not a new native reference qualification or an inventory
 of unannotated background aggregate births or every compatibility path. Authored no-child outcomes remain explained by

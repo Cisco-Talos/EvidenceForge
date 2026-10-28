@@ -545,7 +545,7 @@ def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "2", 1, None])
+@pytest.mark.parametrize("value", [True, "3", 1, 2, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -796,3 +796,56 @@ def test_native_relationship_checks_bind_before_after_and_exact_parent_tokens() 
     result = kit.inspect_existing_launch(before, payload, _IMAGE)
     assert result.parent_is_boot_pid == result.audit_origin_preserved == "FAIL"
     assert result.posix_credentials_preserved == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "origin", ["UNATTRIBUTED_SENTINEL", "ROOT_USER", "REAL_USER", "TARGET_AUDIT_USER", "OTHER"]
+)
+def test_before_audit_user_diagnostic_reveals_only_a_relationship(origin: str) -> None:
+    rows = _rows()
+    before, payload = rows[1]["process"], rows[1]["event"]["exec"]
+    token = before["audit_token"]
+    token["auid"] = {
+        "UNATTRIBUTED_SENTINEL": 2**32 - 1,
+        "ROOT_USER": 0,
+        "REAL_USER": token["ruid"],
+        "TARGET_AUDIT_USER": 600,
+        "OTHER": 700,
+    }[origin]
+    payload["target"]["audit_token"]["auid"] = 600
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.before_audit_user == origin
+    assert result.target_audit_user_is_real_user == "FAIL"
+    assert _CANARY not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("origin", ["DEFAULT_ZERO", "TARGET_SESSION", "OTHER"])
+@pytest.mark.parametrize(
+    "responsibility",
+    ["SELF", "PARENT", "TARGET_EXECUTION", "SAME_PID_OTHER_IDENTITY", "UNSET", "OTHER"],
+)
+def test_before_audit_session_and_responsibility_never_export_native_identifiers(
+    origin: str, responsibility: str
+) -> None:
+    rows = _rows()
+    before, payload = rows[1]["process"], rows[1]["event"]["exec"]
+    before["audit_token"]["asid"] = {
+        "DEFAULT_ZERO": 0,
+        "TARGET_SESSION": payload["target"]["audit_token"]["asid"],
+        "OTHER": 77,
+    }[origin]
+    if responsibility == "SELF":
+        before["responsible_audit_token"] = deepcopy(before["audit_token"])
+    elif responsibility == "PARENT":
+        before["responsible_audit_token"] = deepcopy(before["parent_audit_token"])
+    elif responsibility == "UNSET":
+        before["responsible_audit_token"] = dict.fromkeys(before["audit_token"], 0)
+    elif responsibility == "TARGET_EXECUTION":
+        before["responsible_audit_token"] = deepcopy(payload["target"]["audit_token"])
+    elif responsibility == "SAME_PID_OTHER_IDENTITY":
+        before["responsible_audit_token"] = deepcopy(before["audit_token"])
+        before["responsible_audit_token"]["pidversion"] += 100
+    result = kit.inspect_existing_launch(before, payload, _IMAGE)
+    assert result.before_audit_session == origin
+    assert result.before_responsibility == responsibility
+    assert _CANARY not in result.model_dump_json()

@@ -2002,3 +2002,8 @@ v11 fork/exec/known-exit profile. Complete canonical facts are required; missing
 descriptors or exit results omit the affected phase without padding. Existing collection settings
 still govern source visibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
 for remaining gaps and the distinction between decoding and generation admission.
+
+The internal authenticated xpcproxy-to-app exec contract is not a new authored event or a
+`launch_method` field. Ordinary GUI `process` entries retain aggregate birth semantics until
+a complete qualified launcher producer is selected; an app-bundle path alone does not request
+native exec or GUI Unified Log evidence.

@@ -430,3 +430,8 @@ and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endp
 The [macOS 26 assessment benchmark](scenarios/macos-assessment/README.md) is preserved as historical
 assessment evidence. Its old target is no longer a currently valid generation scenario. Native
 reference records remain private and are never repository fixtures.
+
+The internal Finder relationship and authenticated xpcproxy-to-app exec contracts now preserve
+GUI audit adoption and process-group changes through canonical state and native publication.
+They do not yet convert generic authored/baseline GUI births into complete native executions.
+See the [bounded Finder reference and remaining scope](docs/design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).

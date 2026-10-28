@@ -1310,11 +1310,21 @@ existing host-local audit namespace; GUI and SSH origins share that allocator. A
 session has no Windows desktop session ID. Explicit user launches consume the authenticated
 account's origin, while ordinary children inherit their parent's credentials. A new GUI login
 allocates a new origin independently of terminal POSIX sessions/groups. Known foreign audit
-origins cannot be overwritten. Older frozen policies and already-materialized unknown origins
+origins cannot be overwritten by that clean-launch producer. Older frozen policies and already-materialized unknown origins
 remain unknown. Recovery validates local authentication, UID ownership, chronology and unique
 audit ownership across active and retained sessions. The bounded human-reviewed macOS 27 iTerm2
 experiment verifies these identity relationships, not native GUI startup records, responsible
 ownership or the terminal application's complete lifecycle.
+
+An explicit GUI exec adoption is a distinct authenticated transition. A live canonical
+`/usr/libexec/xpcproxy` owned by the exact local GUI session may replace its image with a regular
+app, adopt that session's audit origin, retain POSIX credentials/session, form its own process
+group and become self-responsible. The State cohort binds the exact session, snapshots and group
+reservation effects; rollback/checkpoint history preserve both sides. Ordinary exec cannot use
+this exception without that authority. Complete facts render through existing ES publication;
+unknown launcher/exec metadata stays unavailable. This internal transition does not turn generic
+GUI births into native execs or add an authored launch-method field. See the
+[Finder contract](design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).
 
 
 The internal `macos_policy_refusal` occurrence is produced only by an explicit authored `process.outcome: policy_refused`. The process-policy action bundle plans and commits an authenticated State cohort allocation, then publishes through the ordinary dispatcher. `MacosPolicyRefusalTarget` is an attempt identity, not a `ProcessIdentity`: its shared-namespace PID is reserved at the observation instant without claiming a birth or lifetime. State retains a bounded exact target/initiator/logging-TID receipt and checkpoints both it and the allocator state. `MacosKernelLogObservation` binds the host boot to its kernel writer and distinct deployment-owned AppleSystemPolicy image. Its source projector renders PID/UID zero and the absolute-style Default/log tracepoint using explicitly modeled profile offsets. Ordinary collection, timing, host sorting and checkpoint spools own export. No eCAR create or ES fork/exec/exit is requested. The pre-child `denied` and returning `exec_failed` paths remain separate; no refusal cause or target exec stage is inferred.

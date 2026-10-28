@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 345
+current_revision: 346
 history_start_revision: 1
-behavior_surface_sha256: 382458185c6be6c697437dd58ea3c658a6cc1fce06a3e38be23e4cab86d42929
+behavior_surface_sha256: 36c274cee818a2ae9c7d4d6b410e2396d765c54e92cbff3e088b0508be414471
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3283,3 +3283,15 @@ changes:
     formats:
       - ecar
     summary: Adds an explicit Finder relationship intent with exact launchd/local-GUI audit ownership and self responsibility, preserving unknown exec inputs and aggregate birth semantics without widening native ES admission.
+  - revision: 346
+    id: macos-authenticated-gui-exec-adoption
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - gui-audit-responsibility
+      - posix-membership-lifecycle
+      - native-source-admission
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Supports authenticated xpcproxy-to-app audit adoption and own-group creation within one exec, preserving ordinary exec rules, exact membership recovery and complete native snapshot gates.

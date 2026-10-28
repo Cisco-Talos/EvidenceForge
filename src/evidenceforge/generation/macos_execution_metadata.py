@@ -17,6 +17,7 @@ from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalAr
 from evidenceforge.events.identity import (
     PosixProcessCredentials,
     ProcessIdentity,
+    SessionIdentity,
     validate_process_arguments,
 )
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
@@ -458,6 +459,7 @@ class MacosExecutionMetadataProducer:
         validation: MacosCodeValidationDecision | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
         observe_descriptors: bool = True,
+        gui_session: SessionIdentity | None = None,
     ) -> MacosPreparedExecution:
         """Produce an exact direct image replacement through the existing State builder.
 
@@ -474,6 +476,15 @@ class MacosExecutionMetadataProducer:
             or type(observe_descriptors) is not bool
         ):
             raise StateError("Mac exec producer requires the exact canonical State builder")
+        if gui_session is not None and (
+            self.profile.finder_launch_relationships != "launchd_self"
+            or environment is None
+            or execution_directory is None
+            or (script is not None and script.artifact_version_id is not None)
+        ):
+            raise StateError(
+                "Finder exec requires qualified policy and explicit exec-time environment/cwd"
+            )
         validate_process_arguments(arguments, command_line=shlex.join(arguments))
         known_environment = environment if environment is not None else process.environment
         current_directory = (
@@ -518,5 +529,6 @@ class MacosExecutionMetadataProducer:
             exec_script=script if script is not None else MacosExecScript(),
             executable_version=ProcessExecutableVersion.from_binary(binary),
             image_security=self.image_security(binary, validation=validation),
+            macos_gui_session=gui_session,
         )
         return MacosPreparedExecution(after, descriptors)

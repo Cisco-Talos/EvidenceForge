@@ -771,3 +771,91 @@ def test_execution_validation_policy_rejects_contradictions(modeled: _Fixture, d
         raw["code_validation"] = (*raw["code_validation"], dict(rule))
     with pytest.raises(ValidationError, match="coherent|disjoint"):
         MacosExecutionMetadataProfile.model_validate(raw)
+
+
+@pytest.mark.parametrize("missing", [None, "environment", "directory", "policy"])
+def test_gui_exec_producer_consumes_explicit_inputs_instead_of_later_app_state(
+    modeled: _Fixture, missing: str | None
+) -> None:
+    from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
+    from tests.unit.test_macos_audit_sessions import _commit
+
+    state = modeled.state
+    batch = state.begin_materialization_batch()
+    session = batch.plan_session(
+        system="MAC-01",
+        username="alex",
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+        auth_protocol="local",
+        effective_uid=501,
+        effective_gid=20,
+        session_id=0,
+        start_time=modeled.start + timedelta(seconds=1),
+    )
+    session = batch.enrich_macos_audit_session(
+        session, audit_uid=501, authenticated_at=session.identity.started_at
+    )
+    _commit(state, batch)
+    birth = state.plan_process_materialization(
+        system="MAC-01",
+        parent_pid=1,
+        image="/usr/libexec/xpcproxy",
+        command_line="/usr/libexec/xpcproxy",
+        username="alex",
+        integrity_level="Medium",
+        os_category="macos",
+        logon_id=session.identity.logon_id,
+        start_time=modeled.start + timedelta(seconds=2),
+        credentials=PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 0),
+    )
+    state.materialize_process(birth)
+    batch = state.begin_action_cohort_materialization()
+    batch.record_macos_descriptors(
+        birth.identity,
+        table=MacosDescriptorTable(
+            "MAC-01",
+            modeled.start + timedelta(seconds=3),
+            tuple(
+                MacosDescriptorBinding(fd, "file", f"invented-file-{fd}", False) for fd in range(3)
+            ),
+            native_last_fd=2,
+        ),
+    )
+    state.materialize_action_cohort(batch.seal())
+    image = "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+    binary = modeled.producer._filesystem.deployed_binary("MAC-01", image, "alex")
+    at = modeled.start + timedelta(seconds=4)
+    if missing == "policy":
+        modeled.producer.profile = modeled.producer.profile.model_copy(
+            update={"finder_launch_relationships": None}
+        )
+    values = dict(
+        at=at,
+        image=image,
+        requested_path=image,
+        arguments=(image,),
+        binary=binary,
+        environment=None if missing == "environment" else ("LANG=C",),
+        execution_directory=None
+        if missing == "directory"
+        else modeled.producer.directory("MAC-01", "/", at),
+        gui_session=session.identity,
+    )
+    digest = state.materialization_digest()
+    batch = state.begin_action_cohort_materialization()
+    if missing:
+        with pytest.raises(StateError, match="explicit exec-time"):
+            modeled.producer.plan_exec(batch, state, birth.identity, **values)
+        assert state.materialization_digest() == digest
+    else:
+        prepared = modeled.producer.plan_exec(batch, state, birth.identity, **values)
+        assert state.materialization_digest() == digest
+        assert prepared.process.environment == ("LANG=C",)
+        assert prepared.process.execution_directory.native_path == "/"
+        assert prepared.descriptors.last_fd == 2
+        assert (
+            prepared.process.credentials.audit_session_id == session.audit_origin.audit_session_id
+        )
+        state.materialize_action_cohort(batch.seal())

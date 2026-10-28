@@ -40,6 +40,21 @@ from later process state; they do not invalidate the native exec vector or estab
 component responsible for Finder's value changes. Fork labels remain RETAINED_MATCH for the
 control and NOT_RETAINED for Finder.
 
+The version-2 supplement identifies the Finder message's pre-exec image as XPCPROXY. Parent
+PID and its audit token identify boot PID 1; parentage and POSIX credentials are preserved.
+Audit origin changes across exec. The target's session ID equals its parent's PID, its group ID
+equals its own PID, and membership changes across exec. Both Finder snapshots lack a controlling
+tty. Only standard descriptors are present, native extent is 2, cwd is untruncated root, script
+is absent, slice is generic arm64, entitlements are null and dyld path matches the target. The
+target signature matches the direct control and differs from the pre-exec image/file object.
+PID and birth stay the same while audit PID version changes: this is image replacement within
+one lifetime, not a new app child beneath xpcproxy.
+
+The control demonstrates why stdio and controlling tty stay separate: its non-TTY standard
+vnodes coexist with a controlling tty in both process snapshots. Its audit and POSIX memberships
+remain unchanged. Finder's comparison FAIL labels describe differences across exec, while
+original collection/provenance controls remain PASS.
+
 ## Remaining distinctions
 
 Do not substitute main-entry environment for the kernel exec input or attribute the difference
@@ -63,6 +78,12 @@ the message process's image relative to the test app/launchd, cwd category, nati
 script/slice/entitlement shape and signature agreement. It exposes no raw identifiers, flag
 values, paths or vectors and needs no repeat collection.
 
+Version 3 additionally classifies the launcher's audit user/session, responsibility and
+individual session/group relationships. Version 2 establishes differences, not whether the
+launcher's prior audit origin was default/unattributed or already associated with an account or
+session. A complete launcher producer needs those classes. The checker uses the same existing
+capture and exports fixed relationships only, without numeric values or new collection.
+
 ## Canonical relationship implementation
 
 Generation behavior revision 345 adds an internal explicit `macos_launch_kind="finder"` process
@@ -79,6 +100,27 @@ observations. The existing planner's explicit POSIX launch choice remains a mode
 a measured Finder default. This slice preserves aggregate birth semantics and does not publish
 a native fork or manufacture an exec epoch. It adds no authored scenario/Studio launch-method
 field and automatically classifies no installed app as Finder-launched.
+
+Generation behavior revision 346 adds authenticated GUI exec adoption for an already live
+canonical xpcproxy launcher. Its exact active local GUI session supplies audit origin; POSIX
+credentials remain unchanged, the boot POSIX session is retained, a new own process group is
+created and responsibility becomes explicitly self. Ordinary exec retains its existing rules.
+The session authority is bound into the sealed cohort and exact projection, including indexed
+group counts, prior snapshots, rollback and checkpoint history. No separate synthetic audit-bind,
+setpgid or fork observation is emitted for this single exec.
+
+The metadata producer requires explicit kernel-exec environment/cwd for this path and retains
+existing binary/signing/descriptor gates. Missing launcher/exec facts yield unavailable native
+coverage instead of fabricated fields. Complete invented inputs verify v11 publication, source
+filtering and interrupted-write recovery. Their pre-exec values are selected fixture facts,
+not recovered private values. The complete authored/baseline launcher producer remains separate;
+no GUI Unified Log template or broader app/signing/entitlement class is admitted here.
+
+Apple's [spawn implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exec.c)
+supports audit-session port actions and process-group changes with image activation. Its
+[process-group API](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/posix_spawnattr_setpgroup.3.html)
+defines the new-group option. These mechanisms support the modeled transition, without proving
+the exact userspace calls, flags or unretained callbacks in the private experiment.
 
 ## Implementation order after the supplemental review
 
