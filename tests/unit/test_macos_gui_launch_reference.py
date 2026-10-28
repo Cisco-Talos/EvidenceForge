@@ -1,0 +1,453 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Invented inputs only: never run a probe, native preflight, app or collector."""
+
+import io
+import json
+import os
+import stat
+import subprocess
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
+from scripts import macos_gui_launch_reference as kit
+
+from tests.unit.test_macos_endpoint_security_contracts import _process, _record
+
+_CANARY = "INVENTED_PRIVATE_CANARY_DO_NOT_EXPORT"
+_IMAGE = kit.Image(device=123, inode=9001, sha256="a" * 64)
+
+
+@pytest.fixture(autouse=True)
+def no_native_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Tests must never execute a native command, probe or collector")
+
+    monkeypatch.setattr(kit.subprocess, "run", forbidden)
+    monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
+
+
+def _rows(pid: int = 1200, image: kit.Image = _IMAGE) -> list[dict]:
+    fork = _record(11, "fork")
+    before = _process(11, pid=pid)
+    fork["process"] = _process(11, pid=1190)
+    fork["event"]["fork"]["child"] = deepcopy(before)
+    execute = _record(11, "exec")
+    execute["process"] = deepcopy(before)
+    target = deepcopy(before)
+    target["audit_token"]["pidversion"] += 1
+    target["executable"]["stat"].update(st_dev=image.device, st_ino=image.inode)
+    payload = execute["event"]["exec"]
+    payload.update(
+        target=target,
+        args=[f"/private/tmp/{_CANARY}/GUIProbe.app/Contents/MacOS/Probe"],
+        env=[f"PRIVATE={_CANARY}"],
+        fds=[{"fd": fd, "fdtype": 1} for fd in range(3)],
+        last_fd=2,
+    )
+    end = _record(11, "exit")
+    end["process"] = deepcopy(target)
+    end["event"]["exit"]["stat"] = 0
+    for i, row in enumerate((fork, execute, end)):
+        row["seq_num"] = 0
+        row["global_seq_num"] = i + 1
+    return [fork, execute, end]
+
+
+def _raws(rows: list[dict]) -> list[bytes]:
+    return [json.dumps(row).encode() for row in rows]
+
+
+def _own(rows: list[dict]) -> kit.OwnSnapshot:
+    payload = rows[1]["event"]["exec"]
+    target = payload["target"]
+    start = kit._birth(target)
+    return kit.OwnSnapshot(
+        phase="MAIN_ENTRY",
+        token=kit._token(target),
+        ppid=target["ppid"],
+        sid=target["session_id"],
+        pgid=target["group_id"],
+        start_seconds=start // 1_000_000,
+        start_microseconds=start % 1_000_000,
+        inventory_complete=True,
+        fds=tuple(
+            kit.OwnFD(fd=i, kind=1, flags=0, access=0 if i == 0 else 1, tty=False) for i in range(3)
+        ),
+        arguments_hex=tuple(s.encode().hex() for s in payload["args"]),
+        environment_hex=tuple(s.encode().hex() for s in payload["env"]),
+    )
+
+
+def test_fixed_case_report_retains_relationships_without_private_values() -> None:
+    rows = _rows()
+    report = kit.analyze_case(_raws(rows), _own(rows), True, _IMAGE)
+    assert report.native_shapes == report.one_exec_and_exit == report.fork_linkage == "PASS"
+    assert report.own_identity_agreement == report.image_identity_agreement == "PASS"
+    assert report.exec_identity_transition == report.audit_identity_agreement == "PASS"
+    assert report.parent_agreement == report.posix_session_agreement == "PASS"
+    assert report.responsible_identity == "OTHER"
+    assert report.descriptor_inventory_agreement == "PASS"
+    assert report.argument_vector_agreement == report.environment_vector_agreement == "PASS"
+    assert report.exit_status_agreement == "PASS"
+    assert report.stdio_kinds == ("VNODE",) * 3
+    assert report.stdio_access == ("READ", "WRITE", "WRITE")
+    serialized = kit.Report(control=report, finder=report).model_dump_json()
+    for forbidden in (_CANARY, _CANARY.encode().hex(), "9001", "1200", "100001", "a" * 64):
+        assert forbidden not in serialized
+
+
+@pytest.mark.parametrize("relation", ["SELF", "PARENT", "OTHER", "UNSET"])
+def test_responsibility_is_observed_not_assumed(relation: str) -> None:
+    rows = _rows()
+    target = rows[1]["event"]["exec"]["target"]
+    if relation == "SELF":
+        target["responsible_audit_token"] = deepcopy(target["audit_token"])
+    elif relation == "PARENT":
+        target["responsible_audit_token"] = deepcopy(target["parent_audit_token"])
+    elif relation == "UNSET":
+        target["responsible_audit_token"] = dict.fromkeys(target["audit_token"], 0)
+        target["parent_audit_token"] = dict.fromkeys(target["audit_token"], 0)
+    assert kit.analyze_case(_raws(rows), _own(rows), True, _IMAGE).responsible_identity == relation
+
+
+@pytest.mark.parametrize(
+    ("damage", "field"),
+    [
+        ("pidversion", "own_identity_agreement"),
+        ("birth", "own_identity_agreement"),
+        ("parent", "parent_agreement"),
+        ("session", "posix_session_agreement"),
+        ("fds", "descriptor_inventory_agreement"),
+        ("duplicate_fd", "descriptor_inventory_agreement"),
+        ("args", "argument_vector_agreement"),
+        ("env", "environment_vector_agreement"),
+        ("exit", "exit_status_agreement"),
+        ("image", "image_identity_agreement"),
+    ],
+)
+def test_inconsistent_observations_are_not_promoted(damage: str, field: str) -> None:
+    rows = _rows()
+    own = _own(rows)
+    payload = rows[1]["event"]["exec"]
+    if damage == "pidversion":
+        token = list(own.token)
+        token[7] += 1
+        own = own.model_copy(update={"token": tuple(token)})
+    elif damage == "birth":
+        own = own.model_copy(update={"start_microseconds": 1})
+    elif damage == "parent":
+        own = own.model_copy(update={"ppid": 77})
+    elif damage == "session":
+        own = own.model_copy(update={"sid": 77})
+    elif damage == "fds":
+        own = own.model_copy(update={"inventory_complete": False})
+    elif damage == "duplicate_fd":
+        payload["fds"].append(deepcopy(payload["fds"][0]))
+    elif damage in {"args", "env"}:
+        payload[damage] = [_CANARY]
+    elif damage == "image":
+        payload["target"]["executable"]["stat"]["st_ino"] += 1
+    else:
+        rows[2]["event"]["exit"]["stat"] = 9
+    report = kit.analyze_case(_raws(rows), own, True, _IMAGE)
+    assert getattr(report, field) == "FAIL"
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_unknown_v11_layout_is_a_fixed_shape_failure() -> None:
+    rows = _rows()
+    rows[1]["event"]["exec"]["entitlements"] = {_CANARY: _CANARY}
+    report = kit.analyze_case(_raws(rows), _own(rows), True, _IMAGE)
+    assert report.native_shapes == "FAIL"
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_missing_and_duplicate_phases_do_not_pass() -> None:
+    rows = _rows()
+    assert kit.analyze_case([], None, False).one_exec_and_exit == "INCONCLUSIVE"
+    assert kit.analyze_case(_raws(rows[:2]), _own(rows), False).one_exec_and_exit == "FAIL"
+    assert kit.analyze_case(_raws(rows[1:]), _own(rows), True).fork_linkage == "INCONCLUSIVE"
+    assert kit.analyze_case(_raws([rows[0], *rows]), _own(rows), True).fork_linkage == "FAIL"
+
+
+def test_filter_holds_ambient_fork_until_exact_owned_exec_and_never_pid_only() -> None:
+    rows = _rows()
+    tracker = kit.Tracker(_IMAGE)
+    tracker.phase = "finder"
+    assert tracker.accept(_raws(rows[:1])[0]) == []
+    foreign = deepcopy(rows[1])
+    foreign["event"]["exec"]["target"]["executable"]["stat"]["st_ino"] = 777
+    # Same path, PID and lifetime are insufficient without the file object.
+    assert tracker.accept(_raws([foreign])[0]) == []
+    accepted = tracker.accept(_raws(rows[1:2])[0])
+    assert [kit._decode(raw)["event_type"] for _, raw in accepted] == [11, 9]
+    assert tracker.accept(_raws(rows[2:])[0])[0][0] == "finder"
+    assert tracker.records["control"] == []
+    assert len(tracker.records["finder"]) == 3
+    reused = deepcopy(rows[2])
+    reused["process"]["audit_token"]["pidversion"] += 100
+    assert tracker.accept(_raws([reused])[0]) == []
+
+
+def test_readiness_requires_known_probe_and_matching_exit() -> None:
+    rows = _rows()
+    rows[1]["event"]["exec"]["args"].append("--ready")
+    tracker = kit.Tracker(_IMAGE)
+    tracker.ready_pids.add(1200)
+    tracker.accept(_raws(rows[1:2])[0])
+    assert not tracker.ready
+    tracker.accept(_raws(rows[2:])[0])
+    assert tracker.ready
+    assert not any(tracker.records.values())
+    tracker.phase = "control"
+    assert tracker.accept(_raws(rows[1:2])[0]) == []
+
+
+def test_fork_buffer_is_bounded_and_unrelated_data_never_retained() -> None:
+    tracker = kit.Tracker(_IMAGE)
+    for index in range(100):
+        row = _rows(2000 + index)[0]
+        row.update(seq_num=index, global_seq_num=index)
+        row[_CANARY] = _CANARY * 1000
+        assert tracker.accept(_raws([row])[0]) == []
+    assert len(tracker.forks) <= 64
+    assert tracker.ring_bytes <= kit.MAX_RING_BYTES
+    assert not any(tracker.records.values())
+
+
+@pytest.mark.parametrize("field", tuple(kit.Report.model_fields))
+def test_public_report_rejects_arbitrary_native_values(field: str) -> None:
+    with pytest.raises(ValidationError):
+        kit.Report.model_validate({field: _CANARY})
+
+
+@pytest.mark.parametrize("field", tuple(kit.CaseReport.model_fields))
+def test_public_case_rejects_arbitrary_native_values(field: str) -> None:
+    with pytest.raises(ValidationError):
+        kit.CaseReport.model_validate({field: _CANARY})
+
+
+@pytest.mark.parametrize("value", [True, "1", 2, None])
+def test_public_version_is_an_exact_integer(value: object) -> None:
+    with pytest.raises(ValidationError):
+        kit.Report(kit_version=value)
+
+
+@pytest.mark.parametrize("raw", [b'{"a":1,"a":2}', b'{"x":NaN}', b"[]", b"broken"])
+def test_private_decoder_fails_closed_without_value_output(raw: bytes) -> None:
+    with pytest.raises(kit.PrivateError, match="^DATA$"):
+        kit._decode(raw)
+
+
+@pytest.mark.parametrize("version", [True, "11", 10, 12])
+def test_profile_never_inferred_from_platform_or_boolean(version: object) -> None:
+    rows = _rows()
+    rows[0]["version"] = version
+    assert kit._wire_profile(_raws(rows)) != "V11"
+
+
+def test_prepare_only_copies_reviewable_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kit.subprocess, "run", lambda *a, **k: pytest.fail("native command"))
+    monkeypatch.setattr(kit.subprocess, "Popen", lambda *a, **k: pytest.fail("collector/app"))
+    root = kit.prepare(tmp_path / "kit")
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert set(p.name for p in root.iterdir()) == {*kit.CODE, "PRIVATE-RUN.md"}
+    assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in root.iterdir())
+    assert not (root / "GUIProbe.app").exists()
+    with pytest.raises(FileExistsError):
+        kit.prepare(root)
+
+
+@pytest.mark.parametrize("git_kind", ["file", "directory"])
+def test_prepare_refuses_any_git_tree(tmp_path: Path, git_kind: str) -> None:
+    if git_kind == "file":
+        (tmp_path / ".git").write_text("gitdir: invented")
+    else:
+        (tmp_path / ".git").mkdir()
+    with pytest.raises(kit.PrivateError, match="^LOCATION$"):
+        kit.prepare(tmp_path / "kit")
+
+
+@pytest.fixture
+def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = kit.prepare(tmp_path / "kit")
+    monkeypatch.setattr(kit, "_root", lambda: root)
+    monkeypatch.setattr(kit, "_preflight", lambda: ("27.0", "27INVENTED"))
+
+    def command(args: list[str], _root: Path) -> None:
+        if "-o" in args:
+            kit._write(Path(args[args.index("-o") + 1]), b"INVENTED BINARY")
+
+    monkeypatch.setattr(kit, "_command", command)
+    assert kit.setup().stage == "SETUP_READY"
+    return root
+
+
+@pytest.mark.parametrize("target", ["Probe", "guard", "plist", "source", "codec"])
+def test_setup_manifest_binds_code_binary_and_codec(
+    prepared: Path, target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert kit._manifest(prepared).image == kit._image(kit._executable(prepared))
+    path = {
+        "Probe": kit._executable(prepared),
+        "guard": prepared / "collector-guard",
+        "plist": prepared / "GUIProbe.app/Contents/Info.plist",
+        "source": prepared / kit.CODE[1],
+    }.get(target)
+    if path:
+        path.write_bytes(b"CHANGED")
+    else:
+        monkeypatch.setattr(kit, "_codec_digest", lambda: "c" * 64)
+    with pytest.raises(kit.PrivateError, match="^BUILD$"):
+        kit._manifest(prepared)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "permissions", "fifo", "size"])
+def test_private_file_reader_does_not_follow_or_open_unbounded_sources(
+    tmp_path: Path, kind: str
+) -> None:
+    target = tmp_path / "target"
+    kit._write(target, _CANARY.encode())
+    source = tmp_path / "source"
+    if kind == "symlink":
+        source.symlink_to(target)
+    elif kind == "hardlink":
+        os.link(target, source)
+    elif kind == "fifo":
+        os.mkfifo(source, 0o600)
+    else:
+        kit._write(source, _CANARY.encode())
+        if kind == "permissions":
+            source.chmod(0o644)
+    with pytest.raises((kit.PrivateError, OSError)):
+        kit._read(source, 1 if kind == "size" else kit.MAX_LINE)
+
+
+@pytest.mark.parametrize("command", ["setup", "capture", "report"])
+def test_human_commands_require_flags_and_never_echo_inputs(
+    command: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kit, "_root", lambda: pytest.fail("private action"))
+    assert kit.main([command, "--private-path", _CANARY]) == 2
+    result = capsys.readouterr()
+    assert _CANARY not in result.out + result.err
+    assert json.loads(result.out)["error"] == "INPUT"
+
+
+@pytest.mark.parametrize("failure", [None, "interrupt", "cleanup"])
+def test_mock_collection_cleans_up_and_persists_only_owned_rows(
+    prepared: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
+) -> None:
+    image = kit._manifest(prepared).image
+    monkeypatch.setattr(kit, "_role", lambda *args: "FINDER")
+    processes: list[SimpleNamespace] = []
+
+    def start(_path: Path, *args: str) -> SimpleNamespace:
+        process = SimpleNamespace(pid=1200, poll=lambda: 0, wait=lambda **kw: 0)
+        processes.append(process)
+        return process
+
+    collector = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO())
+
+    def wait(**_kw: object) -> int:
+        if failure == "cleanup":
+            raise subprocess.TimeoutExpired(_CANARY, 4)
+        return 0
+
+    collector.wait = wait
+    monkeypatch.setattr(kit, "_start", start)
+    monkeypatch.setattr(kit.subprocess, "Popen", lambda *a, **kw: collector)
+
+    class Pump:
+        def __init__(self, _process: object, tracker: kit.Tracker, files: dict) -> None:
+            self.tracker, self.files = tracker, files
+            self.selector = SimpleNamespace(close=lambda: None)
+            self.fed: set[str] = set()
+
+        def tick(self) -> None:
+            case = self.tracker.phase
+            if case == "ready":
+                self.tracker.ready = True
+                return
+            if failure == "interrupt" and case == "finder":
+                raise KeyboardInterrupt
+            if case in self.fed:
+                return
+            self.fed.add(case)
+            rows = _rows(1200 if case == "control" else 1300, image)
+            for row in rows:
+                row["seq_num"] += 0 if case == "control" else 1
+                row["global_seq_num"] += 0 if case == "control" else 3
+                for dest, raw in self.tracker.accept(json.dumps(row).encode()):
+                    self.files[dest].write(raw + b"\n")
+            run = kit._active(prepared)
+            kit._write(run / f"{case}-self.json", _own(rows).model_dump_json().encode())
+            kit._write(run / f"{case}-complete", b"RETURN_ZERO\n")
+
+    monkeypatch.setattr(kit, "Pump", Pump)
+    report = kit.capture()
+    assert report.collector_cleanup == ("FAIL" if failure == "cleanup" else "PASS")
+    assert report.error == (
+        "NONE" if failure is None else "COLLECTOR" if failure == "cleanup" else "INTERRUPTED"
+    )
+    assert (prepared / "SESSION-LOCK").exists() == (failure == "cleanup")
+    assert _CANARY not in report.model_dump_json()
+    assert kit._read(kit._active(prepared) / "ACTIVE-CASE") == b"CLOSED\n"
+    assert report.gate_status == "NOT_EVALUATED"
+    if failure is None:
+        assert report.control.native_shapes == report.finder.native_shapes == "PASS"
+        assert kit.offline_report().stage == "OFFLINE_REPORT"
+
+
+@pytest.mark.parametrize("reply", [b"FINDER\n", b"LAUNCHD\n", _CANARY.encode(), b"1234\n"])
+def test_role_lookup_uses_exact_private_token_pipe_and_fixed_output(
+    prepared: Path, monkeypatch: pytest.MonkeyPatch, reply: bytes
+) -> None:
+    calls = []
+
+    def run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((args, kwargs))
+        return SimpleNamespace(stdout=reply)
+
+    monkeypatch.setattr(kit.subprocess, "run", run)
+    token = kit._token(_process(11, 99))
+    role = kit._role(prepared, token, kit._token(_process(11, 100)))
+    assert role == (
+        reply.decode().strip() if reply in {b"FINDER\n", b"LAUNCHD\n"} else "UNAVAILABLE"
+    )
+    args, kwargs = calls[0]
+    assert args == [str(kit._executable(prepared)), "--classify"]
+    assert len(kwargs["input"]) == 32
+    assert kwargs["timeout"] == 3 and kwargs["stderr"] == subprocess.DEVNULL
+    assert _CANARY not in kit.CaseReport(responsible_image_role=role).model_dump_json()
+
+
+def test_pump_writes_no_ambient_rows_and_backfills_only_proven_fork() -> None:
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb")
+    process = SimpleNamespace(stdout=stream, poll=lambda: None)
+    tracker = kit.Tracker(_IMAGE)
+    tracker.phase = "finder"
+    files = {"control": io.BytesIO(), "finder": io.BytesIO()}
+    pump = kit.Pump(process, tracker, files)
+    rows = _rows()
+    try:
+        os.write(write_fd, _raws(rows[:1])[0] + b"\n")
+        pump.tick()
+        assert files["finder"].getvalue() == b""
+        os.write(write_fd, _raws(rows[1:2])[0] + b"\n")
+        pump.tick()
+        saved = [kit._decode(raw) for raw in files["finder"].getvalue().splitlines()]
+        assert [r["event_type"] for r in saved] == [11, 9]
+        assert files["control"].getvalue() == b""
+    finally:
+        pump.selector.close()
+        stream.close()
+        os.close(write_fd)

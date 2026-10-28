@@ -1,5 +1,10 @@
 # Next private GUI launch reference: proposal only
 
+The code-only kit is implemented in `scripts/macos_gui_launch_reference.py`; preparation copies
+reviewable sources outside Git without compiling, launching or collecting. See the
+[human-run procedure](gui-launch-reference/PRIVATE-RUN.md). This does not authorize an agent
+to run the human commands or read their output files.
+
 No collection, GUI launch or private-file access is authorized by this document. The current
 work used invented synthetic data only. The next human-assisted experiment targets **macOS 27
 arm64 GUI application launch**, beginning with Finder; Dock and Spotlight are distinct follow-ups.
@@ -13,7 +18,7 @@ descriptor, environment, terminal and image facts required by the selected nativ
 The current native projector rejects unknown required facts. A generic eCAR process birth is
 useful normalized evidence but cannot substitute for an observed native relationship.
 
-## Minimum experiment, to prepare after scope approval
+## Bounded experiment implemented for private human use
 
 1. Use one disposable, clearly named harmless test app containing a tiny own-process reporter.
    It should perform no network access, enumerate no personal files and produce no document
@@ -21,13 +26,16 @@ useful normalized evidence but cannot substitute for an observed native relation
 2. Establish a same-content command-line control, then launch the app by Finder. The person
    records the launch method and visible outcome privately. Quarantine/policy outcomes must
    remain separate from a successful GUI launch; this is not another Gatekeeper denial test.
-3. A bounded ES filter would retain only the exact test executable and its explicitly selected
+3. A bounded ES filter retains only the exact test executable and its explicitly selected
    lifecycle. Filtering must happen before persistence; an unfiltered machine-wide capture is
    outside scope. Any parent/responsible identity necessary for linkage stays private locally.
-4. An offline checker would compare own-process audit identity and native export relationships,
+4. An offline checker compares own-process audit identity and native export relationships,
    then report fixed labels for linkage, responsible/parent distinction, source version,
    descriptor kinds/access, tty presence, argv/environment shape, exec and exit agreement.
    No paths, account names, identifiers, argument/environment values or raw records are shared.
+   After collection has stopped, up to four exact audit-token-bound parent/responsible role
+   lookups return fixed system-role labels. No process enumeration or PID-only fallback is used;
+   resolved paths stay in memory and are never exported or persisted by the role helper.
 5. The person reviews the report. Unexpected schema fields are identified by technical field
    name and value *type* only. Values stay private. Only technical constants, checker logic and
    accepted relationship contracts may become repository fixtures.
