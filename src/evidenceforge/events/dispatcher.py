@@ -8170,19 +8170,24 @@ class EventDispatcher:
             process_exit_identity,
             process_fork_identities,
         )
+        from evidenceforge.generation.actions.command_effects import FileEffectIntent
 
-        if not record.root_action_id.startswith("macos-process-cohort:"):
+        file_effects = bool(record.effect_member_bindings)
+        if not record.root_action_id.startswith("macos-process-cohort:") and not file_effects:
             return self._require_macos_exit_group_projection(record)
         plan = record.state_plan
         if (
-            record.root_action_id != f"macos-process-cohort:{plan.semantic_id}"
+            (
+                not file_effects
+                and record.root_action_id != f"macos-process-cohort:{plan.semantic_id}"
+            )
             or any(
                 (
                     plan.sessions,
                     plan.live_session_process_role_patches,
                     plan.session_metadata_patches,
-                    plan.process_activity_patches,
-                    plan.session_activity_patches,
+                    plan.process_activity_patches if not file_effects else (),
+                    plan.session_activity_patches if not file_effects else (),
                     plan.session_terminalizations,
                     plan._smb_connection_finalization,
                     plan._smb_file_mutation_terminalization,
@@ -8201,6 +8206,87 @@ class EventDispatcher:
             )
         ):
             raise EventContractError("Exact Mac process cohort changed its ordered owners")
+        phases = {
+            EventKind.PROCESS_CREATE,
+            EventKind.PROCESS_FORK,
+            EventKind.PROCESS_EXEC,
+            EventKind.PROCESS_TERMINATE,
+        }
+        process_projections = tuple(
+            item for item in record.trusted_projections if item.occurrence.event_type in phases
+        )
+        dependent_members = tuple(
+            (member, projection)
+            for member, projection in zip(
+                record.dispatches, record.trusted_projections, strict=True
+            )
+            if projection.occurrence.event_type not in phases
+        )
+        if file_effects:
+            if (
+                len(plan.processes) != 1
+                or not plan.processes[0].forked
+                or len(plan.process_executions) != 1
+                or plan.process_terminations
+                or plan.process_executions[0].gui_session is not None
+                or len(record.audit_entries) != 1
+                or any(
+                    not isinstance(node.intent, FileEffectIntent)
+                    for entry in record.audit_entries
+                    for node in entry.plan.nodes
+                )
+                or any(
+                    binding.member._occurrence.effect_provenance is None
+                    or binding.member._occurrence.effect_provenance.root_action_id
+                    != record.root_action_id
+                    for binding in record.effect_member_bindings
+                )
+                or record.external_effect_links
+                or record.owned_effect_plans
+                or not dependent_members
+                or {id(binding.member) for binding in record.effect_member_bindings}
+                != {id(member) for member, _ in dependent_members}
+                or record.trusted_projections[: len(process_projections)] != process_projections
+            ):
+                raise EventContractError(
+                    "Exact Mac file-effect chain lost its closed process/effect ownership"
+                )
+            after = plan.process_executions[0].after
+            if (
+                len(plan.process_activity_patches) != 1
+                or plan.process_activity_patches[0].target != after
+                or plan.process_activity_patches[0].activity_time
+                < max(projection.occurrence.timestamp for _, projection in dependent_members)
+            ):
+                raise EventContractError(
+                    "Exact Mac file effects lost their executed process frontier"
+                )
+            if len(plan.session_activity_patches) != 1 or (
+                plan.session_activity_patches[0].target.hostname != after.hostname
+                or plan.session_activity_patches[0].target.logon_id != after.logon_id
+                or plan.session_activity_patches[0].activity_time
+                < max(projection.occurrence.timestamp for _, projection in dependent_members)
+            ):
+                raise EventContractError(
+                    "Exact Mac file effects lost their owning session frontier"
+                )
+            for _, projection in dependent_members:
+                event = projection.occurrence
+                if (
+                    event.file is None
+                    or event.registry is not None
+                    or event.src_host is None
+                    or event.src_host.os_category != "macos"
+                    or event.src_host.hostname != after.hostname
+                    or event.identity_plan.actor != after
+                    or event.timestamp < after.execution_started_at
+                    or event.effect_provenance is None
+                ):
+                    raise EventContractError(
+                        "Exact Mac file effect changed its executed actor, host or time"
+                    )
+        elif dependent_members:
+            raise EventContractError("Exact Mac process cohort cannot contain unowned dependents")
         expected = (
             [
                 (
@@ -8226,14 +8312,12 @@ class EventDispatcher:
             ]
         )
         expected.sort(key=lambda item: item[:2])
-        if len(expected) != len(record.trusted_projections) or len(expected) != len(
-            record.dispatches
-        ):
+        if len(expected) != len(process_projections):
             raise EventContractError(
                 "Exact Mac process cohort must project every canonical phase once"
             )
         for projection, (at, _, kind, identities) in zip(
-            record.trusted_projections, expected, strict=True
+            process_projections, expected, strict=True
         ):
             event = projection.occurrence
             if (
@@ -9219,10 +9303,10 @@ class EventDispatcher:
                 record.exact_projection_kind = kind
                 self._validate_exact_process_retention(record)
             if (
-                record.effect_member_bindings
+                (record.effect_member_bindings and kind != "macos_process_chain")
                 or record.external_effect_links
                 or record.owned_effect_plans
-                or record.published_provenances
+                or (record.published_provenances and not record.effect_member_bindings)
             ):
                 raise EventContractError(
                     "Exact Mac exit group cannot carry unrelated effect owners"
@@ -11717,7 +11801,9 @@ class EventDispatcher:
         events = tuple(
             event
             for event in record.member_occurrences
-            if boundary is None or event.timestamp < boundary
+            if event.event_type
+            in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+            and (boundary is None or event.timestamp < boundary)
         )
         if (
             registry is not self.es_collectors

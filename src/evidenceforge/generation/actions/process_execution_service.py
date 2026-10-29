@@ -54,8 +54,12 @@ from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectAuditCohortEntry,
     ExecutionEffectPlan,
+    FileEffectIntent,
 )
-from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
+from evidenceforge.generation.actions.endpoint_effects import (
+    PreparedFileEffectPayload,
+    PreparedProcessEffectActor,
+)
 from evidenceforge.generation.actions.posix_process import (
     process_exec_occurrence,
     process_exit_occurrence,
@@ -1284,16 +1288,31 @@ class ProcessExecutionService:
 
         This bounded path shares process admission, lifetime and completion owners.
         Explicit retained shebang facts use the existing script/content authority;
-        argv alone never establishes a script. Unexpanded shell operators and
-        effect-bearing launches retain aggregate birth semantics.
+        argv alone never establishes a script. Plain file-effect plans share
+        this transaction; unexpanded operators and other effect families retain gates.
         """
+        file_effects = bool(
+            admission.uses_action_cohort
+            and admission.endpoint is not None
+            and admission.endpoint.execution_plan is not None
+            and admission.endpoint.execution_plan.nodes
+            and all(
+                isinstance(node.intent, FileEffectIntent)
+                for node in admission.endpoint.execution_plan.nodes
+            )
+            and all(
+                type(effect.payload) is PreparedFileEffectPayload
+                and effect.payload.artifact_publication is None
+                for effect in admission.endpoint.admitted_effects
+            )
+        )
         if (
             _get_os_category(request.system.os) != "macos"
             or request.macos_launch_kind is not None
             or request.new_posix_session
-            or admission.endpoint is not None
-            or request.effect_plan is None
-            or request.effect_plan.nodes
+            or (admission.endpoint is not None and not file_effects)
+            or (request.effect_plan is None and not file_effects)
+            or (request.effect_plan is not None and request.effect_plan.nodes and not file_effects)
             or (
                 request.prepared_effects is not None
                 and any(
@@ -1313,6 +1332,17 @@ class ProcessExecutionService:
             )
         ):
             return None
+        if (
+            file_effects
+            and 2
+            + sum(
+                len(effect.spec.occurrence_times) for effect in admission.endpoint.admitted_effects
+            )
+            > _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT
+        ):
+            raise StateError(
+                "Mac fork/exec and file effects exceed the process cohort member limit"
+            )
         parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
         provider = self.identity.macos_execution_metadata
         session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
@@ -1370,6 +1400,14 @@ class ProcessExecutionService:
         # foreground close. Fork begins there; exec follows its modeled latency.
         forked_at = ensure_utc(launch.time)
         executed_at = forked_at + gap
+        if (
+            admission.endpoint is not None
+            and admission.endpoint.earliest_admitted_occurrence is not None
+            and admission.endpoint.earliest_admitted_occurrence < executed_at
+        ):
+            raise StateError(
+                "Mac process-owned file effects must follow the modeled exec; schedule the file occurrence after shell launch latency"
+            )
         if forked_at <= parent.execution_started_at:
             return None
         directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
@@ -1422,6 +1460,18 @@ class ProcessExecutionService:
             ),
         )
         session_identity = self.state_manager.get_session_identity(parent.logon_id)
+        if (
+            file_effects
+            and session_identity is not None
+            and admission.endpoint.latest_admitted_occurrence is not None
+        ):
+            builder.patch_process_activity(
+                after, max(executed_at, admission.endpoint.latest_admitted_occurrence)
+            )
+            builder.patch_session_activity(
+                session_identity,
+                max(executed_at, admission.endpoint.latest_admitted_occurrence or executed_at),
+            )
         cohort = builder.seal()
         fork = process_fork_occurrence(
             host=self.identity.host_context(request.system),
@@ -1632,7 +1682,7 @@ class ProcessExecutionService:
     ) -> PreparedProcessPublication:
         """Prepare and validate source, artifact and optional cohort capabilities before commit."""
         if root.birth_event is not None:
-            return self._prepare_macos_process_publication(request, root, evidence)
+            return self._prepare_macos_process_publication(request, admission, root, evidence)
         process_plan = root.process
         process_identity = root.process.identity
         event = evidence.event
@@ -1825,17 +1875,43 @@ class ProcessExecutionService:
         )
 
     def _prepare_macos_process_publication(
-        self, request: ProcessExecutionRequest, root: ProcessRootPlan, evidence: ProcessEvidencePlan
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        root: ProcessRootPlan,
+        evidence: ProcessEvidencePlan,
     ) -> PreparedProcessPublication:
         """Publish explicit birth/exec through the shared exact native source boundary."""
         assert root.cohort is not None and root.birth_event is not None
-        assert request.effect_plan is not None and not request.effect_plan.nodes
+        assert request.effect_plan is not None or admission.endpoint is not None
+        reconciliation = None
+        endpoint_builders = ()
         with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            if admission.endpoint is not None:
+                reconciliation, endpoint_builders = (
+                    self.effects._prepare_process_owned_endpoint_effects_for_publication(
+                        system=request.system,
+                        process_identity=root.identity,
+                        process_closes_at=evidence.provisional_termination,
+                        prepared=admission.endpoint,
+                        storyline_origin=request.from_storyline,
+                        action_cohort_owned=True,
+                    )
+                )
+                for builder, _ in endpoint_builders:
+                    builder.process.binary_identity = root.binary
+                    builder.identity_plan = replace(
+                        builder.identity_plan, session=root.session_identity
+                    )
             carriers = tuple(
                 self.dispatcher.prepare_action_cohort_projection(
                     event, source_timing_preparation=timing
                 )
-                for event in (root.birth_event, evidence.event)
+                for event in (
+                    root.birth_event,
+                    evidence.event,
+                    *(builder for builder, _ in endpoint_builders),
+                )
             )
         artifacts = (
             request.prepared_effects.artifact_publications
@@ -1851,16 +1927,39 @@ class ProcessExecutionService:
             for index, carrier in enumerate(carriers)
         )
         effects = request.effect_plan
+        root_action_id = f"macos-process-cohort:{root.cohort.semantic_id}"
+        if admission.endpoint is not None:
+            if endpoint_builders:
+                root_action_id = admission.endpoint.root_anchor.action_id
+            if admission.endpoint.execution_plan is None or reconciliation is None:
+                raise StateError("Mac file-effect process lost its exact effect reconciliation")
+            effects = admission.endpoint.execution_plan
+        bindings = tuple(
+            ActionCohortEffectMemberBinding(
+                entry_ordinal=0,
+                node_id=builder.effect_provenance.node_id,
+                occurrence_ordinal=builder.effect_provenance.occurrence_ordinal,
+                member=member,
+            )
+            for (builder, _), member in zip(endpoint_builders, members[2:], strict=True)
+            if builder.effect_provenance is not None
+        )
         batch = self.dispatcher.prepare_action_cohort_batch(
-            f"macos-process-cohort:{root.cohort.semantic_id}",
+            root_action_id,
             root.cohort,
             members,
-            (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
-            (),
+            (
+                ExecutionEffectAuditCohortEntry(
+                    effects, reconciliation if reconciliation is not None else effects.reconcile(())
+                ),
+            ),
+            bindings,
             (),
             exact_projection=True,
         )
-        return PreparedProcessPublication(members[0], members[1:], timing, artifacts, None, batch)
+        return PreparedProcessPublication(
+            members[0], members[1:], timing, artifacts, reconciliation, batch
+        )
 
     def _publish_process(
         self,
@@ -1936,7 +2035,9 @@ class ProcessExecutionService:
             )
         if running_proc.logon_id and (root.cohort is None or root.birth_event is not None):
             session = self.state_manager.get_session(running_proc.logon_id)
-            if session is not None:
+            if session is not None and (
+                session.last_activity_time is None or session.last_activity_time < launch.time
+            ):
                 session.last_activity_time = launch.time
         self.sources._record_process_source_create_time(
             request.system.hostname,

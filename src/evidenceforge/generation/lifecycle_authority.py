@@ -4017,7 +4017,9 @@ class GeneratorLifecycleAuthority:
         for ordinal, patch in enumerate(plan.process_activity_patches):
             target = patch.target
             identity = target.identity if type(target) is ProcessMaterializationPlan else target
-            if type(target) is not ProcessMaterializationPlan:
+            if type(target) is not ProcessMaterializationPlan and not any(
+                execution.after == target for execution in plan.process_executions
+            ):
                 self._action_cohort_registered_process(identity)
             process_change = None
             if patch.privilege_drop is not None or patch.service_drop is not None:

@@ -34,7 +34,7 @@ export against publication receipts. A complete bundle cannot be accepted after 
 | Persistent SMB client materialization | `actions/network_connection.py` | Existing client reuse adds no start. A newly materialized Mac client is counted; a generic aggregate client cannot silently pass complete mode. |
 | Generic network responder preparation | `activity/generator.py` network responder batches | Linux receiver branches remain Linux-specific. Any actual modeled Mac aggregate reached through compatibility paths is still counted. Mac SMB serving remains outside the supported capability set. |
 | Explicit retained scripts and runtime-image processes | Shared shell execution and artifact owners | A qualified literal shell launch with explicit retained shebang facts now uses the same fork/exec transaction. Script-looking argv alone keeps a null script fact. Exact interpreter and script retention remain separate. |
-| Endpoint/effect-bearing processes | Shared process execution/effect owners | All actual births/execs count. Native command qualification does not imply that aggregate effect-bearing launches have a first-exec contract. Unknown facts remain failures in complete mode. |
+| Endpoint/effect-bearing processes | Shared process execution/effect owners | Qualified literal shell launches with plain planned file effects now publish fork, exec and dependent files in one exact transaction. Retained-file mutations, mixed network/scanner/registry plans and unsupported launch metadata retain their gates. All actual births/execs still count. |
 | Windows/Linux-only session helpers | `actions/rdp_session.py`, `process_support/parent_windows.py`, `parent_linux.py`, OS-specific logon branches | Outside the Mac census. Their generation semantics are unchanged. |
 | Context factories and lifecycle registration | `events/contexts.py`, lifecycle registry/shadow/head | Context construction and lifecycle bookkeeping are not additional State births; counting them would duplicate obligations. |
 | Failed exec, denied launch, policy refusal | Typed process outcome owners and transient PID reservation | No successful image activation is invented. If a caller/launcher actually starts, that separate process still counts. |
@@ -48,6 +48,7 @@ not a supported extension path.
 | Contract | Verification |
 | --- | --- |
 | Useful complete workload | Eleven local commands from an explicitly modeled pre-window terminal: all eleven canonical forks and execs match native publication and export. |
+| File-producing workload | A literal shell command with one or several planned file reads has one fork and exec, with every file effect bound to the executed identity. Selected/filtered output, immediate/ordered source publication and interrupted journal acknowledgement are covered. Invalid effect timing and capacity reject before process allocation. |
 | Producer bypass | Disable the qualified shell producer: aggregate starts remain in the census and complete finalization rejects. |
 | Session boundary | Move terminal startup into the collection window: its unresolved initial activations reject, even though the subsequent commands have native execs. |
 | Same PID, multiple execs | Each execution identity counts independently; full State checkpoint round-trip and subsequent exec agree. |

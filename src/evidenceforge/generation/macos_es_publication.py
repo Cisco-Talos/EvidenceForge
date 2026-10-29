@@ -167,6 +167,40 @@ def prepared_macos_es_process_publication(
         MacosEndpointSecurityEmitter,
     )
 
+    # Canonical endpoint effects remain members of the exact action journal;
+    # they are not additional native process observations or generation triggers.
+    if any(
+        event.event_type
+        not in {"process_create", "process_fork", "process_exec", "process_terminate"}
+        for event in events
+    ):
+        for event in events:
+            if event.event_type in {
+                "process_create",
+                "process_fork",
+                "process_exec",
+                "process_terminate",
+            }:
+                continue
+            if (
+                event.file is None
+                or event.registry is not None
+                or event.effect_provenance is None
+                or event.identity_plan is None
+                or not any(
+                    event.identity_plan.actor == execution.after
+                    for execution in cohort.process_executions
+                )
+            ):
+                yield None
+                return
+        events = tuple(
+            event
+            for event in events
+            if event.event_type
+            in {"process_create", "process_fork", "process_exec", "process_terminate"}
+        )
+
     if not events or any(
         event.event_type
         not in {"process_create", "process_fork", "process_exec", "process_terminate"}

@@ -309,3 +309,31 @@ collector/app. No prior human-used kit was accessed. Once the human uses this ne
 inherits the same no-inspection boundary. The next independent engine work is effect-bearing
 process publication; unknown initial launcher/terminal/service metadata remains a human
 qualification dependency, with complete mode rejecting those gaps rather than hiding them.
+
+## Revision 352: plain file effects preserve native process execution
+
+A real-engine regression reproduced a literal `/bin/ls` launch with a planned directory read
+as an aggregate process birth. The shared shell producer now stages its fork/exec alongside
+plain planned file effects in the existing exact action journal. Every file member retains
+the authenticated effect graph and the executed process identity. It consumes no additional
+ES process counter and does not become a trigger for sibling generation. Runtime artifact
+mutation and mixed network/scanner/registry effect families retain their existing gates.
+
+The existing State and lifecycle owners now admit a scalar activity frontier for the exact
+post-exec identity inside that same cohort. Credential, descriptor and other state changes
+remain excluded from this frontier contract. The process/session frontier includes the final
+file occurrence, and later bookkeeping cannot move the session clock backward. Provisional
+rollback, exact retry and full State checkpoint restoration preserve this ownership.
+
+The focused process/effect/source suite passes 121 tests (two existing slow cases deselected).
+All 507 selected State, checkpoint, lifecycle, artifact and manifest regressions pass. Additional
+source-level checks exercise immediate and chronological publication separately; public complete
+mode still requires chronological ingress and independent export receipts. The real-engine
+matrix covers one/multiple file effects, native/eCAR format filtering, failure before journal
+commit, lost acknowledgement after commit, and timing/capacity rejection without process birth.
+All 16 immediate/ordered real-engine cases pass. The four public-CLI contracts pass as well,
+including fresh-process/filter-independent native bytes, nonempty checkpoint suspend/resume,
+and default rejection of unresolved starts or removal of the required native source. Whole
+Ruff/format and whitespace checks pass.
+No native collection or private evidence access occurred. Final revision-352 digest:
+`b253f020eb75212f3590d8e74909e6c5676bf00ee7a53ff11eb9eab7dfb28cba`.

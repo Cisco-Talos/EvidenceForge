@@ -3298,7 +3298,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         """Stage one exact process activity frontier."""
 
         self._require_open()
-        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        normalized = self._manager._normalize_action_cohort_process_target(
+            self, target, allow_executed=True
+        )
         key = self._manager._action_process_target_key(normalized)
         if any(
             self._manager._action_process_target_key(patch.target) == key
@@ -8112,6 +8114,8 @@ class StateManager:
         self,
         builder: ActionCohortMaterializationBuilder,
         target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        allow_executed: bool = False,
     ) -> ProcessMaterializationPlan | ProcessIdentity:
         """Require an exact staged member or exact currently live process identity."""
 
@@ -8130,6 +8134,10 @@ class StateManager:
                 return target
             if type(target) is not ProcessIdentity:
                 raise TypeError("Action cohort process target has an unsupported exact type")
+            if allow_executed and any(
+                execution.after == target for execution in builder._process_execution_drafts
+            ):
+                return target
             process = self._processes_by_object_id.get(target.object_id)
             if (
                 process is None
@@ -12839,11 +12847,37 @@ class StateManager:
             pipe_counters = dict(self._macos_pipe_counters)
             for patch in plan._process_activity:
                 identity = self._action_process_identity(patch.target)
+                post_exec = any(
+                    execution.after == patch.target for execution in plan._process_executions
+                )
                 if type(patch.target) is ProcessMaterializationPlan:
                     if processes.get(identity.object_id) is not patch.target:
                         raise StateError("Action cohort process activity replaced its staged plan")
-                else:
+                elif not post_exec:
                     self._validate_action_live_process_identity(identity)
+                if post_exec and (
+                    patch.activity_time < identity.execution_started_at
+                    or any(
+                        getattr(patch, name) is not None
+                        for name in (
+                            "audit_binding",
+                            "privilege_drop",
+                            "service_drop",
+                            "job_control_change",
+                            "parentage_change",
+                            "directory_change",
+                            "descriptor_table",
+                            "policy_refusal",
+                            "job_control_actor",
+                            "adopting_parent",
+                            "native_pipe_allocation",
+                            "terminal_after",
+                        )
+                    )
+                ):
+                    raise StateError(
+                        "Post-exec activity requires a plain frontier after its exact execution"
+                    )
                 if identity.object_id in process_activity:
                     raise StateError("Action cohort repeats a process activity target")
                 if patch.activity_time < identity.started_at:
@@ -13157,7 +13191,10 @@ class StateManager:
                 # Other activity, dependent children and session shutdown still require
                 # their own explicit ordering contract.
                 if (
-                    before.object_id in process_activity
+                    (
+                        before.object_id in process_activity
+                        and process_activity[before.object_id].target != after
+                    )
                     or any(
                         item.identity.object_id == before.object_id and item.post_execution != after
                         for item in plan._process_terminations

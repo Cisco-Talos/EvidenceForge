@@ -128,6 +128,47 @@ def test_execution_checkpoint_restores_history_and_continues_same_epoch_sequence
     assert manager.materialization_digest() == restored.materialization_digest()
 
 
+def test_exact_post_exec_frontier_is_atomic_and_survives_checkpoint() -> None:
+    manager, before = _process()
+    digest = manager.materialization_digest()
+    builder = manager.begin_action_cohort_materialization()
+    after = builder.execute_process(
+        before, image="/usr/bin/id", command_line="id", executed_at=_START + timedelta(seconds=1)
+    )
+    at = _START + timedelta(seconds=2)
+    builder.patch_process_activity(after, at)
+    plan = builder.seal()
+    with manager.prepared_action_cohort_materialization(plan) as prepared:
+        prepared.certify_composite_commit(prepared.expected_result)
+        prepared.apply_provisional()
+        assert manager.get_process(before.hostname, before.pid).last_activity_time == at
+    assert manager.materialization_digest() == digest
+    manager.materialize_action_cohort(plan)
+    restored = StateManager()
+    _restore_head(restored, _capture_head(manager))
+    assert restored.get_process(before.hostname, before.pid).last_activity_time == at
+
+
+@pytest.mark.parametrize("damage", ["time", "identity"])
+def test_post_exec_frontier_rejects_backdating_or_unowned_future_identity(damage: str) -> None:
+    manager, before = _process()
+    digest = manager.materialization_digest()
+    builder = manager.begin_action_cohort_materialization()
+    after = builder.execute_process(
+        before, image="/usr/bin/id", command_line="id", executed_at=_START + timedelta(seconds=1)
+    )
+    if damage == "identity":
+        with pytest.raises(StateError, match="absent or drifted"):
+            builder.patch_process_activity(
+                replace(after, image="/usr/bin/other"), _START + timedelta(seconds=2)
+            )
+    else:
+        builder.patch_process_activity(after, _START)
+        with pytest.raises(StateError, match="Post-exec activity"):
+            builder.seal()
+    assert manager.materialization_digest() == digest
+
+
 def test_exit_retains_last_execution_and_original_lifetime() -> None:
     manager, before = _process()
     after = _execute(manager, before)

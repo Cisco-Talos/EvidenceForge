@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 351
+current_revision: 352
 history_start_revision: 1
-behavior_surface_sha256: 22f64fb6795c3a53b303d77753e6d66142daf0fc51cb25e879abcf0fbe392e5e
+behavior_surface_sha256: b253f020eb75212f3590d8e74909e6c5676bf00ee7a53ff11eb9eab7dfb28cba
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3349,3 +3349,14 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Publishes explicit retained shebang-script launches through the existing shell fork/exec transaction, preserving exact script/interpreter content and distinguishing script facts from argv-only invocations.
+  - revision: 352
+    id: macos-process-file-effect-execution
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - endpoint-effect-publication
+      - lifecycle-activity-frontiers
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Publishes qualified Mac shell fork/exec and plain file effects in one exact journal, preserving executed actor and process/session frontiers through multi-occurrence effects and interrupted publication.
