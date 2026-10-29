@@ -31,11 +31,20 @@ import time
 import uuid
 import warnings
 from collections import Counter, deque
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, BinaryIO, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 
@@ -50,6 +59,7 @@ MAX_LINE = 1_048_576
 MAX_STREAM = 32 * MAX_LINE
 MAX_RETAINED = 16
 MAX_RING_BYTES = 4 * MAX_LINE
+ENTITLEMENT_MARKER = "org.evidenceforge.reference.synthetic"
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type Case = Literal["control", "finder"]
 type Code = Literal[
@@ -138,12 +148,79 @@ class Image(Model):
 
 
 class Manifest(Model):
-    kit_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+    kit_version: Annotated[int, Field(strict=True, ge=1, le=2)] = 1
+    collection_mode: Literal["app", "launch_chain"] = "app"
     image: Image
     guard_sha256: Digest
     plist_sha256: Digest
     code_sha256: dict[str, Digest]
     codec_sha256: Digest
+
+    @model_validator(mode="after")
+    def coherent_variant(self) -> Manifest:
+        """Bind the new collection scope to an explicit versioned setup choice."""
+        if (self.kit_version == 2) != (self.collection_mode == "launch_chain"):
+            raise ValueError("Private kit collection variant and version disagree")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_compatible(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Preserve original setup/provenance shapes for existing private kits."""
+        data = handler(self)
+        if self.collection_mode == "app":
+            data.pop("collection_mode", None)
+        return data
+
+
+class EntitlementShape(Model):
+    """Fixed representation classes; no native keys or values are exported."""
+
+    representation: Literal[
+        "NULL",
+        "OBJECT",
+        "STRING_JSON_OBJECT",
+        "STRING_PLIST_OBJECT",
+        "STRING_OTHER",
+        "OTHER",
+        "NOT_OBSERVED",
+        "ABSENT",
+    ] = "NOT_OBSERVED"
+    marker: Literal["BOOLEAN_TRUE", "INTEGER_ONE", "ABSENT", "OTHER", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    only_controlled_marker: Check = "INCONCLUSIVE"
+
+
+class LaunchChainDiagnostic(Model):
+    """Supplementary diagnostic only; never a native generation qualification."""
+
+    purpose: Literal["CONTROLLED_LAUNCHER_AND_ENTITLEMENT_DIAGNOSTIC"] = (
+        "CONTROLLED_LAUNCHER_AND_ENTITLEMENT_DIAGNOSTIC"
+    )
+    launcher_retained: Literal["ONE", "NONE", "MULTIPLE"] = "NONE"
+    launcher_linkage: Check = "INCONCLUSIVE"
+    launcher_fork_linkage: Literal["RETAINED_MATCH", "NOT_RETAINED", "MULTIPLE", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    launcher_shape_excluding_entitlements: Check = "INCONCLUSIVE"
+    probe_shape_excluding_entitlements: Check = "INCONCLUSIVE"
+    probe_entitlements: EntitlementShape = Field(default_factory=EntitlementShape)
+    launcher_entitlements: EntitlementShape = Field(default_factory=EntitlementShape)
+    launcher_before_image: Literal["LAUNCHD", "XPCPROXY", "OTHER", "NOT_OBSERVED"] = "NOT_OBSERVED"
+    launcher_signing_identifier: Literal["EXPECTED_XPCPROXY", "OTHER", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    launcher_modeled_security_agreement: Check = "INCONCLUSIVE"
+    launcher_posix_credentials: Literal["ROOT", "APP_USER", "OTHER", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    launcher_argv: Literal["TARGET_ONLY", "TARGET_AND_ARGUMENTS", "OTHER", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    launcher_fds_only_standard: Check = "INCONCLUSIVE"
+    launcher_fds_match_app: Check = "INCONCLUSIVE"
+    launcher_environment_to_app: EnvironmentDifference | None = None
+    launcher_launch: ExistingLaunchFacts | None = None
 
 
 class CaseReport(Model):
@@ -173,9 +250,11 @@ class CaseReport(Model):
 
 
 class Report(Model):
-    kit_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+    kit_version: Annotated[int, Field(strict=True, ge=1, le=2)] = 1
     purpose: Literal["GUI_LAUNCH_RELATIONSHIP_DIAGNOSTIC"] = "GUI_LAUNCH_RELATIONSHIP_DIAGNOSTIC"
-    collection: Literal["CONTROLLED_TEST_APP_ONLY"] = "CONTROLLED_TEST_APP_ONLY"
+    collection: Literal["CONTROLLED_TEST_APP_ONLY", "CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"] = (
+        "CONTROLLED_TEST_APP_ONLY"
+    )
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     error: Code = "NONE"
@@ -192,6 +271,7 @@ class Report(Model):
     finder: CaseReport = Field(default_factory=CaseReport)
     unified_log: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
     other_launch_methods: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+    launch_chain: LaunchChainDiagnostic | None = None
 
 
 class EnvironmentDifference(Model):
@@ -329,6 +409,169 @@ class ExistingReviewReport(Model):
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     apps: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
     live_role_queries: Literal["NOT_PERFORMED"] = "NOT_PERFORMED"
+
+
+LaunchChainDiagnostic.model_rebuild()
+Report.model_rebuild()
+
+
+def entitlement_shape(value: object, *, present: bool = True) -> EntitlementShape:
+    """Classify only the controlled marker, never arbitrary entitlement keys/values."""
+    if not present:
+        return EntitlementShape(representation="ABSENT")
+    representation = "NULL" if value is None else "OBJECT" if type(value) is dict else "OTHER"
+    if type(value) is str:
+        representation = "STRING_OTHER"
+        try:
+            decoded = _decode(value.encode())
+        except PrivateError:
+            try:
+                decoded = plistlib.loads(value.encode())
+            except (ValueError, TypeError, plistlib.InvalidFileException):
+                decoded = None
+            if type(decoded) is dict:
+                representation = "STRING_PLIST_OBJECT"
+        else:
+            representation = "STRING_JSON_OBJECT"
+        value = decoded
+    if type(value) is not dict:
+        return EntitlementShape(representation=representation, marker="ABSENT")
+    marker = value.get(ENTITLEMENT_MARKER)
+    return EntitlementShape(
+        representation=representation,
+        marker="BOOLEAN_TRUE"
+        if marker is True
+        else "INTEGER_ONE"
+        if type(marker) is int and marker == 1
+        else "ABSENT"
+        if ENTITLEMENT_MARKER not in value
+        else "OTHER",
+        only_controlled_marker=_check(set(value) == {ENTITLEMENT_MARKER}),
+    )
+
+
+def _shape_without_entitlements(row: dict) -> Check:
+    """Diagnostic isolation only; deliberately not a source admission predicate."""
+    candidate = deepcopy(row)
+    payload = candidate.get("event", {}).get("exec", {})
+    if "entitlements" in payload:
+        payload["entitlements"] = None
+    try:
+        decode_endpoint_security_record(json.dumps(candidate))
+    except (ValueError, TypeError, ValidationError):
+        return "FAIL"
+    return "PASS"
+
+
+def _same_loaded_image(left: dict, right: dict) -> bool:
+    """Match the linked launcher's native file object and code identity in memory."""
+    lstat, rstat = left["executable"]["stat"], right["executable"]["stat"]
+    return all(lstat[key] == rstat[key] for key in ("st_dev", "st_ino")) and all(
+        left.get(key) == right.get(key) for key in ("cdhash", "signing_id", "team_id")
+    )
+
+
+def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnostic:
+    """Inspect only already-retained controlled-chain rows, exporting fixed labels."""
+    rows = [_decode(raw) for raw in raws]
+    apps = [
+        row
+        for row in rows
+        if row.get("event_type") == 9 and _owned(row["event"]["exec"]["target"], image)
+    ]
+    if len(apps) != 1:
+        return LaunchChainDiagnostic()
+    app = apps[0]
+    app_exec, app_before = app["event"]["exec"], app["process"]
+    launchers = [
+        row
+        for row in rows
+        if row.get("event_type") == 9
+        and row is not app
+        and row["event"]["exec"]["target"]["executable"]["path"] == "/usr/libexec/xpcproxy"
+    ]
+    values: dict = {
+        "launcher_retained": "ONE" if len(launchers) == 1 else "MULTIPLE" if launchers else "NONE",
+        "probe_shape_excluding_entitlements": _shape_without_entitlements(app),
+        "probe_entitlements": entitlement_shape(
+            app_exec.get("entitlements"), present="entitlements" in app_exec
+        ),
+    }
+    if len(launchers) != 1:
+        return LaunchChainDiagnostic(**values)
+    launcher = launchers[0]
+    values["launcher_shape_excluding_entitlements"] = _shape_without_entitlements(launcher)
+    if (
+        values["launcher_shape_excluding_entitlements"] != "PASS"
+        or values["probe_shape_excluding_entitlements"] != "PASS"
+    ):
+        return LaunchChainDiagnostic(**values)
+    payload, before = launcher["event"]["exec"], launcher["process"]
+    target = payload["target"]
+    linked = (
+        _identity(target) == _identity(app_before)
+        and _token(target) == _token(app_before)
+        and _same_loaded_image(target, app_before)
+    )
+    forks = [
+        row
+        for row in rows
+        if row.get("event_type") == 11
+        and _identity(row["event"]["fork"]["child"]) == _identity(before)
+        and _token(row["event"]["fork"]["child"]) == _token(before)
+    ]
+    argv = payload.get("args")
+    fds = payload.get("fds")
+    token, app_token = _token(target), _token(app_before)
+    values.update(
+        launcher_linkage=_check(linked),
+        launcher_fork_linkage="RETAINED_MATCH"
+        if len(forks) == 1
+        else "MULTIPLE"
+        if forks
+        else "NOT_RETAINED",
+        launcher_shape_excluding_entitlements=_shape_without_entitlements(launcher),
+        launcher_entitlements=entitlement_shape(
+            payload.get("entitlements"), present="entitlements" in payload
+        ),
+        launcher_modeled_security_agreement=_check(
+            target.get("codesigning_flags") == 0x24000001
+            and target.get("is_platform_binary") is True
+            and target.get("cs_validation_category") == 1
+        ),
+        launcher_before_image="LAUNCHD"
+        if before["executable"]["path"] == "/sbin/launchd"
+        else "XPCPROXY"
+        if before["executable"]["path"] == "/usr/libexec/xpcproxy"
+        else "OTHER",
+        launcher_signing_identifier="EXPECTED_XPCPROXY"
+        if target.get("signing_id") == "com.apple.xpcproxy"
+        else "OTHER",
+        launcher_posix_credentials="ROOT"
+        if all(token[index] == 0 for index in (1, 2, 3, 4))
+        else "APP_USER"
+        if all(token[index] == app_token[index] for index in (1, 2, 3, 4))
+        else "OTHER",
+        launcher_argv="TARGET_ONLY"
+        if argv == ["/usr/libexec/xpcproxy"]
+        else "TARGET_AND_ARGUMENTS"
+        if type(argv) is list and argv and argv[0] == "/usr/libexec/xpcproxy"
+        else "OTHER",
+        launcher_fds_only_standard=_check(
+            type(fds) is list
+            and {fd.get("fd") for fd in fds if type(fd) is dict} == {0, 1, 2}
+            and len(fds) == 3
+        ),
+        launcher_fds_match_app=_check(
+            fds == app_exec.get("fds") and payload.get("last_fd") == app_exec.get("last_fd")
+        ),
+        launcher_environment_to_app=compare_environment(
+            tuple(item.encode() for item in payload["env"]),
+            tuple(item.encode() for item in app_exec["env"]),
+        ),
+        launcher_launch=inspect_existing_launch(before, payload, image),
+    )
+    return LaunchChainDiagnostic(**values)
 
 
 def compare_environment(
@@ -667,11 +910,37 @@ def _owned(process: dict, image: Image) -> bool:
     )
 
 
+def _app_case_rows(raws: list[bytes], image: Image) -> list[bytes]:
+    """Keep app-only labels separate from the explicitly reported launcher phases."""
+    decoded = [(raw, _decode(raw)) for raw in raws]
+    apps = [
+        row
+        for _, row in decoded
+        if row.get("event_type") == 9 and _owned(row["event"]["exec"]["target"], image)
+    ]
+    if len(apps) != 1:
+        return raws
+    before, after = apps[0]["process"], apps[0]["event"]["exec"]["target"]
+    return [
+        raw
+        for raw, row in decoded
+        if (row.get("event_type") == 9 and row is apps[0])
+        or (
+            row.get("event_type") == 11
+            and _identity(row["event"]["fork"]["child"]) == _identity(before)
+        )
+        or (row.get("event_type") == 15 and _identity(row["process"]) == _identity(after))
+    ]
+
+
 class Tracker:
     """Filter in memory; persist forks only after an exact owned exec proves linkage."""
 
-    def __init__(self, image: Image) -> None:
+    def __init__(self, image: Image, *, launch_chain: bool = False) -> None:
         self.image = image
+        self.launch_chain = launch_chain
+        self.launchers: deque[tuple[bytes, dict]] = deque()
+        self.launcher_bytes = 0
         self.phase: Literal["ready", "control", "finder"] = "ready"
         self.ready_pids: set[int] = set()
         self.ready_ids: set[tuple[int, int, int]] = set()
@@ -724,6 +993,17 @@ class Tracker:
                 payload = event.get("exec", {})
                 target = payload.get("target", {})
                 identity = _identity(target)
+                if (
+                    self.launch_chain
+                    and self.phase == "finder"
+                    and target.get("executable", {}).get("path") == "/usr/libexec/xpcproxy"
+                ):
+                    self.launchers.append((raw, target))
+                    self.launcher_bytes += len(raw)
+                    while len(self.launchers) > 64 or self.launcher_bytes > MAX_RING_BYTES:
+                        removed, _ = self.launchers.popleft()
+                        self.launcher_bytes -= len(removed)
+                    return []
                 if not _owned(target, self.image):
                     return []
                 readiness = payload.get("args", [])[1:] == ["--ready"]
@@ -741,6 +1021,25 @@ class Tracker:
                     raise PrivateError("DATA")
                 self.live[identity] = case
                 linked = [(case, data) for data, child_id in self.forks if child_id == before]
+                if self.launch_chain and case == "finder":
+                    for data, launcher in self.launchers:
+                        if (
+                            _identity(launcher) != before
+                            or _token(launcher) != _token(process)
+                            or not _same_loaded_image(launcher, process)
+                        ):
+                            continue
+                        launcher_before = _decode(data)["process"]
+                        linked.extend(
+                            (case, fork_raw)
+                            for fork_raw, child_id in self.forks
+                            if child_id == _identity(launcher_before)
+                            and _token(_decode(fork_raw)["event"]["fork"]["child"])
+                            == _token(launcher_before)
+                        )
+                        linked.append((case, data))
+                    linked = list(dict.fromkeys(linked))
+                    linked.sort(key=lambda item: _decode(item[1])["global_seq_num"])
                 rows = [*linked, (case, raw)]
             else:
                 identity = _identity(process)
@@ -766,9 +1065,16 @@ class Tracker:
 
 
 def analyze_case(
-    raws: list[bytes], own: OwnSnapshot | None, completed: bool, image: Image | None = None
+    raws: list[bytes],
+    own: OwnSnapshot | None,
+    completed: bool,
+    image: Image | None = None,
+    *,
+    launch_chain: bool = False,
 ) -> CaseReport:
     """Offline fixed-label diagnostics. Unexpected shapes cannot silently qualify."""
+    if launch_chain and image is not None:
+        raws = _app_case_rows(raws, image)
     if not raws or own is None:
         return CaseReport(test_completion=_check(completed))
     rows = [_decode(raw) for raw in raws]
@@ -952,6 +1258,7 @@ def prepare(destination: Path | None = None) -> Path:
         (Path(__file__).resolve(), CODE[0]),
         *((SOURCES / name, name) for name in CODE[1:]),
         (SOURCES / "PRIVATE-RUN.md", "PRIVATE-RUN.md"),
+        (SOURCES / "LAUNCH-CHAIN.md", "LAUNCH-CHAIN.md"),
     ):
         shutil.copyfile(source, root / name)
         (root / name).chmod(0o600)
@@ -1019,7 +1326,7 @@ def _codec_digest() -> str:
     ).hexdigest()
 
 
-def setup() -> Report:
+def setup(*, launch_chain: bool = False) -> Report:
     """HUMAN ONLY: compile/sign the controlled app; launch nothing."""
     root = _root()
     _preflight()
@@ -1054,7 +1361,12 @@ def setup() -> Report:
         root,
     )
     _executable(root).chmod(0o700)
-    _command(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], root)
+    signing = ["/usr/bin/codesign", "--force", "--sign", "-"]
+    if launch_chain:
+        entitlements = root / "CONTROLLED-ENTITLEMENTS.plist"
+        _write(entitlements, plistlib.dumps({ENTITLEMENT_MARKER: True}))
+        signing.extend(["--entitlements", str(entitlements)])
+    _command([*signing, str(app)], root)
     _command(["/usr/bin/codesign", "--verify", "--strict", str(app)], root)
     _command(
         [
@@ -1070,6 +1382,8 @@ def setup() -> Report:
     )
     (root / "collector-guard").chmod(0o700)
     manifest = Manifest(
+        kit_version=2 if launch_chain else 1,
+        collection_mode="launch_chain" if launch_chain else "app",
         image=_image(_executable(root)),
         guard_sha256=_digest(root / "collector-guard"),
         plist_sha256=_digest(app / "Contents/Info.plist"),
@@ -1077,7 +1391,12 @@ def setup() -> Report:
         codec_sha256=_codec_digest(),
     )
     _write(root / "SETUP.json", manifest.model_dump_json().encode())
-    return Report(stage="SETUP_READY", target_platform="PASS", provenance="PASS")
+    return Report(
+        kit_version=manifest.kit_version,
+        stage="SETUP_READY",
+        target_platform="PASS",
+        provenance="PASS",
+    )
 
 
 def _manifest(root: Path) -> Manifest:
@@ -1252,8 +1571,17 @@ def capture() -> Report:
     probes: list[subprocess.Popen[bytes]] = []
     files: dict[Case, BinaryIO] = {}
     pump: Pump | None = None
-    report = Report(target_platform="PASS", provenance="PASS", context="HUMAN_ATTESTED_FINDER")
-    tracker = Tracker(manifest.image)
+    chain = manifest.collection_mode == "launch_chain"
+    report = Report(
+        kit_version=manifest.kit_version,
+        collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"
+        if chain
+        else "CONTROLLED_TEST_APP_ONLY",
+        target_platform="PASS",
+        provenance="PASS",
+        context="HUMAN_ATTESTED_FINDER",
+    )
+    tracker = Tracker(manifest.image, launch_chain=chain)
     try:
         run.mkdir(mode=0o700)
         _replace(root / "ACTIVE-RUN", (run.name + "\n").encode())
@@ -1370,19 +1698,32 @@ def capture() -> Report:
                 _own(run, "control"),
                 _complete(run, "control"),
                 manifest.image,
+                launch_chain=chain,
             ),
             "finder": analyze_case(
                 tracker.records["finder"],
                 _own(run, "finder"),
                 _complete(run, "finder"),
                 manifest.image,
+                launch_chain=chain,
             ),
+            "launch_chain": analyze_launch_chain(tracker.records["finder"], manifest.image)
+            if chain
+            else None,
         }
     )
     if cleaned and probe_cleanup:
         for case in ("control", "finder"):
             report = report.model_copy(
-                update={case: _role_report(root, tracker.records[case], getattr(report, case))}
+                update={
+                    case: _role_report(
+                        root,
+                        _app_case_rows(tracker.records[case], manifest.image)
+                        if chain
+                        else tracker.records[case],
+                        getattr(report, case),
+                    )
+                }
             )
     _write(run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode())
     return report
@@ -1408,7 +1749,13 @@ def offline_report() -> Report:
         if len(rows) > MAX_RETAINED:
             raise PrivateError("LIMIT")
         original = getattr(report, case)
-        analyzed = analyze_case(rows, _own(run, case), _complete(run, case), manifest.image)
+        analyzed = analyze_case(
+            rows,
+            _own(run, case),
+            _complete(run, case),
+            manifest.image,
+            launch_chain=manifest.collection_mode == "launch_chain",
+        )
         report = report.model_copy(
             update={
                 case: analyzed.model_copy(
@@ -1419,6 +1766,10 @@ def offline_report() -> Report:
                 )
             }
         )
+        if case == "finder" and manifest.collection_mode == "launch_chain":
+            report = report.model_copy(
+                update={"launch_chain": analyze_launch_chain(rows, manifest.image)}
+            )
     return report.model_copy(update={"stage": "OFFLINE_REPORT"})
 
 
@@ -1428,6 +1779,8 @@ def review_existing(root: Path) -> ExistingReviewReport:
     root = root.resolve(strict=True)
     _outside_git(root)
     manifest = _manifest(root)
+    if manifest.collection_mode != "app":
+        raise PrivateError("INPUT")
     run = _active(root)
     provenance = _decode(_read(run / "provenance.json"))
     if (
@@ -1536,6 +1889,12 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("setup", "capture", "report", "review-existing"):
         stage = commands.add_parser(name, help="HUMAN private use only")
         stage.add_argument("--private-run", action="store_true", required=True)
+        if name == "setup":
+            stage.add_argument(
+                "--launch-chain",
+                action="store_true",
+                help="Opt into controlled launcher and synthetic-entitlement diagnostics",
+            )
         if name == "capture":
             stage.add_argument(
                 "--finder", action="store_true", required=True, help="Attest a manual Finder launch"
@@ -1552,7 +1911,7 @@ def main(argv: list[str] | None = None) -> int:
             report = review_existing(_hidden_existing_root())
         else:
             report = (
-                setup()
+                setup(launch_chain=args.launch_chain)
                 if args.command == "setup"
                 else capture()
                 if args.command == "capture"

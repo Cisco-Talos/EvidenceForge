@@ -233,7 +233,7 @@ def test_public_case_rejects_arbitrary_native_values(field: str) -> None:
         kit.CaseReport.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "1", 2, None])
+@pytest.mark.parametrize("value", [True, "1", 3, None])
 def test_public_version_is_an_exact_integer(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.Report(kit_version=value)
@@ -259,7 +259,7 @@ def test_prepare_only_copies_reviewable_code(
     monkeypatch.setattr(kit.subprocess, "Popen", lambda *a, **k: pytest.fail("collector/app"))
     root = kit.prepare(tmp_path / "kit")
     assert stat.S_IMODE(root.stat().st_mode) == 0o700
-    assert set(p.name for p in root.iterdir()) == {*kit.CODE, "PRIVATE-RUN.md"}
+    assert set(p.name for p in root.iterdir()) == {*kit.CODE, "PRIVATE-RUN.md", "LAUNCH-CHAIN.md"}
     assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in root.iterdir())
     assert not (root / "GUIProbe.app").exists()
     with pytest.raises(FileExistsError):

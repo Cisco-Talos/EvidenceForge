@@ -282,3 +282,30 @@ combined reference/script selection passes 238 tests (one existing slow case des
 The final script/native-census/behavior selection passes 79 tests. Whole Ruff/format,
 whitespace and revision/digest verification pass. Revision-351 digest:
 `22f64fb6795c3a53b303d77753e6d66142daf0fc51cb25e879abcf0fbe392e5e`.
+
+## Prepared human-only launcher/entitlement follow-up
+
+The new opt-in version-2 setup signs only the harmless own-process probe with the fixed
+synthetic marker `org.evidenceforge.reference.synthetic: true`. A bounded transient xpcproxy
+exec ring is added to the existing filter. Only an exact controlled-app exec can authorize
+persistence of a matching launcher: full audit token, PID version, birth time, native file
+object and code identity must agree. A preceding fork requires the launcher's full child
+token/lifetime agreement. No unrelated candidate is written, no PID/path-only match is used,
+and missing retained forks never establish absence. Stream/retention/watchdog bounds remain;
+the additional in-memory ring is explicitly capped at 64 rows/4 MiB.
+
+The supplementary report exports only fixed relationship/representation labels and agreement
+with the known synthetic marker. Populated entitlements are masked only inside an explicitly
+named diagnostic shape-isolation check, never in generation admission; the production codec's
+nonnull entitlement gate is unchanged. Original app-only behavior and old manifest/provenance
+serialization remain compatible. All 238 selected reference/script tests pass, including
+canary non-disclosure, foreign token/file/code rejection, bounded buffers, versioned setup and
+mocked signing; none executes native commands. The procedure is at
+`docs/design/macos-workstation-feasibility/gui-launch-reference/LAUNCH-CHAIN.md`.
+
+Fresh code-only kit: `/private/tmp/eforge-gui-launch-kit-apsp1wi7`. Isolated `setup --help`
+passes. The agent ran only `prepare` and `--help`, never setup/capture/report/review or a
+collector/app. No prior human-used kit was accessed. Once the human uses this new copy it
+inherits the same no-inspection boundary. The next independent engine work is effect-bearing
+process publication; unknown initial launcher/terminal/service metadata remains a human
+qualification dependency, with complete mode rejecting those gaps rather than hiding them.

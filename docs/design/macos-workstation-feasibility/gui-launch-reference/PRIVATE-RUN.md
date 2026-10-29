@@ -1,5 +1,9 @@
 # Human-only private Finder launch reference
 
+For a **new** opt-in launcher/entitlement experiment, use [LAUNCH-CHAIN.md](LAUNCH-CHAIN.md).
+The original procedure below remains the app-only mode and must not be applied to old private
+kits as an upgrade. Agents prepare a fresh code-only copy for the new experiment.
+
 Agents may prepare this kit, compile its sources without executing, and test invented inputs.
 **Only you run `setup`, `capture`, `report` and `review-existing`, privately after closing
 Codex and other agents.**
