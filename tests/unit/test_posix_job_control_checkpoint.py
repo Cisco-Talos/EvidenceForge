@@ -26,6 +26,7 @@ class _LegacyStateParticipant(StateManagerParticipant):
         seal = super().prepare_checkpoint(sequence)
         head = loads(seal.head.payload)
         head["schema_version"] = "6"
+        head["simple"].pop("_macos_process_census")
         # Keep the fabricated legacy head consistent with the v6 wire contract.
         head["expiring"].pop("_macos_policy_refusals")
         for name in ("_posix_job_control_reservations", "_posix_job_control_reservation_counts"):
@@ -79,7 +80,7 @@ def test_controller_restores_only_explicitly_compatible_segments(
         phase="collection", completed_simulated_hours=12, next_hour="2026-10-16T00:00:00+00:00"
     )
     manifest = controller.commit(cursor=next_cursor, participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "10"
+    assert manifest.participant_heads[0].schema_version == "11"
     again = StateManager()
     controller.restore_participants(
         recovery=store.recover(), participants=(StateManagerParticipant(again),)

@@ -213,3 +213,54 @@ Revision 349 final verification: the native SSH checkpoint/suspend/resume contra
 again after the Finder changes; all seven focused real-engine/CLI cases have passed. Whole
 Ruff, formatting and whitespace checks pass. The behavior manifest is revision 349 with digest
 `554e05ca8e5dbf4bb7cb0a0e491f1c054751081af8ca75b22dff52746f65fa76`.
+
+## Revision 350: independent all-start census and complete-mode enforcement
+
+Canonical accounting now lives at the two actual State mutation owners: every process birth
+and every successful exec. It therefore includes legacy registration, terminal/session helpers,
+services and other producers which never call the ES factory. Fork-only births require fork
+evidence; aggregate born-image starts add an unresolved initial-exec obligation. Existing
+lifetimes may add later exec obligations. Eligibility uses actual canonical times in the
+half-open simulation window, independent of authored labels or source decisions.
+
+The bounded per-host head retains counts, multiplicity-preserving SHA-256 fingerprints and
+at most eight truncated aggregate examples. Cohort rollback restores it with State. State head
+schema 11 persists it; schemas 6–10 migrate with no invented history. A complete run cannot
+claim coverage from such a missing historical census and must start fresh. No emitter or
+source hook supplies the expectation denominator.
+
+Native finalization independently counts committed fork/exec occurrence receipts, compares
+identity fingerprints with State, verifies native journal row counts, and streams the generated
+synthetic export after close against full native-row fingerprints. Missing, duplicated or
+changed records reject. Retry rebuilds the bounded receipt census from the existing spool;
+there is no new duration-growing identity list or second process publisher.
+
+Selecting native ES defaults `macos_process_coverage` to `complete`; the resolved request
+survives runtime format narrowing. CLI/Studio's shared validator and engine preflight reject
+missing output, disabled process collection, loss and collection-window gaps. Runtime unknowns
+or aggregate starts fail before bundle acceptance, with host, fork/exec counts, aggregate image
+examples and source qualification reasons. Explicit `partial` retains exploratory generation
+and reports the same independent census honestly. The six-hour benchmark is now explicitly
+partial; no scenario has been mislabeled complete to preserve a passing native subset.
+
+A real-engine positive workload has **11 canonical forks and 11 execs, all matched to native
+publication and export**, with a legitimately modeled pre-window terminal. Moving terminal
+startup into the window rejects; disabling the qualified command producer also rejects.
+Additional tests cover same-PID re-exec, PID reuse, half-open boundaries, source-bypassing
+registration, provisional rollback/retry, full State restore, legacy history, omitted/doubled
+writes and physical synthetic-export duplication. All 248 selected adjacent tests passed;
+after final boundedness/policy refinements, the focused 103-test set also passes. Nine slow
+CLI contracts pass, including native-only equality and nonempty suspend/resume. The denial
+tests now assert the new independent census and pass. Two additional public-CLI negative
+controls prove that unresolved starts and removal of the required native source reject by
+default. All 13 slow contracts pass across these selections. The separate 468-test State,
+checkpoint, behavior-manifest and legacy-lifecycle regression set passes. Whole Ruff/format
+and whitespace checks pass. Final revision-350 digest:
+`01319fb79a0d928fc3d7cd3f5ce72677a2057db309aeaa9e6319e8dbb9f8b45f`.
+
+The concrete producer inventory and finite acceptance matrix are at
+`docs/design/macos-workstation-feasibility/process-producer-inventory.md`. Unsupported initial
+terminal/xpcproxy/service activations, helper/PTY and effect-bearing paths remain classified
+gaps, not hidden denominator exclusions. Further native qualification may need a bounded
+human-run experiment for populated entitlements and the controlled launcher's first exec.
+No local native logs, human-used kit files, collectors or apps were accessed by the agent.

@@ -1,4 +1,5 @@
 name: macos27-native-assessment
+macos_process_coverage: partial
 description: 'Six-hour fictional software-consultancy benchmark for macOS 27 arm64: qualified v11 process
   phases, explicit policy refusal, shell history and mixed endpoint/network evidence. Native coverage
   limits remain explicit.'

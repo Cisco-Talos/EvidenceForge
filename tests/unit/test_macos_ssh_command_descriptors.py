@@ -267,6 +267,7 @@ def test_old_session_records_keep_unknown_command_streams() -> None:
     assert decode_state_value(encoded).ssh_command_streams is None
     head = loads(_capture_head(state))
     head["schema_version"] = "8"
+    head["simple"].pop("_macos_process_census")
     del head["expiring"]["_macos_policy_refusals"]
     restored = StateManager()
     _restore_head(restored, dumps(head))

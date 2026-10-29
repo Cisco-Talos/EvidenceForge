@@ -31,6 +31,7 @@ from evidenceforge.generation.indexes import (
     GroupedTemporalIndex,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.macos_process_census import MacosProcessCensus
 from evidenceforge.generation.macos_terminal_devices import (
     validate_native_pipe_state,
     validate_terminal_state,
@@ -49,7 +50,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "10"
+_SCHEMA_VERSION = "11"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -361,6 +362,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         "7",
         "8",
         "9",
+        "10",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -378,6 +380,8 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     simple = document["simple"]
     legacy = document["schema_version"] == _LEGACY_VERSION
     missing = _TERMINAL_FIELDS if document["schema_version"] in {"6", "7"} else set()
+    if document["schema_version"] != _SCHEMA_VERSION:
+        missing = missing | {"_macos_process_census"}
     if legacy:
         missing = missing | _JOB_CONTROL_FIELDS
     if missing:
@@ -399,6 +403,15 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
                 f"StateManager checkpoint field {name} has an invalid type"
             )
         setattr(fresh, name, decoded)
+
+    for host, census in fresh._macos_process_census.items():
+        if (
+            type(host) is not str
+            or not host
+            or type(census) is not MacosProcessCensus
+            or fresh._pid_os.get(host, "macos") != "macos"
+        ):
+            raise CheckpointCorruptionError("StateManager Mac process census is invalid")
 
     state = document["state"]
     if type(state) is not dict or set(state) != {"current_time", "dns_cache"}:
@@ -429,7 +442,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         fresh._refresh_connection_lifecycle(connection)
 
     expiring = document["expiring"]
-    if document["schema_version"] != _SCHEMA_VERSION:
+    if document["schema_version"] not in {"10", _SCHEMA_VERSION}:
         if type(expiring) is not dict or set(expiring) != set(_EXPIRING_FIELDS) - {
             "_macos_policy_refusals"
         }:
@@ -601,7 +614,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         streams = session.ssh_command_streams
         if streams is not None:
             if (
-                document["schema_version"] not in {"9", _SCHEMA_VERSION}
+                document["schema_version"] not in {"9", "10", _SCHEMA_VERSION}
                 or not ssh
                 or origin is None
                 or session.effective_uid != origin.audit_uid
@@ -1043,7 +1056,7 @@ class StateManagerParticipant:
             if (
                 type(document) is not dict
                 or document.get("schema_version")
-                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9"}
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

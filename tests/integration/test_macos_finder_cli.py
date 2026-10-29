@@ -42,6 +42,7 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
     overlay.parent.mkdir(parents=True)
     overlay.write_text(yaml.safe_dump(selected, sort_keys=False))
     raw = _scenario().model_dump(mode="json", exclude_none=True)
+    raw["macos_process_coverage"] = "partial"  # xpcproxy's first activation stays unresolved.
     raw["environment"]["systems"] = raw["environment"]["systems"][:1]
     raw["environment"]["users"] = raw["environment"]["users"][:1]
     raw["environment"]["network"]["segments"][0]["systems"] = ["MAC-01"]

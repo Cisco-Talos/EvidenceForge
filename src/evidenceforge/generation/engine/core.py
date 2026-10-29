@@ -983,6 +983,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         # Resolve time window
         self.start_time, self.end_time = resolve_time_window(self.scenario.time_window)
+        from evidenceforge.generation.activity.helpers import _get_os_category
+
+        for system in self.scenario.environment.systems:
+            if _get_os_category(system.os) == "macos":
+                self.state_manager.configure_macos_process_census(
+                    system.hostname, self.start_time, self.end_time
+                )
         logger.info(f"Time window: {self.start_time} to {self.end_time}")
 
         # Compute warm-up period (snapped to whole hours so _generate_hour()
@@ -1060,6 +1067,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.source_deployment_compilation = compile_scenario_source_deployment(
             self.scenario,
             emitter_formats=deployment_formats,
+        )
+        from evidenceforge.generation.macos_process_coverage import validate_complete_collection
+
+        validate_complete_collection(
+            self.scenario,
+            self.source_deployment_compilation.deployment,
+            frozenset(self.emitters),
+            self.start_time,
+            self.end_time,
         )
 
         # Resolve logical people and platform accounts once, then expose the
@@ -1919,8 +1935,64 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._run_bounded_terminal_stage(
                 completed_attribute="_es_ingress_finalized",
                 description="ES occurrence delivery",
-                operation=lambda: ingress.finalize(self.dispatcher),
+                operation=self._finalize_macos_process_coverage,
             )
+
+    def _finalize_macos_process_coverage(self) -> None:
+        """Publish native receipts, then enforce the independent all-process census."""
+        from evidenceforge.generation.macos_process_coverage import (
+            requires_complete_macos_processes,
+        )
+
+        ingress = self.dispatcher.macos_es_ingress
+        if ingress is None:
+            raise StateError("Mac process coverage lost its source occurrence owner")
+        ingress.finalize(self.dispatcher)
+        coverage = ingress.coverage
+        complete = requires_complete_macos_processes(self.scenario, frozenset(self.emitters))
+        if coverage is None:
+            raise StateError("Mac process coverage lost its independent reconciliation")
+        ingress.coverage = coverage.model_copy(
+            update={"policy": "complete" if complete else "partial"}
+        )
+        if not complete:
+            return
+        from evidenceforge.generation.activity.helpers import _get_os_category
+
+        summaries = {host.hostname: host.process_census for host in coverage.hosts}
+        for system in self.scenario.environment.systems:
+            if _get_os_category(system.os) != "macos":
+                continue
+            census = summaries.get(system.hostname)
+            if census is None or (census.window_start, census.window_end) != (
+                self.start_time,
+                self.end_time,
+            ):
+                raise StateError(
+                    f"Complete macOS process coverage on {system.hostname} lost its canonical "
+                    "census history. Start a fresh run; an older checkpoint cannot prove coverage."
+                )
+            if not census.complete:
+                reasons = sorted(
+                    {
+                        item.reason
+                        for host in coverage.hosts
+                        if host.hostname == system.hostname
+                        for item in host.observations
+                        if item.phase in {"fork", "exec"} and item.reason != "supported"
+                    }
+                )
+                examples = ", ".join(census.aggregate_examples) or "none"
+                raise StateError(
+                    f"Incomplete native macOS process coverage on {system.hostname}: "
+                    f"fork {census.published_forks}/{census.expected_forks}, "
+                    f"exec {census.published_execs}/{census.expected_execs}; "
+                    f"unresolved aggregate starts={census.aggregate_births} ({examples}); "
+                    f"missing metadata={','.join(reasons) or 'publication or collection gap'}. "
+                    "Identity reconciliation failed. Implement the owning launch/exec producer "
+                    "and its metadata, or explicitly set macos_process_coverage: partial for a "
+                    "diagnostic run. This bundle cannot claim complete process coverage."
+                )
 
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""
@@ -1946,6 +2018,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 failures.append(error)
             else:
                 self._closed_emitter_names.add(format_name)
+        if ingress is not None and ingress.finalized:
+            try:
+                ingress.verify_export(self.dispatcher)
+            except (OSError, ValueError, StateError) as error:
+                failures.append(error)
         if primary is not None:
             for failure in failures:
                 primary.add_note(f"Emitter cleanup also failed: {failure!r}")

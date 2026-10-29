@@ -312,6 +312,7 @@ def test_legacy_state_head_migrates_with_no_refusal_receipts() -> None:
     state, _ = _state()
     old = loads(_capture_head(state))
     old["schema_version"] = "9"
+    old["simple"].pop("_macos_process_census")
     del old["expiring"]["_macos_policy_refusals"]
     restored = StateManager()
     _restore_head(restored, dumps(old))
@@ -457,6 +458,7 @@ def test_schema9_ssh_command_streams_survive_new_state_head() -> None:
     state, shell = _ready()
     legacy = loads(_capture_head(state))
     legacy["schema_version"] = "9"
+    legacy["simple"].pop("_macos_process_census")
     del legacy["expiring"]["_macos_policy_refusals"]
     restored = StateManager()
     _restore_head(restored, dumps(legacy))

@@ -114,7 +114,10 @@ def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_de
     )
 
     coverage = ground_truth["macos_native_coverage"]
-    assert coverage["scope"] == "exact_process_cohorts_and_authored_births"
+    assert coverage["scope"] == "canonical_process_window"
     host = next(host for host in coverage["hosts"] if host["hostname"] == "MAC-01")
-    assert any(item["reason"] == "aggregate_birth_only" for item in host["observations"])
+    # The independent census also includes terminal/bootstrap starts which are
+    # absent from the old authored-birth-only diagnostic.
+    assert host["process_census"]["aggregate_births"] > 0
+    assert not host["process_census"]["complete"]
     assert not (outputs[0] / "data" / ".eforge-es-ingress").exists()

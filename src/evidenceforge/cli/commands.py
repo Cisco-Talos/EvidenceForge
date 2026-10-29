@@ -1562,6 +1562,11 @@ def _prepare_generation_formats(
         scenario_formats = expand_formats(
             {log["format"] for log in scenario.output.logs if "format" in log}
         )
+        if (
+            scenario.macos_process_coverage is None
+            and "macos_endpoint_security" in scenario_formats
+        ):
+            scenario.macos_process_coverage = "complete"
         filtered = requested & scenario_formats
 
         if requested - scenario_formats:

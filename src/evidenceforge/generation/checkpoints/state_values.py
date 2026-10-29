@@ -65,6 +65,11 @@ from evidenceforge.events.rdp import (
 )
 from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityBinding
+from evidenceforge.generation.macos_process_census import (
+    MacosAggregateBirthSample,
+    MacosOccurrenceDigest,
+    MacosProcessCensus,
+)
 from evidenceforge.generation.process_runtime_cache import RuntimeProcessBinding
 from evidenceforge.models.state import (
     ActiveSession,
@@ -483,6 +488,12 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("hostname", "artifact_version_id", "content_id", "native_path"),
     ),
     "macos-exec-image-v1": (MacosExecImage, ("cpu_subtype", "dyld_exec_path")),
+    "macos-occurrence-digest-v1": (MacosOccurrenceDigest, ("count", "digest")),
+    "macos-aggregate-birth-sample-v1": (MacosAggregateBirthSample, ("image", "started_at")),
+    "macos-process-census-v1": (
+        MacosProcessCensus,
+        ("start", "end", "forks", "execs", "aggregate_births", "aggregate_samples"),
+    ),
     "macos-terminal-session-v1": (
         MacosTerminalSession,
         ("session", "ordinal", "slot", "native_path", "metadata_json"),

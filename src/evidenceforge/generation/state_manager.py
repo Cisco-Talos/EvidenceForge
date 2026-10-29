@@ -114,6 +114,7 @@ from evidenceforge.generation.indexes import (
     IndexedEntityStore,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.macos_process_census import MacosProcessCensus
 from evidenceforge.generation.macos_process_overlay import MacosProcessRelationshipOverlay
 from evidenceforge.generation.macos_terminal_devices import (
     plan_macos_standard_io,
@@ -5487,6 +5488,7 @@ class StateManager:
         self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
         self._macos_audit_session_counters: dict[str, int] = {}
+        self._macos_process_census: dict[str, MacosProcessCensus] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
@@ -6632,6 +6634,24 @@ class StateManager:
                 set(),
             )
             return hashlib.sha256(repr(frozen).encode()).hexdigest()
+
+    def configure_macos_process_census(self, hostname: str, start: datetime, end: datetime) -> None:
+        """Start independent window accounting before any process materialization."""
+        with self._lock:
+            if not hostname or ensure_utc(start) != start or ensure_utc(end) != end or start >= end:
+                raise StateError("Mac process census requires a host and ordered UTC window")
+            if self._pid_os.get(hostname, "macos") != "macos":
+                raise StateError("Mac process census cannot cover a non-Mac host")
+            prior = self._macos_process_census.get(hostname)
+            if prior is not None and (prior.start, prior.end) != (start, end):
+                raise StateError("Mac process census window cannot change during generation")
+            if prior is None:
+                self._macos_process_census[hostname] = MacosProcessCensus(start, end)
+
+    def macos_process_census_snapshot(self) -> tuple[tuple[str, MacosProcessCensus], ...]:
+        """Return immutable per-host obligations, including terminated processes."""
+        with self._lock:
+            return tuple(sorted(self._macos_process_census.items()))
 
     def prepared_materialization_batch(
         self,
@@ -13842,6 +13862,7 @@ class StateManager:
         for item in processes:
             process = item.process
             thread = item.thread
+            capture_mapping(self._macos_process_census, process.system)
             capture_membership(process.job_control)
             terminal = item.plan._payload.terminal_session
             if terminal is not None:
@@ -13983,6 +14004,7 @@ class StateManager:
                     adds_record=adds_record,
                 )
         for execution in plan._process_executions:
+            capture_mapping(self._macos_process_census, execution.target.hostname)
             capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
             capture_object(
                 process_rows.get(execution.target.object_id)
@@ -15740,6 +15762,9 @@ class StateManager:
             self._processes_by_object_id[thread.process_object_id].primary_tid = thread.tid
         for execution in prepared.process_executions:
             process = self._processes_by_object_id[execution.target.object_id]
+            census = self._macos_process_census.get(process.system)
+            if census is not None:
+                self._macos_process_census[process.system] = census.execute(execution.after)
             process.prior_executions = (*process.prior_executions, execution.target)[
                 -_MAX_RETAINED_EXECUTIONS_PER_PROCESS:
             ]
@@ -16568,6 +16593,11 @@ class StateManager:
         if update_state_time:
             self.state.current_time = payload.state_time
         identity = plan.identity
+        census = self._macos_process_census.get(identity.hostname)
+        if census is not None:
+            self._macos_process_census[identity.hostname] = census.birth(
+                identity, forked=payload.forked
+            )
         if identity.audit_pid_version is not None:
             self._macos_audit_pid_versions[identity.hostname] = max(
                 self._macos_audit_pid_versions.get(identity.hostname, 0), identity.audit_pid_version

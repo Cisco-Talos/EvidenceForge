@@ -245,6 +245,7 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
     if native:
         scenario.output.logs.append({"format": "macos_endpoint_security"})
     if native_mode == "filtered":
+        scenario.macos_process_coverage = "partial"
         from evidenceforge.models.scenario import SourceObservationOverride
 
         scenario.environment.observation_overrides = [

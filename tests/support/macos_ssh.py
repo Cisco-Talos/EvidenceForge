@@ -29,6 +29,9 @@ def macos_ssh_scenario(
     """Build existing authored intent without new platform configuration fields."""
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
+    # These fixtures qualify individual native phases. Terminal/service aggregate
+    # starts remain in the independent census and do not assert total coverage.
+    data["macos_process_coverage"] = "partial"
     data["time_window"] = {"start": "2026-10-15T10:00:00Z", "duration": "1h", "warmup": "1h"}
     data["environment"]["users"][0]["primary_system"] = "TEST-01"
     data["environment"]["systems"][0].update(

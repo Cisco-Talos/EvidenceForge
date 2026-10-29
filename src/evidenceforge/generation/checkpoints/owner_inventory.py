@@ -62,6 +62,7 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
         "_logon_id_used_host_bases",
         "_macos_audit_pid_versions",
         "_macos_audit_session_counters",
+        "_macos_process_census",
         "_materialization_version",
         "_open_connections",
         "_pid_allocation_count",

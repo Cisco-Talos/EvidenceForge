@@ -23,6 +23,9 @@ def test_policy_refusal_generation_preserves_caller_and_native_filter_equivalenc
     tmp_path: Path,
 ) -> None:
     data = yaml.safe_load(Path("scenarios/macos-workstation-example/scenario.yaml").read_text())
+    data["macos_process_coverage"] = (
+        "partial"  # This contract tests refusal, not all launch producers.
+    )
     data["time_window"].update(duration="20m", warmup="1h")
     data["baseline_activity"]["suspicious_noise"] = "low"
     data["storyline"] = [

@@ -3999,6 +3999,14 @@ class Scenario(BaseModel):
             "training-friendly perfect source coverage."
         ),
     )
+    macos_process_coverage: Literal["complete", "partial"] | None = Field(
+        default=None,
+        description=(
+            "Native Mac process coverage policy. Omission requires completeness when native ES "
+            "output is selected. Partial explicitly permits unresolved launches and reports the "
+            "independent canonical process census without a completeness claim."
+        ),
+    )
     storyline: list[StorylineEvent] | None = Field(default_factory=list)
     red_herrings: list[RedHerringEvent] = Field(
         default_factory=list,
@@ -4022,6 +4030,15 @@ class Scenario(BaseModel):
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError("logon_grace_period must be a duration like '30m', '1h', '2h30m'")
         return v
+
+    @model_validator(mode="after")
+    def resolve_native_macos_coverage_policy(self) -> "Scenario":
+        """Retain an implicit complete request when runtime format filters narrow output."""
+        if self.macos_process_coverage is None and any(
+            entry.get("format") == "macos_endpoint_security" for entry in self.output.logs
+        ):
+            self.macos_process_coverage = "complete"
+        return self
 
     @field_validator("observation_profile")
     @classmethod

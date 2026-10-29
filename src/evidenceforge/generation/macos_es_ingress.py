@@ -28,6 +28,7 @@ from evidenceforge.events.macos_native_coverage import (
     MacosNativeCoverage,
     MacosNativeCoverageCount,
     MacosNativeHostCoverage,
+    MacosProcessCoverageSummary,
     NativeReason,
 )
 from evidenceforge.events.observation import ObservationDecision
@@ -36,6 +37,7 @@ from evidenceforge.formats.macos_endpoint_security import EndpointSecurityRecord
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.macos_process_census import MacosOccurrenceDigest
 from evidenceforge.models.exceptions import StateError
 
 if TYPE_CHECKING:
@@ -174,6 +176,7 @@ class MacosESIngress:
         self._pending: ExactPublicationBatch | None = None
         self._cursor = 0
         self._expected_restored_count: int | None = None
+        self._export_rows: dict[Path, MacosOccurrenceDigest] = {}
 
     def prepare(
         self, cohort_token: str, rows: tuple[ESProcessIngressRow, ...]
@@ -244,6 +247,10 @@ class MacosESIngress:
         totals: dict[str, Counter] = {}
         authored: dict[str, dict[str, Counter]] = {}
         profiles: dict[str, str] = {}
+        canonical = dict(dispatcher.state_manager.macos_process_census_snapshot())
+        published: dict[str, tuple[MacosOccurrenceDigest, MacosOccurrenceDigest]] = {}
+        visible_rows = 0
+        export_rows: dict[Path, MacosOccurrenceDigest] = {}
         for route in sorted(self.spool._writers.values(), key=lambda item: str(item.output_path)):
             with route.output_path.open(encoding="utf-8") as stream:
                 for line in iter(lambda: stream.readline(_MAX_INGRESS_BYTES + 1), ""):
@@ -280,25 +287,28 @@ class MacosESIngress:
                         authored.setdefault(row.host.hostname, {}).setdefault(
                             row.storyline_cluster_id, Counter()
                         )[fact] += 1
+                    record = None
+                    if row.native_body is not None and row.status in {"visible", "delayed"}:
+                        if output is None:
+                            raise StateError("Visible ES ingress lost its native output owner")
+                        payload = json.loads(row.native_body)
+                        record = EndpointSecurityRecord.model_validate_json(
+                            json.dumps(
+                                payload
+                                | {
+                                    "seq_num": delivery.observation.seq_num,
+                                    "global_seq_num": delivery.observation.global_seq_num,
+                                }
+                            )
+                        )
+                        sink = output.native_sink(row.host)
+                        export_rows[sink.output_path] = export_rows.get(
+                            sink.output_path, MacosOccurrenceDigest()
+                        ).add("native-row", record.to_ndjson().rstrip("\n"))
                     if count >= self._cursor:
                         if self._pending is None:
                             batch = self._authority.issue_batch()
-                            if row.native_body is not None and row.status in {"visible", "delayed"}:
-                                if output is None:
-                                    raise StateError(
-                                        "Visible ES ingress lost its native output owner"
-                                    )
-                                payload = json.loads(row.native_body)
-                                record = EndpointSecurityRecord.model_validate_json(
-                                    json.dumps(
-                                        payload
-                                        | {
-                                            "seq_num": delivery.observation.seq_num,
-                                            "global_seq_num": delivery.observation.global_seq_num,
-                                        }
-                                    )
-                                )
-                                sink = output.native_sink(row.host)
+                            if record is not None:
                                 batch.reserve_participants((sink,))
                                 batch.prepare(
                                     lambda sink=sink, record=record: sink.write(record.to_ndjson())
@@ -313,10 +323,25 @@ class MacosESIngress:
                         self._cursor = count + 1
                         self._pending = None
                     registry.commit(delivery)
+                    if row.native_body is not None and row.status in {"visible", "delayed"}:
+                        visible_rows += 1
+                        census = canonical.get(row.host.hostname)
+                        if census is not None and census.contains(row.observed_at):
+                            forks, execs = published.get(
+                                row.host.hostname,
+                                (MacosOccurrenceDigest(), MacosOccurrenceDigest()),
+                            )
+                            if row.event_type == 11:
+                                forks = forks.add(row.host.hostname, row.occurrence_id)
+                            elif row.event_type == 9:
+                                execs = execs.add(row.host.hostname, row.occurrence_id)
+                            published[row.host.hostname] = forks, execs
                     count += 1
         expected = sum(route._sorted_writer.event_count for route in self.spool._writers.values())
         if count != expected or self._cursor != count:
             raise StateError("ES occurrence replay lost an admitted source snapshot")
+        if output is not None and output.event_count != visible_rows:
+            raise StateError("Native ES output omitted or duplicated a committed publication")
         states = {state.source_instance: state for state in dispatcher.es_collectors.snapshot()}
         for state in registry.snapshot():
             current = states.get(state.source_instance)
@@ -334,6 +359,30 @@ class MacosESIngress:
             if state.source_profile is not None:
                 profiles.setdefault(state.hostname, state.source_profile.profile_id)
                 totals.setdefault(state.hostname, Counter())
+        for host in canonical:
+            totals.setdefault(host, Counter())
+            profiles.setdefault(host, "not_activated")
+
+        def process_summary(host: str) -> MacosProcessCoverageSummary | None:
+            census = canonical.get(host)
+            if census is None:
+                return None
+            forks, execs = published.get(host, (MacosOccurrenceDigest(), MacosOccurrenceDigest()))
+            return MacosProcessCoverageSummary(
+                window_start=census.start,
+                window_end=census.end,
+                expected_forks=census.forks.count,
+                expected_execs=census.execs.count,
+                published_forks=forks.count,
+                published_execs=execs.count,
+                fork_identities_match=forks == census.forks,
+                exec_identities_match=execs == census.execs,
+                aggregate_births=census.aggregate_births,
+                aggregate_examples=tuple(sample.image for sample in census.aggregate_samples),
+                complete=census.aggregate_births == 0
+                and forks == census.forks
+                and execs == census.execs,
+            )
 
         def observations(counter: Counter) -> tuple[MacosNativeCoverageCount, ...]:
             return tuple(
@@ -342,11 +391,16 @@ class MacosESIngress:
             )
 
         self.coverage = MacosNativeCoverage(
+            schema_version=2 if canonical else 1,
+            scope="canonical_process_window"
+            if canonical
+            else "exact_process_cohorts_and_authored_births",
             hosts=tuple(
                 MacosNativeHostCoverage(
                     hostname=host,
                     source_profile=profiles[host],
                     observations=observations(counter),
+                    process_census=process_summary(host),
                     authored_actions=tuple(
                         MacosNativeActionCoverage(
                             storyline_cluster_id=cluster, observations=observations(counts)
@@ -355,6 +409,28 @@ class MacosESIngress:
                     ),
                 )
                 for host, counter in sorted(totals.items())
-            )
+            ),
         )
+        self._export_rows = export_rows
         self.finalized = True
+
+    def verify_export(self, dispatcher: EventDispatcher) -> None:
+        """Stream generated output after close and compare it with native receipts."""
+        if not self.finalized:
+            raise StateError("Native ES output verification requires completed source delivery")
+        output = dispatcher.emitters.get("macos_endpoint_security")
+        routes = tuple(output._writers.values()) if output is not None else ()
+        actual_paths = {route.output_path for route in routes}
+        if actual_paths != set(self._export_rows):
+            raise StateError("Native ES export changed its committed host routes")
+        for path, expected in self._export_rows.items():
+            actual = MacosOccurrenceDigest()
+            with path.open(encoding="utf-8", newline="") as stream:
+                for line in iter(lambda: stream.readline(_MAX_INGRESS_BYTES + 1), ""):
+                    if len(line.encode()) > _MAX_INGRESS_BYTES or not line.endswith("\n"):
+                        raise StateError("Native ES export contains an invalid record extent")
+                    actual = actual.add("native-row", line.rstrip("\n"))
+            if actual != expected:
+                raise StateError(
+                    "Native ES export omitted, duplicated or changed a committed record"
+                )

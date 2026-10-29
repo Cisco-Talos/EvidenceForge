@@ -16,6 +16,14 @@ use `d`, `h`, `m`, `s`, or `ms` components such as `2h30m`.
 simple configured profile name and defaults to `complete`. `logon_grace_period` is a duration and
 defaults to `30m`.
 
+`macos_process_coverage` supports `complete` and `partial`. Native
+`macos_endpoint_security` selection defaults to complete, and runtime format filtering retains
+that request. Complete mode requires lossless process collection over the full simulation
+window and reconciles all canonical Mac starts/execs with native receipts and exported records.
+Unknown metadata or unresolved aggregate starts fail generation. Use `partial` explicitly for
+bounded diagnostic workloads, including current in-window terminal/service/xpcproxy startup;
+the independent census remains in `GROUND_TRUTH.json` without a complete-coverage claim.
+
 ## Baseline activity
 
 `baseline_activity` requires `description`, `intensity: low|medium|high`, and

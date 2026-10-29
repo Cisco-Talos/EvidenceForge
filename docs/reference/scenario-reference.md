@@ -12,6 +12,28 @@ one change without loading this entire document. `eforge info` reports installat
 project-dependent inventories. Use `eforge schema <selector> --json` for an exact focused
 installed-version contract and executable minimal example.
 
+## Native macOS process completeness
+
+`macos_process_coverage: complete` requires every modeled Mac start and successful image
+activation in the simulation window to reconcile with native ES publication. Selecting
+`macos_endpoint_security` defaults to this policy; runtime format filtering preserves that
+request. Missing native output, collection loss, disabled process collection and gaps in the
+collection window fail preflight. Unknown execution metadata, unresolved aggregate starts or
+missing/duplicate native records fail generation before a complete bundle is accepted.
+
+Use `macos_process_coverage: partial` explicitly for exploratory or intentionally incomplete
+workloads. `GROUND_TRUTH.json` then reports independent canonical fork/exec counts, native
+publication counts, identity reconciliation and up to eight unresolved-start examples under
+`macos_native_coverage.hosts[].process_census`. It includes baseline, helper and service starts,
+even when they bypass the native source factory. A passing individual command does not imply
+complete launcher/session coverage. Existing processes gain no retrospective exec records;
+an in-window exec in an existing process still counts.
+
+The supported target remains macOS 27 arm64. Ordinary literal local/non-PTY commands have a
+qualified fork/exec path. Initial terminal, launchd/helper and xpcproxy activations still have
+gates; complete requests containing those unresolved starts reject. See the
+[producer inventory and acceptance matrix](../design/macos-workstation-feasibility/process-producer-inventory.md).
+
 ## Naming metadata
 
 Schema 3 adds optional root `display_name`, a friendly single-line title that permits spaces,

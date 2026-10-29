@@ -43,8 +43,10 @@ subscription, collection interval and output interval. A complete-coverage reque
 incompatible source loss, exclusion or format settings. Deliberately lossy/partial collection
 remains separately available, with an explicit narrower scope and no complete-coverage claim.
 Observation delay must not silently move an otherwise required record beyond exported output.
-The public setting and default enforcement policy remain implementation decisions; enforcement
-must run through CLI and Studio's shared engine, not depend on an author remembering a check.
+The public `macos_process_coverage` setting defaults to complete when native ES is selected;
+partial collection must be declared explicitly. CLI and Studio share the engine preflight,
+independent State census and final native/export reconciliation. Runtime format filtering must
+preserve a complete request rather than quietly dropping the guarantee.
 
 Exec completeness is the first acceptance condition. Fork and exit evidence retain independent
 obligations when modeled and observable. Do not fabricate a fork, terminal status or an exit

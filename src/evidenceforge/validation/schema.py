@@ -251,6 +251,7 @@ class ScenarioValidator:
         self._validate_process_network_pairing()
         self._validate_firewall_config()
         self._validate_observation_profile()
+        self._validate_macos_process_coverage()
         self._validate_network_identities()
         self._validate_public_identity_reuse()
         self._validate_traffic_affinities()
@@ -1636,6 +1637,40 @@ class ScenarioValidator:
                         "Use one of the configured observation profiles: "
                         f"{', '.join(sorted(available))}"
                     ),
+                )
+            )
+
+    def _validate_macos_process_coverage(self) -> None:
+        """Use the engine's same lossless native-collection preflight."""
+        if not any(
+            _get_os_category(system.os) == "macos" for system in self.scenario.environment.systems
+        ):
+            return
+        from evidenceforge.generation.macos_process_coverage import (
+            requires_complete_macos_processes,
+            validate_complete_collection,
+        )
+        from evidenceforge.generation.source_deployment_compiler import (
+            SourceDeploymentCompilationError,
+            compile_scenario_source_deployment,
+        )
+        from evidenceforge.models.exceptions import StateError
+        from evidenceforge.utils.time import resolve_time_window
+
+        formats = frozenset(str(entry.get("format", "")) for entry in self.scenario.output.logs)
+        if not requires_complete_macos_processes(self.scenario, formats):
+            return
+        try:
+            compilation = compile_scenario_source_deployment(self.scenario)
+            start, end = resolve_time_window(self.scenario.time_window)
+            validate_complete_collection(self.scenario, compilation.deployment, formats, start, end)
+        except (StateError, SourceDeploymentCompilationError, ValueError) as error:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="macos_process_coverage",
+                    message=str(error),
+                    suggestion="Use full lossless ES process collection, or declare partial coverage explicitly.",
                 )
             )
 

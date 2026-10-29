@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 349
+current_revision: 350
 history_start_revision: 1
-behavior_surface_sha256: 554e05ca8e5dbf4bb7cb0a0e491f1c054751081af8ca75b22dff52746f65fa76
+behavior_surface_sha256: 01319fb79a0d928fc3d7cd3f5ce72677a2057db309aeaa9e6319e8dbb9f8b45f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3328,3 +3328,14 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Routes explicit Finder and selected baseline app intent through an atomic staged xpcproxy-to-app exec with rollback-safe anonymous audit allocation, retaining the launcher's unresolved initial activation as a separate coverage requirement.
+  - revision: 350
+    id: macos-independent-process-completeness
+    impact: material
+    domains:
+      - canonical-process-execution
+      - native-process-observation
+      - scenario-validation
+      - checkpoint-recovery
+    formats:
+      - macos_endpoint_security
+    summary: Counts all in-window Mac births and execs independently of source admission, persists rollback-safe obligations, reconciles native receipts and exports, and rejects incomplete requests unless partial coverage is explicit.

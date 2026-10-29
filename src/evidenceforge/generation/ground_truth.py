@@ -202,7 +202,9 @@ class GroundTruthGenerator:
                 )
             document = document.model_copy(
                 update={
-                    "macos_native_coverage": MacosNativeCoverage(hosts=tuple(hosts)),
+                    "macos_native_coverage": self.macos_native_coverage.model_copy(
+                        update={"hosts": tuple(hosts)}
+                    ),
                 }
             )
         return document
@@ -320,10 +322,20 @@ class GroundTruthGenerator:
         if doc.macos_native_coverage is not None:
             content.append("\n## macOS Native Process Coverage\n")
             content.append(
-                "Exact process cohorts and authored aggregate births only. Qualification reasons are separate from "
+                "The canonical process census includes all committed starts and execs within the simulation window. "
+                "Source cohort diagnostics also include authored aggregate births. Qualification reasons are separate from "
                 "source filtering/drop decisions. Aggregate births allocate no ES counters. "
                 "This report does not qualify new native reference families.\n"
             )
+            for host in doc.macos_native_coverage.hosts:
+                census = host.process_census
+                if census is not None:
+                    content.append(
+                        f"\n{host.hostname}: native fork {census.published_forks}/{census.expected_forks}; "
+                        f"exec {census.published_execs}/{census.expected_execs}; "
+                        f"unresolved aggregate starts {census.aggregate_births}; "
+                        f"identity reconciliation {'passes' if census.complete else 'fails'}.\n"
+                    )
             content.append("| Host | Phase | Qualification | Source decision | Count |")
             content.append("| --- | --- | --- | --- | ---: |")
             for host in doc.macos_native_coverage.hosts:
