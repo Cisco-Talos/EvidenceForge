@@ -264,3 +264,21 @@ terminal/xpcproxy/service activations, helper/PTY and effect-bearing paths remai
 gaps, not hidden denominator exclusions. Further native qualification may need a bounded
 human-run experiment for populated entitlements and the controlled launcher's first exec.
 No local native logs, human-used kit files, collectors or apps were accessed by the agent.
+
+## Revision 351: retained shell-script producer
+
+A new real-engine regression reproduced an explicitly retained shebang launch as an aggregate
+birth with no native exec. The existing shell producer now accepts the exact script retention
+alongside image retention and carries the caller's canonical script fact into the exec. It does
+not infer that fact from the command string or argv. All source/native/artifact publication
+still uses the existing atomic process cohort and exact retained-content proof; no extra
+publisher or emitter-local inference was introduced. Effect-bearing plans retain their gate.
+
+The four selected/filtered × explicit-script/argv-only real-engine cases pass, including exact
+State/census checkpoint restoration and native script/interpreter distinction. A pre-window
+terminal and one new script activation satisfy complete mode with one fork and one exec.
+Existing birth/script retention, source placement and ordinary-command cases pass too. The
+combined reference/script selection passes 238 tests (one existing slow case deselected).
+The final script/native-census/behavior selection passes 79 tests. Whole Ruff/format,
+whitespace and revision/digest verification pass. Revision-351 digest:
+`22f64fb6795c3a53b303d77753e6d66142daf0fc51cb25e879abcf0fbe392e5e`.

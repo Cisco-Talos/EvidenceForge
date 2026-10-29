@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 350
+current_revision: 351
 history_start_revision: 1
-behavior_surface_sha256: 01319fb79a0d928fc3d7cd3f5ce72677a2057db309aeaa9e6319e8dbb9f8b45f
+behavior_surface_sha256: 22f64fb6795c3a53b303d77753e6d66142daf0fc51cb25e879abcf0fbe392e5e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3339,3 +3339,13 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Counts all in-window Mac births and execs independently of source admission, persists rollback-safe obligations, reconciles native receipts and exports, and rejects incomplete requests unless partial coverage is explicit.
+  - revision: 351
+    id: macos-explicit-shell-script-execution
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - runtime-content-retention
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Publishes explicit retained shebang-script launches through the existing shell fork/exec transaction, preserving exact script/interpreter content and distinguishing script facts from argv-only invocations.

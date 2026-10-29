@@ -1283,21 +1283,27 @@ class ProcessExecutionService:
         """Model a qualified direct shell command as an actual fork and exec.
 
         This bounded path shares process admission, lifetime and completion owners.
-        It never infers native exec evidence. Incomplete local GUI audit metadata,
-        unexpanded shell operators and effect-bearing launches retain aggregate birth semantics.
+        Explicit retained shebang facts use the existing script/content authority;
+        argv alone never establishes a script. Unexpanded shell operators and
+        effect-bearing launches retain aggregate birth semantics.
         """
         if (
             _get_os_category(request.system.os) != "macos"
             or request.macos_launch_kind is not None
             or request.new_posix_session
-            or request.exec_script is not None
             or admission.endpoint is not None
             or request.effect_plan is None
             or request.effect_plan.nodes
             or (
                 request.prepared_effects is not None
                 and any(
-                    token is not request.prepared_effects.process_binary_publication
+                    all(
+                        token is not candidate
+                        for candidate in (
+                            request.prepared_effects.process_binary_publication,
+                            request.prepared_effects.root_script_publication,
+                        )
+                    )
                     or self.dispatcher.local_artifact_registry is None
                     or not self.dispatcher.local_artifact_registry.authenticates_prepared_retention(
                         token
@@ -1397,7 +1403,9 @@ class ProcessExecutionService:
                 binary=binary,
                 kind="user",
             ).image,
-            exec_script=MacosExecScript(),
+            exec_script=request.exec_script
+            if request.exec_script is not None
+            else MacosExecScript(),
             executable_version=(
                 ProcessExecutableVersion.from_binary(binary)
                 if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
