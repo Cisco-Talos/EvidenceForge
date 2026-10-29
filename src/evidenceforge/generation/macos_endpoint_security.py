@@ -15,7 +15,10 @@ from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
-from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+from evidenceforge.events.macos_process_observation import (
+    MacosGUIExecResponsibilityObservation,
+    MacosProcessCollectionObservation,
+)
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import ESFile, ESProcess
 from evidenceforge.formats.macos_file_metadata import (
@@ -88,6 +91,7 @@ def _project_installed_process(
     version: int,
     metadata: MacosFileMetadata | None = None,
     filesystem: MacosInstalledFilesystem | None = None,
+    gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
 ) -> ESProcess:
     process = collection.process
     image = process.executable_version
@@ -122,7 +126,12 @@ def _project_installed_process(
             binary_identity=binary,
         )
         return es_process_from_observations(
-            relationships, collection, context, executable, version=version
+            relationships,
+            collection,
+            context,
+            executable,
+            version=version,
+            gui_responsibility=gui_responsibility,
         )
     except ValueError as error:
         raise StateError(f"Incomplete installed ES process facts: {error}") from error
@@ -205,6 +214,7 @@ def _project_runtime_process(
     collection: MacosProcessCollectionObservation,
     *,
     version: int,
+    gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
 ) -> ESProcess:
     process = collection.process
     image = process.executable_version
@@ -233,7 +243,12 @@ def _project_runtime_process(
     )
     try:
         return es_process_from_observations(
-            relationships, collection, context, placement, version=version
+            relationships,
+            collection,
+            context,
+            placement,
+            version=version,
+            gui_responsibility=gui_responsibility,
         )
     except ValueError as error:
         raise StateError(f"Incomplete ES runtime process facts: {error}") from error
@@ -335,7 +350,44 @@ def prepare_planned_runtime_es_source(
             or relationships.parent.observed_at != collection.observed_at
         ):
             raise StateError("Planned ES source requires its exact transition observation")
-        return _project_runtime_process(artifacts, relationships, collection, version=version)
+        return _project_runtime_process(
+            artifacts,
+            relationships,
+            collection,
+            version=version,
+            gui_responsibility=(
+                _planned_gui_exec_responsibility(cohort, collection, version=version)
+                if source == "exec"
+                else None
+            ),
+        )
+
+
+def _planned_gui_exec_responsibility(
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    *,
+    version: int,
+) -> MacosGUIExecResponsibilityObservation | None:
+    """Sample only the preimage of an already State-authenticated GUI exec.
+
+    Call under the same State boundary as relationship observation. The sealed
+    GUI session authority selects this path; an image name or PID alone cannot.
+    Target/exit snapshots and ordinary execs keep their canonical token mapping.
+    """
+    execution = next(
+        item for item in cohort.process_executions if item.target == collection.process
+    )
+    if execution.gui_session is None:
+        return None
+    if version != 11:
+        raise StateError("GUI responsibility sampling requires the reviewed v11 profile")
+    try:
+        return MacosGUIExecResponsibilityObservation.from_transition(
+            execution.target, execution.after
+        )
+    except ValueError as error:
+        raise StateError(f"Incomplete GUI responsibility observation: {error}") from error
 
 
 def prepare_planned_runtime_es_exec_target(
@@ -464,6 +516,11 @@ def prepare_planned_installed_es_process_snapshot(
             metadata=metadata,
             filesystem=filesystem,
             version=version,
+            gui_responsibility=(
+                _planned_gui_exec_responsibility(cohort, collection, version=version)
+                if phase == "exec_source"
+                else None
+            ),
         )
 
 

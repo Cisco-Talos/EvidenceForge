@@ -11,7 +11,10 @@ from evidenceforge.events.artifact_placement import MacosRuntimeFilePlacementObs
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord, canonical_native_path
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
-from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+from evidenceforge.events.macos_process_observation import (
+    MacosGUIExecResponsibilityObservation,
+    MacosProcessCollectionObservation,
+)
 from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
@@ -36,6 +39,7 @@ def es_process_from_observations(
     ),
     *,
     version: int,
+    gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
 ) -> ESProcess:
     """Freeze one complete non-terminal process snapshot without field padding.
 
@@ -97,7 +101,9 @@ def es_process_from_observations(
         != canonical_native_path(process.image, "macos")
     ):
         raise ValueError("ES process snapshot requires one occurrence and exact executable version")
-    identity = ESProcessRelationshipFields.from_observation(relationships, version=version)
+    identity = ESProcessRelationshipFields.from_observation(
+        relationships, version=version, gui_responsibility=gui_responsibility
+    )
     security = es_image_security_fields(process, context, version=version)
     return ESProcess(
         **identity.model_dump(),

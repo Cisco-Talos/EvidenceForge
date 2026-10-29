@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 347
+current_revision: 348
 history_start_revision: 1
-behavior_surface_sha256: b12117a15c284e0781a6d45aaa675df0378322d18d3392bc0e1450bd66177f57
+behavior_surface_sha256: d4c563f21aae4938c79d39b379ac1a5bd612b9a2a30f84a1f222da51c46f6cbf
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3307,3 +3307,12 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Supplies the modeled uname executable and terminal-chain responsibility; preserves literal quoted or explicit argv through local/SSH fork-exec, bounds authored reservations and closes the current execution without rewriting its birth.
+  - revision: 348
+    id: macos-gui-preimage-responsibility-sampling
+    impact: localized
+    domains:
+      - gui-audit-responsibility
+      - native-process-observation
+    formats:
+      - macos_endpoint_security
+    summary: Projects the reviewed v11 GUI preimage responsibility token separately from actual user credentials, retaining its old audit origin and execution identity while preserving ordinary, target and exit token mapping.

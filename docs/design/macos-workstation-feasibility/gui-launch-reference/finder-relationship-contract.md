@@ -93,6 +93,15 @@ eight predefined token fields with both snapshots, with fixed labels only; numer
 position is reported only for the controlled PID and does not assert temporal order. This
 uses the existing capture, with no new collection, live query, native values or extra keys.
 
+The human's version-4 report resolves that ambiguity. The preimage responsibility token keeps
+the before snapshot's audit user, nonzero audit session, PID and PID version; its effective and
+real UID/GID words are all zero. The target responsibility token equals the complete target
+audit token. Both process snapshots themselves retain the user's POSIX credentials. The
+responsibility export therefore must not be modeled by changing the actual launcher to root,
+inventing a third process lifetime, or substituting the target's token into the preimage. These
+relationships establish neither the sampling time nor the mechanism that produced the token.
+No additional collection or field classification is needed for this distinction.
+
 ## Canonical relationship implementation
 
 Generation behavior revision 345 adds an internal explicit `macos_launch_kind="finder"` process
@@ -124,6 +133,16 @@ coverage instead of fabricated fields. Complete invented inputs verify v11 publi
 filtering and interrupted-write recovery. Their pre-exec values are selected fixture facts,
 not recovered private values. The complete authored/baseline launcher producer remains separate;
 no GUI Unified Log template or broader app/signing/entitlement class is admitted here.
+
+Generation behavior revision 348 represents the preimage token as a separate immutable Mac
+source observation, selected only while preparing the exact State-authenticated GUI exec.
+It preserves the old audit pair/PID/PID version and supplies the four observed zero credential
+words. The canonical process, parent and ownership facts remain intact. Target and exit records,
+ordinary execs and live process snapshots retain their existing full-token mapping. Runtime and
+installed-file preparation use the same observation boundary; historical profiles cannot borrow
+this v11 sampling rule. Missing or unreviewed GUI token facts remain unavailable native phases.
+Invented IDs with a nonzero anonymous preimage audit session verify this shape, recovery and
+checkpoint restoration. The human's used v4 reviewer is private and was not opened by agents.
 
 Apple's [spawn implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exec.c)
 supports audit-session port actions and process-group changes with image activation. Its

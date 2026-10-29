@@ -278,3 +278,38 @@ mixed-token, field-schema canary and unsigned-word rejection cases. The new code
 `/private/tmp/eforge-gui-launch-kit-0q2jr2hb`; isolated help passes and no human command was run by
 an agent. The original outer kit is still the review target. No capture or native GUI admission
 change is part of this follow-up; human input is needed to resolve the actual field pattern.
+
+## Human-shared version-4 result and native token sampling
+
+The human shared the fixed report with provenance and original controls PASS. Finder's before
+responsibility token has its before audit user/session/PID/PID version, with all four real and
+effective UID/GID words ZERO. The target responsibility token matches the target completely.
+Before and target process credentials themselves remain those of the account. Control's
+responsible tokens retain the previously established distinct-lifetime relationship. These
+classes resolve this specific ambiguity; no further collection or diagnostic was requested.
+The reviewer `/private/tmp/eforge-gui-launch-kit-0q2jr2hb` is now human-used and private. No agent
+read that directory, the original capture or any local native records.
+
+Revision 348 adds an immutable source observation for the preimage token. Preparation selects
+it only from an exact State-authenticated GUI exec under v11, after the existing canonical
+relationship validation. Both runtime and installed executable paths consume it. It retains
+the before audit pair/PID/PID version and explicit zero POSIX words; it never rewrites the
+canonical launcher credentials or creates another responsible lifetime. Ordinary exec, target,
+exit and live-snapshot mapping are unchanged. Unknown/unreviewed GUI boundaries remain counted
+as `gui_exec_metadata_unknown`; the default-zero launcher ASID is not a qualified substitute
+for the human's observed nonzero, distinct audit session. No sampling cause/time is inferred.
+
+Invented input verifies the exact eight-word relationship, nonzero anonymous audit session,
+user preservation, wrong field/lifetime/instant/profile rejection, full installed-State
+checkpoint restoration, runtime native output, known exit, filtering and interrupted-write
+recovery. The final focused selection passes **541 tests** (five existing slow cases deselected),
+including both immediate and chronological ingress delivery. Generic authored/baseline GUI
+birth-to-exec and all-process ES coverage remain open; this corrects the qualified exec snapshot
+without claiming those producers or a complete-coverage guarantee exist.
+
+Both slow native CLI contracts also pass: fresh-process/native-only byte equality and full
+checkpoint verification/suspend/resume equality, with 100% native parseability. Full Ruff,
+formatting (1,359 files), whitespace and behavior revision/base checks pass. Revision 348 digest:
+`d4c563f21aae4938c79d39b379ac1a5bd612b9a2a30f84a1f222da51c46f6cbf`.
+No full routine-suite pass is claimed. No native collection, private-file access, assessment
+panel, product version bump or new kit is part of this change.

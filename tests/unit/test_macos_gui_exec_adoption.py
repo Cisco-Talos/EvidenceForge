@@ -11,10 +11,12 @@ import pytest
 
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity, SessionIdentity
+from evidenceforge.events.macos_process_observation import MacosGUIExecResponsibilityObservation
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.process import process_exec_identities
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.responsibility import ProcessResponsibility
+from evidenceforge.formats.macos_process_relationships import ESProcessRelationshipFields
 from evidenceforge.generation.actions.posix_process import process_exec_occurrence
 from evidenceforge.generation.checkpoints.state_manager_head import (
     StateManagerParticipant,
@@ -87,7 +89,7 @@ def _setup(
         os_category="macos",
         start_time=_START + timedelta(seconds=2),
         logon_id=session.identity.logon_id,
-        credentials=credentials or PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 0),
+        credentials=credentials or PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 73),
         responsibility=ProcessResponsibility(None),
         executable_version=executable_version,
         image_security=image_security,
@@ -139,6 +141,169 @@ def test_gui_adoption_is_atomic_preserves_posix_credentials_and_has_no_fork() ->
     assert result.executed_processes == (after,)
     assert result.started_processes == ()
     assert state.get_posix_group_members(after.job_control) == (after,)
+
+
+def test_gui_responsibility_sampling_preserves_the_user_and_exact_old_execution() -> None:
+    state, before, owner = _setup()
+    plan, after = _plan(state, before, owner)
+    original = state.materialization_digest()
+    sample = MacosGUIExecResponsibilityObservation.from_transition(before, after)
+    relationships = state.observe_planned_execution_relationships(plan, process=before, source=True)
+    sampled = ESProcessRelationshipFields.from_observation(
+        relationships, version=11, gui_responsibility=sample
+    )
+    ordinary = ESProcessRelationshipFields.from_observation(relationships, version=11)
+    assert ordinary.responsible_audit_token == ordinary.audit_token
+    assert sampled.audit_token == ordinary.audit_token
+    assert sampled.parent_audit_token == ordinary.parent_audit_token
+    assert sampled.responsible_audit_token.as_native_array() == (
+        2**32 - 1,
+        0,
+        0,
+        0,
+        0,
+        before.pid,
+        73,
+        before.audit_pid_version,
+    )
+    assert before.credentials.real_uid == after.credentials.real_uid == 501
+    assert before.credentials.effective_gid == after.credentials.effective_gid == 20
+    assert state.materialization_digest() == original
+    with pytest.raises(ValueError, match="another execution or instant"):
+        ESProcessRelationshipFields.from_observation(
+            state.observe_planned_execution_relationships(plan, process=after),
+            version=11,
+            gui_responsibility=sample,
+        )
+    with pytest.raises(ValueError, match="another execution or instant"):
+        ESProcessRelationshipFields.from_observation(
+            replace(
+                relationships,
+                parent=replace(relationships.parent, observed_at=after.executed_at + timedelta(1)),
+                responsibility=replace(
+                    relationships.responsibility, observed_at=after.executed_at + timedelta(1)
+                ),
+            ),
+            version=11,
+            gui_responsibility=sample,
+        )
+    for version in (6, 9, 10):
+        with pytest.raises(ValueError, match="another execution or instant"):
+            ESProcessRelationshipFields.from_observation(
+                relationships, version=version, gui_responsibility=sample
+            )
+
+
+@pytest.mark.parametrize(
+    "damage", ["uid", "audit_user", "audit_session", "version", "lifetime", "image", "owner"]
+)
+def test_gui_responsibility_sample_rejects_unreviewed_or_mixed_token_words(damage: str) -> None:
+    state, before, owner = _setup()
+    _, after = _plan(state, before, owner)
+    sample = MacosGUIExecResponsibilityObservation.from_transition(before, after)
+    credentials = sample.credentials
+    if damage == "uid":
+        credentials = replace(credentials, effective_uid=501)
+    elif damage == "audit_user":
+        credentials = replace(credentials, audit_uid=after.credentials.audit_uid)
+    elif damage == "audit_session":
+        credentials = replace(credentials, audit_session_id=after.credentials.audit_session_id)
+    elif damage == "version":
+        after = replace(after, audit_pid_version=before.audit_pid_version)
+    elif damage == "lifetime":
+        after = replace(
+            after,
+            object_id="foreign-lifetime",
+            primary_thread=replace(after.primary_thread, process_object_id="foreign-lifetime"),
+        )
+    elif damage == "image":
+        before = replace(before, image="/bin/zsh")
+    else:
+        from evidenceforge.events.responsibility import ResponsibleProcessReference
+
+        before = replace(
+            before,
+            responsibility=ProcessResponsibility(
+                ResponsibleProcessReference(before.hostname, "another-lifetime", 999, _START)
+            ),
+        )
+    with pytest.raises(ValueError, match="reviewed launcher boundary"):
+        MacosGUIExecResponsibilityObservation(before, after, credentials)
+
+
+def test_installed_gui_source_sampling_survives_checkpoint_and_stays_out_of_live_snapshots() -> (
+    None
+):
+    from evidenceforge.events.content_identity import (
+        BinaryReleaseIdentity,
+        BinaryReleaseKey,
+        SoftwareInstallationIdentity,
+    )
+    from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+    from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
+    from evidenceforge.generation.macos_endpoint_security import (
+        prepare_installed_es_process_snapshot,
+        prepare_planned_installed_es_process_snapshot,
+    )
+    from tests.unit.test_macos_runtime_file_metadata import _executable, _metadata
+
+    descriptor = _executable()
+    binary = BinaryReleaseIdentity(
+        BinaryReleaseKey("invented-launcher", "1", "test", "arm64", "macos", "xpcproxy"),
+        code_signature=descriptor.code_signature,
+        mach_o_image=descriptor.mach_o_image,
+    )
+    deployments = DeploymentContentRegistry(
+        binary_releases=(binary,),
+        installations=(
+            SoftwareInstallationIdentity(
+                hostname=_HOST.hostname,
+                application_id="invented-launcher",
+                release_id=binary.release_id,
+                platform="macos",
+                scope="machine",
+                image_paths=("/usr/libexec/xpcproxy",),
+            ),
+        ),
+    )
+    state, before, owner = _setup(
+        executable_version=ProcessExecutableVersion.from_binary(binary),
+        image_security=MacosImageSecurity(7, False, 3),
+    )
+    restored = StateManager()
+    participant = StateManagerParticipant(state)
+    checkpoint = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    StateManagerParticipant(restored).restore_checkpoint(
+        checkpoint.head.payload, tuple(segment.payload for segment in checkpoint.segments)
+    )
+    snapshots = []
+    for manager in (state, restored):
+        plan, after = _plan(manager, before, owner)
+        collection = MacosProcessCollectionObservation(before, after.executed_at, False, "absent")
+        live = prepare_installed_es_process_snapshot(
+            manager,
+            deployments,
+            process=before,
+            collection=collection,
+            metadata=_metadata(),
+            version=11,
+        )
+        assert live.responsible_audit_token == live.audit_token
+        snapshots.append(
+            prepare_planned_installed_es_process_snapshot(
+                manager,
+                deployments,
+                cohort=plan,
+                collection=collection,
+                phase="exec_source",
+                metadata=_metadata(),
+                version=11,
+            )
+        )
+        assert snapshots[-1].responsible_audit_token.euid == 0
+        assert snapshots[-1].audit_token.euid == 501
+    assert snapshots[0] == snapshots[1]
 
 
 def test_gui_exec_structural_contract_requires_session_and_exact_snapshot_roles() -> None:
@@ -248,10 +413,12 @@ def test_gui_sealed_plan_cannot_drop_its_session_authority() -> None:
         (True, None, False, True),
         (True, "source_version", False, False),
         (True, "source_audit", False, False),
+        (True, "source_responsibility", False, False),
         (True, "environment", False, False),
         (True, "cwd", False, False),
     ],
 )
+@pytest.mark.parametrize("chronological", [False, True])
 def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -259,6 +426,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     missing: str | None,
     fault: bool,
     completed: bool,
+    chronological: bool,
 ) -> None:
     from evidenceforge.events.dispatcher import EventDispatcher
     from evidenceforge.events.es_collector import ESCollectorRegistry
@@ -275,6 +443,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
     from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
     from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+    from evidenceforge.generation.macos_es_ingress import MacosESIngress
     from evidenceforge.generation.macos_es_source import initialize_macos_es_source
     from tests.unit.test_macos_es_source_profile import _system
     from tests.unit.test_macos_execution_directory import _directory
@@ -314,9 +483,13 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
             else ProcessExecutableVersion.from_binary(records[0].binary)
         ),
         image_security=MacosImageSecurity(7, False, 3),
-        credentials=PosixProcessCredentials(501, 501, 20, 20)
-        if missing == "source_audit"
-        else None,
+        credentials=(
+            PosixProcessCredentials(501, 501, 20, 20)
+            if missing == "source_audit"
+            else PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 0)
+            if missing == "source_responsibility"
+            else None
+        ),
     )
     state.register_boot_time(_HOST.hostname, _START - timedelta(hours=1))
     table = MacosDescriptorTable(
@@ -364,6 +537,8 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     dispatcher.bind_execution_effect_audit(ExecutionEffectAuditCounter())
     dispatcher.local_artifact_registry = content.registry
     dispatcher.es_collectors = source.owner.collectors
+    ingress = MacosESIngress(tmp_path / "ingress") if chronological else None
+    dispatcher.macos_es_ingress = ingress
     at = _START + timedelta(seconds=3)
     directory = replace(_directory(path="/"), hostname=_HOST.hostname, observed_at=at)
     batch = state.begin_action_cohort_materialization()
@@ -437,14 +612,22 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
             )
             dispatcher.publish_prepared_action_cohort_batch(publication)
         dispatcher.assert_exact_projection_recoveries_drained()
+        if ingress is not None:
+            assert source.connection().next_delivery == 0
+            ingress.finalize(dispatcher)
         assert state.get_process_identity(_HOST.hostname, after.pid) == after
         assert (state.get_process(_HOST.hostname, after.pid) is None) == completed
-        assert source.connection().next_delivery == 1 + int(completed)
-        assert {
-            item.event_type: item.next_sequence for item in source.connection().event_counters
-        } == {9: 1, 11: 0, 15: int(completed)}
+        connection = dispatcher.es_collectors.connection(source.source_instance)
+        assert connection.next_delivery == 1 + int(completed)
+        assert {item.event_type: item.next_sequence for item in connection.event_counters} == {
+            9: 1,
+            11: 0,
+            15: int(completed),
+        }
     finally:
         output.close()
+        if ingress is not None:
+            ingress.cleanup()
     paths = list(tmp_path.rglob("macos_endpoint_security.ndjson"))
     assert len(paths) == int(exported and missing is None)
     if exported and missing is None:
@@ -456,6 +639,23 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
         assert wire.process.executable.path == "/usr/libexec/xpcproxy"
         assert target.executable.path == _APP
         assert wire.process.audit_token.asid != target.audit_token.asid
+        old_token = wire.process.audit_token
+        responsible = wire.process.responsible_audit_token
+        assert (responsible.euid, responsible.egid, responsible.ruid, responsible.rgid) == (0,) * 4
+        assert (responsible.auid, responsible.asid, responsible.pid, responsible.pidversion) == (
+            old_token.auid,
+            old_token.asid,
+            old_token.pid,
+            old_token.pidversion,
+        )
+        assert (old_token.euid, old_token.egid, old_token.ruid, old_token.rgid) == (
+            501,
+            20,
+            501,
+            20,
+        )
+        assert responsible.asid == 73
+        assert before.credentials == PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 73)
         assert target.audit_token.pid == target.group_id and target.session_id == 1
         assert target.responsible_audit_token == target.audit_token
         assert wire.event.exec.cwd.path == "/"
@@ -464,3 +664,4 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
             end_wire = decode_endpoint_security_record(rows[1])
             assert end_wire.event_type == 15 and end_wire.event.exit.stat == 0
             assert end_wire.process.audit_token == target.audit_token
+            assert end_wire.process.responsible_audit_token == target.audit_token

@@ -155,3 +155,14 @@ no setup, capture, report or review-existing command. The human should select or
 kit `/private/tmp/eforge-gui-launch-kit-kzex70ik` at the hidden prompt and share only the fixed
 JSON. No sudo, setup/capture, app launch or new collection is needed. Once used, this new copy
 inherits the private no-inspection boundary. All previous used kits remain untouched.
+
+## Version-4 Finder follow-up
+
+The human's fixed v4 result now resolves the preimage responsibility token: old audit
+user/session/PID/PID version, but four zero POSIX credential words. Target responsibility is
+the complete target token. Revision 348 consumes that bounded observation at native preparation,
+without changing actual process credentials/ownership or claiming a new lifetime. The selected
+source rule is scoped to authenticated GUI exec and v11, including runtime/installed paths,
+filtering, known exit and recovery. Nonzero anonymous preimage audit-session fixtures replace
+the older arbitrary zero choice. No private files were inspected and no further collection is
+needed for this token distinction. Detailed implementation/verification is in the GUI worklog.

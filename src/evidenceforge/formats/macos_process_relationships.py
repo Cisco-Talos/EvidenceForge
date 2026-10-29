@@ -9,6 +9,7 @@ from datetime import UTC
 
 from pydantic import BaseModel, ConfigDict
 
+from evidenceforge.events.macos_process_observation import MacosGUIExecResponsibilityObservation
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import (
     AuditTokenArray,
@@ -39,7 +40,11 @@ class ESProcessRelationshipFields(BaseModel):
 
     @classmethod
     def from_observation(
-        cls, observation: ProcessRelationshipObservation, *, version: int
+        cls,
+        observation: ProcessRelationshipObservation,
+        *,
+        version: int,
+        gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
     ) -> ESProcessRelationshipFields:
         """Map known audit and POSIX identities using the versioned token layout."""
         if type(version) is not int or version not in {6, 9, 10, 11}:
@@ -58,6 +63,29 @@ class ESProcessRelationshipFields(BaseModel):
             ESAuditToken.from_process_identity(identity)
             for identity in (process, parent, observation.responsibility.responsible)
         )
+        if gui_responsibility is not None:
+            if type(gui_responsibility) is not MacosGUIExecResponsibilityObservation:
+                raise ValueError("ES GUI responsibility requires its exact token observation")
+            gui_responsibility.__post_init__()
+            if (
+                version != 11
+                or gui_responsibility.before != process
+                or gui_responsibility.after.execution_started_at != observation.parent.observed_at
+                or observation.responsibility.reason != "absent"
+            ):
+                raise ValueError("ES GUI responsibility belongs to another execution or instant")
+            credentials = gui_responsibility.credentials
+            responsible = ESAuditToken(
+                auid=credentials.audit_uid,
+                euid=credentials.effective_uid,
+                egid=credentials.effective_gid,
+                ruid=credentials.real_uid,
+                rgid=credentials.real_gid,
+                pid=process.pid,
+                asid=credentials.audit_session_id,
+                pidversion=process.audit_pid_version,
+            )
+            tokens = (tokens[0], tokens[1], responsible)
         rendered: tuple[ESAuditToken | AuditTokenArray, ...]
         if version == 10:
             rendered = tuple(token.as_native_array() for token in tokens)

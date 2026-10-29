@@ -20,7 +20,10 @@ from evidenceforge.events.es_collector import (
 )
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
-from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+from evidenceforge.events.macos_process_observation import (
+    MacosGUIExecResponsibilityObservation,
+    MacosProcessCollectionObservation,
+)
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.formats.macos_endpoint_security import ESAction
 from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner, _process
@@ -252,6 +255,12 @@ def prepared_macos_es_process_publication(
                     or execution.after.exec_image is None
                     or execution.after.exec_script is None
                 ):
+                    return "gui_exec_metadata_unknown"
+                try:
+                    MacosGUIExecResponsibilityObservation.from_transition(
+                        execution.target, execution.after
+                    )
+                except ValueError:
                     return "gui_exec_metadata_unknown"
             binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
             if binary.code_signature is None or binary.code_signature.entitlements == "unknown":
