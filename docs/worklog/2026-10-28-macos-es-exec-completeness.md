@@ -337,3 +337,53 @@ and default rejection of unresolved starts or removal of the required native sou
 Ruff/format and whitespace checks pass.
 No native collection or private evidence access occurred. Final revision-352 digest:
 `b253f020eb75212f3590d8e74909e6c5676bf00ee7a53ff11eb9eab7dfb28cba`.
+
+## Revision 353: retained file mutations share native execution publication
+
+A second measured omission involved a qualified literal interpreter command creating a
+retained synthetic file. Its file version published correctly, but the command remained an
+aggregate birth. The same canonical shell transaction now admits authenticated file creation,
+modification and removal. Existing image/script retention remains bound to the exec; a file
+publication belongs to its exact effect member, time, artifact, content and metadata. The
+existing registry group owns atomic file mutation and rollback. No new publisher, generated
+artifact trigger or native ES file callback was introduced.
+
+The closed family accepts only its endpoint file graph and an empty independent root effect
+plan. An unrelated network/scanner graph cannot disappear behind a file-only reconciliation.
+Writing the executing image remains outside this qualified family. Unsupported launches stay
+in the independent all-start census and cannot satisfy complete mode.
+
+The new real-engine cases cover create/modify/delete with native selected or filtered, native
+output with eCAR filtered, exact State and artifact checkpoint restoration, artifact failure
+after placement/withdrawal, journal failure before publication and lost acknowledgement after
+publication. They also reject a mismatched file-publication time without process allocation and
+prove that an unrelated root graph fails instead of being hidden by native qualification.
+Reference kits and private evidence were not accessed. Revision-353 digest:
+`bba265f00315ade770be1f45d880d7cf780be4e5fc562a2daaa25f54df8f5df7`.
+
+All 156 selected process/artifact/source/manifest tests pass (two existing slow cases
+deselected), including the 15 new retained-file cases. A separate 110-test Finder, GUI exec,
+ingress, independent census and complete-collection selection passes. The shared State and
+lifecycle verification remains the 507 passing tests recorded for revision 352; revision 353
+does not change those implementations.
+The four public-CLI slow contracts pass again after the final source change, including native
+filter/fresh-process equality and nonempty checkpoint suspend/resume. Whole Ruff/format and
+whitespace checks pass. No release/version change or assessment panel was performed.
+
+## Remaining boundary after the independent implementation
+
+Independent accounting/enforcement and the finite recovery matrix are implemented. Ordinary
+qualified commands, retained scripts and plain/retained file effects have useful complete-mode
+positive tests. Finder's app execution is connected through authored and baseline producers;
+the first xpcproxy activation still needs native qualification. Initial terminal/login/shell
+and service/helper activations, populated entitlement export, PTY helpers and additional GUI
+methods remain unresolved. Explicit unknowns cause complete-mode rejection; no aggregate start
+is silently removed to pass a workload. Unrelated scanner/non-file effect plans retain their
+existing unsupported boundary rather than receiving a fabricated execution contract.
+
+The next human dependency is the already prepared opt-in launcher/entitlement experiment at
+`/private/tmp/eforge-gui-launch-kit-apsp1wi7`, following the tracked `LAUNCH-CHAIN.md` procedure
+with agents closed. Only the fixed JSON report is requested. The agent must not run its setup,
+capture, report or review or inspect the kit after handoff. Once that bounded reference is
+available, implement the exact supported first-launch facts before requesting another broader
+experiment. No new assessment panel is a prerequisite.

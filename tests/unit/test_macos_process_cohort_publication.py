@@ -402,5 +402,5 @@ def test_first_exec_target_retention_binds_to_its_exact_fork_admission(
 def test_retained_exec_image_cannot_use_an_arbitrary_between_phase_time(tmp_path: Path) -> None:
     from evidenceforge.models.exceptions import EventContractError
 
-    with pytest.raises(EventContractError, match="retained execution content"):
+    with pytest.raises(EventContractError, match="authenticated image, script or file content"):
         _setup(tmp_path, retain_target=True, retention_offset=timedelta(milliseconds=500))

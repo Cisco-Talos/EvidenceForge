@@ -9210,7 +9210,7 @@ class EventDispatcher:
         return False
 
     def _validate_exact_process_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
-        """Retain only existing image/script content owned by one exact Mac exec or fork."""
+        """Authenticate exact Mac image/script retention and bound file-effect publication."""
         from evidenceforge.events.process import process_exec_identities, process_fork_identities
 
         publications = record.artifact_publications
@@ -9221,6 +9221,32 @@ class EventDispatcher:
                     "Exact Mac process cohort requires bounded retained artifacts"
                 )
             for token in publications:
+                file_publication = bool(
+                    record.effect_member_bindings
+                    and registry.authenticates_prepared_publication(token)
+                    and any(
+                        any(item is token for item in member._artifact_publications)
+                        and any(
+                            binding.member is member for binding in record.effect_member_bindings
+                        )
+                        and projection.occurrence.timestamp == token.observed_at
+                        and projection.occurrence.event_type
+                        in (
+                            {EventKind.FILE_DELETE}
+                            if token.withdraw_placement
+                            else {EventKind.FILE_CREATE, EventKind.FILE_MODIFY}
+                        )
+                        and projection.occurrence.file is not None
+                        and projection.occurrence.file.artifact_identity == token.record.artifact
+                        and projection.occurrence.file.content_identity == token.record.content
+                        and projection.occurrence.file.macos_metadata == token.record.macos_file
+                        for member, projection in zip(
+                            record.dispatches, record.trusted_projections, strict=True
+                        )
+                    )
+                )
+                if file_publication:
+                    continue
 
                 def owns_retention(
                     projection: _PreparedProjection, retained: LocalArtifactPublishToken = token
@@ -9255,7 +9281,7 @@ class EventDispatcher:
                     owns_retention(projection) for projection in record.trusted_projections
                 ):
                     raise EventContractError(
-                        "Exact Mac process cohort changed retained execution content"
+                        "Exact Mac process cohort lost authenticated image, script or file content"
                     )
             return
         occurrence = record.trusted_projections[0].occurrence

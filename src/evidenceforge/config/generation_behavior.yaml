@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 352
+current_revision: 353
 history_start_revision: 1
-behavior_surface_sha256: b253f020eb75212f3590d8e74909e6c5676bf00ee7a53ff11eb9eab7dfb28cba
+behavior_surface_sha256: bba265f00315ade770be1f45d880d7cf780be4e5fc562a2daaa25f54df8f5df7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3360,3 +3360,13 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Publishes qualified Mac shell fork/exec and plain file effects in one exact journal, preserving executed actor and process/session frontiers through multi-occurrence effects and interrupted publication.
+  - revision: 353
+    id: macos-process-retained-file-effect-execution
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - endpoint-artifact-publication
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Publishes qualified shell fork/exec with authenticated retained file creation, modification or removal in the existing exact transaction, rejecting unrelated mixed effect plans and preserving artifact rollback and recovery.

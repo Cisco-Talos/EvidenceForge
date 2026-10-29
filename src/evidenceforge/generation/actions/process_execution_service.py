@@ -22,6 +22,7 @@ from evidenceforge.events.content_identity import (
     Platform,
     ProcessBinaryIdentity,
     UnresolvedBinaryIdentity,
+    canonical_native_path,
 )
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -1288,27 +1289,44 @@ class ProcessExecutionService:
 
         This bounded path shares process admission, lifetime and completion owners.
         Explicit retained shebang facts use the existing script/content authority;
-        argv alone never establishes a script. Plain file-effect plans share
+        argv alone never establishes a script. Exact file-effect plans share
         this transaction; unexpanded operators and other effect families retain gates.
         """
+        if _get_os_category(request.system.os) != "macos":
+            return None
         file_effects = bool(
             admission.uses_action_cohort
             and admission.endpoint is not None
             and admission.endpoint.execution_plan is not None
             and admission.endpoint.execution_plan.nodes
+            and (request.effect_plan is None or not request.effect_plan.nodes)
             and all(
                 isinstance(node.intent, FileEffectIntent)
                 for node in admission.endpoint.execution_plan.nodes
             )
             and all(
                 type(effect.payload) is PreparedFileEffectPayload
-                and effect.payload.artifact_publication is None
+                and (
+                    effect.payload.artifact_publication is None
+                    or canonical_native_path(
+                        effect.payload.artifact_publication.record.artifact.native_path, "macos"
+                    )
+                    != canonical_native_path(launch.actor.image, "macos")
+                )
                 for effect in admission.endpoint.admitted_effects
             )
         )
+        file_publications = (
+            tuple(
+                effect.payload.artifact_publication
+                for effect in admission.endpoint.admitted_effects
+                if effect.payload.artifact_publication is not None
+            )
+            if file_effects
+            else ()
+        )
         if (
-            _get_os_category(request.system.os) != "macos"
-            or request.macos_launch_kind is not None
+            request.macos_launch_kind is not None
             or request.new_posix_session
             or (admission.endpoint is not None and not file_effects)
             or (request.effect_plan is None and not file_effects)
@@ -1321,11 +1339,18 @@ class ProcessExecutionService:
                         for candidate in (
                             request.prepared_effects.process_binary_publication,
                             request.prepared_effects.root_script_publication,
+                            *file_publications,
                         )
                     )
                     or self.dispatcher.local_artifact_registry is None
-                    or not self.dispatcher.local_artifact_registry.authenticates_prepared_retention(
+                    or not self.dispatcher.local_artifact_registry.authenticates_prepared_publication(
                         token
+                    )
+                    or (
+                        all(token is not publication for publication in file_publications)
+                        and not self.dispatcher.local_artifact_registry.authenticates_prepared_retention(
+                            token
+                        )
                     )
                     for token in request.prepared_effects.artifact_publications
                 )
@@ -1918,11 +1943,23 @@ class ProcessExecutionService:
             if request.prepared_effects is not None
             else ()
         )
+        file_publication_ids = {
+            id(publication) for _, publication in endpoint_builders if publication is not None
+        }
+        retained_artifacts = tuple(
+            token for token in artifacts if id(token) not in file_publication_ids
+        )
         members = tuple(
             self.dispatcher.bind_action_cohort_projection(
                 carrier,
                 state_plan=root.cohort,
-                artifact_publications=artifacts if index == 1 else (),
+                artifact_publications=(
+                    retained_artifacts
+                    if index == 1
+                    else (endpoint_builders[index - 2][1],)
+                    if index >= 2 and endpoint_builders[index - 2][1] is not None
+                    else ()
+                ),
             )
             for index, carrier in enumerate(carriers)
         )
