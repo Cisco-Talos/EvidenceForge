@@ -111,7 +111,7 @@ class GroundTruthAttributesBase(BaseModel):
 class ProcessAttributes(GroundTruthAttributesBase):
     """Process event attributes."""
 
-    native_process_model: Literal["aggregate_birth", "fork_exec"] | None = None
+    native_process_model: Literal["aggregate_birth", "fork_exec", "gui_exec"] | None = None
     refused_target_pid: int | None = Field(default=None, gt=0, lt=100000)
     refusal_cause: Literal["unclassified"] | None = None
     execution_stage: Literal["unclassified"] | None = None

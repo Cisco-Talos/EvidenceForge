@@ -150,6 +150,8 @@ def test_explicit_finder_process_uses_canonical_relationships_and_preserves_unkn
     engine: GenerationEngine,
 ) -> None:
     request = _request(engine)
+    provider = engine.macos_execution_metadata
+    provider.profile = provider.profile.model_copy(update={"finder_launch_execution": None})
     generator = engine.activity_generator
     pid = generator.generate_process(
         request.user,

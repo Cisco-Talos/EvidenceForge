@@ -16,6 +16,11 @@ terminal_responsibility: terminal_application
 # This selects parent/audit/responsibility only: no inferred exec environment,
 # descriptor backing, controlling terminal, POSIX session creation or native fork.
 finder_launch_relationships: launchd_self
+# Explicit synthetic clean launch inputs; never copied from the later main-entry
+# environment or extrapolated to arbitrary installed GUI applications.
+finder_launch_execution: xpcproxy_app_exec
+finder_launch_images:
+  - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
 # Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
 ssh_command_descriptors: standard_pipes
 # Explicit nominal completed results for these exact invocations only. This is a
@@ -97,7 +102,15 @@ code_validation:
       - sw_vers
       - tccd
       - uname
+      - xpcproxy
       - zsh
     codesigning_flags: 603979777 # 0x24000001
     is_platform_binary: true
     validation_category: 1 # explicit modeled platform validation outcome
+  # This invented ad-hoc app is a selected model, not an inventory claim about
+  # third-party applications. XNU cs_blobs.h defines SIGNED|ADHOC|VALID and NONE.
+  - product_id: eforge-reference
+    artifact_names: [EForgeReference]
+    codesigning_flags: 536870915 # 0x20000003
+    is_platform_binary: false
+    validation_category: 10

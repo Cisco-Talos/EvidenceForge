@@ -4249,11 +4249,31 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         description="Explicit modeled terminal-app ownership of its login/shell/command chain",
     )
     finder_launch_relationships: Literal["launchd_self"] | None = None
+    finder_launch_execution: Literal["xpcproxy_app_exec"] | None = None
+    finder_launch_images: tuple[str, ...] = Field(default=(), max_length=64)
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )
+
+    @field_validator("finder_launch_images")
+    @classmethod
+    def literal_finder_images(cls, images: tuple[str, ...]) -> tuple[str, ...]:
+        """Require explicit distinct regular-app paths rather than wildcard classification."""
+        from pathlib import PurePosixPath
+
+        if len(set(images)) != len(images) or any(
+            not image.startswith("/")
+            or "\0" in image
+            or ".." in PurePosixPath(image).parts
+            or ".app/Contents/MacOS/" not in image
+            or not image.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or "/" in image.rsplit(".app/Contents/MacOS/", 1)[-1]
+            for image in images
+        ):
+            raise ValueError("Finder launch images require distinct literal app executables")
+        return images
 
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:

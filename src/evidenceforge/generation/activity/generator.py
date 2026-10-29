@@ -17045,6 +17045,20 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        provider = self.macos_execution_metadata if _get_os_category(system.os) == "macos" else None
+        if (
+            _get_os_category(system.os) == "macos"
+            and macos_launch_kind is None
+            and not require_exact_parent
+            and provider is not None
+            and process_name in provider.profile.finder_launch_images
+        ):
+            parent_pid = 1
+            require_exact_parent = True
+            arguments = catalog_direct_exec_arguments(process_name, command_line)
+            macos_launch_kind = "finder"
+            allow_existing_browser_reuse = False
+            allow_browser_launch_spacing = False
         if _get_os_category(system.os) in {
             "linux",
             "macos",

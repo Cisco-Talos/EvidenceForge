@@ -1157,7 +1157,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
-| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `outcome` (success/denied/exec_failed/policy_refused), `supplementary` (auto/none) |
+| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `launch_method` (finder on Mac), `outcome` (success/denied/exec_failed/policy_refused), `supplementary` (auto/none) |
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN; Type 9 uses the host's active/assigned desktop user as the local caller and the event actor as outbound credentials | | `logon_type` (default 3), `source_ip` (ignored for local Type 9) |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3), `target_username` |
 | `logoff` | 4634, eCAR LOGOUT | | |
@@ -2009,7 +2009,19 @@ can produce the shell's own exec, but its inner commands are not automatically e
 child events. Author those activities explicitly when needed. Baseline activity uses the same
 process owner; the complete all-process coverage contract remains in progress.
 
-The internal authenticated xpcproxy-to-app exec contract is not a new authored event or a
-`launch_method` field. Ordinary GUI `process` entries retain aggregate birth semantics until
-a complete qualified launcher producer is selected; an app-bundle path alone does not request
-native exec or GUI Unified Log evidence.
+For a fresh regular-app launch on a supported Mac, `process.launch_method: finder` selects the
+bounded xpcproxy-to-app producer. Supply the absolute `.app/Contents/MacOS/<executable>` path
+and a literal command vector; `parent_ref` and unsuccessful outcomes are incompatible. The
+existing local GUI login owns the app's audit identity. Its xpcproxy preimage and app exec share
+one PID/lifetime and one canonical transaction. No native fork is inferred. Native app exec
+requires complete deployed launcher/app, image-security, descriptor and other source facts;
+unknown signing/entitlement classes stay unavailable.
+
+The installed invented `macos-reference-app` provides an explicit ad-hoc/no-entitlements test
+workload. Its narrow image selector also routes baseline launches through the same process
+owner. Ordinary personas are not assigned this test app; a baseline acceptance workload must
+explicitly select it in its effective catalog. Its identifiers, clean environment, timing, installed stat and opaque vnode
+objects are declared model inputs, not private captured values or another application's facts.
+The launcher's own initial activation remains an aggregate coverage obligation. This producer
+does not establish complete coverage for that activation, Dock/Spotlight, arbitrary apps, or
+GUI Unified Log messages. Unselected GUI paths retain their explicit coverage limitations.

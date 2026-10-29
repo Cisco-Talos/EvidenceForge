@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.content_identity import FileContentIdentity
+from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -92,6 +93,16 @@ def handle_process(
         username=process_actor.username,
     )
     command_line = spec.command_line or process_name
+    provider = self.activity_generator.macos_execution_metadata if os_category == "macos" else None
+    finder = getattr(spec, "launch_method", None) == "finder" or (
+        os_category == "macos"
+        and provider is not None
+        and process_name in provider.profile.finder_launch_images
+    )
+    if finder and os_category != "macos":
+        from evidenceforge.models.exceptions import StateError
+
+        raise StateError("Finder launch_method requires a supported Mac host")
     shell_key = (system.hostname, process_actor.username)
 
     if "<base64_encoded_command>" in command_line:
@@ -146,7 +157,10 @@ def handle_process(
         malicious_event["skipped_reason"] = "no_live_parent_ref"
         return malicious_event
     requires_interactive_session = False
-    if explicit_parent is not None:
+    if finder:
+        parent_pid = 1
+        requires_interactive_session = True
+    elif explicit_parent is not None:
         parent_pid, _parent_image = explicit_parent
         requires_interactive_session = True
     elif service_process_identity is not None:
@@ -299,7 +313,7 @@ def handle_process(
             prepared_shell_command,
         )
         malicious_event["time"] = time
-    if os_category == "macos":
+    if os_category == "macos" and not finder:
         reserved_start = self.activity_generator.reserve_macos_foreground_process_start(
             system=system,
             username=process_actor.username,
@@ -363,6 +377,16 @@ def handle_process(
             <= (timedelta(minutes=2) if exe_name == "psexesvc.exe" else timedelta(minutes=30))
         ):
             service_lifecycle_group_id = str(recent_service.get("lifecycle_group_id") or "")
+    finder_arguments = (
+        {
+            "arguments": catalog_direct_exec_arguments(process_name, process_command_line),
+            "macos_launch_kind": "finder",
+            "allow_existing_browser_reuse": False,
+            "allow_browser_launch_spacing": False,
+        }
+        if finder
+        else {}
+    )
     pid = self.activity_generator.generate_process(
         user=process_actor,
         system=system,
@@ -371,11 +395,12 @@ def handle_process(
         process_name=process_name,
         command_line=process_command_line,
         parent_pid=parent_pid,
-        require_exact_parent=explicit_parent is not None,
+        require_exact_parent=explicit_parent is not None or finder,
         ensure_file_event=not service_backed_process,
         from_storyline=True,
         suppress_command_file_effect=output_file is not None,
         lifecycle_group_id=service_lifecycle_group_id,
+        **finder_arguments,
     )
     if pid <= 0:
         malicious_event["process_name"] = process_name
@@ -389,7 +414,11 @@ def handle_process(
     if os_category == "macos":
         if running_process is not None:
             malicious_event["native_process_model"] = (
-                "fork_exec" if running_process.execution_ordinal > 0 else "aggregate_birth"
+                "gui_exec"
+                if finder and running_process.execution_ordinal > 0
+                else "fork_exec"
+                if running_process.execution_ordinal > 0
+                else "aggregate_birth"
             )
         submission_time = (
             ensure_utc(running_process.start_time)

@@ -39,6 +39,7 @@ from evidenceforge.events.identity import (
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
+from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -98,7 +99,7 @@ from evidenceforge.generation.windows_tokens import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import RunningProcess
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 from .process_execution_stages import (
@@ -413,7 +414,7 @@ class ProcessExecutionService:
         # Due closes own independent commits and must precede frozen State/timing plans.
         self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
         root = self._prepare_root(request, admission, launch)
-        if root.fork_event is not None:
+        if root.birth_event is not None:
             launch = replace(launch, time=root.identity.execution_started_at)
         evidence = self._prepare_evidence(request, admission, launch, root)
         publication = self._prepare_publication(request, admission, root, evidence)
@@ -977,6 +978,13 @@ class ProcessExecutionService:
                 != request.exec_script
             ):
                 raise StateError("Mac script launch requires its exact prepared retention")
+        provider = self.identity.macos_execution_metadata
+        if (
+            request.macos_launch_kind == "finder"
+            and provider is not None
+            and provider.profile.finder_launch_execution == "xpcproxy_app_exec"
+        ):
+            return self._prepare_macos_finder_root(request, admission, launch, binary=binary)
         shell_root = self._prepare_macos_shell_root(request, admission, launch, binary=binary)
         if shell_root is not None:
             return shell_root
@@ -1123,6 +1131,145 @@ class ProcessExecutionService:
             process_session_identity,
             parent_identity,
             binary,
+        )
+
+    def _prepare_macos_finder_root(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        *,
+        binary: ProcessBinaryIdentity | None,
+    ) -> ProcessRootPlan:
+        """Plan the app exec and separately retain its unresolved launcher activation.
+
+        The selected clean environment and opaque vnode streams are model inputs,
+        not recovered private values or an assertion that stdio is /dev/null.
+        A launcher aggregate never becomes an invented native fork or first exec.
+        """
+        provider = self.identity.macos_execution_metadata
+        assert provider is not None
+        if (
+            admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+        ):
+            raise StateError("Finder launch needs a supported explicit app effect plan")
+        launcher_binary = self.dispatcher.resolve_process_binary_identity(
+            request.system.hostname, launch.actor.username, "/usr/libexec/xpcproxy", "macos"
+        )
+        if type(binary) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity} or type(
+            launcher_binary
+        ) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+            raise StateError("Finder launch requires exact deployed launcher and app executables")
+        for candidate in (launcher_binary, binary):
+            if candidate.mach_o_image is None or candidate.mach_o_image.architecture != "arm64":
+                raise StateError("Finder launch requires declared native arm64 executable images")
+        at = ensure_utc(launch.time)
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.finder_preimage_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="finder_launch",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        executed_at = at + gap
+        credentials = self.identity.process_credentials(
+            request.system, launch.actor.username, 1, at
+        )
+        relationship = provider.finder_launch_relationships(
+            self.state_manager,
+            request.system.hostname,
+            launch.actor.username,
+            parent_pid=launch.parent_pid,
+            logon_id=launch.actor.logon_id,
+            at=executed_at,
+            credentials=credentials,
+        )
+        session = self.state_manager.get_session_identity(launch.actor.logon_id)
+        if session is None:
+            raise StateError("Finder launch requires its exact live GUI login")
+        metadata = provider.launch(
+            request.system.hostname,
+            launch.actor.username,
+            at=executed_at,
+            requested_path=launch.actor.image,
+            binary=binary,
+            kind="user",
+        )
+        descriptors = MacosDescriptorTable(
+            request.system.hostname,
+            at,
+            tuple(
+                MacosDescriptorBinding(
+                    fd, "file", stable_uuid("finder-vnode", request.stable_id, fd), False
+                )
+                for fd in range(3)
+            ),
+            native_last_fd=2,
+        )
+        builder = self.state_manager.begin_action_cohort_materialization()
+        birth = builder.plan_macos_gui_launcher(
+            system=request.system.hostname,
+            username=launch.actor.username,
+            logon_id=launch.actor.logon_id,
+            start_time=at,
+            credentials=relationship.credentials,
+            executable_version=ProcessExecutableVersion.from_binary(launcher_binary),
+            image_security=provider.image_security(launcher_binary),
+            descriptors=descriptors,
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+        )
+        after = builder.execute_process(
+            birth,
+            image=launch.actor.image,
+            command_line=launch.actor.command_line,
+            arguments=request.arguments,
+            environment=metadata.environment,
+            executed_at=executed_at,
+            execution_directory=provider.directory(request.system.hostname, "/", executed_at),
+            exec_image=metadata.image,
+            exec_script=metadata.script,
+            executable_version=ProcessExecutableVersion.from_binary(binary),
+            image_security=metadata.image_security,
+            macos_gui_session=session,
+        )
+        before = birth.identity
+        event = OccurrenceBuilder(
+            timestamp=before.started_at,
+            event_type="process_create",
+            src_host=self.identity.host_context(request.system),
+            process=ProcessContext(
+                before.pid,
+                before.parent_pid,
+                before.image,
+                before.command_line,
+                before.principal,
+                integrity_level=launch.integrity,
+                logon_id=before.logon_id,
+                start_time=before.started_at,
+                binary_identity=launcher_binary,
+            ),
+            identity_plan=EventIdentityPlan(
+                subject=before, actor=birth.parent_identity, session=session
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=before.lifecycle_group_id,
+                canonical_start=before.started_at,
+                phase="start",
+                parent_group_id=before.parent_lifecycle_group_id or None,
+            ),
+            storyline_origin=request.from_storyline,
+        )
+        return ProcessRootPlan(
+            birth,
+            builder.seal(),
+            session.session_id,
+            session,
+            birth.parent_identity,
+            binary,
+            after,
+            event,
         )
 
     def _prepare_macos_shell_root(
@@ -1431,6 +1578,7 @@ class ProcessExecutionService:
                 before=root.process.identity,
                 after=root.executed,
                 integrity_level=launch.integrity,
+                session=root.session_identity if request.macos_launch_kind == "finder" else None,
             )
             event.storyline_origin = request.from_storyline
             event.process.binary_identity = root.binary
@@ -1475,8 +1623,8 @@ class ProcessExecutionService:
         evidence: ProcessEvidencePlan,
     ) -> PreparedProcessPublication:
         """Prepare and validate source, artifact and optional cohort capabilities before commit."""
-        if root.fork_event is not None:
-            return self._prepare_macos_shell_publication(request, root, evidence)
+        if root.birth_event is not None:
+            return self._prepare_macos_process_publication(request, root, evidence)
         process_plan = root.process
         process_identity = root.process.identity
         event = evidence.event
@@ -1668,18 +1816,18 @@ class ProcessExecutionService:
             action_cohort_batch,
         )
 
-    def _prepare_macos_shell_publication(
+    def _prepare_macos_process_publication(
         self, request: ProcessExecutionRequest, root: ProcessRootPlan, evidence: ProcessEvidencePlan
     ) -> PreparedProcessPublication:
-        """Publish canonical fork/exec through the shared exact native source boundary."""
-        assert root.cohort is not None and root.fork_event is not None
+        """Publish explicit birth/exec through the shared exact native source boundary."""
+        assert root.cohort is not None and root.birth_event is not None
         assert request.effect_plan is not None and not request.effect_plan.nodes
         with self.dispatcher.source_timing_planner.prepared_planning() as timing:
             carriers = tuple(
                 self.dispatcher.prepare_action_cohort_projection(
                     event, source_timing_preparation=timing
                 )
-                for event in (root.fork_event, evidence.event)
+                for event in (root.birth_event, evidence.event)
             )
         artifacts = (
             request.prepared_effects.artifact_publications
@@ -1778,14 +1926,14 @@ class ProcessExecutionService:
                 command_line=launch.actor.command_line,
                 time=launch.time,
             )
-        if running_proc.logon_id and (root.cohort is None or root.fork_event is not None):
+        if running_proc.logon_id and (root.cohort is None or root.birth_event is not None):
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
                 session.last_activity_time = launch.time
         self.sources._record_process_source_create_time(
             request.system.hostname,
             root.process.identity.pid,
-            root.fork_event if root.fork_event is not None else event,
+            root.birth_event if root.birth_event is not None else event,
             not_after=evidence.source_visible_by,
         )
         if evidence.provisional_termination is not None:

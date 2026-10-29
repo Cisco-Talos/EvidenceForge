@@ -168,11 +168,31 @@ def prepared_macos_es_process_publication(
     )
 
     if not events or any(
-        event.event_type not in {"process_fork", "process_exec", "process_terminate"}
+        event.event_type
+        not in {"process_create", "process_fork", "process_exec", "process_terminate"}
         or event.src_host is None
         or event.src_host.os_category != "macos"
         for event in events
     ):
+        yield None
+        return
+    # A staged GUI launcher has an aggregate birth followed by an authenticated
+    # app exec. Its birth is not a native fork/exec and must remain a separate
+    # completeness obligation; it must not suppress the app's exact exec record.
+    for event in events:
+        if event.event_type == "process_create" and not any(
+            birth.identity == event.identity_plan.subject
+            and not birth._payload.forked
+            and any(
+                execution.target == birth.identity and execution.gui_session is not None
+                for execution in cohort.process_executions
+            )
+            for birth in cohort.processes
+        ):
+            yield None
+            return
+    events = tuple(event for event in events if event.event_type != "process_create")
+    if not events:
         yield None
         return
     # Some compatibility SSH closures also carry auth/session contexts. They

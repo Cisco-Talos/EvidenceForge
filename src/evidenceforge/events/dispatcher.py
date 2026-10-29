@@ -8189,7 +8189,16 @@ class EventDispatcher:
                 )
             )
             or not plan.process_executions
-            or any(not item.forked for item in plan.processes)
+            or any(
+                not item.forked
+                and not any(
+                    execution.target == item.identity
+                    and execution.gui_session is not None
+                    and item._allocator_patch.macos_anonymous_audit_session is not None
+                    for execution in plan.process_executions
+                )
+                for item in plan.processes
+            )
         ):
             raise EventContractError("Exact Mac process cohort changed its ordered owners")
         expected = (
@@ -8197,7 +8206,7 @@ class EventDispatcher:
                 (
                     item.identity.started_at,
                     0,
-                    EventKind.PROCESS_FORK,
+                    EventKind.PROCESS_FORK if item.forked else EventKind.PROCESS_CREATE,
                     (item.parent_identity, item.identity),
                 )
                 for item in plan.processes
@@ -8239,6 +8248,8 @@ class EventDispatcher:
             actual = (
                 process_fork_identities(event)
                 if kind is EventKind.PROCESS_FORK
+                else (event.identity_plan.actor, event.identity_plan.subject)
+                if kind is EventKind.PROCESS_CREATE
                 else process_exec_identities(event)
                 if kind is EventKind.PROCESS_EXEC
                 else (process_exit_identity(event),)
@@ -10393,6 +10404,8 @@ class EventDispatcher:
             expected = {
                 self._es_process_occurrence(item._occurrence)[0]: item._occurrence
                 for item in dispatches
+                if item._occurrence.event_type
+                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
             }
             for row in es_ingress.rows:
                 occurrence = expected.get(row.occurrence_id)
@@ -10423,6 +10436,8 @@ class EventDispatcher:
                 )
                 for observation in native_observations
                 if prepared._occurrence.storyline_cluster_id
+                and prepared._occurrence.event_type
+                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
                 and observation.observed_at == prepared._occurrence.timestamp
                 and observation.occurrence_id
                 == self._es_process_occurrence(prepared._occurrence)[0]
@@ -10436,6 +10451,8 @@ class EventDispatcher:
                 )
                 for row in (es_ingress.rows if es_ingress is not None else ())
                 if prepared._occurrence.storyline_cluster_id
+                and prepared._occurrence.event_type
+                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
                 and row.occurrence_id == self._es_process_occurrence(prepared._occurrence)[0]
             )
             for prepared in dispatches
@@ -11568,24 +11585,41 @@ class EventDispatcher:
                     "A partial native process chain requires a fork-only client"
                 )
             expected_type = 11
+        gui_exec_chain = (
+            record.exact_projection_kind == "macos_process_chain"
+            and len(record.member_occurrences) == 2
+            and record.member_occurrences[0].event_type is EventKind.PROCESS_CREATE
+            and record.member_occurrences[1].event_type is EventKind.PROCESS_EXEC
+            and len(record.state_plan.processes) == 1
+            and len(record.state_plan.process_executions) == 1
+            and record.state_plan.process_executions[0].gui_session is not None
+            and not record.state_plan.process_terminations
+        )
+        if gui_exec_chain:
+            self._require_multi_process_projection(record)
+            expected_type = 9
         if (
             registry is not self.es_collectors
             or not record.exact_projection
             or expected_type is None
-            or (len(record.member_occurrences) != 1 and not fork_only_chain)
+            or (len(record.member_occurrences) != 1 and not fork_only_chain and not gui_exec_chain)
             or not registry.authenticates_pending_delivery(delivery)
         ):
             raise EventContractError(
                 "ES binding requires one exact Mac fork, exec or exit delivery"
             )
-        event = record.member_occurrences[0]
+        event = record.member_occurrences[1 if gui_exec_chain else 0]
         observation = delivery.observation
         if (
             event.src_host is None
             or event.src_host.os_category != "macos"
             or observation.hostname != event.src_host.hostname
             or observation.occurrence_id
-            != (self._es_process_occurrence(event)[0] if fork_only_chain else record.root_action_id)
+            != (
+                self._es_process_occurrence(event)[0]
+                if fork_only_chain or gui_exec_chain
+                else record.root_action_id
+            )
             or observation.event_type != expected_type
             or observation.observed_at != event.timestamp
             or collector.hostname != observation.hostname

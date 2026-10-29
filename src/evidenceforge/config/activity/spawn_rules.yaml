@@ -565,6 +565,8 @@ macos:
       - Cisco Secure Client
       - GlobalProtect
       - Tableau
+      - xpcproxy
+      - EForgeReference
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
     lifetime: long

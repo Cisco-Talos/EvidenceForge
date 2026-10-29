@@ -143,6 +143,78 @@ def test_gui_adoption_is_atomic_preserves_posix_credentials_and_has_no_fork() ->
     assert state.get_posix_group_members(after.job_control) == (after,)
 
 
+def test_staged_gui_origin_rolls_back_and_reserves_the_shared_namespace_after_restore() -> None:
+    from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
+    from tests.unit.test_macos_launch_file import _manager
+    from tests.unit.test_macos_runtime_file_metadata import _executable
+
+    binary = _manager().build_record(_executable()).binary
+    state, _, owner = _setup()
+    at = _START + timedelta(seconds=3)
+    batch = state.begin_action_cohort_materialization()
+    before = state.materialization_digest()
+    birth = batch.plan_macos_gui_launcher(
+        system=_HOST.hostname,
+        username="alex",
+        logon_id=owner.logon_id,
+        start_time=at,
+        credentials=PosixProcessCredentials(501, 501, 20, 20),
+        executable_version=ProcessExecutableVersion.from_binary(binary),
+        image_security=MacosImageSecurity(7, False, 3),
+        descriptors=MacosDescriptorTable(
+            _HOST.hostname,
+            at,
+            tuple(MacosDescriptorBinding(fd, "file", f"invented-{fd}", False) for fd in range(3)),
+            native_last_fd=2,
+        ),
+    )
+    assert birth.identity.credentials.audit_session_id == 100001
+    assert state.materialization_digest() == before
+    with pytest.raises(StateError, match="authenticated exec cohort"):
+        state.materialize_process(birth)
+    after = batch.execute_process(
+        birth,
+        image=_APP,
+        command_line=_APP,
+        executed_at=at + timedelta(milliseconds=10),
+        macos_gui_session=owner,
+    )
+    plan = batch.seal()
+    with state.prepared_action_cohort_materialization(plan) as prepared:
+        prepared.certify_composite_commit(prepared.expected_result)
+        prepared.apply_provisional()
+        assert state._macos_audit_session_counters[_HOST.hostname] == 100001
+    assert state.materialization_digest() == before
+    state.materialize_action_cohort(plan)
+    restored = StateManager()
+    participant = StateManagerParticipant(state)
+    snapshot = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    StateManagerParticipant(restored).restore_checkpoint(
+        snapshot.head.payload, tuple(segment.payload for segment in snapshot.segments)
+    )
+    assert restored.get_process_identity(_HOST.hostname, after.pid) == after
+    assert restored._macos_audit_session_counters == state._macos_audit_session_counters
+    for manager in (state, restored):
+        batch = manager.begin_materialization_batch()
+        login = batch.plan_session(
+            system=_HOST.hostname,
+            username="alex",
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            auth_protocol="local",
+            effective_uid=501,
+            effective_gid=20,
+            session_id=0,
+            start_time=_START + timedelta(seconds=5),
+        )
+        enriched = batch.enrich_macos_audit_session(
+            login, audit_uid=501, authenticated_at=login.identity.started_at
+        )
+        assert enriched.audit_origin.audit_session_id == 100002
+
+
 def test_gui_responsibility_sampling_preserves_the_user_and_exact_old_execution() -> None:
     state, before, owner = _setup()
     plan, after = _plan(state, before, owner)
@@ -405,17 +477,21 @@ def test_gui_sealed_plan_cannot_drop_its_session_authority() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exported", "missing", "fault", "completed"),
+    ("exported", "missing", "fault", "completed", "staged"),
     [
-        (False, None, False, False),
-        (True, None, False, False),
-        (True, None, True, False),
-        (True, None, False, True),
-        (True, "source_version", False, False),
-        (True, "source_audit", False, False),
-        (True, "source_responsibility", False, False),
-        (True, "environment", False, False),
-        (True, "cwd", False, False),
+        (False, None, False, False, False),
+        (True, None, False, False, False),
+        (True, None, True, False, False),
+        (True, None, False, True, False),
+        (True, "source_version", False, False, False),
+        (True, "source_audit", False, False, False),
+        (True, "source_responsibility", False, False, False),
+        (True, "environment", False, False, False),
+        (True, "cwd", False, False, False),
+        (False, None, False, False, True),
+        (True, None, False, False, True),
+        (True, None, True, False, True),
+        (True, None, False, True, True),
     ],
 )
 @pytest.mark.parametrize("chronological", [False, True])
@@ -427,6 +503,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     fault: bool,
     completed: bool,
     chronological: bool,
+    staged: bool,
 ) -> None:
     from evidenceforge.events.dispatcher import EventDispatcher
     from evidenceforge.events.es_collector import ESCollectorRegistry
@@ -542,8 +619,51 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     at = _START + timedelta(seconds=3)
     directory = replace(_directory(path="/"), hostname=_HOST.hostname, observed_at=at)
     batch = state.begin_action_cohort_materialization()
+    birth = None
+    start = None
+    if staged:
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import ProcessContext
+        from evidenceforge.events.identity import EventIdentityPlan
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
+        birth = batch.plan_macos_gui_launcher(
+            system=_HOST.hostname,
+            username="alex",
+            logon_id=owner.logon_id,
+            start_time=table.observed_at,
+            credentials=PosixProcessCredentials(501, 501, 20, 20),
+            executable_version=ProcessExecutableVersion.from_binary(records[0].binary),
+            image_security=MacosImageSecurity(7, False, 3),
+            descriptors=table,
+        )
+        before = birth.identity
+        start = OccurrenceBuilder(
+            timestamp=before.started_at,
+            event_type="process_create",
+            src_host=_HOST,
+            process=ProcessContext(
+                before.pid,
+                before.parent_pid,
+                before.image,
+                before.command_line,
+                before.principal,
+                logon_id=before.logon_id,
+                start_time=before.started_at,
+                binary_identity=records[0].binary,
+            ),
+            identity_plan=EventIdentityPlan(
+                subject=before, actor=birth.parent_identity, session=owner
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=before.lifecycle_group_id,
+                canonical_start=before.started_at,
+                phase="start",
+                parent_group_id=before.parent_lifecycle_group_id or None,
+            ),
+        )
     after = batch.execute_process(
-        before,
+        birth if birth is not None else before,
         image=_APP,
         command_line=_APP,
         arguments=(_APP,),
@@ -559,6 +679,12 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
     cohort = batch.seal()
     event = process_exec_occurrence(
         host=_HOST, before=before, after=after, integrity_level="Medium", session=owner
+    )
+    events = (start, event) if start is not None else (event,)
+    root_id = (
+        f"macos-process-cohort:{cohort.semantic_id}"
+        if staged
+        else f"process-exec:{after.execution_id}"
     )
     try:
         if fault:
@@ -577,9 +703,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
 
             with monkeypatch.context() as scoped:
                 scoped.setattr(ExternalSortedLineWriter, "_commit_exact_row", fail_after_write)
-                publication = _prepare(
-                    dispatcher, cohort, (event,), root=f"process-exec:{after.execution_id}"
-                )
+                publication = _prepare(dispatcher, cohort, events, root=root_id)
                 with pytest.raises(RuntimeError, match="invented GUI native") as caught:
                     dispatcher.publish_prepared_action_cohort_batch(publication)
                 digest = state.materialization_digest()
@@ -588,9 +712,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
                 assert state.materialization_digest() == digest
                 assert source.connection() == connection
         else:
-            publication = _prepare(
-                dispatcher, cohort, (event,), root=f"process-exec:{after.execution_id}"
-            )
+            publication = _prepare(dispatcher, cohort, events, root=root_id)
             dispatcher.publish_prepared_action_cohort_batch(publication)
         if completed:
             from evidenceforge.events.process_outcome import PosixProcessExit
@@ -654,8 +776,10 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
             501,
             20,
         )
-        assert responsible.asid == 73
-        assert before.credentials == PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 73)
+        assert responsible.asid == (100001 if staged else 73)
+        assert before.credentials == PosixProcessCredentials(
+            501, 501, 20, 20, 2**32 - 1, 100001 if staged else 73
+        )
         assert target.audit_token.pid == target.group_id and target.session_id == 1
         assert target.responsible_audit_token == target.audit_token
         assert wire.event.exec.cwd.path == "/"

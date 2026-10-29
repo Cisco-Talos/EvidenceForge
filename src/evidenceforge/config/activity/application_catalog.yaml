@@ -2991,6 +2991,49 @@ applications:
     personas: [developer, sysadmin, analyst, security_analyst, default]
     system_types: [workstation]
 
+  # Explicit modeled launcher image. Its first activation remains an aggregate
+  # obligation; omitted entitlements stay unknown and cannot qualify that exec.
+  - id: macos-xpcproxy
+    display_name: macOS GUI launcher
+    platforms:
+      macos:
+        image_path: /usr/libexec/xpcproxy
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.xpcproxy, team_id: null}
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: [/usr/libexec/xpcproxy]
+    categories: [macos_session]
+    personas: []
+    system_types: [workstation]
+
+  # Invented reference workload with declared ad-hoc signing and no entitlements.
+  # Not automatically assigned to real personas or used as another app's fallback.
+  - id: macos-reference-app
+    display_name: EvidenceForge reference app
+    platforms:
+      macos:
+        image_path: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+        executable_format: mach_o
+        code_signature:
+          signing_id: org.evidenceforge.Reference
+          team_id: null
+          entitlements: absent
+        deployment:
+          kind: catalog
+          product_id: eforge-reference
+          release_policy: unspecified
+          scope: machine
+          architectures: [arm64]
+        command_templates: [/Applications/EForgeReference.app/Contents/MacOS/EForgeReference]
+    categories: [code]
+    personas: []
+    system_types: [workstation]
+
   - id: macos-bash
     display_name: macOS Bash shell
     platforms:

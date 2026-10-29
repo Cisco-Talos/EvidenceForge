@@ -221,6 +221,12 @@ relationships:
     position: before
     min_ms: 1
     max_ms: 20
+  # Selected readiness gap, not measured Finder startup latency.
+  macos.finder_preimage_before_exec:
+    class: causal_prerequisite
+    position: before
+    min_ms: 1
+    max_ms: 20
   macos.ssh_client_before_transport:
     class: human_workflow
     position: before

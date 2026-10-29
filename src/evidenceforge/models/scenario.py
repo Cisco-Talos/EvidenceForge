@@ -909,12 +909,22 @@ class ProcessEventSpec(_EventSpecBase):
     process_ref: str | None = None  # Optional durable ref for explicit parent/child lineage
     parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
+    launch_method: Literal["finder"] | None = Field(
+        default=None, description="Explicit fresh regular-app Finder launch on a supported Mac"
+    )
 
     outcome: Literal["success", "denied", "exec_failed", "policy_refused"] = "success"
 
     @model_validator(mode="after")
     def bounded_unsuccessful_process(self) -> "ProcessEventSpec":
         """A no-new-execution outcome requires its existing caller, never a new child."""
+        if self.launch_method is not None and (
+            self.outcome != "success"
+            or self.parent_ref is not None
+            or not self.process_name.startswith("/")
+            or ".app/Contents/MacOS/" not in self.process_name
+        ):
+            raise ValueError("Finder launch requires a successful fresh app and no parent_ref")
         if self.outcome != "success":
             label = {
                 "denied": "Denied process launch",

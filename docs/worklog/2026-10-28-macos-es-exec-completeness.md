@@ -166,3 +166,50 @@ source rule is scoped to authenticated GUI exec and v11, including runtime/insta
 filtering, known exit and recovery. Nonzero anonymous preimage audit-session fixtures replace
 the older arbitrary zero choice. No private files were inspected and no further collection is
 needed for this token distinction. Detailed implementation/verification is in the GUI worklog.
+
+## Authorized four-item implementation continuation
+
+The user explicitly authorized completing all four remaining items as far as possible without
+assistance: Finder end-to-end, other producers, independent accounting/enforcement, and finite
+acceptance/recovery tests. Commit and push useful milestones; do not stop between items or start
+new assessment panels. Standing private-capture/local-log restrictions remain unchanged.
+
+The in-progress Finder producer now stages an aggregate xpcproxy birth and the authenticated
+app exec in one existing canonical transaction. A shared host audit-session allocator reserves
+the nonzero anonymous origin and rolls it back with the birth. Its initial image activation
+remains an unresolved independent obligation, never an inferred native fork or silently
+excluded denominator. Existing immediate and chronological native publication admit the app
+exec without requiring a native record for that aggregate birth. Forty-five invented GUI
+transition/recovery cases pass, including the new staged form; 95 adjacent tests pass.
+
+Current work wires this into explicit `process.launch_method: finder` and a narrowly selected
+baseline image policy. New catalog entries describe an explicit modeled xpcproxy image and an
+invented EForgeReference app; their signing/image-security choices are model declarations, not
+values copied from private captures or claims about arbitrary vendor binaries. xpcproxy
+entitlements stay unknown, so its own initial exec is not qualified by this work. Generic apps
+do not inherit the reference app's signing/entitlement facts. A real-engine authored/baseline
+test is being run before closing this increment. No new collection or private access occurred.
+
+The shared-engine authored and actual `execute_baseline_activity(process_code)` tests now pass with native output both selected and
+filtered: the app has one v11 exec and its explicitly known exit, with no invented fork.
+The new anonymous origin shares the existing host audit allocator and is protected by exact
+cohort identity, namespace rollback, full State checkpoint restoration and subsequent login
+allocation. Normal and deferred ingress paths retain interrupted-write recovery. The focused
+State/process/Finder set passes 177 tests (one existing slow case deselected). A public CLI
+Finder workload passes fresh-process/native-only byte equality with baseline enabled. The
+baseline test opts the invented app into a temporary effective catalog and initializes under
+that frozen scope; no random schedule or warm-up launch count is used as the baseline oracle.
+The separate native/cross-OS regression selection passes 191 tests (two existing slow cases
+deselected). All 99 installed config files validate with
+zero findings; ordinary personas remain unassigned to the invented app.
+
+This is bounded app-exec coverage, not closure of item 1's entire launcher chain. xpcproxy's
+initial activation still lacks a qualified first-exec producer and known entitlement export.
+It must be counted by the independent all-process census and rejected in complete mode. The
+next independent engineering work is that census/enforcement plus migration of other feasible
+process producers. No privacy boundary or unknown-field gate is relaxed to improve a count.
+
+Revision 349 final verification: the native SSH checkpoint/suspend/resume contract passes
+again after the Finder changes; all seven focused real-engine/CLI cases have passed. Whole
+Ruff, formatting and whitespace checks pass. The behavior manifest is revision 349 with digest
+`554e05ca8e5dbf4bb7cb0a0e491f1c054751081af8ca75b22dff52746f65fa76`.

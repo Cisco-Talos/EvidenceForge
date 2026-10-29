@@ -2,6 +2,15 @@
 
 ## Current generation admission (2026-10-27)
 
+October 28, revision 349: explicit `process.launch_method: finder` and a narrowly selected
+baseline image policy now use one staged xpcproxy-to-app exec transaction. The invented
+EForgeReference workload produces native app exec and explicitly known exit records; the
+actual baseline activity owner and authored/public CLI paths are exercised. The launcher's
+own initial activation remains an aggregate coverage requirement with unknown entitlement
+export; this is not complete launcher-chain or all-process coverage. Generic apps and
+Dock/Spotlight are not automatically qualified. See the
+[current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
+
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
 output selection. The catalog can hold multiple profiles; historical wire decoders remain

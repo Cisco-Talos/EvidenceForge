@@ -704,6 +704,7 @@ class _ProcessAllocatorPatch:
     pid_candidate_probe_delta: int
     thread_counter: tuple[str, int] | None
     thread_rng_state: tuple[str, object] | None
+    macos_anonymous_audit_session: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3796,6 +3797,85 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             self._processes[-1] = fork
             return fork
 
+    def plan_macos_gui_launcher(
+        self,
+        *,
+        system: str,
+        username: str,
+        logon_id: str,
+        start_time: datetime,
+        credentials: PosixProcessCredentials,
+        executable_version: ProcessExecutableVersion,
+        image_security: MacosImageSecurity,
+        descriptors: MacosDescriptorTable,
+        lifecycle_group_id: str = "",
+    ) -> ProcessMaterializationPlan:
+        """Reserve an anonymous launcher origin for one staged GUI adoption.
+
+        This is an aggregate xpcproxy start, not proof of its initial exec or a
+        native fork. Its own activation remains an independent ES obligation.
+        The following GUI exec must use this exact birth in the same cohort.
+        """
+        self._require_open()
+        if (
+            type(credentials) is not PosixProcessCredentials
+            or type(executable_version) is not ProcessExecutableVersion
+            or type(image_security) is not MacosImageSecurity
+            or type(descriptors) is not MacosDescriptorTable
+        ):
+            raise StateError(
+                "GUI launcher requires exact credentials, loaded image and descriptor facts"
+            )
+        if self._action_sessions or any(
+            item._allocator_patch.macos_anonymous_audit_session is not None
+            for item in self._processes
+        ):
+            raise StateError("GUI launcher requires one existing login and one audit reservation")
+        credentials.__post_init__()
+        descriptors.__post_init__()
+        if descriptors.hostname != system or descriptors.observed_at != ensure_utc(start_time):
+            raise StateError("GUI launcher descriptors require its exact host and birth instant")
+        previous = self._manager._macos_audit_session_counters.get(system, 99_999)
+        if not 99_999 <= previous < 2**32 - 2:
+            raise StateError("macOS anonymous audit session namespace is exhausted")
+        audit_session = previous + 1
+        plan = self.plan_process(
+            system=system,
+            parent_pid=1,
+            image="/usr/libexec/xpcproxy",
+            command_line="/usr/libexec/xpcproxy",
+            username=username,
+            integrity_level="Medium",
+            os_category="macos",
+            logon_id=logon_id,
+            start_time=start_time,
+            parent_activity_time=start_time,
+            credentials=replace(credentials, audit_uid=2**32 - 1, audit_session_id=audit_session),
+            executable_version=executable_version,
+            image_security=image_security,
+            responsibility=ProcessResponsibility(None),
+            lifecycle_group_id=lifecycle_group_id,
+        )
+        payload = replace(plan._payload, initial_descriptors=descriptors)
+        allocator = replace(
+            plan._allocator_patch, macos_anonymous_audit_session=(system, audit_session)
+        )
+        result = replace(
+            plan,
+            _payload=payload,
+            _allocator_patch=allocator,
+            _integrity_token=_materialization_integrity_token(
+                self._manager._materialization_secret,
+                "process",
+                plan.expected_version,
+                plan.identity,
+                payload,
+                allocator,
+            ),
+        )
+        self._processes[-1] = result
+        return result
+
     def execute_process(
         self,
         target: ProcessMaterializationPlan | ProcessIdentity,
@@ -3821,7 +3901,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         birth = selected if type(selected) is ProcessMaterializationPlan else None
         normalized = birth.identity if birth is not None else selected
         assert type(normalized) is ProcessIdentity
-        if birth is not None and not birth._payload.forked:
+        if birth is not None and not birth._payload.forked and macos_gui_session is None:
             raise StateError("Same-cohort execution requires an authenticated fork birth")
         platform = (
             self._manager._action_cohort_process_pid_namespaces(tuple(self._processes))[id(birth)]
@@ -3845,10 +3925,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._manager._validate_process_credentials(credentials, platform)
         gui_relationships = None
         if macos_gui_session is not None:
-            if birth is not None:
-                raise StateError("GUI exec adoption requires its already live launcher")
             gui_relationships = self._manager._plan_macos_gui_exec_relationships(
-                normalized, macos_gui_session, timestamp, image=image
+                normalized, macos_gui_session, timestamp, image=image, birth=birth
             )
             if credentials is not None and credentials != gui_relationships[0]:
                 raise StateError("GUI exec credentials disagree with its authenticated login")
@@ -12599,6 +12677,22 @@ class StateManager:
                 thread_keys.add(thread_key)
 
             process_pid_namespaces = self._action_cohort_process_pid_namespaces(plan.processes)
+            anonymous_launchers = tuple(
+                item
+                for item in plan.processes
+                if item._allocator_patch.macos_anonymous_audit_session is not None
+            )
+            if anonymous_launchers and (
+                len(anonymous_launchers) != 1
+                or plan.sessions
+                or not any(
+                    item.target == anonymous_launchers[0].identity and item.gui_session is not None
+                    for item in plan.process_executions
+                )
+            ):
+                raise StateError(
+                    "Anonymous GUI launcher requires its same-cohort authenticated exec"
+                )
             if len(plan._session_process_links) != len(plan.sessions):
                 raise StateError("Action cohort session process links are incomplete")
             role_plan_owners: dict[int, str] = {}
@@ -12893,7 +12987,9 @@ class StateManager:
                 before, after = execution.target, execution.after
                 birth = processes.get(before.object_id)
                 if birth is not None:
-                    if birth.identity != before or not birth._payload.forked:
+                    if birth.identity != before or (
+                        not birth._payload.forked and execution.gui_session is None
+                    ):
                         raise StateError("Ordered exec requires the exact authenticated fork birth")
                     process = self._prepare_action_cohort_process_start(birth).process
                     platform = process_pid_namespaces[id(birth)]
@@ -12980,10 +13076,12 @@ class StateManager:
                     )
                 gui_relationships = None
                 if execution.gui_session is not None:
-                    if birth is not None:
-                        raise StateError("GUI exec adoption requires its already live launcher")
                     gui_relationships = self._plan_macos_gui_exec_relationships(
-                        before, execution.gui_session, after.execution_started_at, image=after.image
+                        before,
+                        execution.gui_session,
+                        after.execution_started_at,
+                        image=after.image,
+                        birth=birth,
                     )
                     if (
                         after.credentials,
@@ -13770,6 +13868,7 @@ class StateManager:
                 (self._pid_bucket_offsets, patch.pid_bucket_offset),
                 (self._thread_id_counters, patch.thread_counter),
                 (self._thread_id_rngs, patch.thread_rng_state),
+                (self._macos_audit_session_counters, patch.macos_anonymous_audit_session),
             ):
                 if entry is not None:
                     capture_mapping(mapping, entry[0])  # type: ignore[arg-type]
@@ -16189,12 +16288,33 @@ class StateManager:
         membership_updates(self._posix_job_control_reservations, before, after, change.changed_at)
 
     def _plan_macos_gui_exec_relationships(
-        self, before: ProcessIdentity, owner: SessionIdentity, at: datetime, *, image: str
+        self,
+        before: ProcessIdentity,
+        owner: SessionIdentity,
+        at: datetime,
+        *,
+        image: str,
+        birth: ProcessMaterializationPlan | None = None,
     ) -> tuple[PosixProcessCredentials, PosixGroupIdentity, ProcessResponsibility]:
         """Authenticate a local GUI exec adoption without a general credential rewrite."""
         if type(owner) is not SessionIdentity:
             raise StateError("GUI exec adoption requires its exact session identity")
-        self._validate_action_live_process_identity(before)
+        if birth is None:
+            self._validate_action_live_process_identity(before)
+        elif (
+            birth.identity != before
+            or birth._payload.forked
+            or birth._allocator_patch.macos_anonymous_audit_session
+            != (
+                before.hostname,
+                self._macos_audit_session_counters.get(before.hostname, 99_999) + 1,
+            )
+            or before.credentials is None
+            or before.credentials.audit_uid != 2**32 - 1
+            or before.credentials.audit_session_id
+            != birth._allocator_patch.macos_anonymous_audit_session[1]
+        ):
+            raise StateError("GUI exec adoption requires its exact staged anonymous launcher")
         session = self.get_session_at(owner.logon_id, at)
         parent = self.get_process_identity_at(before.hostname, before.parent_pid, at)
         old = before.credentials
@@ -16240,15 +16360,16 @@ class StateManager:
         )
         group = PosixGroupIdentity(before.job_control.session, before.pid, before.object_id, at)
         change = PosixJobControlChange("setpgid", before.job_control, group, at)
-        self._validate_posix_job_control_patch(
-            ActionCohortProcessActivityPatch(
-                target=before,
-                activity_time=at,
-                job_control_change=change,
-                job_control_actor=before,
-                _capability=_ActionCohortCapability(),
+        if birth is None:
+            self._validate_posix_job_control_patch(
+                ActionCohortProcessActivityPatch(
+                    target=before,
+                    activity_time=at,
+                    job_control_change=change,
+                    job_control_actor=before,
+                    _capability=_ActionCohortCapability(),
+                )
             )
-        )
         return credentials, group, ProcessResponsibility(None)
 
     def _validate_posix_membership_sequence(
@@ -16292,6 +16413,8 @@ class StateManager:
 
         with self._lock:
             self._validate_process_materialization_plan(plan)
+            if plan._allocator_patch.macos_anonymous_audit_session is not None:
+                raise StateError("Anonymous GUI launcher requires its authenticated exec cohort")
             if plan.expected_version != self._materialization_version:
                 raise StateError("Process materialization plan became stale before commit")
             identity = plan.identity
@@ -16405,6 +16528,9 @@ class StateManager:
         """Perform primitive process writes after validation under materialization_guard."""
 
         patch = plan._allocator_patch
+        if patch.macos_anonymous_audit_session is not None:
+            host, counter = patch.macos_anonymous_audit_session
+            self._macos_audit_session_counters[host] = counter
         self._commit_pid_allocator_patch(
             patch,
             prepared_rng=prepared.pid_rng_replacement if prepared is not None else None,

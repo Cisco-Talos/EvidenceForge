@@ -77,7 +77,7 @@ class ProcessRootPlan:
     parent_identity: ProcessIdentity | None
     binary: ProcessBinaryIdentity | None = None
     executed: ProcessIdentity | None = None
-    fork_event: OccurrenceBuilder | None = None
+    birth_event: OccurrenceBuilder | None = None
 
     @property
     def identity(self) -> ProcessIdentity:

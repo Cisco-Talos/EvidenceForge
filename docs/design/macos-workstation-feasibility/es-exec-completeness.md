@@ -89,9 +89,10 @@ exec transition. The same PID/lifetime survives image replacement; do not model 
 invented child of xpcproxy or assert a native fork from missing evidence. Supply every modeled
 launcher/app execution's own metadata and connect authored and baseline activity explicitly.
 
-The human's version-3 offline report resolves the preimage audit/session/group classes from
-the existing capture. Its same-PID responsibility token differs from both execution tokens;
-do not replace it with either token without establishing that source observation's semantics.
+The human's version-4 offline report resolves the preimage audit/session/group and token
+relationships. The source observation keeps the old audit pair/PID/PID version but has four
+zero POSIX credential words. Canonical launcher credentials stay those of the account; target
+responsibility equals the complete target token. That distinction is implemented in revision 348.
 Broader Dock/Spotlight, application/helper and signing/entitlement classes require bounded
 qualification where current evidence and primary format contracts do not establish needed facts.
 Reuse shared contracts when justified; do not extrapolate the Finder test automatically.

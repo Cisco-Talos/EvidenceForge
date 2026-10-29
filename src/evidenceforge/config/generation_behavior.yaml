@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 348
+current_revision: 349
 history_start_revision: 1
-behavior_surface_sha256: d4c563f21aae4938c79d39b379ac1a5bd612b9a2a30f84a1f222da51c46f6cbf
+behavior_surface_sha256: 554e05ca8e5dbf4bb7cb0a0e491f1c054751081af8ca75b22dff52746f65fa76
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3316,3 +3316,15 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Projects the reviewed v11 GUI preimage responsibility token separately from actual user credentials, retaining its old audit origin and execution identity while preserving ordinary, target and exit token mapping.
+  - revision: 349
+    id: macos-finder-staged-app-execution
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - gui-audit-responsibility
+      - native-process-observation
+      - scenario-authoring
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Routes explicit Finder and selected baseline app intent through an atomic staged xpcproxy-to-app exec with rollback-safe anonymous audit allocation, retaining the launcher's unresolved initial activation as a separate coverage requirement.

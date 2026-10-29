@@ -3391,6 +3391,15 @@ class ScenarioValidator:
 
                 # Process command OS mismatch
                 if event_type == "process" and hasattr(spec, "command_line"):
+                    if getattr(spec, "launch_method", None) == "finder" and os_cat != "macos":
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.launch_method",
+                                message="Finder launch_method requires a supported Mac host",
+                                suggestion="Use a supported Mac host or remove launch_method.",
+                            )
+                        )
                     cmd = spec.command_line or spec.process_name
                     cmd_lower = cmd.lower()
                     process_name = getattr(spec, "process_name", "")
