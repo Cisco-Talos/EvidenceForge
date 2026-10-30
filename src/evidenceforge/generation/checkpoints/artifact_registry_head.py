@@ -126,7 +126,7 @@ def _decode_record(
                 architecture=binary_values[0],
                 artifact_name=binary_values[1],
                 pe_version_info=version_info,
-                code_signature=MachOCodeSignature(*binary_values[3])
+                code_signature=MachOCodeSignature.from_serialized_values(binary_values[3])
                 if len(binary_values) == 5 and binary_values[3] is not None
                 else None,
                 mach_o_image=MachOImageIdentity(*binary_values[4])

@@ -422,7 +422,7 @@ available independently of generation admission.
 
 The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
 and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
-profile. Exec needs explicit absent entitlements and complete descriptors; exit needs an explicit
+profile. Exec needs explicit absent or flat Boolean entitlements and complete descriptors; exit needs an explicit
 completed result. Qualified literal local-terminal and non-PTY SSH commands share canonical
 fork/exec production, including the exec of a shell receiving a quoted command argument.
 Inner commands are not automatically expanded. GUI/bootstrap starts, PTY/helper inventories,

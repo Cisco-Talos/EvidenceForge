@@ -844,9 +844,28 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
 
     signing_id: str = Field(min_length=1, max_length=512)
     team_id: str | None = Field(default=None, min_length=1, max_length=128)
-    entitlements: Literal["absent"] | None = Field(
-        default=None, description="Explicit modeled no-entitlements fact; null leaves it unknown"
+    entitlements: Literal["absent"] | dict[str, bool] | None = Field(
+        default=None,
+        description="Explicit absence or a bounded Boolean dictionary; null is unknown",
     )
+
+    @field_validator("entitlements", mode="before")
+    @classmethod
+    def exact_boolean_entitlements(cls, value: object) -> object:
+        """Keep absent, unknown and observed Boolean-object representations distinct."""
+        if type(value) is dict and (
+            not 1 <= len(value) <= 128
+            or any(
+                type(key) is not str
+                or not key.strip()
+                or len(key) > 512
+                or "\0" in key
+                or type(item) is not bool
+                for key, item in value.items()
+            )
+        ):
+            raise ValueError("Entitlements require 1-128 exact Boolean entries with bounded keys")
+        return value
 
     @field_validator("signing_id", "team_id")
     @classmethod
@@ -4111,6 +4130,7 @@ class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
     codesigning_flags: int = Field(strict=True, ge=0, lt=2**32)
     is_platform_binary: bool = Field(strict=True)
     validation_category: int = Field(strict=True, ge=0, le=10)
+    cpu_subtype: int | None = Field(default=None, strict=True, ge=-(2**31), lt=2**31)
 
     @model_validator(mode="after")
     def coherent_outcome(self) -> Self:
@@ -4140,7 +4160,7 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
     result_type: Literal[0]
     auth_result: Literal[0]
     clock_profile: Literal["macos27-workspace-entry-v1"]
-    exec_entitlements: Literal["absent_only"]
+    exec_entitlements: Literal["absent_only", "absent_or_boolean_object"]
 
     @field_validator(
         "os_major",

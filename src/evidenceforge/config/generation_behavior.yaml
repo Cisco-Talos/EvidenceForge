@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 354
+current_revision: 355
 history_start_revision: 1
-behavior_surface_sha256: b360e6b475e4de1e333e2411809539e7229d6762889225bd0527c8e9500a3020
+behavior_surface_sha256: c5f0374ab5598c9b56cb93a36c6f721eae9bd61869a0987b26600a1a9c4b70f0
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3379,3 +3379,13 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Corrects the catalog-owned xpcproxy signing identifier to com.apple.xpc.proxy, preserving the unqualified initial-activation gate and all process completeness requirements.
+  - revision: 355
+    id: macos-reviewed-launcher-execution-metadata
+    impact: localized
+    domains:
+      - canonical-binary-identity
+      - native-process-observation
+      - checkpoint-recovery
+    formats:
+      - macos_endpoint_security
+    summary: Admits reviewed v11 Boolean entitlement objects with immutable checkpointed signature facts and selects launchd/xpcproxy security flags and the xpcproxy ARM64e slice. Initial process publication remains gated.

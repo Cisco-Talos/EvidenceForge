@@ -30,12 +30,25 @@ def test_v11_preserves_original_headers_named_tokens_and_category(family: str) -
         assert "entitlements" in record.event.exec.model_fields_set
 
 
-@pytest.mark.parametrize("value", [{}, [], "", False, 0, {"invented.entitlement": True}])
+@pytest.mark.parametrize(
+    "value",
+    [{}, [], "", False, 0, {"invented.entitlement": 1}, {"invented.entitlement": {"nested": True}}],
+)
 def test_v11_does_not_admit_unreviewed_nonnull_entitlements(value: object) -> None:
     fields = _record(11, "exec")
     fields["event"]["exec"]["entitlements"] = value
     with pytest.raises(ValidationError):
         decode_endpoint_security_record(json.dumps(fields))
+
+
+def test_v11_preserves_nonempty_boolean_entitlements_without_coercion() -> None:
+    fields = _record(11, "exec")
+    fields["event"]["exec"]["entitlements"] = {"invented.enabled": True, "invented.disabled": False}
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert json.loads(record.to_ndjson()) == fields
+    assert dict(record.event.exec.entitlements) == fields["event"]["exec"]["entitlements"]
+    fields["event"]["exec"]["entitlements"]["invented.enabled"] = False
+    assert dict(record.event.exec.entitlements)["invented.enabled"] is True
 
 
 @pytest.mark.parametrize("field", ["entitlements", "dyld_exec_path", "script"])

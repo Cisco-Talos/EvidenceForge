@@ -317,9 +317,12 @@ def prepared_macos_es_process_publication(
                 except ValueError:
                     return "gui_exec_metadata_unknown"
             binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
-            if binary.code_signature is None or binary.code_signature.entitlements == "unknown":
+            if binary.code_signature is None or binary.code_signature.entitlements is None:
                 return "entitlements_unknown"
-            if binary.code_signature.entitlements != "absent":
+            if (
+                binary.code_signature.entitlements != "absent"
+                and source.profile.exec_entitlements != "absent_or_boolean_object"
+            ):
                 return "entitlements_present"
             if execution.descriptors_after is None:
                 return "descriptors_unknown"

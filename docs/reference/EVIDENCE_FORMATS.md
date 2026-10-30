@@ -691,8 +691,11 @@ inventory, boot clock and counters share existing checkpoint and exact publicati
 A native fork requires an actual authenticated fork and complete signing, validation, audit,
 terminal and file facts. Exec additionally requires exact argv, environment, cwd, Mach-O slice,
 script presence and complete post-exec descriptors. The bounded v11 codec exports null
-`entitlements` only when the canonical binary explicitly models absent entitlements; unknown and
-nonnull entitlements do not qualify. Exit requires an explicit canonical completed status or
+`entitlements` when the canonical binary explicitly models absence or a nonempty flat Boolean
+dictionary. Unknown entitlement facts and other value/container shapes do not qualify. The
+macOS 27 Finder reference confirms the Apple xpcproxy Boolean template; its first activation
+still needs the canonical fork/exec/credential producer before complete coverage can pass.
+Exit requires an explicit canonical completed status or
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
 

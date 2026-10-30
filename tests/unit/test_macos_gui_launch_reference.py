@@ -871,6 +871,28 @@ def test_failed_original_collection_controls_leave_supplemental_checks_inconclus
     assert report.control_environment.comparison == report.finder_fork == "INCONCLUSIVE"
 
 
+@pytest.mark.parametrize("known", [False, True])
+def test_only_offline_review_accepts_the_exact_prior_codec_lineage(
+    existing_capture: tuple[Path, Path], known: bool
+) -> None:
+    root, run = existing_capture
+    setup_path = root / "SETUP.json"
+    manifest = json.loads(setup_path.read_bytes())
+    manifest["codec_sha256"] = kit.PRIOR_REVIEW_CODEC if known else "f" * 64
+    setup_path.write_text(json.dumps(manifest))
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_bytes())
+    provenance["setup"] = manifest
+    provenance_path.write_text(json.dumps(provenance))
+    with pytest.raises(kit.PrivateError, match="BUILD"):
+        kit._manifest(root)
+    if known:
+        assert kit.review_existing(root).error == "NONE"
+    else:
+        with pytest.raises(kit.PrivateError, match="BUILD"):
+            kit.review_existing(root)
+
+
 def test_hidden_original_location_never_allows_echo_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

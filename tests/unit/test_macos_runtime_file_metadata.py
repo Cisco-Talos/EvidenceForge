@@ -106,6 +106,27 @@ def test_atomic_publication_and_checkpoint_retain_all_metadata(executable: bool)
     ) == manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
 
 
+def test_boolean_signature_entitlements_survive_runtime_artifact_head_restore() -> None:
+    manager = _manager()
+    descriptor = _executable()
+    descriptor = replace(
+        descriptor,
+        code_signature=replace(
+            descriptor.code_signature, entitlements=(("invented.enabled", True),)
+        ),
+    )
+    _publish(manager, descriptor)
+    expected = manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
+    seal = LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1)
+    restored = _manager()
+    LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
+        seal.head.payload, ()
+    )
+    actual = restored.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
+    assert actual == expected
+    assert actual.binary.code_signature.entitlements == (("invented.enabled", True),)
+
+
 def test_metadata_does_not_become_a_content_digest_or_path_identity() -> None:
     manager = _manager()
     first = manager.build_record(_executable())

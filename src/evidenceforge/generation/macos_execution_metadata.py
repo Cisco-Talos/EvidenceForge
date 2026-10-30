@@ -337,7 +337,7 @@ class MacosExecutionMetadataProducer:
             and binary.mach_o_image is not None
             and binary.mach_o_image.architecture == "arm64"
         ):
-            image = MacosExecImage(self.profile.cpu_subtype, requested_path)
+            image = MacosExecImage(self.image_cpu_subtype(binary), requested_path)
             if script is None:
                 script = MacosExecScript()
         return MacosLaunchMetadata(
@@ -359,6 +359,18 @@ class MacosExecutionMetadataProducer:
                 else None
             ),
         )
+
+    def image_cpu_subtype(self, binary: BinaryReleaseIdentity | LocalArtifactBinaryIdentity) -> int:
+        """Select an explicit artifact slice without changing the host architecture."""
+        if type(binary) is BinaryReleaseIdentity:
+            for rule in self.profile.code_validation:
+                if (
+                    binary.key.product_id == rule.product_id
+                    and binary.key.artifact_name in rule.artifact_names
+                    and rule.cpu_subtype is not None
+                ):
+                    return rule.cpu_subtype
+        return self.profile.cpu_subtype
 
     def image_security(
         self,
@@ -525,7 +537,7 @@ class MacosExecutionMetadataProducer:
             arguments=arguments,
             environment=known_environment,
             execution_directory=directory,
-            exec_image=MacosExecImage(self.profile.cpu_subtype, requested_path),
+            exec_image=MacosExecImage(self.image_cpu_subtype(binary), requested_path),
             exec_script=script if script is not None else MacosExecScript(),
             executable_version=ProcessExecutableVersion.from_binary(binary),
             image_security=self.image_security(binary, validation=validation),

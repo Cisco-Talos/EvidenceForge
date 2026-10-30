@@ -13,4 +13,4 @@ profiles:
     result_type: 0
     auth_result: 0
     clock_profile: macos27-workspace-entry-v1
-    exec_entitlements: absent_only
+    exec_entitlements: absent_or_boolean_object

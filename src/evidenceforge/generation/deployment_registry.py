@@ -4350,7 +4350,7 @@ class _PackedArtifactStore:
                 architecture=cast(Architecture, str(binary_values[0])),
                 artifact_name=str(binary_values[1]),
                 pe_version_info=version_info,
-                code_signature=MachOCodeSignature(*binary_values[3])
+                code_signature=MachOCodeSignature.from_serialized_values(binary_values[3])
                 if len(binary_values) == 5 and binary_values[3] is not None
                 else None,
                 mach_o_image=MachOImageIdentity(*binary_values[4])
@@ -4934,7 +4934,7 @@ def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
         signature_values = values[14]
         if type(signature_values) is not list or len(signature_values) not in {3, 4}:
             raise StateError("binary release code signature row is invalid")
-        signature = MachOCodeSignature(*signature_values)
+        signature = MachOCodeSignature.from_serialized_values(signature_values)
     if len(values) == 16:
         image_values = values[15]
         if type(image_values) is not list or len(image_values) != 2:

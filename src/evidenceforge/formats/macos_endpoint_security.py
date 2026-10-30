@@ -5,8 +5,8 @@
 
 These are wire records, not canonical process or file state. Version 6 and 9
 profiles describe historical references; version 10 covers fork. The privately
-reviewed macOS 27/message-11 profile covers fork, exec with null entitlements,
-and exit. Decoder admission does not enable generator sources or establish
+reviewed macOS 27/message-11 profile covers fork, exec with null or flat Boolean
+entitlements, and exit. Decoder admission does not enable generator sources or establish
 macOS 26 fidelity. Unsupported combinations fail closed. A notification result
 is not an authorization callback or a synthetic policy decision.
 """
@@ -14,7 +14,14 @@ is not an authorization callback or a synthetic policy decision.
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -229,12 +236,37 @@ class ESExec(_Record):
 
 
 class ESExecV11(ESExec):
-    """Reviewed v11 exec subset; nonnull entitlement exports remain unqualified."""
+    """Reviewed v11 null and nonempty Boolean-dictionary entitlement exports."""
 
     dyld_exec_path: str = Field(description="Required native execution path")
-    entitlements: None = Field(
-        description="Required null member in the reviewed no-entitlements export subset"
-    )
+    entitlements: (
+        Annotated[tuple[tuple[str, bool], ...], Field(min_length=1, max_length=128)] | None
+    ) = Field(description="Required null or nonempty exact Boolean dictionary")
+
+    @field_validator("entitlements", mode="before")
+    @classmethod
+    def bounded_boolean_entitlements(cls, value: object) -> object:
+        """Admit only the locally reviewed flat Boolean shape, without type coercion."""
+        if value is not None and (
+            type(value) is not dict
+            or any(
+                type(key) is not str
+                or not key.strip()
+                or len(key) > 512
+                or "\0" in key
+                or type(item) is not bool
+                for key, item in value.items()
+            )
+        ):
+            raise ValueError("Native v11 entitlements require exact bounded Boolean members")
+        return tuple(value.items()) if value is not None else None
+
+    @field_serializer("entitlements")
+    def native_entitlements(
+        self, value: tuple[tuple[str, bool], ...] | None
+    ) -> dict[str, bool] | None:
+        """Keep the validated model immutable while preserving the native JSON object."""
+        return dict(value) if value is not None else None
 
 
 class ESExecEvent(_Record):

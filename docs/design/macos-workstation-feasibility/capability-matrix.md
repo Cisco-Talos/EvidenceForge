@@ -6,8 +6,10 @@ October 28, revision 349: explicit `process.launch_method: finder` and a narrowl
 baseline image policy now use one staged xpcproxy-to-app exec transaction. The invented
 EForgeReference workload produces native app exec and explicitly known exit records; the
 actual baseline activity owner and authored/public CLI paths are exercised. The launcher's
-own initial activation remains an aggregate coverage requirement with unknown entitlement
-export; this is not complete launcher-chain or all-process coverage. Generic apps and
+own initial activation remains an aggregate coverage requirement; this is not complete
+launcher-chain or all-process coverage. October 30, revision 355 adds the verified flat Boolean
+entitlement export, launchd/xpcproxy security flags and xpcproxy ARM64e slice. The full canonical
+fork/exec/credential chain is still needed before complete Finder coverage passes. Generic apps and
 Dock/Spotlight are not automatically qualified. See the
 [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 

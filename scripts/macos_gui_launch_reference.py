@@ -55,6 +55,9 @@ SOURCES = (
 )
 SAFE_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
 CODE = ("private_gui_launch.py", "gui_launch_probe.m", "collector_guard.c")
+# Exact codec used by the reviewed v11 captures before Boolean-object admission.
+# Offline review alone accepts this known lineage; new collection still binds current code.
+PRIOR_REVIEW_CODEC = "ab175ffcd097eb39b04e672f380e857ffd4b7d2536585d0f0da759ba38aa55ad"
 MAX_LINE = 1_048_576
 MAX_STREAM = 32 * MAX_LINE
 MAX_RETAINED = 16
@@ -411,6 +414,13 @@ class LauncherEnvironmentFacts(Model):
     xpc_service_name: EnvironmentRole = "INCONCLUSIVE"
     xpc_flags: EnvironmentRole = "INCONCLUSIVE"
     cf_text_encoding: EnvironmentRole = "INCONCLUSIVE"
+    launcher_keys: Literal["ONLY_XPC_FLAGS", "EMPTY", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    launcher_xpc_flags: Literal[
+        "HEX_ZERO", "HEX_ONE", "DECIMAL_ZERO", "DECIMAL_ONE", "ABSENT", "OTHER", "INCONCLUSIVE"
+    ] = "INCONCLUSIVE"
+    app_xpc_flags: Literal[
+        "HEX_ZERO", "HEX_ONE", "DECIMAL_ZERO", "DECIMAL_ONE", "ABSENT", "OTHER", "INCONCLUSIVE"
+    ] = "INCONCLUSIVE"
 
 
 class LauncherReferenceFacts(Model):
@@ -419,12 +429,16 @@ class LauncherReferenceFacts(Model):
     retained_chain: Check = "INCONCLUSIVE"
     fork_parent_is_boot_parent: Check = "INCONCLUSIVE"
     fork_preserves_parent_image: Check = "INCONCLUSIVE"
+    fork_preserves_parent_credentials: Check = "INCONCLUSIVE"
+    fork_parent_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
+    launcher_before_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
     launcher_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
     app_preimage_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
     slice: NativeSliceFacts = Field(default_factory=NativeSliceFacts)
     arguments: LauncherArgumentFacts = Field(default_factory=LauncherArgumentFacts)
     entitlements: LauncherEntitlementFacts = Field(default_factory=LauncherEntitlementFacts)
     environment: LauncherEnvironmentFacts = Field(default_factory=LauncherEnvironmentFacts)
+    service_environment_matches_argument: Check = "INCONCLUSIVE"
 
 
 class LaunchChainDiagnostic(Model):
@@ -1005,7 +1019,21 @@ def inspect_launcher_environment(before: object, after: object) -> LauncherEnvir
             mapping[key] = value
         vectors.append(mapping)
     old, new = vectors
-    values: dict = {"vectors_well_formed": "PASS"}
+    flag_classes = {"0x0": "HEX_ZERO", "0x1": "HEX_ONE", "0": "DECIMAL_ZERO", "1": "DECIMAL_ONE"}
+    values: dict = {
+        "vectors_well_formed": "PASS",
+        "launcher_keys": "ONLY_XPC_FLAGS"
+        if set(old) == {"XPC_FLAGS"}
+        else "EMPTY"
+        if not old
+        else "OTHER",
+        "launcher_xpc_flags": flag_classes.get(
+            old.get("XPC_FLAGS"), "ABSENT" if "XPC_FLAGS" not in old else "OTHER"
+        ),
+        "app_xpc_flags": flag_classes.get(
+            new.get("XPC_FLAGS"), "ABSENT" if "XPC_FLAGS" not in new else "OTHER"
+        ),
+    }
     for field, key in (
         ("home", "HOME"),
         ("user", "USER"),
@@ -1061,12 +1089,22 @@ def inspect_launcher_reference(
     values: dict = {
         "retained_chain": "PASS",
         "launcher_security": inspect_native_security(payload["target"]),
+        "launcher_before_security": inspect_native_security(launcher["process"]),
         "app_preimage_security": inspect_native_security(app["process"]),
         "slice": inspect_native_slice(payload),
         "arguments": inspect_launcher_arguments(payload, bundle_identifier),
         "entitlements": inspect_launcher_entitlements(payload),
         "environment": inspect_launcher_environment(payload["env"], app["event"]["exec"]["env"]),
     }
+    service_values = [
+        item.split("=", 1)[1]
+        for item in app["event"]["exec"]["env"]
+        if item.startswith("XPC_SERVICE_NAME=")
+    ]
+    if len(payload["args"]) == 2 and len(service_values) == 1:
+        values["service_environment_matches_argument"] = _check(
+            service_values[0] == payload["args"][1]
+        )
     if len(forks) == 1:
         parent, child = forks[0]["process"], forks[0]["event"]["fork"]["child"]
         values["fork_parent_is_boot_parent"] = _check(
@@ -1074,6 +1112,9 @@ def inspect_launcher_reference(
             and _token(parent) == _token(child, "parent_audit_token")
             and parent["executable"]["path"] == "/sbin/launchd"
         )
+        values["fork_parent_security"] = inspect_native_security(parent)
+        pt, ct = _token(parent), _token(child)
+        values["fork_preserves_parent_credentials"] = _check(pt[:5] == ct[:5] and pt[6] == ct[6])
         values["fork_preserves_parent_image"] = _check(
             all(
                 parent["executable"]["stat"][key] == child["executable"]["stat"][key]
@@ -1985,7 +2026,7 @@ def setup(*, launch_chain: bool = False, synthetic_entitlement: bool = False) ->
     )
 
 
-def _manifest(root: Path) -> Manifest:
+def _manifest(root: Path, *, historical_review: bool = False) -> Manifest:
     for directory in (
         root / "GUIProbe.app",
         root / "GUIProbe.app/Contents",
@@ -2000,7 +2041,10 @@ def _manifest(root: Path) -> Manifest:
         or manifest.guard_sha256 != _digest(root / "collector-guard")
         or manifest.plist_sha256 != _digest(root / "GUIProbe.app/Contents/Info.plist")
         or manifest.code_sha256 != {name: _digest(root / name) for name in CODE}
-        or manifest.codec_sha256 != _codec_digest()
+        or (
+            manifest.codec_sha256 != _codec_digest()
+            and not (historical_review and manifest.codec_sha256 == PRIOR_REVIEW_CODEC)
+        )
     ):
         raise PrivateError("BUILD")
     return manifest
@@ -2396,7 +2440,7 @@ def review_existing(root: Path) -> ExistingReviewReport:
     _directory(root)
     root = root.resolve(strict=True)
     _outside_git(root)
-    manifest = _manifest(root)
+    manifest = _manifest(root, historical_review=True)
     run = _active(root)
     provenance = _decode(_read(run / "provenance.json"))
     if (

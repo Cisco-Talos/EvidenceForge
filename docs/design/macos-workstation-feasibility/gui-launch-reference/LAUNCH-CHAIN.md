@@ -100,10 +100,10 @@ backups and existing endpoint software remain separate from this filter's persis
 5. Review the final fixed JSON. `error: NONE`, `collector_cleanup: PASS`, collection controls
    and `launch_chain` are the relevant diagnostics. A nonzero, killed, timed-out or
    non-completing automatic control now reports a specific `CONTROL_*` error. The current
-   production codec still rejects populated entitlements, but this default variant adds no
-   marker; do not automatically dismiss a shape failure as expected. The
+   production codec admits null and nonempty flat Boolean entitlement dictionaries; other
+   shapes remain unqualified. This default variant adds no marker. The
    `*_shape_excluding_entitlements` checks deliberately isolate that one field and are
-   **not** a full shape pass or a generation admission decision. No fork retained means
+   **not** a full shape pass or a complete-process producer decision. No fork retained means
    `NOT_RETAINED`; it never proves that no fork happened.
 
    A missing Finder completion before its deadline reports `FINDER_TIMEOUT` with stage

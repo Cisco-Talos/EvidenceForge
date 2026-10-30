@@ -84,7 +84,6 @@ code_validation:
       - find
       - id
       - ifconfig
-      - launchd
       - login
       - logind
       - loginwindow
@@ -102,11 +101,24 @@ code_validation:
       - sw_vers
       - tccd
       - uname
-      - xpcproxy
       - zsh
     codesigning_flags: 603979777 # 0x24000001
     is_platform_binary: true
     validation_category: 1 # explicit modeled platform validation outcome
+  # Human-reviewed macOS 27 Finder chain, including the fork's boot parent.
+  # VALID|FORCED_LV|HARD|KILL|RESTRICT|ENFORCEMENT|ENTITLEMENTS_VALIDATED|
+  # RUNTIME|NO_UNTRUSTED_HELPERS|PLATFORM_BINARY|SIGNED.
+  - product_id: apple-macos
+    artifact_names: [launchd]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+  - product_id: apple-macos
+    artifact_names: [xpcproxy]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646 # ARM64E | PTRAUTH_ABI, distinct from generic app arm64
   # This invented ad-hoc app is a selected model, not an inventory claim about
   # third-party applications. XNU cs_blobs.h defines SIGNED|ADHOC|VALID and NONE.
   - product_id: eforge-reference

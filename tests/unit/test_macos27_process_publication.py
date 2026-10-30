@@ -26,13 +26,13 @@ from tests.unit.test_macos_execution_directory import _directory
 from tests.unit.test_macos_native_sink_publication import _prepare
 
 
-@pytest.mark.parametrize("known_entitlements", [False, True])
+@pytest.mark.parametrize("known_entitlements", [False, True, "boolean"])
 @pytest.mark.parametrize("exit_code", [None, 7])
 @pytest.mark.parametrize("failure", [None, "before_write", "after_write"])
 def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    known_entitlements: bool,
+    known_entitlements: bool | str,
     exit_code: int | None,
     failure: str | None,
 ) -> None:
@@ -42,7 +42,13 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
         def executable() -> RuntimeArtifactDescriptor:
             descriptor = original()
             return replace(
-                descriptor, code_signature=replace(descriptor.code_signature, entitlements="absent")
+                descriptor,
+                code_signature=replace(
+                    descriptor.code_signature,
+                    entitlements=(("invented.enabled", True),)
+                    if known_entitlements == "boolean"
+                    else "absent",
+                ),
             )
 
         monkeypatch.setattr(runtime_fixture, "_executable", executable)
@@ -139,7 +145,11 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     ]
     if known_entitlements:
         execution = next(record for record in records if record.event_type == 9)
-        assert execution.event.exec.entitlements is None
+        assert (
+            dict(execution.event.exec.entitlements)
+            if execution.event.exec.entitlements is not None
+            else None
+        ) == ({"invented.enabled": True} if known_entitlements == "boolean" else None)
         assert execution.event.exec.target.audit_token.pid == after.pid
         assert execution.event.exec.args == (parent.image,)
         assert len(execution.event.exec.fds) == 3

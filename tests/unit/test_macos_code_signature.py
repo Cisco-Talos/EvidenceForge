@@ -111,6 +111,39 @@ def test_explicit_no_entitlements_has_distinct_identity_and_roundtrips() -> None
     assert _network_request(unknown).stable_id != _network_request(known).stable_id
 
 
+def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippable() -> None:
+    app = _application()
+    values = {"invented.enabled": True, "invented.disabled": False}
+    app.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor", entitlements=values
+    )
+    binary = _release(app)
+    signature = binary.code_signature
+    assert signature.entitlements == (("invented.disabled", False), ("invented.enabled", True))
+    values["invented.enabled"] = False
+    assert dict(signature.entitlements)["invented.enabled"] is True
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    encoded = json.loads(json.dumps(signature.serialized_values()))
+    assert MachOCodeSignature.from_serialized_values(encoded) == signature
+    assert (
+        _network_request(binary).stable_id != _network_request(_release(_application())).stable_id
+    )
+
+
+@pytest.mark.parametrize(
+    "value", [{}, {"a": 1}, {"a": "true"}, {"a": None}, {"a": []}, {"\0": True}]
+)
+def test_catalog_boolean_entitlements_reject_unreviewed_or_coerced_values(value: object) -> None:
+    with pytest.raises(ValidationError):
+        MacCodeSignatureEntry(signing_id="test.example.editor", entitlements=value)
+
+
+@pytest.mark.parametrize("value", [[], (("a", 1),), (("a", True), ("a", False)), (("a", []),)])
+def test_canonical_entitlements_cannot_retain_mutable_or_ambiguous_data(value: object) -> None:
+    with pytest.raises(ValueError):
+        MachOCodeSignature("invented", None, "a" * 40, value)
+
+
 @pytest.mark.parametrize(
     "platform,architecture,expected",
     [

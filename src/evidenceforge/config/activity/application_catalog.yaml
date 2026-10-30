@@ -2991,15 +2991,26 @@ applications:
     personas: [developer, sysadmin, analyst, security_analyst, default]
     system_types: [workstation]
 
-  # Explicit modeled launcher image. Its first activation remains an aggregate
-  # obligation; omitted entitlements stay unknown and cannot qualify that exec.
+  # The reviewed Apple launcher Boolean template. First-activation publication
+  # still needs its canonical fork/exec/credential chain; metadata alone is insufficient.
   - id: macos-xpcproxy
     display_name: macOS GUI launcher
     platforms:
       macos:
         image_path: /usr/libexec/xpcproxy
         executable_format: mach_o
-        code_signature: {signing_id: com.apple.xpc.proxy, team_id: null}
+        code_signature:
+          signing_id: com.apple.xpc.proxy
+          team_id: null
+          entitlements:
+            com.apple.private.coreservices.canmanagebackgroundtasks: true
+            com.apple.private.exclaves.conclave-spawn: true
+            com.apple.private.security.storage.driverkitd: true
+            com.apple.private.shared-region.config: true
+            com.apple.private.spawn-driver: true
+            com.apple.private.spawn-panic-crash-behavior: true
+            com.apple.private.spawn-subsystem-root: true
+            com.apple.private.xpc.is.xpcproxy: true
         deployment:
           kind: catalog
           product_id: apple-macos

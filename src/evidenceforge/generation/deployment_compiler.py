@@ -404,7 +404,9 @@ def _release_for_application_artifact(
                 key,
                 signing_id=signature.signing_id,
                 team_id=signature.team_id,
-                entitlements=signature.entitlements,
+                entitlements=tuple(sorted(signature.entitlements.items()))
+                if type(signature.entitlements) is dict
+                else signature.entitlements,
             )
             if signature is not None and is_main_executable
             else None

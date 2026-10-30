@@ -668,3 +668,65 @@ transition -> existing GUI app exec -> known exit through the exact action publi
 then prove the authored/baseline complete-mode census, output filtering and recovery matrix.
 Other startup/service/helper families remain separate inventoried obligations. No assessment
 loop is a prerequisite for this development sequence.
+
+## Approved offline result and revision 355: reviewed executable metadata
+
+The human approved running version 6. The prepared reviewer completed with `error: NONE`,
+passing provenance and original collection controls. Only its fixed JSON reached the agent;
+it performed no collection, app/probe/subprocess launch or mutation of the capture. The same
+bounded review also classified the already-retained fork parent and first-exec source security
+and standard environment roles. No additional private files or live queries were added.
+
+The fork's parent is the boot parent and the child preserves its image and credentials.
+Fork parent, first-exec source, xpcproxy target and app preimage share the named flags
+VALID, FORCED_LV, HARD, KILL, RESTRICT, ENFORCEMENT, ENTITLEMENTS_VALIDATED, RUNTIME,
+NO_UNTRUSTED_HELPERS, PLATFORM_BINARY and SIGNED. All bits are known, category is PLATFORM,
+and none of those processes is an ES client. The xpcproxy exec slice is ARM64E/PTRAUTH_ABI.
+Its argv0 is the basename xpcproxy, with one controlled-bundle service label and decimal-pair
+suffix. That label agrees with the later app's XPC_SERVICE_NAME. Entitlements are a nonempty
+direct Boolean dictionary with exact static keys and values matching the Apple binary template.
+The initial environment contains only XPC_FLAGS; standard user/home/path/shell/tmp/service/CF
+fields are added for the app. App XPC_FLAGS is decimal one; the initial value remains OTHER
+and private. No arbitrary environment values or label suffixes were requested or recovered.
+
+Revision 355 implements the verified flat Boolean native wire form with exact Boolean typing,
+bounded nonempty keys, immutable tuple storage and a JSON-object serializer. Unknown facts,
+empty dictionaries, nested containers and other value types remain distinct/rejected.
+Catalog signer entries compile to sorted immutable pairs; absent and unknown checkpoint rows
+retain their old encodings, while present Boolean data has an explicit tagged encoding. Both
+installed and runtime artifact/head readers restore it. Native publication preserves the active
+profile's entitlement policy and no longer mislabels unknown canonical facts as known presence.
+The current macOS 27 profile permits the reviewed Boolean form; old frozen absent-only profiles
+retain their restriction. This is not admission of arbitrary XPC/JSON entitlement types.
+
+The catalog now owns xpcproxy's verified eight Boolean vendor entries. Validation policy selects
+the named security mask for launchd/xpcproxy and the signed ARM64e subtype only for xpcproxy;
+the reference app and ordinary arm64 executables retain their independent policies. Synthetic
+digests are still derived once, never copied from a local binary or log. The updated binary
+metadata reaches authored/baseline Finder source snapshots and survives packed-registry recovery.
+
+Focused verification covers Boolean-object/null wire round-trips and input detachment, malformed
+types, immutable canonical signatures, installed checkpoint encodings, and native fork/exec/exit
+publication with omitted/explicit/Boolean entitlements under before-write and after-write retry.
+The expanded run passed 468 tests with only three manifest-summary-length failures; shortening
+that summary then passed all 23 behavior tests. Subsequent reference/behavior verification
+passed 297 tests, including two exact-old-codec-lineage cases. Routine slow exclusion remains;
+no full repository test-suite claim is made.
+
+Offline review now explicitly accepts only the known pre-Boolean codec hash as a historical
+lineage. New setup/capture still requires the current codec, and arbitrary codec drift rejects.
+This prevents a compatible decoder update from invalidating the completed private capture;
+future review should use a freshly prepared code-only reviewer rather than editing a used kit.
+
+The first launcher remains an aggregate start in the production action owner. Metadata
+qualification does not satisfy its independent start/exec census or authorize manufactured
+native rows. The remaining implementation must represent the boot-parent fork, root launcher
+exec, exact GUI-account credential/session ownership change and app exec as separate canonical
+phases with authenticated publication and recovery. Existing State cohorts admit one exec per
+process and keep credential changes separate; preserve those guarantees while adding the
+needed ordered action graph, rather than hiding the initial activation from complete mode.
+
+The runtime artifact/head metadata suite also passed all 28 cases, including an explicit
+Boolean-entitlement restore through `LocalArtifactVersionRegistryParticipant`. Whole Ruff,
+format, whitespace and behavior-surface checks pass. Revision-355 digest:
+`c5f0374ab5598c9b56cb93a36c6f721eae9bd61869a0987b26600a1a9c4b70f0`.

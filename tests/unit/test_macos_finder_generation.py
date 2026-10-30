@@ -100,6 +100,11 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
         process = engine.state_manager.get_process_identity(system.hostname, pid)
         assert process.image == _APP and process.execution_ordinal == 1
         assert process.initial_image == "/usr/libexec/xpcproxy"
+        launcher_binary = engine.dispatcher.resolve_process_binary_identity(
+            system.hostname, user.username, "/usr/libexec/xpcproxy", "macos"
+        )
+        assert engine.macos_execution_metadata.image_cpu_subtype(launcher_binary) == -2147483646
+        assert type(launcher_binary.code_signature.entitlements) is tuple
         assert process.parent_pid == process.parentage.original_pid == 1
         assert process.job_control.pgid == pid and process.job_control.session.sid == 1
         assert process.arguments == (_APP,) and process.environment
@@ -131,6 +136,7 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
         exec_record, exit_record = records
         assert exec_record.process.executable.path == "/usr/libexec/xpcproxy"
         assert exec_record.process.signing_id == "com.apple.xpc.proxy"
+        assert exec_record.process.codesigning_flags == 0x26015B11
         assert exec_record.event.exec.target.executable.path == _APP
         assert exec_record.process.responsible_audit_token.euid == 0
         assert exec_record.process.audit_token.euid == process.credentials.effective_uid

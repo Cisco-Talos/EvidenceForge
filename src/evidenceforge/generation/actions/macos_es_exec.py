@@ -281,9 +281,9 @@ def _exec_record(
     if binary is None:
         raise StateError("Native exec lost its exact executable")
     if version == 11 and (
-        binary.code_signature is None or binary.code_signature.entitlements != "absent"
+        binary.code_signature is None or binary.code_signature.entitlements is None
     ):
-        raise StateError("Native v11 exec requires explicit no-entitlements executable facts")
+        raise StateError("Native v11 exec requires explicit absence or Boolean entitlement facts")
     context = ProcessContext(
         identity.pid,
         identity.parent_pid,
@@ -316,7 +316,16 @@ def _exec_record(
         "last_fd": descriptors.last_fd,
         **image_fields,
     }
-    native_exec = ESExecV11(entitlements=None, **payload) if version == 11 else ESExec(**payload)
+    native_exec = (
+        ESExecV11(
+            entitlements=dict(binary.code_signature.entitlements)
+            if type(binary.code_signature.entitlements) is tuple
+            else None,
+            **payload,
+        )
+        if version == 11
+        else ESExec(**payload)
+    )
     record = EndpointSecurityRecord(
         schema_version=1,
         version=version,
