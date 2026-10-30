@@ -148,7 +148,13 @@ def _observation(
     )
     if terminal is None or client is None:
         raise StateError("Native ES publication requires known terminal and client observations")
-    return MacosProcessCollectionObservation(process, event.timestamp, client, terminal)
+    return MacosProcessCollectionObservation(
+        process,
+        event.timestamp,
+        client,
+        terminal,
+        source.profile.boot_parent_token if process.pid == 1 and process.parent_pid == 0 else None,
+    )
 
 
 @contextmanager
@@ -277,6 +283,16 @@ def prepared_macos_es_process_publication(
         subject = event.identity_plan.subject
         if subject.executable_version is None:
             return "executable_version_unknown"
+        if event.event_type == "process_fork":
+            actor = event.identity_plan.actor
+            if (
+                actor.pid == 1
+                and actor.parent_pid == 0
+                and actor.parentage is not None
+                and actor.parentage.current is None
+                and source.profile.boot_parent_token is None
+            ):
+                return "boot_parent_token_unknown"
         if event.event_type == "process_exec":
             execution = next(
                 item

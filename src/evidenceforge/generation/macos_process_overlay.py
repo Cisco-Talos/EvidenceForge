@@ -73,6 +73,8 @@ class MacosProcessRelationshipOverlay:
             drop = patch.privilege_drop or patch.service_drop
             if drop is not None:
                 identity = replace(identity, credentials=drop.after, principal=drop.after_principal)
+                if patch.service_drop is not None and patch.service_drop.gui_session is not None:
+                    identity = replace(identity, logon_id=patch.service_drop.after_logon_id)
         return identity
 
     def observe(self, identity: ProcessIdentity, at: datetime) -> ProcessRelationshipObservation:

@@ -2722,6 +2722,9 @@ applications:
       macos:
         image_path: /sbin/launchd
         executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.xpc.launchd
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build

@@ -42,7 +42,9 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
     overlay.parent.mkdir(parents=True)
     overlay.write_text(yaml.safe_dump(selected, sort_keys=False))
     raw = _scenario().model_dump(mode="json", exclude_none=True)
-    raw["macos_process_coverage"] = "partial"  # xpcproxy's first activation stays unresolved.
+    raw["macos_process_coverage"] = (
+        "partial"  # Boot-parent token and GUI login startup remain gated.
+    )
     raw["environment"]["systems"] = raw["environment"]["systems"][:1]
     raw["environment"]["users"] = raw["environment"]["users"][:1]
     raw["environment"]["network"]["segments"][0]["systems"] = ["MAC-01"]
@@ -121,4 +123,31 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
         assert (
             app_execs[0].process.audit_token.pid == app_execs[0].event.exec.target.audit_token.pid
         )
+        launcher_execs = [
+            record
+            for path in paths
+            for line in path.read_text().splitlines()
+            if (record := decode_endpoint_security_record(line)).event_type == 9
+            and record.event.exec.target.audit_token.pid == authored["attributes"]["pid"]
+            and record.event.exec.target.executable.path == "/usr/libexec/xpcproxy"
+        ]
+        assert (
+            len(launcher_execs) == 1
+            and launcher_execs[0].process.executable.path == "/sbin/launchd"
+        )
+        assert launcher_execs[0].event.exec.target.audit_token.euid == 0
     assert snapshots[0] == snapshots[1]
+
+
+@pytest.mark.slow
+def test_finder_checkpoint_resume_retains_both_executions_and_gui_credentials(
+    tmp_path: Path,
+    scenarios_dir: Path,
+) -> None:
+    from tests.integration.test_checkpoint_smoke import (
+        test_short_generation_checkpoint_suspension_and_resume as checkpoint_gate,
+    )
+
+    checkpoint_gate(
+        tmp_path, scenarios_dir, "default", None, True, None, False, False, False, finder=True
+    )

@@ -212,7 +212,15 @@ def prepared_macos_es_fork_publication(
             missing = True
         else:
             observations.append(
-                MacosProcessCollectionObservation(process, event.timestamp, known, terminal)
+                MacosProcessCollectionObservation(
+                    process,
+                    event.timestamp,
+                    known,
+                    terminal,
+                    profile.boot_parent_token
+                    if process.pid == 1 and process.parent_pid == 0
+                    else None,
+                )
             )
     if missing:
         if emitter is not None and decision.status in {"visible", "delayed"}:

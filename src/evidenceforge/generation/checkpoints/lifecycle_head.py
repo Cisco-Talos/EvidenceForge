@@ -28,6 +28,7 @@ from evidenceforge.events.lifecycle import (
     LifecycleSingletonLease,
     LifecycleTransition,
     LogicalServiceIdentity,
+    ProcessGUIAttribution,
     ProcessLifecycleIdentity,
     ProcessLifecycleSnapshot,
     ProcessRuntimeChange,
@@ -72,7 +73,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "8"
+_SCHEMA_VERSION = "9"
 
 
 @dataclass(frozen=True)
@@ -515,7 +516,7 @@ def _decode_token(value: object) -> ProcessTokenIdentity:
 
 
 def _runtime_view(value: ProcessRuntimeView) -> list[object]:
-    return [
+    result: list[object] = [
         value.revision,
         value.execution_ordinal,
         _time(value.changed_at),
@@ -523,11 +524,28 @@ def _runtime_view(value: ProcessRuntimeView) -> list[object]:
         value.role,
         _token(value.token),
     ]
+    if value.gui_attribution is not None:
+        proof = value.gui_attribution
+        result.append(
+            [_token(proof.before), _token(proof.after), _time(proof.changed_at), proof.revision]
+        )
+    return result
 
 
 def _decode_runtime_view(value: object) -> ProcessRuntimeView:
-    revision, ordinal, changed_at, image, role, token = _record(value, 6, "process runtime view")
+    if type(value) is not list or len(value) not in {6, 7}:
+        raise CheckpointCorruptionError("lifecycle checkpoint process runtime view is invalid")
+    revision, ordinal, changed_at, image, role, token = value[:6]
     try:
+        attribution = None
+        if len(value) == 7:
+            before, after, at, binding_revision = _record(value[6], 4, "GUI attribution")
+            attribution = ProcessGUIAttribution(
+                _decode_token(before),
+                _decode_token(after),
+                _decode_time(at),
+                binding_revision,
+            )
         return ProcessRuntimeView(
             revision=revision,
             execution_ordinal=ordinal,
@@ -535,6 +553,7 @@ def _decode_runtime_view(value: object) -> ProcessRuntimeView:
             image=image,
             role=role,
             token=_decode_token(token),
+            gui_attribution=attribution,
         )
     except (TypeError, ValueError) as error:
         raise CheckpointCorruptionError(
@@ -553,6 +572,17 @@ def _validate_runtime_view(snapshot: ProcessLifecycleSnapshot) -> None:
         if changes:
             raise CheckpointCorruptionError("lifecycle checkpoint lost its process runtime view")
         return
+    attribution = view.gui_attribution
+    if attribution is not None and (
+        attribution.before != initial.token
+        or attribution.revision != 2
+        or view.execution_ordinal < 1
+        or attribution.changed_at < initial.changed_at
+        or snapshot.identity.image != "/sbin/launchd"
+        or snapshot.identity.pid <= 1
+        or not snapshot.identity.parent_object_id
+    ):
+        raise CheckpointCorruptionError("lifecycle checkpoint GUI attribution is invalid")
     if (
         not 1 <= view.revision < snapshot.transition_count
         or view.execution_ordinal > view.revision
@@ -560,7 +590,8 @@ def _validate_runtime_view(snapshot: ProcessLifecycleSnapshot) -> None:
         or snapshot.latest_dependent_at is None
         or view.changed_at > snapshot.latest_dependent_at
         or (snapshot.closed_at is not None and view.changed_at > snapshot.closed_at)
-        or (view.token.logon_id, view.token.session_id, view.token.logon_type)
+        or attribution is None
+        and (view.token.logon_id, view.token.session_id, view.token.logon_type)
         != (initial.token.logon_id, initial.token.session_id, initial.token.logon_type)
     ):
         raise CheckpointCorruptionError("lifecycle checkpoint process runtime frontier is invalid")
@@ -1303,7 +1334,7 @@ def _decode_snapshot_rows(
         for row in process_rows:  # type: ignore[union-attr]
             if type(row) is not list or len(row) not in {4, 5, 6}:
                 raise CheckpointCorruptionError("lifecycle checkpoint process record is invalid")
-            if document.get("schema_version") != "8" and len(row) == 6:
+            if document.get("schema_version") not in {"8", "9"} and len(row) == 6:
                 raise CheckpointCorruptionError(
                     "Legacy lifecycle head cannot contain parent adoption fields"
                 )
@@ -1319,6 +1350,14 @@ def _decode_snapshot_rows(
                 parentage_change=None if len(row) < 6 else _decode_parentage_change(row[5]),
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            if (
+                document.get("schema_version") != "9"
+                and snapshot.runtime_view is not None
+                and snapshot.runtime_view.gui_attribution is not None
+            ):
+                raise CheckpointCorruptionError(
+                    "Legacy lifecycle head cannot contain GUI attribution"
+                )
             _validate_runtime_view(snapshot)
             _validate_parentage_frontier(snapshot)
             processes.append(snapshot)
@@ -1791,6 +1830,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
         "5",
         "6",
         "7",
+        "8",
         _SCHEMA_VERSION,
     }:
         raise CheckpointCorruptionError("lifecycle checkpoint head schema is invalid")
@@ -2151,7 +2191,7 @@ class LifecycleRegistryParticipant:
     checkpoint_owner = "lifecycle-registry"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = ("5", "6", "7")
+    checkpoint_compatible_head_versions = ("5", "6", "7", "8")
     checkpoint_state_fields = (
         OwnerStateField("retained_entities", "bounded-live-head"),
         OwnerStateField("immutable_history", "immutable-incremental-segments"),

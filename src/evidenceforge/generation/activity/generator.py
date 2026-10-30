@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_execution_service import (
         ProcessExecutionService,
         ProcessTerminationService,
+        RetainedFinderLaunch,
     )
     from evidenceforge.generation.actions.process_support.actors import ProcessActorResolver
     from evidenceforge.generation.actions.process_support.capabilities import (
@@ -3713,6 +3714,7 @@ class ActivityGenerator:
                 )
         self.dispatcher = dispatcher
         self._runtime_content_manager = runtime_content_manager
+        self._macos_finder_startups: dict[str, RetainedFinderLaunch] = {}
         if dispatcher is not None:
             bind_execution_effect_audit = getattr(
                 dispatcher,
@@ -37114,6 +37116,7 @@ class ActivityGenerator:
             dispatcher=self.dispatcher,
             lifecycle_authority=self._lifecycle_authority,
             runtime_content_manager=self._runtime_content_manager,
+            finder_startups=self._macos_finder_startups,
         )
 
     def _process_termination_service(self) -> "ProcessTerminationService":

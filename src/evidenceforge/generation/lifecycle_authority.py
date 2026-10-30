@@ -37,6 +37,7 @@ from evidenceforge.events.lifecycle import (
     LifecycleHold,
     LifecycleSingletonLease,
     LifecycleTransition,
+    ProcessGUIAttribution,
     ProcessLifecycleIdentity,
     ProcessRuntimeChange,
     ProcessRuntimeView,
@@ -3994,6 +3995,7 @@ class GeneratorLifecycleAuthority:
                 image=execution.after.image,
                 role=self._shadow._process_role(execution.after.image),
                 token=before.token,
+                gui_attribution=before.gui_attribution,
             )
             category = "process-execution"
             append(
@@ -4043,9 +4045,34 @@ class GeneratorLifecycleAuthority:
                         before.token,
                         principal=drop.after_principal,
                         integrity_level=drop.after_integrity,
+                        **(
+                            {
+                                "logon_id": drop.after_logon_id,
+                                "session_id": drop.gui_session.session_id,
+                                "logon_type": 2,
+                            }
+                            if patch.service_drop is not None and drop.gui_session is not None
+                            else {}
+                        ),
                     ),
                 )
-                process_change = ProcessRuntimeChange(before, after, "credentials")
+                if patch.service_drop is not None and drop.gui_session is not None:
+                    after = replace(
+                        after,
+                        gui_attribution=ProcessGUIAttribution(
+                            before.token,
+                            after.token,
+                            after.changed_at,
+                            after.revision,
+                        ),
+                    )
+                process_change = ProcessRuntimeChange(
+                    before,
+                    after,
+                    "gui_credentials"
+                    if patch.service_drop is not None and drop.gui_session is not None
+                    else "credentials",
+                )
             if (
                 patch.job_control_actor is not None
                 and patch.job_control_actor.object_id != identity.object_id

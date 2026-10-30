@@ -9,6 +9,7 @@ from datetime import timedelta
 import pytest
 
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.formats.macos_endpoint_security import ESAuditToken
@@ -17,6 +18,39 @@ from evidenceforge.generation.checkpoints.state_manager_head import _capture_hea
 from evidenceforge.generation.state_manager import StateManager
 from tests.unit.test_posix_job_control import _START, _change, _close
 from tests.unit.test_process_responsibility import _exec, _launch, _reference
+
+
+@pytest.mark.parametrize("policy", ["all_zero", "default_unattributed_kernel", None])
+def test_known_no_parent_boot_observation_never_substitutes_for_unknown_policy(
+    policy: str | None,
+) -> None:
+    from tests.unit.test_macos_gui_exec_adoption import _HOST, _setup
+
+    state, other, _ = _setup()
+    boot = state.get_process_identity(_HOST.hostname, 1)
+    captured = state.observe_process_relationships(boot, observed_at=boot.started_at)
+    if policy is None:
+        with pytest.raises(ValueError, match="qualified no-parent audit-token policy"):
+            ESProcessRelationshipFields.from_observation(captured, version=11)
+        return
+    collection = MacosProcessCollectionObservation(boot, boot.started_at, False, "absent", policy)
+    fields = ESProcessRelationshipFields.from_observation(
+        captured,
+        version=11,
+        boot_parent_token=collection.boot_parent_token,
+    )
+    assert fields.ppid == fields.original_ppid == fields.parent_audit_token.pid == 0
+    assert fields.parent_audit_token.pidversion == 0
+    assert fields.parent_audit_token.auid == (0 if policy == "all_zero" else 2**32 - 1)
+    assert fields.group_id == fields.session_id == 1
+    with pytest.raises(ValueError, match="boot launchd"):
+        MacosProcessCollectionObservation(
+            other,
+            other.started_at,
+            False,
+            "absent",
+            policy,
+        )
 
 
 def _family() -> tuple[StateManager, ProcessIdentity, ProcessIdentity, ProcessIdentity]:

@@ -2,15 +2,17 @@
 
 ## Current generation admission (2026-10-27)
 
-October 28, revision 349: explicit `process.launch_method: finder` and a narrowly selected
-baseline image policy now use one staged xpcproxy-to-app exec transaction. The invented
-EForgeReference workload produces native app exec and explicitly known exit records; the
-actual baseline activity owner and authored/public CLI paths are exercised. The launcher's
-own initial activation remains an aggregate coverage requirement; this is not complete
-launcher-chain or all-process coverage. October 30, revision 355 adds the verified flat Boolean
-entitlement export, launchd/xpcproxy security flags and xpcproxy ARM64e slice. The full canonical
-fork/exec/credential chain is still needed before complete Finder coverage passes. Generic apps and
-Dock/Spotlight are not automatically qualified. See the
+October 30, revision 356: explicit `process.launch_method: finder` and the narrowly selected
+baseline reference app share a canonical launchd fork, root xpcproxy exec, GUI credential
+binding and app exec in one process lifetime. Qualified launcher and app exec records can be
+exported now; a known app completion also produces native exit. The aggregate Finder birth
+has been removed. Phase recovery and independent census checks are exercised.
+
+One native wire fact is still unqualified: the no-parent audit token in the boot launchd fork
+snapshot. Explicit partial output records that fork gap while retaining both execs; complete
+mode rejects it. A prepared offline check of the existing bounded capture can close this gate
+without another collection. Generic apps, in-window GUI/terminal startup and Dock/Spotlight
+remain separate obligations. See the
 [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact

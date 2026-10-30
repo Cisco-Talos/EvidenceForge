@@ -241,3 +241,35 @@ values were accepted from that static inspection. The offline command itself per
 native execution and returns no arbitrary capture strings, numeric identities or values.
 It requires permission before reading the completed capture. No repeat live experiment is
 needed to perform this metadata review.
+
+## Revision 356: canonical startup and remaining boot-parent export gate
+
+The approved v6 report admits the Boolean entitlement wire form, named launchd/xpcproxy
+validation flags and xpcproxy ARM64e slice. The shared Finder producer now owns an actual
+launchd fork and root xpcproxy exec, a separate credential/session-attribution change to the
+GUI account, and the later app exec. The first activation has only an explicitly selected
+synthetic XPC_FLAGS input. Its service-label argument uses declared app bundle identity and
+deterministic synthetic decimal suffixes; the same label reaches app XPC_SERVICE_NAME.
+The private initial flag value remains undisclosed. No current-directory, descriptor backing
+path, environment value or timing distribution is claimed to have been recovered.
+
+Three exact publication phases retain their pending capability/receipt on the activity owner.
+Recovery finishes the current phase before another State mutation. A failed source release,
+pre-commit interruption or lost commit return cannot refork or repeat an exec. An unfinished
+startup prevents checkpoint sealing; completed State retains the same lifetime through both
+execs and its later known exit. Spawn file actions declare three opaque vnode streams in the
+child without asserting a launchd parent descriptor inventory.
+
+Native fork preparation exposed one previously unclassified wire fact: the no-parent audit
+token in the boot launchd snapshot. Canonical State already knows explicit no-parent state;
+it does not manufacture a kernel process or its credentials. The source profile must explicitly
+select the observed token representation. It currently selects none, so native startup records an explicit fork coverage gap rather than padding that field.
+Explicit partial collection can still publish both qualified execs; complete mode rejects
+the missing fork. The v7 read-only reviewer adds only fixed token,
+PPID, group/session and default-audit-origin labels from the same retained fork. It requires
+separate permission under the standing local-log rule and starts no collection or processes.
+
+Invented-policy tests exercise native fork -> exec -> exec -> known-exit output, authored and
+baseline routing, a complete in-window census with a genuinely pre-existing GUI login, and
+every startup phase's exact recovery. These tests establish implementation behavior; they
+do not close the remaining native representation gate.

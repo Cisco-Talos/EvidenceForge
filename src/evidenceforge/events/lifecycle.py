@@ -154,6 +154,35 @@ class ProcessLifecycleIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessGUIAttribution:
+    """Retained account-binding frontier when transition details are compacted."""
+
+    before: ProcessTokenIdentity
+    after: ProcessTokenIdentity
+    changed_at: datetime
+    revision: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.before) is not ProcessTokenIdentity
+            or type(self.after) is not ProcessTokenIdentity
+            or self.before.principal != "root"
+            or self.before.integrity_level != "System"
+            or self.after.principal == "root"
+            or self.after.integrity_level != "Medium"
+            or not self.after.logon_id
+            or self.after.logon_type != 2
+            or self.after.session_id is None
+            or type(self.changed_at) is not datetime
+            or self.changed_at.utcoffset() is None
+            or type(self.revision) is not int
+            or self.revision < 1
+        ):
+            raise ValueError("GUI runtime attribution requires an exact root-to-local-user binding")
+        object.__setattr__(self, "changed_at", ensure_utc(self.changed_at))
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessRuntimeView:
     """Current execution facts, separate from immutable lifetime ownership."""
 
@@ -163,6 +192,7 @@ class ProcessRuntimeView:
     image: str
     role: str
     token: ProcessTokenIdentity
+    gui_attribution: ProcessGUIAttribution | None = None
 
     def __post_init__(self) -> None:
         """Require an exact bounded projection before lifecycle admission."""
@@ -176,6 +206,13 @@ class ProcessRuntimeView:
             raise ValueError("Process runtime view requires an image and role")
         if type(self.token) is not ProcessTokenIdentity:
             raise TypeError("Process runtime view requires an exact token")
+        if self.gui_attribution is not None and (
+            type(self.gui_attribution) is not ProcessGUIAttribution
+            or self.gui_attribution.after != self.token
+            or self.gui_attribution.changed_at > self.changed_at
+            or self.gui_attribution.revision > self.revision
+        ):
+            raise ValueError("GUI runtime view changed its retained attribution frontier")
         object.__setattr__(self, "changed_at", ensure_utc(self.changed_at))
 
     @classmethod
@@ -192,7 +229,7 @@ class ProcessRuntimeChange:
 
     before: ProcessRuntimeView
     after: ProcessRuntimeView
-    kind: Literal["exec", "credentials"]
+    kind: Literal["exec", "credentials", "gui_credentials"]
 
     def __post_init__(self) -> None:
         """Reject ambiguous image, token and revision transitions."""
@@ -209,7 +246,27 @@ class ProcessRuntimeChange:
                 "Process runtime change must advance its revision and preserve time order"
             )
         previous, current = self.before.token, self.after.token
-        if (previous.logon_id, previous.session_id, previous.logon_type) != (
+        if self.kind == "gui_credentials":
+            if (
+                self.before.gui_attribution is not None
+                or self.after.gui_attribution
+                != ProcessGUIAttribution(
+                    previous,
+                    current,
+                    self.after.changed_at,
+                    self.after.revision,
+                )
+                or self.before.execution_ordinal != 1
+                or self.before.image != "/usr/libexec/xpcproxy"
+            ):
+                raise ValueError("GUI credential change lost its exact launcher attribution")
+        elif self.before.gui_attribution != self.after.gui_attribution:
+            raise ValueError("Process runtime change cannot rewrite GUI attribution")
+        if self.kind != "gui_credentials" and (
+            previous.logon_id,
+            previous.session_id,
+            previous.logon_type,
+        ) != (
             current.logon_id,
             current.session_id,
             current.logon_type,
@@ -218,7 +275,7 @@ class ProcessRuntimeChange:
         if self.kind == "exec":
             if self.after.execution_ordinal != self.before.execution_ordinal + 1:
                 raise ValueError("Process exec must advance exactly one execution ordinal")
-        elif self.kind == "credentials":
+        elif self.kind in {"credentials", "gui_credentials"}:
             if (self.after.execution_ordinal, self.after.image, self.after.role) != (
                 self.before.execution_ordinal,
                 self.before.image,
@@ -227,6 +284,16 @@ class ProcessRuntimeChange:
                 raise ValueError("Credential changes must preserve execution image and role")
             if current == previous:
                 raise ValueError("Credential changes require a different token")
+            if self.kind == "gui_credentials" and (
+                previous.principal != "root"
+                or current.principal == "root"
+                or not current.logon_id
+                or current.logon_type != 2
+                or current.integrity_level != "Medium"
+            ):
+                raise ValueError(
+                    "GUI credential adoption requires a root child and local user token"
+                )
         else:
             raise ValueError("Unsupported process runtime change kind")
 

@@ -542,3 +542,23 @@ def test_launcher_supplement_uses_only_retained_linked_rows() -> None:
     assert _CANARY not in report.model_dump_json()
     missing = kit.inspect_launcher_reference(_raws(rows)[2:], _IMAGE)
     assert missing.retained_chain == "FAIL" and missing.entitlements.static_values == "INCONCLUSIVE"
+
+
+@pytest.mark.parametrize("kind", ["ALL_ZERO", "DEFAULT_UNATTRIBUTED_KERNEL", "OTHER"])
+def test_boot_parent_supplement_releases_only_fixed_classes(kind: str) -> None:
+    rows = _chain()
+    parent = rows[0]["process"]
+    parent["ppid"] = parent["original_ppid"] = 0
+    parent["group_id"] = parent["session_id"] = 1
+    parent["audit_token"]["auid"], parent["audit_token"]["asid"] = 2**32 - 1, 0
+    parent["parent_audit_token"] = {key: 0 for key in parent["audit_token"]}
+    if kind == "DEFAULT_UNATTRIBUTED_KERNEL":
+        parent["parent_audit_token"]["auid"] = 2**32 - 1
+    elif kind == "OTHER":
+        parent["parent_audit_token"]["pidversion"] = 987654321
+    report = kit.inspect_launcher_reference(_raws(rows), _IMAGE, bundle_identifier=_CANARY)
+    assert report.boot_parent_parent_token == kind
+    assert report.boot_parent_ppids_zero == "PASS"
+    assert report.boot_parent_group_and_session_one == "PASS"
+    assert report.boot_parent_default_audit_origin == "PASS"
+    assert _CANARY not in report.model_dump_json() and "987654321" not in report.model_dump_json()

@@ -21,6 +21,13 @@ finder_launch_relationships: launchd_self
 finder_launch_execution: xpcproxy_app_exec
 finder_launch_images:
   - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+# Explicit invented bundle metadata, never inferred from a signing identifier.
+finder_applications:
+  - image: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+    bundle_identifier: org.evidenceforge.Reference
+# Selected synthetic launcher input. The private reference classifies its native
+# value only as OTHER; this literal is not claimed to have been measured.
+finder_launcher_xpc_flags: "0x2"
 # Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
 ssh_command_descriptors: standard_pipes
 # Explicit nominal completed results for these exact invocations only. This is a

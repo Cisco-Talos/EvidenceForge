@@ -730,3 +730,93 @@ The runtime artifact/head metadata suite also passed all 28 cases, including an 
 Boolean-entitlement restore through `LocalArtifactVersionRegistryParticipant`. Whole Ruff,
 format, whitespace and behavior-surface checks pass. Revision-355 digest:
 `c5f0374ab5598c9b56cb93a36c6f721eae9bd61869a0987b26600a1a9c4b70f0`.
+
+## Revision 356: retained Finder startup implementation
+
+The shared authored/baseline process owner replaces the user-credential aggregate birth with
+an actual boot-parent fork, root xpcproxy exec, separate GUI account/session attribution change,
+and app exec in the same lifetime. The root-to-user transition preserves execution ID, audit
+pair and PID version. Only the app exec adopts the GUI audit origin, own process group and
+self responsibility. Immutable historical snapshots and restored checkpoints retain both
+credential states; legacy service-drop checkpoint widths still decode without GUI attribution.
+
+A retained activity-owned startup coordinator publishes three exact cohorts in order. Every
+cohort retains its pending capability/receipt, finishes source recovery before advancing, and
+survives a rebound ephemeral process service. Pending startup rejects checkpoint sealing.
+Nine extended interruption cases pass: before-commit, lost-return and source-release failure
+at each phase. Each finishes with exactly one fork and two execs in the independent census.
+Installed-only app admission, explicit bundle identity, empty effects, qualified image metadata,
+exact live GUI authority, declared timing and readiness are checked before the first mutation.
+Runtime app retention and unrelated effect graphs remain unsupported rather than bypassed.
+
+The data policy owns a declared reference bundle ID independently of code signing. A scoped
+deterministic decimal-pair service label is computed once and shared by xpcproxy argv and app
+XPC_SERVICE_NAME. Initial XPC_FLAGS=0x2 is an explicit synthetic workload input, not the private
+reference literal (which remains OTHER). App XPC_FLAGS=1 is the classified relationship.
+Three opaque vnode standard descriptors come from explicit child spawn file actions; no
+launchd descriptor table or backing path is inferred. The selected timing gap is synthetic,
+not measured startup calibration. Static fixed-output inspection of /sbin/launchd confirmed
+its public com.apple.xpc.launchd signing identifier and absent team; no logs were opened.
+The catalog now supplies that static identity, with synthetic code digests as usual.
+
+Native fork preparation exposed one unclassified field: launchd's parent_audit_token when
+its canonical parentage is explicitly absent/PID zero. Apple public ES documentation names
+the field but does not establish its no-parent representation. The source profile now has an
+optional explicit wire policy, with no default. Unknown policy records the fork gap as
+boot_parent_token_unknown; explicit partial output can still publish both qualified execs.
+The independent complete-mode census continues to reject that missing fork. No kernel process,
+parent credentials or zero token is silently invented.
+
+Version 7 of the offline reviewer adds only fixed boot-parent token, PPID, group/session and
+unattributed-origin classes to the same bounded existing records. Its 275 reference-kit tests
+passed before three additional boot-label cases were added; the subsequent focused regression
+passed 534 tests including those cases. The prepared code-only reviewer is at
+/private/tmp/eforge-gui-launch-kit-b9gy67m0. Permission to run it against the existing completed
+/private/tmp/eforge-gui-launch-kit-jsdpx_t1 was requested asynchronously. Do not inspect that
+capture until the answer arrives; no new collection is required.
+
+Invented-policy authored and baseline tests each produce fork -> exec -> exec -> known exit,
+and a complete census with one fork, two execs and no aggregate starts when the GUI login
+really predates the collection window. Filtered execution follows the same canonical chain.
+These tests verify the implementation without claiming the pending real no-parent wire fact.
+The 534-test regression covers credential/GUI changes, process snapshots, census, exact cohorts,
+source profiles, mixed projections, private-kit fixed output, lifecycle runtime and owner bindings.
+The wider initial run stopped on obsolete expectations for the retired aggregate Finder fallback
+and zero audit-session origin, plus a test-fixture error; those were corrected. No full repository
+suite or completed public native acceptance claim is made.
+
+### Public recovery acceptance and two owning-layer fixes
+
+The public CLI's authored Finder generation and format-filter equivalence passed. A new
+three-hour checkpoint/suspend/verify/resume/control comparison then found two actual defects.
+First, a later independent baseline member could advance the boot-group reservation timestamp
+and falsely reject the earlier app's setpgid at exec. The qualified GUI exec now uses the same
+independent-member boundary rule as birth/exit, while retaining per-process time checks and
+rejecting early retirement of the final member. A focused regression covers both the allowed
+lookahead and rejected early retirement; the ordinary POSIX transition suite remains strict.
+
+Second, lifecycle checkpoint hydration still required immutable login attribution in every
+current runtime view. The new reviewed credential transition requires an explicit retained
+GUI-attribution frontier, separate from immutable process lifetime membership. It contains the
+before/after tokens, binding time and revision, survives subsequent app exec/history compaction,
+and cannot be rewritten by an ordinary runtime change. Lifecycle head schema 9 serializes this
+bounded frontier; genuine schemas 5-8 remain readable and rewrite as schema 9. Legacy heads
+cannot contain new GUI attribution. Corrupted/missing/foreign/time/revision and downgraded proof
+cases reject without changing the restore target. No broad authentication-invariant removal
+or emitter correction was used.
+
+After these fixes, the public checkpoint test passed: it retains a live ordinal-2 app with its
+GUI credential record, verifies the checkpoint read-only, resumes and starts another Finder app,
+and compares every deterministic bundle byte with uninterrupted generation. Each authored PID
+has exactly one root xpcproxy exec and one app exec. It remains an explicitly partial workload
+because the boot-parent token and in-window GUI/terminal startup gates are still open.
+No private capture, Terminal or process-list inspection occurred during this implementation.
+
+Final focused routine verification passes 708 Mac execution/source/reference/manifest cases
+(with five slow exclusions) plus 189 lifecycle/POSIX/checkpoint compatibility cases (also five
+slow exclusions; overlapping cases are not an independent combined count). Whole Ruff, format
+and whitespace checks pass. Revision-356 generation surface digest:
+`65c4b5839cf08e8fdee59c7eb7e7ca6fc2f155a03d4f527978172c1d692c228a`.
+The final public CLI/filter/checkpoint and per-phase fault tier passed all 11 cases against
+that exact surface in 64.45 seconds. The v7 private review remains unrun pending the requested
+permission. No native logs are included in this commit.

@@ -563,7 +563,7 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
         credentials=(
             PosixProcessCredentials(501, 501, 20, 20)
             if missing == "source_audit"
-            else PosixProcessCredentials(501, 501, 20, 20, 2**32 - 1, 0)
+            else PosixProcessCredentials(501, 501, 20, 20, 0, 73)
             if missing == "source_responsibility"
             else None
         ),

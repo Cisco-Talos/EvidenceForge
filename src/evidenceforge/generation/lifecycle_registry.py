@@ -46,6 +46,7 @@ from evidenceforge.events.lifecycle import (
     LifecycleSingletonLeaseKey,
     LifecycleTransition,
     LogicalServiceIdentity,
+    ProcessGUIAttribution,
     ProcessLifecycleIdentity,
     ProcessLifecycleSnapshot,
     ProcessRuntimeChange,
@@ -9779,6 +9780,11 @@ class LifecycleRegistry:
     def _normalize_action_cohort_runtime_view(cls, value: object) -> ProcessRuntimeView:
         if type(value) is not ProcessRuntimeView:
             raise TypeError("Lifecycle process runtime view must be exact")
+        if (
+            value.gui_attribution is not None
+            and type(value.gui_attribution) is not ProcessGUIAttribution
+        ):
+            raise TypeError("Lifecycle GUI attribution must be exact")
         return ProcessRuntimeView(
             revision=cls._action_cohort_exact_int(value.revision, field_name="view revision"),
             execution_ordinal=cls._action_cohort_exact_int(
@@ -9792,6 +9798,20 @@ class LifecycleRegistry:
                 value.role, field_name="view role", allow_empty=False
             ),
             token=cls._normalize_action_cohort_process_token(value.token),
+            gui_attribution=(
+                ProcessGUIAttribution(
+                    cls._normalize_action_cohort_process_token(value.gui_attribution.before),
+                    cls._normalize_action_cohort_process_token(value.gui_attribution.after),
+                    cls._action_cohort_exact_datetime(
+                        value.gui_attribution.changed_at, field_name="GUI attribution time"
+                    ),
+                    cls._action_cohort_exact_int(
+                        value.gui_attribution.revision, field_name="GUI attribution revision"
+                    ),
+                )
+                if type(value.gui_attribution) is ProcessGUIAttribution
+                else None
+            ),
         )
 
     @classmethod

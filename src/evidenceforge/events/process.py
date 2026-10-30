@@ -192,10 +192,26 @@ def process_credential_identities(
     ):
         raise ValueError("Process credentials require exact before/after process identity roles")
     before, after = plan.actor, plan.subject
+    gui_service_drop = (
+        event.event_type == "process_service_drop"
+        and type(plan.session) is SessionIdentity
+        and plan.session.session_kind == "interactive"
+        and plan.session.hostname == before.hostname == after.hostname
+        and plan.session.principal == after.principal
+        and plan.session.logon_id == after.logon_id
+        and before.image == "/usr/libexec/xpcproxy"
+        and before.parent_pid == 1
+    )
     if (
         before.credentials is None
         or after.credentials is None
-        or replace(after, principal=before.principal, credentials=before.credentials) != before
+        or replace(
+            after,
+            principal=before.principal,
+            credentials=before.credentials,
+            logon_id=before.logon_id if gui_service_drop else after.logon_id,
+        )
+        != before
         or event.timestamp < before.execution_started_at
         or before.credentials == after.credentials
     ):
@@ -238,7 +254,7 @@ def process_credential_identities(
             or new.real_gid != new.effective_gid
             or not old.has_no_authenticated_audit_origin
             or (old.audit_uid, old.audit_session_id) != (new.audit_uid, new.audit_session_id)
-            or after.principal != "_sshd"
+            or (after.principal != "_sshd" and not gui_service_drop)
             or event.timestamp <= before.execution_started_at
         ):
             raise ValueError("Service privilege drop must preserve unauthenticated audit identity")

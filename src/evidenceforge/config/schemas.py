@@ -4161,6 +4161,7 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
     auth_result: Literal[0]
     clock_profile: Literal["macos27-workspace-entry-v1"]
     exec_entitlements: Literal["absent_only", "absent_or_boolean_object"]
+    boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
 
     @field_validator(
         "os_major",
@@ -4245,6 +4246,15 @@ class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosFinderApplicationPolicy(BaseModel, extra="forbid", frozen=True):
+    """Declared GUI bundle identity, independent of the executable's signing identity."""
+
+    image: str = Field(min_length=1, max_length=4096)
+    bundle_identifier: str = Field(
+        min_length=3, max_length=255, pattern=r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+    )
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4271,6 +4281,10 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     finder_launch_relationships: Literal["launchd_self"] | None = None
     finder_launch_execution: Literal["xpcproxy_app_exec"] | None = None
     finder_launch_images: tuple[str, ...] = Field(default=(), max_length=64)
+    finder_applications: tuple[MacosFinderApplicationPolicy, ...] = Field(default=(), max_length=64)
+    finder_launcher_xpc_flags: str | None = Field(
+        default=None, max_length=32, pattern=r"^(?:0x[0-9a-fA-F]+|[0-9]+)$"
+    )
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
@@ -4303,6 +4317,11 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         ]
         if len(selectors) != len(set(selectors)):
             raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
+        finder_images = [entry.image for entry in self.finder_applications]
+        if len(set(finder_images)) != len(finder_images) or any(
+            image not in self.finder_launch_images for image in finder_images
+        ):
+            raise ValueError("Finder bundle policies require distinct admitted app images")
         shell_invocations = [(rule.image, rule.arguments) for rule in self.nested_command_shells]
         if len(shell_invocations) != len(set(shell_invocations)):
             raise ValueError("Nested Mac command shell policies must have distinct invocations")

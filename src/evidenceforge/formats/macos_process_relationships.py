@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import UTC
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -45,6 +46,7 @@ class ESProcessRelationshipFields(BaseModel):
         *,
         version: int,
         gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
+        boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None,
     ) -> ESProcessRelationshipFields:
         """Map known audit and POSIX identities using the versioned token layout."""
         if type(version) is not int or version not in {6, 9, 10, 11}:
@@ -55,13 +57,58 @@ class ESProcessRelationshipFields(BaseModel):
         process = observation.parent.process
         parentage = process.parentage
         group = process.job_control
-        if parent is None or parentage is None or parentage.original is None or group is None:
+        no_parent_identity = (
+            version == 11
+            and parent is None
+            and parentage is not None
+            and parentage.original is None
+            and parentage.current is None
+            and process.pid == 1
+            and process.parent_pid == 0
+            and process.image == "/sbin/launchd"
+            and process.principal == "root"
+            and process.credentials is not None
+            and process.credentials.is_unattributed_root
+            and group is not None
+            and group.pgid == group.session.sid == 1
+        )
+        if no_parent_identity and boot_parent_token is None:
+            raise ValueError(
+                "ES boot launchd snapshot requires a qualified no-parent audit-token policy"
+            )
+        no_parent = no_parent_identity and boot_parent_token in {
+            "all_zero",
+            "default_unattributed_kernel",
+        }
+        if (
+            group is None
+            or parentage is None
+            or not no_parent
+            and (parent is None or parentage.original is None)
+        ):
             raise ValueError(
                 "ES process identity projection requires known original/current parent and group"
             )
-        tokens = tuple(
-            ESAuditToken.from_process_identity(identity)
-            for identity in (process, parent, observation.responsibility.responsible)
+        if boot_parent_token is not None and not no_parent:
+            raise ValueError("ES boot-parent policy cannot substitute for an ordinary parent")
+        parent_token = (
+            ESAuditToken(
+                auid=0 if boot_parent_token == "all_zero" else 2**32 - 1,
+                euid=0,
+                egid=0,
+                ruid=0,
+                rgid=0,
+                pid=0,
+                asid=0,
+                pidversion=0,
+            )
+            if no_parent
+            else ESAuditToken.from_process_identity(parent)
+        )
+        tokens = (
+            ESAuditToken.from_process_identity(process),
+            parent_token,
+            ESAuditToken.from_process_identity(observation.responsibility.responsible),
         )
         if gui_responsibility is not None:
             if type(gui_responsibility) is not MacosGUIExecResponsibilityObservation:
@@ -95,8 +142,8 @@ class ESProcessRelationshipFields(BaseModel):
             audit_token=rendered[0],
             parent_audit_token=rendered[1],
             responsible_audit_token=rendered[2],
-            ppid=parent.pid,
-            original_ppid=parentage.original.pid,
+            ppid=parentage.current_pid,
+            original_ppid=parentage.original_pid,
             group_id=group.pgid,
             session_id=group.session.sid,
             start_time=process.started_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

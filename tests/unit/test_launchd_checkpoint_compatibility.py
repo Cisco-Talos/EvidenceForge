@@ -117,7 +117,7 @@ class _LegacyLifecycleParticipant(LifecycleRegistryParticipant):
         )
 
 
-@pytest.mark.parametrize("version", ["5", "6", "7"])
+@pytest.mark.parametrize("version", ["5", "6", "7", "8"])
 def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(
     tmp_path: Path, version: str
 ) -> None:
@@ -138,7 +138,7 @@ def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(
     controller.restore_participants(recovery=recovery, participants=(participant,))
     assert _capture(restored) == _capture(registry)
     manifest = controller.commit(cursor=_cursor(12), participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "8"
+    assert manifest.participant_heads[0].schema_version == "9"
 
 
 def test_legacy_head_does_not_accept_new_service_fields() -> None:

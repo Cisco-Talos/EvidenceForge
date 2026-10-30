@@ -297,6 +297,10 @@ class MacosProcessServiceDrop:
     before_integrity: str
     after_integrity: str
     dropped_at: datetime
+    gui_session: SessionIdentity | None = None
+    before_logon_id: str | None = None
+    after_logon_id: str | None = None
+    gui_audit_origin: MacosAuditSession | None = None
 
     def __post_init__(self) -> None:
         """Require a permanent root-to-service transition with no authenticated audit origin."""
@@ -336,6 +340,25 @@ class MacosProcessServiceDrop:
             raise ValueError(
                 "Service privilege drop must adopt a nonroot service without authenticated origin"
             )
+        if self.gui_session is not None:
+            if (
+                type(self.gui_session) is not SessionIdentity
+                or self.gui_session.session_kind != "interactive"
+                or self.gui_session.principal != self.after_principal
+                or self.gui_session.logon_id != self.after_logon_id
+                or type(self.before_logon_id) is not str
+                or self.gui_session.started_at > self.dropped_at
+                or type(self.gui_audit_origin) is not MacosAuditSession
+                or self.gui_audit_origin.created_at > self.dropped_at
+                or self.before_principal != "root"
+                or self.after_integrity != "Medium"
+            ):
+                raise ValueError("GUI service drop requires its exact local session owner")
+        elif any(
+            value is not None
+            for value in (self.before_logon_id, self.after_logon_id, self.gui_audit_origin)
+        ):
+            raise ValueError("Process session attribution changes require a GUI session owner")
 
 
 def validate_process_arguments(

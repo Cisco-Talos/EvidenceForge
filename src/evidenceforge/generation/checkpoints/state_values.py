@@ -422,7 +422,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
             "dropped_at",
         ),
     ),
-    "macos-process-service-drop-v1": (
+    "macos-process-service-drop-v2": (
         MacosProcessServiceDrop,
         (
             "parent_object_id",
@@ -435,6 +435,10 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
             "before_integrity",
             "after_integrity",
             "dropped_at",
+            "gui_session",
+            "before_logon_id",
+            "after_logon_id",
+            "gui_audit_origin",
         ),
     ),
     "macos-process-audit-binding-v1": (
@@ -674,6 +678,9 @@ def decode_state_value(value: object) -> object:
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        if record_tag == "macos-process-service-drop-v1" and len(encoded_fields) == 10:
+            record_tag = "macos-process-service-drop-v2"
+            encoded_fields = [*encoded_fields, None, None, None, None]
         if record_tag == "macos-descriptor-binding-v1" and len(encoded_fields) == 4:
             record_tag = "macos-descriptor-binding-v2"
             encoded_fields = [*encoded_fields, None]

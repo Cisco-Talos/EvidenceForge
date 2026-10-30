@@ -633,7 +633,7 @@ def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "5", 1, 2, 3, 4, 5, 7, None])
+@pytest.mark.parametrize("value", [True, "7", 1, 2, 3, 4, 5, 6, 8, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -757,7 +757,7 @@ def test_version_six_reviews_retained_launcher_without_native_execution_or_write
     monkeypatch.setattr(kit.subprocess, "run", forbidden)
     monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
     report = kit.review_existing(root)
-    assert report.review_version == 6 and report.error == "NONE"
+    assert report.review_version == 7 and report.error == "NONE"
     assert report.launcher_reference.retained_chain == "PASS"
     assert report.launcher_reference.entitlements.static_values == "PASS"
     assert report.launcher_reference.arguments.service_matches_controlled_bundle == "PASS"
@@ -820,7 +820,7 @@ def test_chain_reviewer_uses_retained_app_lifetime_and_preserves_its_unknown_pre
     for name in ("_role", "_start", "_preflight", "_write", "_replace"):
         monkeypatch.setattr(kit, name, forbidden)
     report = kit.review_existing(root)
-    assert report.review_version == 6
+    assert report.review_version == 7
     assert report.finder_launch.before_image_role == "XPCPROXY"
     assert report.finder_preimage_birth == label
     assert report.launch_chain.launcher_retained == "NONE"

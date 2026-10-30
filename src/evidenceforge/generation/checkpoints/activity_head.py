@@ -110,6 +110,7 @@ _TRANSIENT_EMPTY_FIELDS = (
     "_failed_logon_attempt_pending",
     "_linux_sudo_tty_capacity_claims",
     "_pending_linux_sudo_logoffs",
+    "_macos_finder_startups",
     "_pending_ssh_manager_closures",
     "_postfix_queue_states",
     "_prepared_rdp_lifecycle_continuations",

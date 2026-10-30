@@ -863,7 +863,34 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             or service_drop.dropped_at > (process.last_activity_time or process.start_time)
             or (process.end_time is not None and service_drop.dropped_at >= process.end_time)
             or process.credentials is None
-            or process.credentials.origin != service_drop.after.origin
+            or (
+                process.credentials.origin != service_drop.after.origin
+                if service_drop.gui_session is None
+                else (
+                    process.logon_id != service_drop.after_logon_id
+                    or (
+                        process.credentials.real_uid,
+                        process.credentials.effective_uid,
+                        process.credentials.real_gid,
+                        process.credentials.effective_gid,
+                    )
+                    != (
+                        service_drop.after.real_uid,
+                        service_drop.after.effective_uid,
+                        service_drop.after.real_gid,
+                        service_drop.after.effective_gid,
+                    )
+                    or (process.credentials.audit_uid, process.credentials.audit_session_id)
+                    != (
+                        (service_drop.after.audit_uid, service_drop.after.audit_session_id)
+                        if process.execution_ordinal == service_drop.execution_ordinal
+                        else (
+                            service_drop.gui_audit_origin.audit_uid,
+                            service_drop.gui_audit_origin.audit_session_id,
+                        )
+                    )
+                )
+            )
             or process.username != service_drop.after_principal
             or process.integrity_level != service_drop.after_integrity
             or process.audit_binding is not None

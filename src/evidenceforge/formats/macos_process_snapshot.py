@@ -102,7 +102,10 @@ def es_process_from_observations(
     ):
         raise ValueError("ES process snapshot requires one occurrence and exact executable version")
     identity = ESProcessRelationshipFields.from_observation(
-        relationships, version=version, gui_responsibility=gui_responsibility
+        relationships,
+        version=version,
+        gui_responsibility=gui_responsibility,
+        boot_parent_token=collection.boot_parent_token,
     )
     security = es_image_security_fields(process, context, version=version)
     return ESProcess(

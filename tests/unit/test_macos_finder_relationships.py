@@ -16,9 +16,7 @@ from evidenceforge.generation.actions.process_execution import ProcessExecutionR
 from evidenceforge.generation.activity.macos_execution_metadata import (
     load_macos_execution_metadata_profile,
 )
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.engine import GenerationEngine
-from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import resolve_time_window
 from tests.unit.test_macos_installed_provisioning import _scenario
@@ -146,48 +144,32 @@ def test_finder_selector_requires_a_fresh_literal_bundle_and_separate_unknowns(
         replace(request, **changes)
 
 
-def test_explicit_finder_process_uses_canonical_relationships_and_preserves_unknowns(
+def test_legacy_finder_policy_rejects_without_an_aggregate_fallback(
     engine: GenerationEngine,
 ) -> None:
     request = _request(engine)
     provider = engine.macos_execution_metadata
     provider.profile = provider.profile.model_copy(update={"finder_launch_execution": None})
     generator = engine.activity_generator
-    pid = generator.generate_process(
-        request.user,
-        request.system,
-        request.time,
-        request.logon_id,
-        request.process_name,
-        request.command_line,
-        parent_pid=request.parent_pid,
-        require_exact_parent=True,
-        arguments=request.arguments,
-        macos_launch_kind="finder",
-        allow_existing_browser_reuse=False,
-        allow_browser_launch_spacing=False,
-        from_storyline=True,
-    )
-    assert pid > 1
-    state = engine.state_manager
-    process = state.get_process_identity("MAC-01", pid)
-    origin = state.get_session(request.logon_id).audit_origin
-    assert process.parent_pid == process.parentage.original_pid == 1
-    assert process.responsibility is not None and process.responsibility.responsible is None
-    assert process.credentials.audit_uid == origin.audit_uid
-    assert process.credentials.audit_session_id == origin.audit_session_id
-    assert process.arguments == (_APP,)
-    # No exec vector is reconstructed from a display command or runtime snapshot.
-    assert process.environment is process.execution_directory is process.exec_image is None
-    assert process.exec_script is process.image_security is None
-    assert state.process_descriptors_at(process, event_time=request.time) is None
-    # This slice has aggregate canonical birth semantics, not a fabricated fork/exec.
-    assert process.execution_ordinal == 0
-    assert process.executed_at is None
-    restored = StateManager()
-    _restore_head(restored, _capture_head(state))
-    assert restored.get_process_identity("MAC-01", pid) == process
-    assert restored.get_session(request.logon_id).audit_origin == origin
+    before = engine.state_manager.materialization_digest()
+    with pytest.raises(StateError, match="qualified installed-app policy"):
+        generator.generate_process(
+            request.user,
+            request.system,
+            request.time,
+            request.logon_id,
+            request.process_name,
+            request.command_line,
+            parent_pid=request.parent_pid,
+            require_exact_parent=True,
+            arguments=request.arguments,
+            macos_launch_kind="finder",
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            from_storyline=True,
+        )
+    assert engine.state_manager.materialization_digest() == before
+    assert not generator._macos_finder_startups
 
 
 def test_generic_user_launch_does_not_acquire_finder_responsibility(

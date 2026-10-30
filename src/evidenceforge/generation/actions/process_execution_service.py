@@ -40,7 +40,6 @@ from evidenceforge.events.identity import (
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
-from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -61,6 +60,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedFileEffectPayload,
     PreparedProcessEffectActor,
 )
+from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
 from evidenceforge.generation.actions.posix_process import (
     process_exec_occurrence,
     process_exit_occurrence,
@@ -104,7 +104,7 @@ from evidenceforge.generation.windows_tokens import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import RunningProcess
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 from .process_execution_stages import (
@@ -153,6 +153,16 @@ class ProcessReuseCandidate:
 
 
 @dataclass(frozen=True)
+class RetainedFinderLaunch:
+    """Current startup journal and its immutable admission intent, owned by activity."""
+
+    request: ProcessExecutionRequest
+    launch: ProcessLaunchPlan
+    startup: MacosFinderStartup
+    binary: BinaryReleaseIdentity
+
+
+@dataclass(frozen=True)
 class ProcessExecutionService:
     """Ephemeral dependency binding; all durable state remains on existing owners."""
 
@@ -170,6 +180,7 @@ class ProcessExecutionService:
     dispatcher: EventDispatcher
     lifecycle_authority: GeneratorLifecycleAuthority
     runtime_content_manager: RuntimeContentIdentityManager | None
+    finder_startups: dict[str, RetainedFinderLaunch]
 
     def bounded_reuse_intent(
         self,
@@ -409,6 +420,15 @@ class ProcessExecutionService:
 
     def create(self, request: ProcessExecutionRequest) -> int:
         """Execute process admission, planning, preparation, publication and bookkeeping."""
+        retained = self.finder_startups.get(request.stable_id)
+        if retained is not None:
+            if (
+                retained.request != request
+                or retained.request.effect_plan != request.effect_plan
+                or retained.request.prepared_effects != request.prepared_effects
+            ):
+                raise StateError("Pending Finder startup changed its original execution request")
+            return self._continue_finder(request.stable_id, retained)
         admission = self._prepare_execution(request)
         actor = self._resolve_actor(request, admission)
         if isinstance(actor, int):
@@ -418,6 +438,10 @@ class ProcessExecutionService:
             return launch
         # Due closes own independent commits and must precede frozen State/timing plans.
         self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
+        if request.macos_launch_kind == "finder":
+            retained = self._prepare_finder(request, admission, launch)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
         root = self._prepare_root(request, admission, launch)
         if root.birth_event is not None:
             launch = replace(launch, time=root.identity.execution_started_at)
@@ -425,6 +449,146 @@ class ProcessExecutionService:
         publication = self._prepare_publication(request, admission, root, evidence)
         running = self._publish_process(request, root, publication)
         return self._finish_execution(request, launch, root, evidence, running)
+
+    def _prepare_finder(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+    ) -> RetainedFinderLaunch:
+        """Validate every startup dependency before allocating a root child."""
+        provider = self.identity.macos_execution_metadata
+        if (
+            provider is None
+            or provider.profile.finder_launch_execution != "xpcproxy_app_exec"
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or request.requested_endpoint_effects
+            or request.new_posix_session
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+        ):
+            raise StateError(
+                "Finder startup requires qualified installed-app policy and empty effects"
+            )
+        if len(self.finder_startups) >= 128:
+            raise StateError("Finish pending Finder startups before admitting another launch")
+        application = next(
+            (
+                entry
+                for entry in provider.profile.finder_applications
+                if entry.image == launch.actor.image
+            ),
+            None,
+        )
+        if application is None or request.arguments is None:
+            raise StateError("Finder startup requires an explicit app bundle-identifier policy")
+        binary = self.dispatcher.resolve_process_binary_identity(
+            request.system.hostname,
+            launch.actor.username,
+            launch.actor.image,
+            "macos",
+        )
+        launcher = self.dispatcher.resolve_process_binary_identity(
+            request.system.hostname,
+            "root",
+            "/usr/libexec/xpcproxy",
+            "macos",
+        )
+        if type(binary) is not BinaryReleaseIdentity or type(launcher) is not BinaryReleaseIdentity:
+            raise StateError("Finder startup requires exact installed launcher and app binaries")
+        at = ensure_utc(launch.time)
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.finder_preimage_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="finder_launch",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        times = (at, at + gap / 3, at + gap * 2 / 3, at + gap)
+        if request.source_visible_by is not None and times[-1] > ensure_utc(
+            request.source_visible_by
+        ):
+            raise StateError("Finder startup cannot meet the requested source readiness deadline")
+        credentials = self.identity.process_credentials(
+            request.system,
+            launch.actor.username,
+            1,
+            at,
+        )
+        relationship = provider.finder_launch_relationships(
+            self.state_manager,
+            request.system.hostname,
+            launch.actor.username,
+            parent_pid=launch.parent_pid,
+            logon_id=launch.actor.logon_id,
+            at=times[-1],
+            credentials=credentials,
+        )
+        session = self.state_manager.get_session_identity(launch.actor.logon_id)
+        if session is None:
+            raise StateError("Finder startup lost its live GUI login owner")
+        suffix = tuple(
+            _stable_seed(f"finder-service:{request.stable_id}:{part}") % 10**9
+            for part in ("first", "second")
+        )
+        label = f"application.{application.bundle_identifier}.{suffix[0]}.{suffix[1]}"
+        startup = MacosFinderStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=relationship.parent,
+            session=session,
+            launcher=launcher,
+            app=binary,
+            arguments=request.arguments,
+            service_label=label,
+            times=times,
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
+
+    def _continue_finder(self, key: str, retained: RetainedFinderLaunch) -> int:
+        """Resume committed source work before exposing a ready application."""
+        startup = retained.startup
+        while not startup.complete:
+            startup.advance()
+        process, birth = startup.process, startup.birth
+        assert process is not None and birth is not None and startup.app_event is not None
+        session = self.state_manager.get_session_identity(process.logon_id)
+        if session is None:
+            raise StateError("Completed Finder startup lost its GUI owner")
+        root = ProcessRootPlan(
+            birth,
+            None,
+            session.session_id,
+            session,
+            birth.parent_identity,
+            retained.binary,
+            process,
+            startup.fork_event,
+        )
+        running = self.state_manager.get_process(process.hostname, process.pid)
+        if running is None:
+            raise StateError("Completed Finder startup lost its exact process")
+        launch = replace(retained.launch, time=process.execution_started_at)
+        evidence = ProcessEvidencePlan(
+            startup.app_event,
+            None,
+            retained.request.source_visible_by,
+            None,
+        )
+        result = self._finish_execution(retained.request, launch, root, evidence, running)
+        del self.finder_startups[key]
+        return result
 
     def _prepare_execution(self, request: ProcessExecutionRequest) -> ProcessExecutionAdmission:
         """Validate prepared effects and actor identity before launch decisions."""
@@ -946,6 +1110,8 @@ class ProcessExecutionService:
         launch: ProcessLaunchPlan,
     ) -> ProcessRootPlan:
         """Freeze exact State identities without consuming the process allocator."""
+        if request.macos_launch_kind == "finder":
+            raise StateError("Finder process roots require their retained startup coordinator")
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
         process_session_id = self.queries._session_id_for_logon(launch.actor.logon_id)
         process_session_identity = self.state_manager.get_session_identity(launch.actor.logon_id)
@@ -983,36 +1149,15 @@ class ProcessExecutionService:
                 != request.exec_script
             ):
                 raise StateError("Mac script launch requires its exact prepared retention")
-        provider = self.identity.macos_execution_metadata
-        if (
-            request.macos_launch_kind == "finder"
-            and provider is not None
-            and provider.profile.finder_launch_execution == "xpcproxy_app_exec"
-        ):
-            return self._prepare_macos_finder_root(request, admission, launch, binary=binary)
         shell_root = self._prepare_macos_shell_root(request, admission, launch, binary=binary)
         if shell_root is not None:
             return shell_root
         provider = self.identity.macos_execution_metadata
         metadata = None
-        finder = None
         terminal = None
         standard_io = None
-        if request.macos_launch_kind == "finder" and provider is None:
-            raise StateError("Finder launch requires the qualified Mac relationship producer")
         if provider is not None and _get_os_category(request.system.os) == "macos":
-            if request.macos_launch_kind == "finder":
-                finder = provider.finder_launch_relationships(
-                    self.state_manager,
-                    request.system.hostname,
-                    launch.actor.username,
-                    parent_pid=launch.parent_pid,
-                    logon_id=launch.actor.logon_id,
-                    at=ensure_utc(launch.time),
-                    credentials=credentials,
-                )
-                credentials = finder.credentials
-            elif request.macos_launch_kind is not None:
+            if request.macos_launch_kind is not None:
                 metadata = provider.launch(
                     request.system.hostname,
                     launch.actor.username,
@@ -1073,9 +1218,7 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
-                responsibility=(
-                    finder.responsibility if finder is not None else request.macos_responsibility
-                ),
+                responsibility=request.macos_responsibility,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -1118,9 +1261,7 @@ class ProcessExecutionService:
                 image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
-                responsibility=(
-                    finder.responsibility if finder is not None else request.macos_responsibility
-                ),
+                responsibility=request.macos_responsibility,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity
@@ -1136,145 +1277,6 @@ class ProcessExecutionService:
             process_session_identity,
             parent_identity,
             binary,
-        )
-
-    def _prepare_macos_finder_root(
-        self,
-        request: ProcessExecutionRequest,
-        admission: ProcessExecutionAdmission,
-        launch: ProcessLaunchPlan,
-        *,
-        binary: ProcessBinaryIdentity | None,
-    ) -> ProcessRootPlan:
-        """Plan the app exec and separately retain its unresolved launcher activation.
-
-        The selected clean environment and opaque vnode streams are model inputs,
-        not recovered private values or an assertion that stdio is /dev/null.
-        A launcher aggregate never becomes an invented native fork or first exec.
-        """
-        provider = self.identity.macos_execution_metadata
-        assert provider is not None
-        if (
-            admission.endpoint is not None
-            or request.effect_plan is None
-            or request.effect_plan.nodes
-        ):
-            raise StateError("Finder launch needs a supported explicit app effect plan")
-        launcher_binary = self.dispatcher.resolve_process_binary_identity(
-            request.system.hostname, launch.actor.username, "/usr/libexec/xpcproxy", "macos"
-        )
-        if type(binary) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity} or type(
-            launcher_binary
-        ) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
-            raise StateError("Finder launch requires exact deployed launcher and app executables")
-        for candidate in (launcher_binary, binary):
-            if candidate.mach_o_image is None or candidate.mach_o_image.architecture != "arm64":
-                raise StateError("Finder launch requires declared native arm64 executable images")
-        at = ensure_utc(launch.time)
-        gap = self.activity_timing.sample_profile_gap(
-            "macos.finder_preimage_before_exec",
-            stable_id=request.stable_id,
-            host=request.system.hostname,
-            source="finder_launch",
-            lifecycle_id=request.lifecycle_group_id or request.stable_id,
-        )
-        executed_at = at + gap
-        credentials = self.identity.process_credentials(
-            request.system, launch.actor.username, 1, at
-        )
-        relationship = provider.finder_launch_relationships(
-            self.state_manager,
-            request.system.hostname,
-            launch.actor.username,
-            parent_pid=launch.parent_pid,
-            logon_id=launch.actor.logon_id,
-            at=executed_at,
-            credentials=credentials,
-        )
-        session = self.state_manager.get_session_identity(launch.actor.logon_id)
-        if session is None:
-            raise StateError("Finder launch requires its exact live GUI login")
-        metadata = provider.launch(
-            request.system.hostname,
-            launch.actor.username,
-            at=executed_at,
-            requested_path=launch.actor.image,
-            binary=binary,
-            kind="user",
-        )
-        descriptors = MacosDescriptorTable(
-            request.system.hostname,
-            at,
-            tuple(
-                MacosDescriptorBinding(
-                    fd, "file", stable_uuid("finder-vnode", request.stable_id, fd), False
-                )
-                for fd in range(3)
-            ),
-            native_last_fd=2,
-        )
-        builder = self.state_manager.begin_action_cohort_materialization()
-        birth = builder.plan_macos_gui_launcher(
-            system=request.system.hostname,
-            username=launch.actor.username,
-            logon_id=launch.actor.logon_id,
-            start_time=at,
-            credentials=relationship.credentials,
-            executable_version=ProcessExecutableVersion.from_binary(launcher_binary),
-            image_security=provider.image_security(launcher_binary),
-            descriptors=descriptors,
-            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-        )
-        after = builder.execute_process(
-            birth,
-            image=launch.actor.image,
-            command_line=launch.actor.command_line,
-            arguments=request.arguments,
-            environment=metadata.environment,
-            executed_at=executed_at,
-            execution_directory=provider.directory(request.system.hostname, "/", executed_at),
-            exec_image=metadata.image,
-            exec_script=metadata.script,
-            executable_version=ProcessExecutableVersion.from_binary(binary),
-            image_security=metadata.image_security,
-            macos_gui_session=session,
-        )
-        before = birth.identity
-        event = OccurrenceBuilder(
-            timestamp=before.started_at,
-            event_type="process_create",
-            src_host=self.identity.host_context(request.system),
-            process=ProcessContext(
-                before.pid,
-                before.parent_pid,
-                before.image,
-                before.command_line,
-                before.principal,
-                integrity_level=launch.integrity,
-                logon_id=before.logon_id,
-                start_time=before.started_at,
-                binary_identity=launcher_binary,
-            ),
-            identity_plan=EventIdentityPlan(
-                subject=before, actor=birth.parent_identity, session=session
-            ),
-            lifecycle=ActionLifecycleContext(
-                group_id=before.lifecycle_group_id,
-                canonical_start=before.started_at,
-                phase="start",
-                parent_group_id=before.parent_lifecycle_group_id or None,
-            ),
-            storyline_origin=request.from_storyline,
-        )
-        return ProcessRootPlan(
-            birth,
-            builder.seal(),
-            session.session_id,
-            session,
-            birth.parent_identity,
-            binary,
-            after,
-            event,
         )
 
     def _prepare_macos_shell_root(

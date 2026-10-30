@@ -2375,6 +2375,7 @@ class ActionCohortProcessExecution:
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
     descriptors_after: MacosDescriptorTable | None = None
     gui_session: SessionIdentity | None = None
+    finder_spawn: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -3663,6 +3664,66 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         )
         return replace(normalized, principal=drop.after_principal, credentials=drop.after)
 
+    def drop_macos_gui_launcher_credentials(
+        self, target: ProcessIdentity, *, session: SessionIdentity, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Bind a root xpcproxy child to one GUI account, preserving its audit origin."""
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(normalized) is not ProcessIdentity or type(session) is not SessionIdentity:
+            raise StateError("GUI service drop requires exact live process and session identities")
+        process = self._manager._validate_action_live_process_identity(normalized)
+        owner = self._manager.get_session(session.logon_id)
+        parent = self._manager.get_process_identity(normalized.hostname, normalized.parent_pid)
+        if (
+            owner is None
+            or parent is None
+            or normalized.credentials is None
+            or owner.effective_uid is None
+            or owner.effective_gid is None
+        ):
+            raise StateError("GUI service drop lost its account or boot parent")
+        drop = MacosProcessServiceDrop(
+            parent.object_id,
+            parent.execution_id,
+            normalized.execution_ordinal,
+            normalized.credentials,
+            PosixProcessCredentials(
+                owner.effective_uid,
+                owner.effective_uid,
+                owner.effective_gid,
+                owner.effective_gid,
+                normalized.credentials.audit_uid,
+                normalized.credentials.audit_session_id,
+            ),
+            normalized.principal,
+            owner.username,
+            process.integrity_level,
+            "Medium",
+            ensure_utc(dropped_at),
+            session,
+            normalized.logon_id,
+            session.logon_id,
+            owner.audit_origin,
+        )
+        self._manager._validate_macos_process_service_drop(normalized, drop)
+        if self._process_activity_patches:
+            raise StateError("GUI service drop requires its own exact process cohort")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=drop.dropped_at,
+                service_drop=drop,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(
+            normalized,
+            principal=drop.after_principal,
+            credentials=drop.after,
+            logon_id=drop.after_logon_id,
+        )
+
     def drop_macos_ssh_child_privileges(
         self, target: ProcessIdentity, *, dropped_at: datetime
     ) -> ProcessIdentity:
@@ -3896,6 +3957,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         execution_directory: MacosExecutionDirectory | None = None,
         macos_ssh_standard_io: bool = False,
         macos_gui_session: SessionIdentity | None = None,
+        macos_finder_spawn: bool = False,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -4031,6 +4093,12 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         if type(macos_ssh_standard_io) is not bool:
             raise StateError("SSH command descriptor selection requires an exact bool")
         descriptors_after = descriptors.after_exec(timestamp) if descriptors is not None else None
+        if type(macos_finder_spawn) is not bool:
+            raise StateError("Finder spawn descriptor selection requires an exact bool")
+        if macos_finder_spawn:
+            if macos_ssh_standard_io:
+                raise StateError("Finder and SSH descriptor contracts are mutually exclusive")
+            descriptors_after = self._manager._macos_finder_spawn_descriptor_table(birth, after)
         if macos_ssh_standard_io:
             if descriptors is not None:
                 raise StateError("SSH command contract cannot replace a known inherited FD table")
@@ -4050,6 +4118,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 _capability=_ActionCohortCapability(),
                 descriptors_after=descriptors_after,
                 gui_session=macos_gui_session,
+                finder_spawn=macos_finder_spawn,
             )
         )
         return after
@@ -4971,6 +5040,7 @@ def _action_cohort_semantic_preimage(
                     if patch.gui_session is not None
                     else ()
                 )
+                + ((("macos-finder-spawn-v1",),) if patch.finder_spawn else ())
                 for patch in process_executions
             ),
         ),
@@ -7654,6 +7724,7 @@ class StateManager:
                 type(execution.target) is not ProcessIdentity
                 or type(execution.after) is not ProcessIdentity
                 or type(execution.retired_threads) is not tuple
+                or type(execution.finder_spawn) is not bool
                 or (
                     execution.gui_session is not None
                     and type(execution.gui_session) is not SessionIdentity
@@ -13066,7 +13137,9 @@ class StateManager:
                     if current_descriptors is not None
                     else None
                 )
-                if expected_descriptors is None and execution.descriptors_after is not None:
+                if execution.finder_spawn:
+                    expected_descriptors = self._macos_finder_spawn_descriptor_table(birth, after)
+                elif expected_descriptors is None and execution.descriptors_after is not None:
                     expected_descriptors = self._macos_ssh_command_descriptor_table(
                         birth, after.execution_started_at
                     )
@@ -15826,7 +15899,9 @@ class StateManager:
                     execution.after.job_control,
                     execution.after.execution_started_at,
                 )
-                self._commit_posix_membership(change.before, change.after, change.changed_at)
+                self._commit_posix_membership(
+                    change.before, change.after, change.changed_at, gui_exec_boundary=True
+                )
                 process.job_control = change.after
                 process.job_control_history = (*process.job_control_history, change)
                 process.responsibility = execution.after.responsibility
@@ -15898,6 +15973,12 @@ class StateManager:
                 process.integrity_level = drop.after_integrity
                 process.privilege_drop = patch.privilege_drop
                 process.service_drop = patch.service_drop
+                if patch.service_drop is not None and patch.service_drop.gui_session is not None:
+                    owner = patch.service_drop.gui_session
+                    process.logon_id = owner.logon_id
+                    process.token_logon_id = owner.logon_id
+                    process.auth_session_id = owner.session_id
+                    process.auth_logon_type = 2
                 self._running_processes.refresh((identity.hostname, identity.pid))
             if (
                 process.last_activity_time is None
@@ -16171,14 +16252,19 @@ class StateManager:
             self._posix_job_control_reservation_counts.pop(host, None)
 
     def _commit_posix_membership(
-        self, before: PosixGroupIdentity | None, after: PosixGroupIdentity | None, at: datetime
+        self,
+        before: PosixGroupIdentity | None,
+        after: PosixGroupIdentity | None,
+        at: datetime,
+        *,
+        gui_exec_boundary: bool = False,
     ) -> None:
         for key, rows in membership_updates(
             self._posix_job_control_reservations,
             before,
             after,
             at,
-            lifetime_boundary=before is None or after is None,
+            lifetime_boundary=before is None or after is None or gui_exec_boundary,
         ).items():
             self._replace_posix_reservation_rows(key, rows)
 
@@ -16248,7 +16334,12 @@ class StateManager:
                 "Parent adoption has stale, foreign, backdated or unsupported ownership"
             )
 
-    def _validate_posix_job_control_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+    def _validate_posix_job_control_patch(
+        self,
+        patch: ActionCohortProcessActivityPatch,
+        *,
+        gui_exec_boundary: bool = False,
+    ) -> None:
         target, change, actor = patch.target, patch.job_control_change, patch.job_control_actor
         if (
             type(target) is not ProcessIdentity
@@ -16347,7 +16438,13 @@ class StateManager:
             after.leader_object_id != target.object_id or after.started_at != change.changed_at
         ):
             raise StateError("New POSIX group must use its creating process identity")
-        membership_updates(self._posix_job_control_reservations, before, after, change.changed_at)
+        membership_updates(
+            self._posix_job_control_reservations,
+            before,
+            after,
+            change.changed_at,
+            lifetime_boundary=gui_exec_boundary,
+        )
 
     def _plan_macos_gui_exec_relationships(
         self,
@@ -16423,6 +16520,10 @@ class StateManager:
         group = PosixGroupIdentity(before.job_control.session, before.pid, before.object_id, at)
         change = PosixJobControlChange("setpgid", before.job_control, group, at)
         if birth is None:
+            # The qualified exec moves this member out of the shared boot group.
+            # Another member's planner lookahead cannot floor this process's
+            # transition. Keep per-process ordering and last-member retirement
+            # checks; the membership delta never closes the boot group early.
             self._validate_posix_job_control_patch(
                 ActionCohortProcessActivityPatch(
                     target=before,
@@ -16430,7 +16531,8 @@ class StateManager:
                     job_control_change=change,
                     job_control_actor=before,
                     _capability=_ActionCohortCapability(),
-                )
+                ),
+                gui_exec_boundary=True,
             )
         return credentials, group, ProcessResponsibility(None)
 
@@ -16461,6 +16563,7 @@ class StateManager:
                         execution.target.job_control,
                         execution.after.job_control,
                         execution.after.execution_started_at,
+                        lifetime_boundary=True,
                     )
                 )
         for plan in closes:
@@ -17584,6 +17687,45 @@ class StateManager:
             (item for item in reversed(process.descriptor_history) if item.observed_at <= at), None
         )
 
+    def _macos_finder_spawn_descriptor_table(
+        self, birth: ProcessMaterializationPlan | None, after: ProcessIdentity
+    ) -> MacosDescriptorTable:
+        """Apply explicitly modeled child spawn file actions, without inventing a parent table."""
+        parent = birth.parent_identity if birth is not None else None
+        if (
+            birth is None
+            or not birth.forked
+            or parent is None
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or birth.identity.image != parent.image
+            or after.image != "/usr/libexec/xpcproxy"
+            or after.execution_ordinal != 1
+            or after.principal != "root"
+            or after.credentials is None
+            or any(
+                value != 0
+                for value in (
+                    after.credentials.real_uid,
+                    after.credentials.effective_uid,
+                    after.credentials.real_gid,
+                    after.credentials.effective_gid,
+                )
+            )
+        ):
+            raise StateError("Finder file actions require the exact boot-parent root launcher fork")
+        return MacosDescriptorTable(
+            after.hostname,
+            after.execution_started_at,
+            tuple(
+                MacosDescriptorBinding(
+                    fd, "file", stable_uuid("finder-spawn-vnode", after.object_id, fd), False
+                )
+                for fd in range(3)
+            ),
+            native_last_fd=2,
+        )
+
     def _macos_ssh_command_descriptor_table(
         self, birth: ProcessMaterializationPlan | None, at: datetime
     ) -> MacosDescriptorTable:
@@ -17989,7 +18131,7 @@ class StateManager:
             or process.credentials != drop.before
             or process.username != drop.before_principal
             or process.integrity_level != drop.before_integrity
-            or drop.after_principal != "_sshd"
+            or (drop.after_principal != "_sshd" and drop.gui_session is None)
             or drop.after_integrity != "Medium"
             or process.audit_binding is not None
             or process.privilege_drop is not None
@@ -18000,6 +18142,31 @@ class StateManager:
             process.last_activity_time or process.start_time
         ):
             raise StateError("Service privilege drop is outside its live child interval")
+        if drop.gui_session is not None:
+            owner = drop.gui_session
+            session = self.get_session_at(owner.logon_id, drop.dropped_at)
+            if (
+                self.get_session_identity(owner.logon_id) != owner
+                or session is None
+                or owner.hostname != target.hostname
+                or session.logon_type != 2
+                or session.auth_protocol != "local"
+                or session.audit_origin is None
+                or target.image != "/usr/libexec/xpcproxy"
+                or target.parent_pid != 1
+                or parent.image != "/sbin/launchd"
+                or target.execution_ordinal != 1
+                or drop.before_logon_id != target.logon_id
+                or drop.after_logon_id != owner.logon_id
+                or drop.after_principal != session.username
+                or drop.gui_audit_origin != session.audit_origin
+                or (drop.after.real_uid, drop.after.real_gid)
+                != (session.effective_uid, session.effective_gid)
+            ):
+                raise StateError(
+                    "GUI service drop lost its exact local login and launcher authority"
+                )
+            return
         session = self.get_session(target.logon_id)
         if session is not None and (
             (
@@ -18146,7 +18313,14 @@ class StateManager:
                 or selected.execution_ordinal == drop.execution_ordinal
             )
         ):
-            selected = replace(selected, principal=drop.before_principal, credentials=drop.before)
+            selected = replace(
+                selected,
+                principal=drop.before_principal,
+                credentials=drop.before,
+                logon_id=drop.before_logon_id
+                if type(drop) is MacosProcessServiceDrop and drop.gui_session is not None
+                else selected.logon_id,
+            )
         binding = process.audit_binding
         if selected is not None and binding is not None and event_time < binding.bound_at:
             if selected.credentials is not None:

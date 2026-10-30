@@ -20,6 +20,7 @@ NativeReason = Literal[
     "exit_outcome_unknown",
     "executable_version_unknown",
     "gui_exec_metadata_unknown",
+    "boot_parent_token_unknown",
 ]
 
 

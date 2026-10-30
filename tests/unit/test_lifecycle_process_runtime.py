@@ -13,8 +13,10 @@ from evidenceforge.events.lifecycle import (
     LifecycleForegroundLease,
     LifecycleSingletonLease,
     LifecycleTransition,
+    ProcessGUIAttribution,
     ProcessRuntimeChange,
     ProcessRuntimeView,
+    ProcessTokenIdentity,
 )
 from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
 from evidenceforge.generation.checkpoints.lifecycle_head import _capture, _restore
@@ -198,6 +200,93 @@ def test_runtime_frontier_survives_detail_compaction_and_checkpoint() -> None:
     assert restored.get_process("child-1") == before
     _commit(restored, _change(restored, seconds=11, credentials=True))
     assert restored.get_process("child-1").current_view.revision == 2
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "origin", "time", "revision", "legacy"])
+def test_gui_account_frontier_survives_compaction_and_rejects_changed_proof(
+    damage: str | None,
+) -> None:
+    registry = LifecycleRegistry(ledger_detail_retention=timedelta(seconds=1))
+    root_token = ProcessTokenIdentity("root", integrity_level="System")
+    for object_id, pid, parent in (("boot", 1, ""), ("child-1", 5104, "boot")):
+        request = _process_request(
+            object_id=object_id, pid=pid, started_at=_START, parent_object_id=parent
+        )
+        registry.register_process(
+            replace(request.identity, image="/sbin/launchd"),
+            token=root_token,
+            membership=request.membership,
+            action_id=request.action_id,
+            transition_id=request.transition_id,
+        )
+    before = registry.get_process("child-1").current_view
+    launcher = replace(
+        before,
+        revision=1,
+        execution_ordinal=1,
+        changed_at=_START + timedelta(seconds=2),
+        image="/usr/libexec/xpcproxy",
+    )
+    gui_token = ProcessTokenIdentity("analyst", "gui-login", 0, 2, "Medium")
+    at = _START + timedelta(seconds=3)
+    bound = replace(
+        launcher,
+        revision=2,
+        changed_at=at,
+        token=gui_token,
+        gui_attribution=ProcessGUIAttribution(root_token, gui_token, at, 2),
+    )
+    app = replace(
+        bound,
+        revision=3,
+        execution_ordinal=2,
+        changed_at=_START + timedelta(seconds=4),
+        image="/Applications/Invented.app/Contents/MacOS/Invented",
+    )
+    for old, new, kind in (
+        (before, launcher, "exec"),
+        (launcher, bound, "gui_credentials"),
+        (bound, app, "exec"),
+    ):
+        _commit(
+            registry,
+            LifecycleTransition(
+                transition_id=f"gui-{new.revision}",
+                subject=registry.get_process("child-1").identity.ref,
+                kind="dependent",
+                canonical_time=new.changed_at,
+                action_id=f"gui-action-{new.revision}",
+                process_change=ProcessRuntimeChange(old, new, kind),
+            ),
+        )
+    registry.advance_watermark(_START + timedelta(seconds=10))
+    snapshot = registry.get_process("child-1")
+    assert not snapshot.transitions and snapshot.current_view == app
+    document = loads(_capture(registry))
+    runtime = next(
+        row[4]
+        for partition in document["partitions"]
+        for row in partition[0]
+        if row[0][1] == "child-1"
+    )
+    if damage == "legacy":
+        document["schema_version"] = "8"
+    elif damage == "missing":
+        runtime.pop()
+    elif damage == "origin":
+        runtime[6][0][1] = "foreign-logon"
+    elif damage == "time":
+        runtime[6][2] = (_START - timedelta(seconds=1)).isoformat()
+    elif damage == "revision":
+        runtime[6][3] = 5
+    restored = LifecycleRegistry()
+    if damage is not None:
+        with pytest.raises(CheckpointCorruptionError):
+            _restore(restored, dumps(document))
+        assert restored.get_process("child-1") is None
+    else:
+        _restore(restored, dumps(document))
+        assert restored.get_process("child-1") == snapshot
 
 
 @pytest.mark.parametrize("field,value", [(0, 0), (0, 500), (1, 500), (2, _START.isoformat())])

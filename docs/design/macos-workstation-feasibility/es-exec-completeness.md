@@ -86,15 +86,18 @@ supported plan until implemented.
 
 ### 3. Connect GUI launch activity
 
-Finish the Finder launchd/xpcproxy birth-to-exec producer using the existing authenticated GUI
-exec transition. The same PID/lifetime survives image replacement; do not model the app as an
-invented child of xpcproxy or assert a native fork from missing evidence. Supply every modeled
-launcher/app execution's own metadata and connect authored and baseline activity explicitly.
+Revision 356 replaces the Finder aggregate with the observed boot-parent fork, root xpcproxy
+exec, GUI-account credential binding and app exec. The same PID/lifetime survives both image
+replacements; the app is not an invented child of xpcproxy. Each phase retains exact source
+recovery before advancing, and pending startup rejects checkpoint sealing. Authored and baseline
+activity share this owner. Production native startup still requires the boot parent's
+no-parent audit-token wire classification; the existing capture can supply it offline.
 
 The human's version-4 offline report resolves the preimage audit/session/group and token
-relationships. The source observation keeps the old audit pair/PID/PID version but has four
-zero POSIX credential words. Canonical launcher credentials stay those of the account; target
-responsibility equals the complete target token. That distinction is implemented in revision 348.
+relationships. The source responsibility observation keeps the old audit pair/PID/PID version but
+has four zero POSIX credential words. Canonical launcher credentials change from root to the GUI
+account without another exec; the app exec then adopts the GUI audit origin. Target responsibility
+equals the complete target token. Revisions 348 and 356 preserve these distinct observations.
 Broader Dock/Spotlight, application/helper and signing/entitlement classes require bounded
 qualification where current evidence and primary format contracts do not establish needed facts.
 Reuse shared contracts when justified; do not extrapolate the Finder test automatically.

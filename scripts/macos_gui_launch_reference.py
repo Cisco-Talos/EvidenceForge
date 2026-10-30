@@ -431,6 +431,12 @@ class LauncherReferenceFacts(Model):
     fork_preserves_parent_image: Check = "INCONCLUSIVE"
     fork_preserves_parent_credentials: Check = "INCONCLUSIVE"
     fork_parent_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
+    boot_parent_ppids_zero: Check = "INCONCLUSIVE"
+    boot_parent_group_and_session_one: Check = "INCONCLUSIVE"
+    boot_parent_parent_token: Literal[
+        "ALL_ZERO", "DEFAULT_UNATTRIBUTED_KERNEL", "OTHER", "INCONCLUSIVE"
+    ] = "INCONCLUSIVE"
+    boot_parent_default_audit_origin: Check = "INCONCLUSIVE"
     launcher_before_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
     launcher_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
     app_preimage_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
@@ -644,7 +650,7 @@ class ExistingLaunchFacts(Model):
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=6, le=6)] = 6
+    review_version: Annotated[int, Field(strict=True, ge=7, le=7)] = 7
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -1113,7 +1119,20 @@ def inspect_launcher_reference(
             and parent["executable"]["path"] == "/sbin/launchd"
         )
         values["fork_parent_security"] = inspect_native_security(parent)
+        values["boot_parent_ppids_zero"] = _check(parent["ppid"] == parent["original_ppid"] == 0)
+        values["boot_parent_group_and_session_one"] = _check(
+            parent["group_id"] == parent["session_id"] == 1
+        )
+        parent_token = _token(parent, "parent_audit_token")
+        values["boot_parent_parent_token"] = (
+            "ALL_ZERO"
+            if parent_token == (0,) * 8
+            else "DEFAULT_UNATTRIBUTED_KERNEL"
+            if parent_token == (2**32 - 1, 0, 0, 0, 0, 0, 0, 0)
+            else "OTHER"
+        )
         pt, ct = _token(parent), _token(child)
+        values["boot_parent_default_audit_origin"] = _check(pt[0] == 2**32 - 1 and pt[6] == 0)
         values["fork_preserves_parent_credentials"] = _check(pt[:5] == ct[:5] and pt[6] == ct[6])
         values["fork_preserves_parent_image"] = _check(
             all(

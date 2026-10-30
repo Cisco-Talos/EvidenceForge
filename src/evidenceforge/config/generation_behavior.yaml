@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 355
+current_revision: 356
 history_start_revision: 1
-behavior_surface_sha256: c5f0374ab5598c9b56cb93a36c6f721eae9bd61869a0987b26600a1a9c4b70f0
+behavior_surface_sha256: 65c4b5839cf08e8fdee59c7eb7e7ca6fc2f155a03d4f527978172c1d692c228a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3389,3 +3389,14 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Admits reviewed v11 Boolean entitlement objects with immutable checkpointed signature facts and selects launchd/xpcproxy security flags and the xpcproxy ARM64e slice. Initial process publication remains gated.
+  - revision: 356
+    id: macos-finder-canonical-root-startup
+    impact: localized
+    domains:
+      - canonical-process-lifecycle
+      - macos-gui-execution
+      - checkpoint-recovery
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Replaces aggregate Finder births with retained boot-parent fork, root xpcproxy exec, GUI account binding and app exec. Missing boot-parent wire policy stays gated; unfinished startup rejects checkpoints.

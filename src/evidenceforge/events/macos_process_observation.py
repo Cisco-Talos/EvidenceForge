@@ -53,7 +53,7 @@ class MacosGUIExecResponsibilityObservation:
             or old is None
             or new is None
             or old.audit_uid != 2**32 - 1
-            or old.audit_session_id in {None, 0}
+            or old.audit_session_id is None
             or new.audit_uid != new.real_uid
             or new.audit_session_id is None
             or old.audit_session_id == new.audit_session_id
@@ -96,6 +96,7 @@ class MacosProcessCollectionObservation:
     observed_at: datetime
     is_es_client: bool
     terminal: Literal["absent"] | MacosTerminalObservation
+    boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -112,6 +113,23 @@ class MacosProcessCollectionObservation:
             raise ValueError(
                 "Mac collection observation requires exact timed client/terminal facts"
             )
+        if self.boot_parent_token is not None and (
+            type(self.boot_parent_token) is not str
+            or self.boot_parent_token not in {"all_zero", "default_unattributed_kernel"}
+            or self.process.pid != 1
+            or self.process.parent_pid != 0
+            or self.process.parentage is None
+            or self.process.parentage.original is not None
+            or self.process.parentage.current is not None
+            or self.process.image != "/sbin/launchd"
+            or self.process.principal != "root"
+            or self.process.credentials is None
+            or not self.process.credentials.is_unattributed_root
+            or self.process.job_control is None
+            or self.process.job_control.session.sid != 1
+            or self.process.job_control.pgid != 1
+        ):
+            raise ValueError("ES no-parent token requires its explicitly known boot launchd")
         if type(self.terminal) is MacosTerminalObservation:
             self.terminal.__post_init__()
             if (

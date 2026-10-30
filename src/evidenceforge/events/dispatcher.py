@@ -6407,6 +6407,15 @@ class EventDispatcher:
                     or change.before != before.credentials
                     or change.after != after.credentials
                     or after.principal != expected_principal
+                    or (
+                        patch.service_drop is not None
+                        and patch.service_drop.gui_session is not None
+                        and (
+                            event.identity_plan.session != patch.service_drop.gui_session
+                            or before.logon_id != patch.service_drop.before_logon_id
+                            or after.logon_id != patch.service_drop.after_logon_id
+                        )
+                    )
                     or patch.activity_time != event.timestamp
                     or event.process.integrity_level != expected_integrity
                     or self.state_manager._pid_os.get(before.hostname) != "macos"
@@ -6597,6 +6606,11 @@ class EventDispatcher:
                     )
 
         allowed_ids = {
+            *(
+                patch.service_drop.gui_session.object_id
+                for patch in state_plan.process_activity_patches
+                if patch.service_drop is not None and patch.service_drop.gui_session is not None
+            ),
             *(
                 patch.job_control_actor.object_id
                 for patch in state_plan.process_activity_patches

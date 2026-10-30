@@ -97,6 +97,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     persistence_group: bool = False,
     history_spillage: bool = False,
     endpoint_forks: bool = False,
+    finder: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -163,6 +164,27 @@ def test_short_generation_checkpoint_suspension_and_resume(
                     ("+1h11m", "logon"),
                 ]
             )
+        ]
+    if finder:
+        scenario_data["macos_process_coverage"] = "partial"
+        scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
+        scenario_data["storyline"] = [
+            {
+                "id": f"finder-{index}",
+                "time": when,
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Invented Finder startup across checkpoint recovery",
+                "events": [
+                    {
+                        "type": "process",
+                        "launch_method": "finder",
+                        "supplementary": "none",
+                        "process_name": "/Applications/EForgeReference.app/Contents/MacOS/EForgeReference",
+                    }
+                ],
+            }
+            for index, when in enumerate(("+30m", "+2h10m"))
         ]
     if denied_launch or failed_exec:
         scenario_data["storyline"] = [
@@ -357,6 +379,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "The active continuation must retain its authored end owner"
             )
     retained_helpers: set[str] = set()
+    if finder:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        apps = [
+            process for _key, process in processes if process.image.endswith("/EForgeReference")
+        ]
+        assert len(apps) == 1 and apps[0].execution_ordinal == 2
+        assert apps[0].service_drop is not None and apps[0].service_drop.gui_session is not None
     if helpers:
         from evidenceforge.generation.checkpoints.packed import loads
         from evidenceforge.generation.checkpoints.state_values import decode_state_value
@@ -413,6 +449,27 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
+    if finder:
+        truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+        pids = {
+            event["attributes"]["pid"]
+            for event in truth["events"]
+            if (event.get("storyline_id") or "").startswith("finder-")
+        }
+        assert len(pids) == 2
+        for pid in pids:
+            targets = [
+                json.loads(line)["event"]["exec"]["target"]["executable"]["path"]
+                for name, content in resumed_files.items()
+                if name.endswith("macos_endpoint_security.ndjson")
+                for line in content.splitlines()
+                if (row := json.loads(line))["event_type"] == 9
+                and row["event"]["exec"]["target"]["audit_token"]["pid"] == pid
+            ]
+            assert targets == [
+                "/usr/libexec/xpcproxy",
+                "/Applications/EForgeReference.app/Contents/MacOS/EForgeReference",
+            ]
     if endpoint_forks:
         from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 
