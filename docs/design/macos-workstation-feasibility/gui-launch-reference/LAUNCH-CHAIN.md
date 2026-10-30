@@ -122,7 +122,7 @@ backups and existing endpoint software remain separate from this filter's persis
 
 ## Offline supplement for an existing capture
 
-A separately prepared version-5 reviewer supports both original app-only and launcher-chain
+A separately prepared version-6 reviewer supports both original app-only and launcher-chain
 kits. Do not copy it over the original helper or run setup in a used kit. From the new
 reviewer directory, run `private_gui_launch.py review-existing --private-run` with the same
 isolated Python command. At its hidden prompt choose the original outer kit, not its run
@@ -166,6 +166,32 @@ matches, the report returns `MULTIPLE` and inconclusive per-candidate comparison
 arbitrarily choosing one; it still retains only a unique candidate satisfying every proof.
 Old reports retain an absent comparison rather than inventing observations. No rejected raw
 candidate is written to disk and no native qualification gate is closed by these diagnostics.
+
+Once a launcher is retained, version 6 adds `launcher_reference` to the offline review. It
+classifies the fork's boot-parent/image relationship, named code-signing flags and validation
+category, ARM64 subtype/capability class, argv0 and the controlled bundle's service-label role,
+standard environment-key relationships, and a boolean entitlement-template comparison. It
+returns no raw flags, subtype integers, entitlement names/values, service labels, environment
+names/values beyond the fixed standard-key schema, paths, times or process identifiers.
+
+The entitlement reference is static code metadata from the fixed Apple xpcproxy binary on the
+macOS 27 reference host: only eight `com.apple.*` keys with Boolean values were accepted.
+It is not a captured event, personal configuration or a statement that eslogger uses that
+same layout. `static_keys` and `static_values` must establish that relationship privately.
+The template is embedded in the prepared reviewer's code; review invokes no commands or
+static-file queries. The named flag constants come from Apple's
+[cs_blobs.h](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/cs_blobs.h),
+and subtype/capability classes from
+[machine.h](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/machine.h).
+Apple documents an XPC dictionary or null for
+[es_exec_entitlements](https://developer.apple.com/documentation/endpointsecurity/es_exec_entitlements(_:));
+the offline comparison still qualifies the observed eslogger representation separately.
+
+Version 6 requires only the existing bounded retained capture and its provenance, app metadata
+and own-process snapshots. It writes nothing and starts no collector, app, probe, codesign
+command or live role query. Ask before an agent uses it under the standing local-log rule.
+No further live collection is needed for this supplement. A retained chain pass does not
+silently qualify populated entitlements, changed security/slice facts or other GUI methods.
 
 The result may qualify the bounded controlled launcher after review and tests. Populated
 entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,

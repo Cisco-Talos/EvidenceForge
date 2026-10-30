@@ -217,3 +217,27 @@ candidate's raw record. The same comparison model controls retention and offline
 there is no separate weaker persistence predicate. Existing report review preserves these
 capture-time labels and cannot reconstruct them for older captures. No further local native
 record was inspected to diagnose this report.
+
+## Retained first execution: metadata review remains
+
+The next human report retained exactly one xpcproxy exec and its matching fork. Lifetime,
+native file object, code identity, paths and source order all match the app preimage, and the
+candidate ring did not evict entries. Both exec layouts pass when entitlements are isolated.
+The launcher starts with root POSIX credentials; at the later app preimage all four POSIX
+credential fields differ while audit user/session, PID and PID version agree. This is the
+same execution at two credential states, followed by the already-qualified app exec.
+
+The first launcher has object-valued entitlements, fails the current modeled security tuple,
+uses an ARM64 subtype other than generic zero, and has an argv layout outside the old absolute
+path expectation. Those are unresolved concrete metadata classes, not missing source events.
+No first-exec admission follows from the shape-with-entitlements-excluded diagnostic. The
+current user-credential aggregate birth cannot simply be relabeled as this root exec/fork.
+
+Version 6 of the offline reviewer classifies the remaining named security flags/category,
+slice, argument/service-label and standard environment roles. It also compares the wire
+entitlement object to a static eight-key Boolean Apple xpcproxy template. The template comes
+from the installed system binary, not native records; only `com.apple.*` key names and Boolean
+values were accepted from that static inspection. The offline command itself performs no
+native execution and returns no arbitrary capture strings, numeric identities or values.
+It requires permission before reading the completed capture. No repeat live experiment is
+needed to perform this metadata review.

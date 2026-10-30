@@ -6,6 +6,7 @@
 import io
 import json
 import os
+import plistlib
 import stat
 import subprocess
 import warnings
@@ -617,6 +618,12 @@ def test_controlled_environment_is_checked_against_exec_time_not_main_entry() ->
         kit.EnvironmentDifference,
         kit.AuditTokenFieldRelations,
         kit.ExistingLaunchFacts,
+        kit.NativeSecurityFacts,
+        kit.NativeSliceFacts,
+        kit.LauncherArgumentFacts,
+        kit.LauncherEntitlementFacts,
+        kit.LauncherEnvironmentFacts,
+        kit.LauncherReferenceFacts,
         kit.ExistingReviewReport,
     ],
 )
@@ -626,7 +633,7 @@ def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "5", 1, 2, 3, 4, None])
+@pytest.mark.parametrize("value", [True, "5", 1, 2, 3, 4, 5, 7, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -709,6 +716,57 @@ def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
     assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == files
 
 
+def test_version_six_reviews_retained_launcher_without_native_execution_or_writes(
+    existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.unit.test_macos_launch_chain_reference import _chain
+
+    root, run = existing_capture
+    setup_path = root / "SETUP.json"
+    manifest = json.loads(setup_path.read_bytes())
+    manifest.update(kit_version=2, collection_mode="launch_chain", synthetic_entitlement=False)
+    info_path = root / "GUIProbe.app/Contents/Info.plist"
+    info_path.write_bytes(plistlib.dumps({"CFBundleIdentifier": _CANARY}))
+    manifest["plist_sha256"] = kit._digest(info_path)
+    setup_path.write_text(json.dumps(manifest))
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_bytes())
+    provenance["setup"] = manifest
+    provenance_path.write_text(json.dumps(provenance))
+    rows = _chain()
+    rows[1]["event"]["exec"]["entitlements"] = dict(kit.XPCPROXY_STATIC_ENTITLEMENTS)
+    rows[1]["event"]["exec"]["args"] = ["xpcproxy", f"application.{_CANARY}.1234.5678"]
+    rows[2]["event"]["exec"]["entitlements"] = None
+    for process in (rows[2]["event"]["exec"]["target"], rows[3]["process"]):
+        process["executable"]["stat"].update(
+            st_dev=manifest["image"]["device"], st_ino=manifest["image"]["inode"]
+        )
+    (run / "finder-self.json").write_text(_own([rows[0], rows[2], rows[3]]).model_dump_json())
+    (run / "finder-events.jsonl").write_bytes(b"\n".join(_raws(rows)))
+    summary_path = run / "SHAREABLE-REPORT.json"
+    summary = json.loads(summary_path.read_bytes())
+    summary.update(kit_version=2, collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER")
+    summary_path.write_text(json.dumps(summary))
+    files = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("No native operations or evidence mutation during offline review")
+
+    for name in ("_role", "_start", "_preflight", "_write", "_replace", "_command"):
+        monkeypatch.setattr(kit, name, forbidden)
+    monkeypatch.setattr(kit.subprocess, "run", forbidden)
+    monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
+    report = kit.review_existing(root)
+    assert report.review_version == 6 and report.error == "NONE"
+    assert report.launcher_reference.retained_chain == "PASS"
+    assert report.launcher_reference.entitlements.static_values == "PASS"
+    assert report.launcher_reference.arguments.service_matches_controlled_bundle == "PASS"
+    assert report.collectors == "NOT_STARTED" and report.live_role_queries == "NOT_PERFORMED"
+    for private in (_CANARY, str(root), str(run), _CANARY.encode().hex()):
+        assert private not in report.model_dump_json()
+    assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == files
+
+
 @pytest.mark.parametrize(
     "birth,label",
     [
@@ -762,7 +820,7 @@ def test_chain_reviewer_uses_retained_app_lifetime_and_preserves_its_unknown_pre
     for name in ("_role", "_start", "_preflight", "_write", "_replace"):
         monkeypatch.setattr(kit, name, forbidden)
     report = kit.review_existing(root)
-    assert report.review_version == 5
+    assert report.review_version == 6
     assert report.finder_launch.before_image_role == "XPCPROXY"
     assert report.finder_preimage_birth == label
     assert report.launch_chain.launcher_retained == "NONE"

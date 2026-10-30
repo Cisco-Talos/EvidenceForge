@@ -61,6 +61,78 @@ MAX_RETAINED = 16
 MAX_RING_BYTES = 4 * MAX_LINE
 ENTITLEMENT_MARKER = "org.evidenceforge.reference.synthetic"
 XPCPROXY_SIGNING_ID = "com.apple.xpc.proxy"
+# Boolean vendor metadata from the fixed Apple system binary, never a native log.
+XPCPROXY_STATIC_ENTITLEMENTS: dict[str, bool] = {
+    "com.apple.private.coreservices.canmanagebackgroundtasks": True,
+    "com.apple.private.exclaves.conclave-spawn": True,
+    "com.apple.private.security.storage.driverkitd": True,
+    "com.apple.private.shared-region.config": True,
+    "com.apple.private.spawn-driver": True,
+    "com.apple.private.spawn-panic-crash-behavior": True,
+    "com.apple.private.spawn-subsystem-root": True,
+    "com.apple.private.xpc.is.xpcproxy": True,
+}
+# ABI constants from Apple's XNU cs_blobs.h; these are not observed flag values.
+type CodeSigningFlag = Literal[
+    "VALID",
+    "ADHOC",
+    "GET_TASK_ALLOW",
+    "INSTALLER",
+    "FORCED_LV",
+    "INVALID_ALLOWED",
+    "HARD",
+    "KILL",
+    "CHECK_EXPIRATION",
+    "RESTRICT",
+    "ENFORCEMENT",
+    "REQUIRE_LV",
+    "ENTITLEMENTS_VALIDATED",
+    "NVRAM_UNRESTRICTED",
+    "RUNTIME",
+    "LINKER_SIGNED",
+    "EXEC_SET_HARD",
+    "EXEC_SET_KILL",
+    "EXEC_SET_ENFORCEMENT",
+    "EXEC_INHERIT_SIP",
+    "KILLED",
+    "NO_UNTRUSTED_HELPERS",
+    "PLATFORM_BINARY",
+    "PLATFORM_PATH",
+    "DEBUGGED",
+    "SIGNED",
+    "DEV_CODE",
+    "DATAVAULT_CONTROLLER",
+]
+CODE_SIGNING_FLAGS: tuple[tuple[CodeSigningFlag, int], ...] = (
+    ("VALID", 0x00000001),
+    ("ADHOC", 0x00000002),
+    ("GET_TASK_ALLOW", 0x00000004),
+    ("INSTALLER", 0x00000008),
+    ("FORCED_LV", 0x00000010),
+    ("INVALID_ALLOWED", 0x00000020),
+    ("HARD", 0x00000100),
+    ("KILL", 0x00000200),
+    ("CHECK_EXPIRATION", 0x00000400),
+    ("RESTRICT", 0x00000800),
+    ("ENFORCEMENT", 0x00001000),
+    ("REQUIRE_LV", 0x00002000),
+    ("ENTITLEMENTS_VALIDATED", 0x00004000),
+    ("NVRAM_UNRESTRICTED", 0x00008000),
+    ("RUNTIME", 0x00010000),
+    ("LINKER_SIGNED", 0x00020000),
+    ("EXEC_SET_HARD", 0x00100000),
+    ("EXEC_SET_KILL", 0x00200000),
+    ("EXEC_SET_ENFORCEMENT", 0x00400000),
+    ("EXEC_INHERIT_SIP", 0x00800000),
+    ("KILLED", 0x01000000),
+    ("NO_UNTRUSTED_HELPERS", 0x02000000),
+    ("PLATFORM_BINARY", 0x04000000),
+    ("PLATFORM_PATH", 0x08000000),
+    ("DEBUGGED", 0x10000000),
+    ("SIGNED", 0x20000000),
+    ("DEV_CODE", 0x40000000),
+    ("DATAVAULT_CONTROLLER", 0x80000000),
+)
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type Case = Literal["control", "finder"]
 type Code = Literal[
@@ -266,6 +338,95 @@ class LauncherCandidateComparison(Model):
     source_order: Check = "INCONCLUSIVE"
 
 
+class NativeSecurityFacts(Model):
+    """Public named ABI flags and categories, never raw integers or signatures."""
+
+    flags_well_formed: Check = "INCONCLUSIVE"
+    flags: tuple[CodeSigningFlag, ...] = ()
+    only_known_flags: Check = "INCONCLUSIVE"
+    platform_binary: Check = "INCONCLUSIVE"
+    es_client: Check = "INCONCLUSIVE"
+    category: Literal[
+        "INVALID",
+        "PLATFORM",
+        "TESTFLIGHT",
+        "DEVELOPMENT",
+        "APP_STORE",
+        "ENTERPRISE",
+        "DEVELOPER_ID",
+        "LOCAL_SIGNING",
+        "ROSETTA",
+        "OOPJIT",
+        "NONE",
+        "NULL",
+        "OTHER",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+
+
+class NativeSliceFacts(Model):
+    """Classify the image slice separately from the simulated host's architecture."""
+
+    architecture: Literal["ARM64", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    subtype: Literal["ALL", "V8", "ARM64E", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    capabilities: Literal["NONE", "PTRAUTH_ABI", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+
+
+class LauncherArgumentFacts(Model):
+    """Classify only fixed argv roles; never return a service label or suffix value."""
+
+    argv0: Literal["ABSOLUTE_XPCPROXY", "BASENAME_XPCPROXY", "OTHER", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    layout: Literal["TARGET_ONLY", "TARGET_AND_SERVICE", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    service_matches_controlled_bundle: Check = "INCONCLUSIVE"
+    suffix: Literal["DECIMAL_PAIR", "DECIMAL", "OTHER", "INCONCLUSIVE"] = "INCONCLUSIVE"
+
+
+class LauncherEntitlementFacts(Model):
+    """Compare against static Apple boolean metadata without native names or values."""
+
+    direct_object: Check = "INCONCLUSIVE"
+    nonempty: Check = "INCONCLUSIVE"
+    boolean_values_only: Check = "INCONCLUSIVE"
+    static_keys: Check = "INCONCLUSIVE"
+    static_values: Check = "INCONCLUSIVE"
+
+
+type EnvironmentRole = Literal[
+    "ABSENT", "ADDED", "REMOVED", "SAME", "CHANGED", "ROOT_TO_APP", "INCONCLUSIVE"
+]
+
+
+class LauncherEnvironmentFacts(Model):
+    """Fixed standard-key relationships; arbitrary names and values remain private."""
+
+    vectors_well_formed: Check = "INCONCLUSIVE"
+    home: EnvironmentRole = "INCONCLUSIVE"
+    user: EnvironmentRole = "INCONCLUSIVE"
+    logname: EnvironmentRole = "INCONCLUSIVE"
+    shell: EnvironmentRole = "INCONCLUSIVE"
+    path: EnvironmentRole = "INCONCLUSIVE"
+    tmpdir: EnvironmentRole = "INCONCLUSIVE"
+    xpc_service_name: EnvironmentRole = "INCONCLUSIVE"
+    xpc_flags: EnvironmentRole = "INCONCLUSIVE"
+    cf_text_encoding: EnvironmentRole = "INCONCLUSIVE"
+
+
+class LauncherReferenceFacts(Model):
+    """Offline-only supplement for the now-retained first launcher execution."""
+
+    retained_chain: Check = "INCONCLUSIVE"
+    fork_parent_is_boot_parent: Check = "INCONCLUSIVE"
+    fork_preserves_parent_image: Check = "INCONCLUSIVE"
+    launcher_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
+    app_preimage_security: NativeSecurityFacts = Field(default_factory=NativeSecurityFacts)
+    slice: NativeSliceFacts = Field(default_factory=NativeSliceFacts)
+    arguments: LauncherArgumentFacts = Field(default_factory=LauncherArgumentFacts)
+    entitlements: LauncherEntitlementFacts = Field(default_factory=LauncherEntitlementFacts)
+    environment: LauncherEnvironmentFacts = Field(default_factory=LauncherEnvironmentFacts)
+
+
 class LaunchChainDiagnostic(Model):
     """Supplementary diagnostic only; never a native generation qualification."""
 
@@ -469,7 +630,7 @@ class ExistingLaunchFacts(Model):
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=5, le=5)] = 5
+    review_version: Annotated[int, Field(strict=True, ge=6, le=6)] = 6
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -488,6 +649,7 @@ class ExistingReviewReport(Model):
         "INCONCLUSIVE",
     ] = "INCONCLUSIVE"
     launch_chain: LaunchChainDiagnostic | None = None
+    launcher_reference: LauncherReferenceFacts | None = None
     control_fork: Literal["RETAINED_MATCH", "NOT_RETAINED", "INCONSISTENT", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
     )
@@ -724,6 +886,202 @@ def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnost
         launcher_launch=inspect_existing_launch(before, payload, image),
     )
     return LaunchChainDiagnostic(**values)
+
+
+def inspect_native_security(process: dict) -> NativeSecurityFacts:
+    """Translate only public flag/category constants into fixed schema labels."""
+    flags = process.get("codesigning_flags")
+    if type(flags) is not int or not 0 <= flags < 2**32:
+        return NativeSecurityFacts(flags_well_formed="FAIL")
+    categories = (
+        "INVALID",
+        "PLATFORM",
+        "TESTFLIGHT",
+        "DEVELOPMENT",
+        "APP_STORE",
+        "ENTERPRISE",
+        "DEVELOPER_ID",
+        "LOCAL_SIGNING",
+        "ROSETTA",
+        "OOPJIT",
+        "NONE",
+    )
+    category = process.get("cs_validation_category")
+    return NativeSecurityFacts(
+        flags_well_formed="PASS",
+        flags=tuple(name for name, bit in CODE_SIGNING_FLAGS if flags & bit),
+        only_known_flags=_check(flags & ~sum(bit for _, bit in CODE_SIGNING_FLAGS) == 0),
+        platform_binary=_check(process.get("is_platform_binary") is True),
+        es_client=_check(process.get("is_es_client") is True),
+        category="NULL"
+        if category is None and "cs_validation_category" in process
+        else categories[category]
+        if type(category) is int and 0 <= category < len(categories)
+        else "OTHER",
+    )
+
+
+def inspect_native_slice(payload: dict) -> NativeSliceFacts:
+    """Separate the ARM64 subtype and capability bits using public Mach constants."""
+    cpu, subtype = payload.get("image_cputype"), payload.get("image_cpusubtype")
+    if any(type(value) is not int or not -(2**31) <= value < 2**31 for value in (cpu, subtype)):
+        return NativeSliceFacts()
+    if cpu != 16777228:
+        return NativeSliceFacts(architecture="OTHER")
+    base, capabilities = subtype & 0x00FFFFFF, subtype & 0xFF000000
+    return NativeSliceFacts(
+        architecture="ARM64",
+        subtype={0: "ALL", 1: "V8", 2: "ARM64E"}.get(base, "OTHER"),
+        capabilities="NONE"
+        if capabilities == 0
+        else "PTRAUTH_ABI"
+        if capabilities == 0x80000000
+        else "OTHER",
+    )
+
+
+def inspect_launcher_arguments(
+    payload: dict, bundle_identifier: str | None
+) -> LauncherArgumentFacts:
+    """Compare argv roles with the controlled app's already-provenanced bundle ID."""
+    argv = payload.get("args")
+    if type(argv) is not list or not argv or any(type(item) is not str for item in argv):
+        return LauncherArgumentFacts()
+    values: dict = {
+        "argv0": "ABSOLUTE_XPCPROXY"
+        if argv[0] == "/usr/libexec/xpcproxy"
+        else "BASENAME_XPCPROXY"
+        if argv[0] == "xpcproxy"
+        else "OTHER",
+        "layout": "TARGET_ONLY"
+        if len(argv) == 1
+        else "TARGET_AND_SERVICE"
+        if len(argv) == 2
+        else "OTHER",
+    }
+    if len(argv) == 2 and bundle_identifier:
+        prefix = f"application.{bundle_identifier}."
+        agrees = argv[1].startswith(prefix) and len(argv[1]) > len(prefix)
+        values["service_matches_controlled_bundle"] = _check(agrees)
+        if agrees:
+            suffix = argv[1][len(prefix) :]
+            values["suffix"] = (
+                "DECIMAL_PAIR"
+                if re.fullmatch(r"[0-9]+\.[0-9]+", suffix)
+                else ("DECIMAL" if re.fullmatch(r"[0-9]+", suffix) else "OTHER")
+            )
+    return LauncherArgumentFacts.model_validate(values)
+
+
+def inspect_launcher_entitlements(payload: dict) -> LauncherEntitlementFacts:
+    """Compare the wire object to a boolean-only static Apple code template."""
+    value = payload.get("entitlements")
+    if type(value) is not dict:
+        return LauncherEntitlementFacts(direct_object="FAIL")
+    keys = set(value) == set(XPCPROXY_STATIC_ENTITLEMENTS)
+    booleans = all(type(item) is bool for item in value.values())
+    return LauncherEntitlementFacts(
+        direct_object="PASS",
+        nonempty=_check(bool(value)),
+        boolean_values_only=_check(booleans),
+        static_keys=_check(keys),
+        static_values=_check(keys and booleans and value == XPCPROXY_STATIC_ENTITLEMENTS),
+    )
+
+
+def inspect_launcher_environment(before: object, after: object) -> LauncherEnvironmentFacts:
+    """Classify standard environment roles without exporting unknown names or values."""
+    vectors: list[dict[str, str]] = []
+    for entries in (before, after):
+        if type(entries) is not list or any(
+            type(entry) is not str or "=" not in entry for entry in entries
+        ):
+            return LauncherEnvironmentFacts(vectors_well_formed="FAIL")
+        mapping: dict[str, str] = {}
+        for entry in entries:
+            key, value = entry.split("=", 1)
+            if not key or key in mapping or "\0" in entry:
+                return LauncherEnvironmentFacts(vectors_well_formed="FAIL")
+            mapping[key] = value
+        vectors.append(mapping)
+    old, new = vectors
+    values: dict = {"vectors_well_formed": "PASS"}
+    for field, key in (
+        ("home", "HOME"),
+        ("user", "USER"),
+        ("logname", "LOGNAME"),
+        ("shell", "SHELL"),
+        ("path", "PATH"),
+        ("tmpdir", "TMPDIR"),
+        ("xpc_service_name", "XPC_SERVICE_NAME"),
+        ("xpc_flags", "XPC_FLAGS"),
+        ("cf_text_encoding", "__CF_USER_TEXT_ENCODING"),
+    ):
+        root = (
+            old.get(key) in ("/var/root", "/private/var/root")
+            if key == "HOME"
+            else (old.get(key) == "root" if key in {"USER", "LOGNAME"} else False)
+        )
+        values[field] = (
+            "ABSENT"
+            if key not in old and key not in new
+            else "ADDED"
+            if key not in old
+            else "REMOVED"
+            if key not in new
+            else "SAME"
+            if old[key] == new[key]
+            else "ROOT_TO_APP"
+            if root
+            else "CHANGED"
+        )
+    return LauncherEnvironmentFacts.model_validate(values)
+
+
+def inspect_launcher_reference(
+    raws: list[bytes], image: Image, *, bundle_identifier: str | None = None
+) -> LauncherReferenceFacts:
+    """Inspect a retained exact chain in memory; never start a process or write a file."""
+    checked = analyze_launch_chain(raws, image)
+    if checked.launcher_retained != "ONE" or checked.launcher_linkage != "PASS":
+        return LauncherReferenceFacts(retained_chain="FAIL")
+    rows = [_decode(raw) for raw in raws]
+    execs = [row for row in rows if row["event_type"] == 9]
+    app = next(row for row in execs if _owned(row["event"]["exec"]["target"], image))
+    launcher = next(row for row in execs if row is not app)
+    payload = launcher["event"]["exec"]
+    forks = [
+        row
+        for row in rows
+        if row["event_type"] == 11
+        and _identity(row["event"]["fork"]["child"]) == _identity(launcher["process"])
+        and _token(row["event"]["fork"]["child"]) == _token(launcher["process"])
+        and _precedes(row, launcher)
+    ]
+    values: dict = {
+        "retained_chain": "PASS",
+        "launcher_security": inspect_native_security(payload["target"]),
+        "app_preimage_security": inspect_native_security(app["process"]),
+        "slice": inspect_native_slice(payload),
+        "arguments": inspect_launcher_arguments(payload, bundle_identifier),
+        "entitlements": inspect_launcher_entitlements(payload),
+        "environment": inspect_launcher_environment(payload["env"], app["event"]["exec"]["env"]),
+    }
+    if len(forks) == 1:
+        parent, child = forks[0]["process"], forks[0]["event"]["fork"]["child"]
+        values["fork_parent_is_boot_parent"] = _check(
+            _token(parent)[5] == child["ppid"] == 1
+            and _token(parent) == _token(child, "parent_audit_token")
+            and parent["executable"]["path"] == "/sbin/launchd"
+        )
+        values["fork_preserves_parent_image"] = _check(
+            all(
+                parent["executable"]["stat"][key] == child["executable"]["stat"][key]
+                for key in ("st_dev", "st_ino")
+            )
+            and all(parent[key] == child[key] for key in ("signing_id", "team_id", "cdhash"))
+        )
+    return LauncherReferenceFacts(**values)
 
 
 def _preserve_candidate_selection(
@@ -2132,6 +2490,14 @@ def review_existing(root: Path) -> ExistingReviewReport:
         if case == "finder" and manifest.collection_mode == "launch_chain":
             values["launch_chain"] = _preserve_candidate_selection(
                 analyze_launch_chain(rows, manifest.image), original.launch_chain
+            )
+            bundle_identifier = None
+            if values["launch_chain"].launcher_linkage == "PASS":
+                info = plistlib.loads(_read(root / "GUIProbe.app/Contents/Info.plist"))
+                if type(info) is dict and type(info.get("CFBundleIdentifier")) is str:
+                    bundle_identifier = info["CFBundleIdentifier"]
+            values["launcher_reference"] = inspect_launcher_reference(
+                rows, manifest.image, bundle_identifier=bundle_identifier
             )
         values[f"{case}_fork"] = (
             "RETAINED_MATCH"

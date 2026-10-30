@@ -416,3 +416,129 @@ def test_marker_requires_explicit_launcher_mode_before_any_native_operation() ->
 def test_absent_entitlements_remain_distinct_from_explicit_null() -> None:
     assert kit.entitlement_shape(None).representation == "NULL"
     assert kit.entitlement_shape(None, present=False).representation == "ABSENT"
+
+
+@pytest.mark.parametrize(
+    ("subtype", "base", "capabilities"),
+    [
+        (0, "ALL", "NONE"),
+        (1, "V8", "NONE"),
+        (2, "ARM64E", "NONE"),
+        (-2147483646, "ARM64E", "PTRAUTH_ABI"),
+        (0x01000002, "ARM64E", "OTHER"),
+        (17, "OTHER", "NONE"),
+    ],
+)
+def test_reference_slice_labels_preserve_base_and_capabilities(
+    subtype: int,
+    base: str,
+    capabilities: str,
+) -> None:
+    report = kit.inspect_native_slice({"image_cputype": 16777228, "image_cpusubtype": subtype})
+    assert report.architecture == "ARM64"
+    assert report.subtype == base and report.capabilities == capabilities
+    assert str(subtype) not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("value", [True, -1, 2**32, _CANARY])
+def test_security_supplement_does_not_coerce_or_export_invalid_flags(value: object) -> None:
+    report = kit.inspect_native_security({"codesigning_flags": value})
+    assert report.flags_well_formed == "FAIL" and not report.flags
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_security_supplement_uses_named_flags_and_keeps_unknown_bits_visible() -> None:
+    report = kit.inspect_native_security(
+        {
+            "codesigning_flags": 0x22000001,
+            "cs_validation_category": 1,
+            "is_platform_binary": True,
+            "is_es_client": False,
+        }
+    )
+    assert report.flags == ("VALID", "NO_UNTRUSTED_HELPERS", "SIGNED")
+    assert report.only_known_flags == "PASS" and report.category == "PLATFORM"
+    assert report.platform_binary == "PASS" and report.es_client == "FAIL"
+    unknown = kit.inspect_native_security({"codesigning_flags": 0x40})
+    assert unknown.flags_well_formed == "PASS" and unknown.only_known_flags == "FAIL"
+    assert not unknown.flags
+
+
+@pytest.mark.parametrize("argv0", ["xpcproxy", "/usr/libexec/xpcproxy"])
+def test_argument_supplement_matches_controlled_bundle_without_exporting_label(argv0: str) -> None:
+    report = kit.inspect_launcher_arguments(
+        {"args": [argv0, f"application.{_CANARY}.1234.5678"]}, _CANARY
+    )
+    assert report.layout == "TARGET_AND_SERVICE"
+    assert report.service_matches_controlled_bundle == "PASS" and report.suffix == "DECIMAL_PAIR"
+    assert report.argv0 == ("BASENAME_XPCPROXY" if argv0 == "xpcproxy" else "ABSOLUTE_XPCPROXY")
+    assert _CANARY not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("damage", ["unknown_key", "integer_value", "false_value", "wrapper"])
+def test_entitlement_supplement_distinguishes_exact_static_boolean_template(damage: str) -> None:
+    value: dict = dict(kit.XPCPROXY_STATIC_ENTITLEMENTS)
+    assert kit.inspect_launcher_entitlements({"entitlements": value}).static_values == "PASS"
+    if damage == "unknown_key":
+        value[_CANARY] = _CANARY
+    elif damage == "integer_value":
+        value[next(iter(value))] = 1
+    elif damage == "false_value":
+        value[next(iter(value))] = False
+    else:
+        value = {_CANARY: value}
+    report = kit.inspect_launcher_entitlements({"entitlements": value})
+    assert report.static_values == "FAIL"
+    assert report.static_keys == ("PASS" if damage in {"integer_value", "false_value"} else "FAIL")
+    assert report.boolean_values_only == ("PASS" if damage == "false_value" else "FAIL")
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_environment_supplement_reports_roles_without_unknown_names_or_values() -> None:
+    report = kit.inspect_launcher_environment(
+        [
+            "HOME=/var/root",
+            "USER=root",
+            "LOGNAME=root",
+            f"SHELL={_CANARY}",
+            "PATH=/usr/bin",
+            f"{_CANARY}={_CANARY}",
+            "XPC_FLAGS=0",
+        ],
+        [
+            f"HOME=/Users/{_CANARY}",
+            f"USER={_CANARY}",
+            f"LOGNAME={_CANARY}",
+            f"SHELL={_CANARY}",
+            "PATH=/usr/bin:/bin",
+            f"__CF_USER_TEXT_ENCODING={_CANARY}",
+        ],
+    )
+    assert report.vectors_well_formed == "PASS"
+    assert report.home == report.user == report.logname == "ROOT_TO_APP"
+    assert report.shell == "SAME" and report.path == "CHANGED"
+    assert report.cf_text_encoding == "ADDED" and report.xpc_flags == "REMOVED"
+    assert report.tmpdir == "ABSENT"
+    assert _CANARY not in report.model_dump_json()
+    assert (
+        kit.inspect_launcher_environment(["USER=root", "USER=root"], []).vectors_well_formed
+        == "FAIL"
+    )
+
+
+def test_launcher_supplement_uses_only_retained_linked_rows() -> None:
+    rows = _chain()
+    first = rows[1]["event"]["exec"]
+    first["entitlements"] = dict(kit.XPCPROXY_STATIC_ENTITLEMENTS)
+    first["args"] = ["xpcproxy", f"application.{_CANARY}.1234.5678"]
+    first["image_cpusubtype"] = -2147483646
+    first["target"]["codesigning_flags"] = 0x22000001
+    report = kit.inspect_launcher_reference(_raws(rows), _IMAGE, bundle_identifier=_CANARY)
+    assert report.retained_chain == "PASS"
+    assert report.entitlements.static_values == "PASS"
+    assert report.arguments.service_matches_controlled_bundle == "PASS"
+    assert report.slice.subtype == "ARM64E" and report.slice.capabilities == "PTRAUTH_ABI"
+    assert report.launcher_security.flags == ("VALID", "NO_UNTRUSTED_HELPERS", "SIGNED")
+    assert _CANARY not in report.model_dump_json()
+    missing = kit.inspect_launcher_reference(_raws(rows)[2:], _IMAGE)
+    assert missing.retained_chain == "FAIL" and missing.entitlements.static_values == "INCONCLUSIVE"

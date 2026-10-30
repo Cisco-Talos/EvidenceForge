@@ -608,3 +608,63 @@ The marker-free replacement `/private/tmp/eforge-gui-launch-kit-jsdpx_t1` is bui
 `SETUP_READY`, `error: NONE` and platform/provenance passing. No probe, app or collector was
 started. Do not rerun setup or modify any completed capture; the next human-run experiment
 uses this fresh kit and can explain all image predicates in a single fixed report.
+
+## October 30: first launcher fork/exec retained; offline metadata approval pending
+
+The human pasted the reviewed fixed report from the corrected kit through a chat attachment.
+Only that supplied report was opened. The agent did not inspect the kit's private captures,
+snapshots, Terminal or process listings. Collection/platform/provenance/readiness/bounds/sequence
+and cleanup pass. The launcher has `ONE` retained exec, `MATCHED`, `RETAINED_MATCH` fork and
+passing linkage. Every image comparison and source ordering passes, with no ring eviction.
+Both launcher/app native shapes pass when entitlements are isolated; app exec/exit and own
+image/identity/argv/descriptors retain their previous passes. No new live collection is needed
+for the remaining metadata review.
+
+The launcher initially has root POSIX credentials. All four POSIX token words differ at the
+later app preimage, while audit user/session, PID and PID version remain equal. These are two
+credential states in the same execution, before the separately observed app exec. This is
+distinct from the already-modeled zero-word responsibility token: first-exec root credentials
+are now directly classified, not inferred from responsibility. The current user-credential
+aggregate cannot be relabeled as a qualified root fork/exec. Its replacement will need an
+explicit authenticated credential transition without an invented extra image activation.
+
+The first exec additionally reports object-valued entitlements, a failing current security
+tuple, non-generic ARM64 subtype and an argv layout outside the old absolute-path classifier.
+Those concrete classes remain unresolved rather than being treated as source absence or as
+permission to accept guessed flags, entitlements, arguments or CPU subtype.
+
+A static inspection of the fixed installed Apple xpcproxy binary returned only approved shape
+labels, then a sanitized vendor template after confirming the expected signing identifier,
+`com.apple.*` key names and Boolean-only values. The eight Boolean vendor entitlements are
+code metadata, not native log records or personal configuration. Initial sandboxed display
+attempts were inconclusive; the documented XML display with normal filesystem access succeeded.
+Only the static system file was read; no app/probe, collector, security setting or signing
+mutation was involved. The template is embedded only in the private reviewer's expected
+reference. It has not been asserted equal to eslogger's object or admitted to generation.
+
+Version 6 of the offline supplement now classifies all remaining first-exec facts in one pass:
+named public code-signing bits/category (with an unknown-bit check), ARM64 subtype/capabilities,
+argv0 and controlled-app service-label roles, standard environment relationships, fork parent/
+image linkage, and exact static Boolean entitlement keys/values. It returns no arbitrary
+entitlement names/values, environment strings, service labels, paths, timestamps, numeric
+identities, hashes or raw flags. It starts no subprocess, app, collector, probe or live query
+and changes no evidence. Existing v1/v2 provenance and capture reports remain readable.
+
+All 272 reference-kit tests pass with invented inputs, including read-only end-to-end review
+of a populated-entitlement launcher chain, private canaries, named flags/unknown bits, ARM64e
+capabilities, argv roles, exact Boolean typing, environment differences and schema rejection.
+Ruff/format and whitespace checks pass. Generation revision remains 354; no codec, source
+qualification, State census or native producer gate was changed by this supplement.
+
+Code-only reviewer `/private/tmp/eforge-gui-launch-kit-qpj8kw44` is prepared. No setup or native
+execution was run from it. Permission was requested to run `review-existing --private-run`
+against the completed `/private/tmp/eforge-gui-launch-kit-jsdpx_t1` under the standing local-log
+rule. Do not read that capture until the answer arrives. Use the hidden original-outer-kit
+prompt, never overwrite the old helper or run setup in the used kit.
+
+After that bounded review: admit only the confirmed entitlement wire form and named security/
+slice metadata; implement launchd fork -> root xpcproxy exec -> explicit POSIX credential
+transition -> existing GUI app exec -> known exit through the exact action publication owner;
+then prove the authored/baseline complete-mode census, output filtering and recovery matrix.
+Other startup/service/helper families remain separate inventoried obligations. No assessment
+loop is a prerequisite for this development sequence.
