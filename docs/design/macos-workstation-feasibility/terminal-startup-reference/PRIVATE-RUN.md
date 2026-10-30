@@ -5,6 +5,12 @@ macOS 27 arm64. Agents prepare code and test invented inputs only. Close Codex a
 agents before setup or capture. Never share native records, screenshots, terminal contents,
 provenance, hashes or the whole kit. Share only the fixed final JSON after reviewing it.
 
+Use a fresh **version-2 kit**. Version 1 mistakenly applied private-file permission checks
+to installed app binaries, causing setup `LOCATION` and a subsequent capture `IO` from the
+missing setup manifest. Do not repair permissions on Terminal/iTerm2 or overwrite an old kit.
+Version 2 hashes the installed app separately, preserves strict private-file checks, and
+adds a fixed `step` label to failures. Failed commands return a nonzero exit status.
+
 The question is which actual fork/exec transitions connect a newly launched terminal app,
 any helpers, login, the initial shell and one harmless marker. We must distinguish new PIDs
 from same-PID image replacements. Matching behavior in our engine does not establish that
@@ -45,7 +51,9 @@ work and fully quit the app being tested before collection. Do not quit the cont
    /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_terminal_startup.py setup --terminal apple --private-run
    ```
 
-   For the iTerm2 kit, use `--terminal iterm2`. Expect `SETUP_READY`, error `NONE`.
+   For the iTerm2 kit, use `--terminal iterm2`. Expect `kit_version: 2`,
+   `stage: SETUP_READY`, and `error: NONE`. **Stop if setup reports any error; do not run
+   capture.** Share only its fixed JSON. A failed setup needs another fresh kit.
    The iTerm2 executable must be `/Applications/iTerm.app/Contents/MacOS/iTerm2`.
 
 2. Have Finder ready to launch the selected app. Prepare the following marker command using
@@ -81,5 +89,8 @@ work and fully quit the app being tested before collection. Do not quit the cont
 The private `run-…` directory has `SHAREABLE-REPORT.json`, provenance, and (only after successful
 chain proof and cleanup) `launch-chain-events.jsonl`. Do not copy these files into the repository.
 If a command fails, share only its fixed JSON; keep every other output private.
+`SETUP_REQUIRED` at `SETUP_MANIFEST` means no successful setup is available; no collection
+is started. `KIT_ALREADY_USED` means the one-shot setup or capture was already attempted;
+leave that kit intact and request a fresh code-only copy.
 You can replay a saved fixed report with `private_terminal_startup.py report --private-run`;
 that command reads only the saved allowlisted JSON, not native records, and starts nothing.

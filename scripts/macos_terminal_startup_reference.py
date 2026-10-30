@@ -11,6 +11,7 @@ Only prepare and invented-input tests are appropriate in an agent session.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -23,9 +24,10 @@ import tempfile
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -73,6 +75,65 @@ CODE = (
 MAX_RING_BYTES = 8 * 1_048_576
 MAX_RING_ROWS = 512
 MAX_CHAIN_ROWS = 48
+MAX_INSTALLED_IMAGE_BYTES = 256 * 1_048_576
+
+type ErrorCode = Literal[
+    "NONE",
+    "INPUT",
+    "PLATFORM",
+    "ROOT_USER",
+    "LOCATION",
+    "BUILD",
+    "COLLECTOR",
+    "LIMIT",
+    "DATA",
+    "INTERRUPTED",
+    "IO",
+    "INTERNAL",
+    "TIMEOUT",
+    "APP_START_NOT_OBSERVED",
+    "AMBIGUOUS_MARKER",
+    "SETUP_REQUIRED",
+    "KIT_ALREADY_USED",
+    "APP_NOT_FOUND",
+]
+type DiagnosticStep = Literal[
+    "INPUT",
+    "KIT_LOCATION",
+    "PLATFORM_CHECK",
+    "SETUP_LOCK",
+    "COMPILE_MARKER",
+    "COMPILE_GUARD",
+    "SIGN_MARKER",
+    "INSTALLED_APP",
+    "PRIVATE_ARTIFACTS",
+    "ACCOUNT",
+    "SEAL_SETUP",
+    "SETUP_MANIFEST",
+    "VERIFY_CODE",
+    "PREPARE_RUN",
+    "COLLECTOR",
+    "COLLECTION",
+    "CLEANUP",
+    "ANALYSIS",
+    "SAVE_RECORDS",
+    "SAVE_REPORT",
+    "REPORT_READ",
+    "COMPLETE",
+]
+
+
+class DiagnosticError(ValueError):
+    """Fixed failure context without paths, exception messages or native values."""
+
+    def __init__(self, code: ErrorCode, step: DiagnosticStep) -> None:
+        if code not in get_args(ErrorCode.__value__) or step not in get_args(
+            DiagnosticStep.__value__
+        ):
+            raise ValueError("INPUT")
+        self.code = code
+        self.step = step
+        super().__init__(code)
 
 
 class Model(BaseModel):
@@ -125,7 +186,7 @@ class Phase(Model):
 
 
 class Report(Model):
-    kit_version: Literal[1] = 1
+    kit_version: Literal[1, 2] = 2
     purpose: Literal["TERMINAL_STARTUP_CHAIN_DIAGNOSTIC"] = "TERMINAL_STARTUP_CHAIN_DIAGNOSTIC"
     collection: Literal["MARKER_AUTHENTICATED_LAUNCH_CHAIN_ONLY"] = (
         "MARKER_AUTHENTICATED_LAUNCH_CHAIN_ONLY"
@@ -133,23 +194,8 @@ class Report(Model):
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     terminal: Terminal
-    error: Literal[
-        "NONE",
-        "INPUT",
-        "PLATFORM",
-        "ROOT_USER",
-        "LOCATION",
-        "BUILD",
-        "COLLECTOR",
-        "LIMIT",
-        "DATA",
-        "INTERRUPTED",
-        "IO",
-        "INTERNAL",
-        "TIMEOUT",
-        "APP_START_NOT_OBSERVED",
-        "AMBIGUOUS_MARKER",
-    ] = "NONE"
+    error: ErrorCode = "NONE"
+    step: DiagnosticStep = "INPUT"
     stage: Literal["SETUP_READY", "COLLECTOR_READY", "TERMINAL_READY", "COMPLETE", "ERROR"] = (
         "ERROR"
     )
@@ -556,71 +602,133 @@ def _root() -> Path:
 
 
 def _image(path: Path) -> reference.Image:
+    """Read a private kit executable with the existing private-file checks."""
     if not stat.S_ISREG(path.lstat().st_mode):
         raise reference.PrivateError("BUILD")
     return reference._image(path)
 
 
+def _installed_image(path: Path) -> reference.Image:
+    """Hash an installed executable without treating it as a private capture file.
+
+    System/user ownership and public read/execute permissions are normal here.
+    Keep descriptor-bound identity, bounded streaming, no symlink following and
+    change detection; private kit readers retain their stricter policy.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid not in (0, os.getuid())
+            or before.st_mode & 0o022
+        ):
+            raise reference.PrivateError("BUILD")
+        if not 0 < before.st_size <= MAX_INSTALLED_IMAGE_BYTES:
+            raise reference.PrivateError("LIMIT")
+        digest = hashlib.sha256()
+        extent = 0
+        while chunk := stream.read(65536):
+            extent += len(chunk)
+            if extent > MAX_INSTALLED_IMAGE_BYTES:
+                raise reference.PrivateError("LIMIT")
+            digest.update(chunk)
+        after = os.fstat(stream.fileno())
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_mode", "st_uid")
+        if extent != before.st_size or any(
+            getattr(before, field) != getattr(after, field) for field in fields
+        ):
+            raise reference.PrivateError("BUILD")
+    return reference.Image(device=before.st_dev, inode=before.st_ino, sha256=digest.hexdigest())
+
+
 def setup(terminal: Terminal) -> Report:
     """HUMAN ONLY: compile/sign the marker and guard; launch nothing."""
-    root = _root()
-    os_version, os_build = reference._preflight()
-    reference._write(root / "SETUP-LOCK", b"SETUP\n")
+    root = _at_step("KIT_LOCATION", _root)
+    os_version, os_build = _at_step("PLATFORM_CHECK", reference._preflight)
+    _at_step("SETUP_LOCK", lambda: reference._write(root / "SETUP-LOCK", b"SETUP\n"))
+    app = _at_step("INSTALLED_APP", lambda: _installed_image(Path(PATHS[terminal])))
     for source, output in ((CODE[2], "terminal-marker"), (CODE[3], "collector-guard")):
-        reference._command(
-            [
-                "/usr/bin/clang",
-                "-Wall",
-                "-Wextra",
-                "-Werror",
-                str(root / source),
-                "-o",
-                str(root / output),
-            ],
-            root,
+        _at_step(
+            "COMPILE_MARKER" if output == "terminal-marker" else "COMPILE_GUARD",
+            lambda source=source, output=output: reference._command(
+                [
+                    "/usr/bin/clang",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    str(root / source),
+                    "-o",
+                    str(root / output),
+                ],
+                root,
+            ),
         )
-        (root / output).chmod(0o700)
-    reference._command(
-        ["/usr/bin/codesign", "--force", "--sign", "-", str(root / "terminal-marker")], root
+        _at_step("PRIVATE_ARTIFACTS", lambda output=output: (root / output).chmod(0o700))
+    _at_step(
+        "SIGN_MARKER",
+        lambda: reference._command(
+            ["/usr/bin/codesign", "--force", "--sign", "-", str(root / "terminal-marker")], root
+        ),
     )
-    account = pwd.getpwuid(os.getuid())
+    account = _at_step("ACCOUNT", lambda: pwd.getpwuid(os.getuid()))
     manifest = Manifest(
         terminal=terminal,
         os_version=os_version,
         os_build=os_build,
-        app=_image(Path(PATHS[terminal])),
-        marker=_image(root / "terminal-marker"),
-        guard_sha256=reference._digest(root / "collector-guard"),
+        app=app,
+        marker=_at_step("PRIVATE_ARTIFACTS", lambda: _image(root / "terminal-marker")),
+        guard_sha256=_at_step(
+            "PRIVATE_ARTIFACTS", lambda: reference._digest(root / "collector-guard")
+        ),
         codec_sha256=reference._codec_digest(),
-        code_sha256={name: reference._digest(root / name) for name in CODE},
+        code_sha256=_at_step(
+            "VERIFY_CODE", lambda: {name: reference._digest(root / name) for name in CODE}
+        ),
         own_uid=account.pw_uid,
         own_gid=account.pw_gid,
         own_username=account.pw_name,
         own_home=account.pw_dir,
     )
-    reference._write(root / "SETUP.json", manifest.model_dump_json().encode())
-    return Report(terminal=terminal, stage="SETUP_READY", provenance="PASS", target_platform="PASS")
+    _at_step(
+        "SEAL_SETUP",
+        lambda: reference._write(root / "SETUP.json", manifest.model_dump_json().encode()),
+    )
+    return Report(
+        terminal=terminal,
+        stage="SETUP_READY",
+        step="COMPLETE",
+        provenance="PASS",
+        target_platform="PASS",
+    )
 
 
 def _manifest(root: Path) -> Manifest:
-    manifest = Manifest.model_validate_json(reference._read(root / "SETUP.json"))
+    manifest = _at_step(
+        "SETUP_MANIFEST", lambda: Manifest.model_validate_json(reference._read(root / "SETUP.json"))
+    )
     if (
-        manifest.app != _image(Path(PATHS[manifest.terminal]))
-        or manifest.marker != _image(root / "terminal-marker")
-        or manifest.guard_sha256 != reference._digest(root / "collector-guard")
+        manifest.app
+        != _at_step("INSTALLED_APP", lambda: _installed_image(Path(PATHS[manifest.terminal])))
+        or manifest.marker
+        != _at_step("PRIVATE_ARTIFACTS", lambda: _image(root / "terminal-marker"))
+        or manifest.guard_sha256
+        != _at_step("PRIVATE_ARTIFACTS", lambda: reference._digest(root / "collector-guard"))
         or manifest.codec_sha256 != reference._codec_digest()
         or manifest.code_sha256 != {name: reference._digest(root / name) for name in CODE}
     ):
-        raise reference.PrivateError("BUILD")
+        raise DiagnosticError("BUILD", "VERIFY_CODE")
     return manifest
 
 
-def _failure(error: BaseException) -> str:
+def _failure(error: BaseException) -> ErrorCode:
     """Map failures to the fixed export vocabulary without exception text."""
+    if isinstance(error, DiagnosticError):
+        return error.code
     if isinstance(error, reference.PrivateError):
         return (
-            error.code
-            if error.code in Report.model_fields["error"].annotation.__args__
+            cast(ErrorCode, error.code)
+            if error.code in get_args(ErrorCode.__value__)
             else "INTERNAL"
         )
     if isinstance(error, KeyboardInterrupt):
@@ -630,30 +738,72 @@ def _failure(error: BaseException) -> str:
     return "DATA"
 
 
+def _at_step[T](step: DiagnosticStep, operation: Callable[[], T]) -> T:
+    """Retain a fixed failure location without exposing exception text."""
+    try:
+        return operation()
+    except DiagnosticError:
+        raise
+    except FileNotFoundError as error:
+        code: ErrorCode = (
+            "SETUP_REQUIRED"
+            if step == "SETUP_MANIFEST"
+            else "APP_NOT_FOUND"
+            if step == "INSTALLED_APP"
+            else "IO"
+        )
+        raise DiagnosticError(code, step) from error
+    except FileExistsError as error:
+        raise DiagnosticError("KIT_ALREADY_USED", step) from error
+    except (
+        reference.PrivateError,
+        KeyboardInterrupt,
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        AttributeError,
+        RecursionError,
+    ) as error:
+        raise DiagnosticError(_failure(error), step) from error
+
+
 def capture() -> Report:
     """HUMAN ONLY: observe a manually opened terminal, anchored by its marker."""
-    root = _root()
-    os_version, os_build = reference._preflight()
+    root = _at_step("KIT_LOCATION", _root)
     manifest = _manifest(root)
+    os_version, os_build = _at_step("PLATFORM_CHECK", reference._preflight)
     if (manifest.os_version, manifest.os_build) != (os_version, os_build):
-        raise reference.PrivateError("PLATFORM")
-    reference._write(root / "SESSION-LOCK", b"ACTIVE\n")
+        raise DiagnosticError("PLATFORM", "PLATFORM_CHECK")
+    _at_step("PREPARE_RUN", lambda: reference._write(root / "SESSION-LOCK", b"ACTIVE\n"))
     run = root / f"run-{uuid.uuid4().hex}"
-    run.mkdir(mode=0o700)
-    reference._write(root / "ACTIVE-RUN", (run.name + "\n").encode())
-    reference._write(run / "provenance.json", manifest.model_dump_json().encode())
-    report = Report(terminal=manifest.terminal, provenance="PASS", target_platform="PASS")
+    _at_step("PREPARE_RUN", lambda: run.mkdir(mode=0o700))
+    _at_step(
+        "PREPARE_RUN", lambda: reference._write(root / "ACTIVE-RUN", (run.name + "\n").encode())
+    )
+    _at_step(
+        "PREPARE_RUN",
+        lambda: reference._write(run / "provenance.json", manifest.model_dump_json().encode()),
+    )
+    report = Report(
+        terminal=manifest.terminal, step="COLLECTOR", provenance="PASS", target_platform="PASS"
+    )
     tracker = Tracker(manifest)
     collector: subprocess.Popen[bytes] | None = None
     probes: list[subprocess.Popen[bytes]] = []
     pump: reference.Pump | None = None
     try:
-        collector = subprocess.Popen(
-            ["/usr/bin/sudo", "-n", str(root / "collector-guard")],
-            env=reference.SAFE_ENV,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+        collector = _at_step(
+            "COLLECTOR",
+            lambda: subprocess.Popen(
+                ["/usr/bin/sudo", "-n", str(root / "collector-guard")],
+                env=reference.SAFE_ENV,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            ),
         )
         pump = reference.Pump(collector, tracker, {})
         deadline, next_probe = time.monotonic() + 10, 0.0
@@ -666,7 +816,9 @@ def capture() -> Report:
             pump.tick()
         if not tracker.ready:
             raise reference.PrivateError("COLLECTOR")
-        report = report.model_copy(update={"stage": "TERMINAL_READY", "collector_ready": "PASS"})
+        report = report.model_copy(
+            update={"stage": "TERMINAL_READY", "step": "COLLECTION", "collector_ready": "PASS"}
+        )
         print(report.model_dump_json(include={"purpose", "stage", "error", "terminal"}), flush=True)
         tracker.collecting = True
         deadline = time.monotonic() + 30
@@ -676,6 +828,7 @@ def capture() -> Report:
         report = report.model_copy(
             update={
                 "stage": "COMPLETE",
+                "step": "COMPLETE",
                 "bounded_collection": "PASS",
                 "sequence_continuity": _check(tracker.sequence_ok),
                 "candidate_ring_evicted": tracker.evicted,
@@ -693,6 +846,7 @@ def capture() -> Report:
             }
         )
     except (
+        DiagnosticError,
         reference.PrivateError,
         KeyboardInterrupt,
         OSError,
@@ -704,7 +858,13 @@ def capture() -> Report:
         AttributeError,
         RecursionError,
     ) as error:
-        report = report.model_copy(update={"stage": "ERROR", "error": _failure(error)})
+        report = report.model_copy(
+            update={
+                "stage": "ERROR",
+                "error": _failure(error),
+                "step": error.step if isinstance(error, DiagnosticError) else report.step,
+            }
+        )
     finally:
         cleanup = reference._stop_collector(collector) if collector is not None else False
         if pump is not None:
@@ -717,9 +877,14 @@ def capture() -> Report:
     # Raw rows never reach a file until the exact marker-to-app chain is proved.
     if report.error == "NONE" and cleanup:
         try:
-            report = report.model_copy(update={"phases": analyze(tracker.retained, manifest)})
-            reference._write(
-                run / "launch-chain-events.jsonl", b"\n".join(tracker.retained) + b"\n"
+            report = report.model_copy(
+                update={"phases": _at_step("ANALYSIS", lambda: analyze(tracker.retained, manifest))}
+            )
+            _at_step(
+                "SAVE_RECORDS",
+                lambda: reference._write(
+                    run / "launch-chain-events.jsonl", b"\n".join(tracker.retained) + b"\n"
+                ),
             )
         except (
             ValueError,
@@ -729,18 +894,34 @@ def capture() -> Report:
             AttributeError,
             RecursionError,
         ) as error:
-            report = report.model_copy(update={"stage": "ERROR", "error": _failure(error)})
+            report = report.model_copy(
+                update={
+                    "stage": "ERROR",
+                    "error": _failure(error),
+                    "step": error.step if isinstance(error, DiagnosticError) else "ANALYSIS",
+                }
+            )
     elif report.error == "NONE":
-        report = report.model_copy(update={"stage": "ERROR", "error": "COLLECTOR"})
-    reference._write(run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode())
+        report = report.model_copy(
+            update={"stage": "ERROR", "step": "CLEANUP", "error": "COLLECTOR"}
+        )
+    _at_step(
+        "SAVE_REPORT",
+        lambda: reference._write(
+            run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode()
+        ),
+    )
     return report
 
 
 def report_existing() -> Report:
     """HUMAN ONLY: replay the fixed saved report, without opening native records."""
-    root = _root()
-    run = reference._active(root)
-    return Report.model_validate_json(reference._read(run / "SHAREABLE-REPORT.json"))
+    root = _at_step("KIT_LOCATION", _root)
+    run = _at_step("REPORT_READ", lambda: reference._active(root))
+    return _at_step(
+        "REPORT_READ",
+        lambda: Report.model_validate_json(reference._read(run / "SHAREABLE-REPORT.json")),
+    )
 
 
 def main() -> None:
@@ -766,12 +947,10 @@ def main() -> None:
             if args.operation == "capture"
             else report_existing()
         )
+    except DiagnosticError as error:
+        report = report.model_copy(update={"error": error.code, "step": error.step})
     except reference.PrivateError as error:
-        code = (
-            error.code
-            if error.code in Report.model_fields["error"].annotation.__args__
-            else "INTERNAL"
-        )
+        code = error.code if error.code in get_args(ErrorCode.__value__) else "INTERNAL"
         report = report.model_copy(update={"error": code})
     except KeyboardInterrupt:
         report = report.model_copy(update={"error": "INTERRUPTED"})
@@ -780,6 +959,8 @@ def main() -> None:
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError):
         report = report.model_copy(update={"error": "DATA"})
     print(report.model_dump_json(indent=2), flush=True)
+    if report.error != "NONE":
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

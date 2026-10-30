@@ -3,6 +3,7 @@
 
 """Invented records only; never launch a real app, marker or collector."""
 
+import hashlib
 import json
 import subprocess
 from copy import deepcopy
@@ -225,11 +226,19 @@ def test_marker_exit_is_bound_to_birth_and_ready_exit_to_controlled_pid() -> Non
 
 
 @pytest.mark.parametrize(
-    "field,value", [("error", _CANARY), ("terminal", _CANARY), ("phases", [{"role": _CANARY}])]
+    "field,value",
+    [("error", _CANARY), ("step", _CANARY), ("terminal", _CANARY), ("phases", [{"role": _CANARY}])],
 )
 def test_shareable_schema_cannot_export_arbitrary_native_text(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         kit.Report.model_validate({"terminal": "apple", field: value})
+
+
+def test_version_one_fixed_report_remains_readable_without_a_step_label() -> None:
+    original = kit.Report(kit_version=1, terminal="apple", error="IO")
+    legacy = original.model_dump_json(exclude={"step"})
+    restored = kit.Report.model_validate_json(legacy)
+    assert restored.kit_version == 1 and restored.error == "IO" and restored.step == "INPUT"
 
 
 def test_prepare_copies_only_code_and_instructions(tmp_path: Path) -> None:
@@ -238,6 +247,171 @@ def test_prepare_copies_only_code_and_instructions(tmp_path: Path) -> None:
     assert root.stat().st_mode & 0o777 == 0o700
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in root.iterdir())
     assert not (root / "SETUP.json").exists()
+
+
+@pytest.mark.parametrize("system_owned", [False, True])
+def test_installed_app_accepts_normal_permissions_without_weakening_private_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system_owned: bool
+) -> None:
+    app = tmp_path / "invented-app"
+    app.write_bytes(b"invented executable")
+    app.chmod(0o755)
+    # This reproduces the original setup failure using only an invented file.
+    with pytest.raises(kit.reference.PrivateError, match="LOCATION"):
+        kit.reference._image(app)
+    if system_owned:
+        original_fstat = kit.os.fstat
+
+        def system_stat(fd: int) -> SimpleNamespace:
+            value = original_fstat(fd)
+            fields = (
+                "st_dev",
+                "st_ino",
+                "st_size",
+                "st_mtime_ns",
+                "st_ctime_ns",
+                "st_mode",
+                "st_nlink",
+            )
+            return SimpleNamespace(**{name: getattr(value, name) for name in fields}, st_uid=0)
+
+        monkeypatch.setattr(kit.os, "fstat", system_stat)
+    image = kit._installed_image(app)
+    assert image.sha256 == hashlib.sha256(b"invented executable").hexdigest()
+    assert image.inode == app.stat().st_ino
+    with pytest.raises(kit.reference.PrivateError, match="LOCATION"):
+        kit.reference._image(app)
+
+
+@pytest.mark.parametrize("mode", [0o775, 0o777])
+def test_installed_app_rejects_other_writers(tmp_path: Path, mode: int) -> None:
+    app = tmp_path / "invented-app"
+    app.write_bytes(b"invented executable")
+    app.chmod(mode)
+    with pytest.raises(kit.reference.PrivateError, match="BUILD"):
+        kit._installed_image(app)
+
+
+def test_installed_app_rejects_symlinks_growth_and_oversized_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = tmp_path / "invented-app"
+    app.write_bytes(b"invented executable")
+    app.chmod(0o755)
+    link = tmp_path / "link"
+    link.symlink_to(app)
+    with pytest.raises(OSError):
+        kit._installed_image(link)
+    original_fstat = kit.os.fstat
+    calls = 0
+
+    def changed_stat(fd: int) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        value = original_fstat(fd)
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode", "st_uid")
+        return SimpleNamespace(
+            **{name: getattr(value, name) for name in fields}, st_ctime_ns=value.st_ctime_ns + calls
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(kit.os, "fstat", changed_stat)
+        with pytest.raises(kit.reference.PrivateError, match="BUILD"):
+            kit._installed_image(app)
+    monkeypatch.setattr(kit, "MAX_INSTALLED_IMAGE_BYTES", 1)
+    with pytest.raises(kit.reference.PrivateError, match="LIMIT"):
+        kit._installed_image(app)
+
+
+def test_installed_app_hashing_does_not_use_the_small_private_record_limit(tmp_path: Path) -> None:
+    app = tmp_path / "invented-large-app"
+    with app.open("wb") as stream:
+        stream.truncate(17 * 1_048_576)
+    app.chmod(0o755)
+    image = kit._installed_image(app)
+    assert len(image.sha256) == 64
+
+
+def test_setup_and_verification_accept_an_installed_public_app_without_running_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "kit"
+    root.mkdir(mode=0o700)
+    for name in kit.CODE:
+        (root / name).write_bytes(b"invented code")
+        (root / name).chmod(0o600)
+    app = tmp_path / "invented-app"
+    app.write_bytes(b"invented public executable")
+    app.chmod(0o755)
+    monkeypatch.setattr(kit, "_root", lambda: root)
+    monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "inventedbuild"))
+    monkeypatch.setattr(kit.reference, "_codec_digest", lambda: "a" * 64)
+    monkeypatch.setitem(kit.PATHS, "apple", str(app))
+    monkeypatch.setattr(
+        kit.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(
+            pw_uid=501, pw_gid=20, pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}"
+        ),
+    )
+    commands: list[str] = []
+
+    def compile_only(args: list[str], _root: Path) -> None:
+        commands.append(args[0])
+        if args[0] == "/usr/bin/clang":
+            Path(args[-1]).write_bytes(b"invented compiled binary")
+
+    monkeypatch.setattr(kit.reference, "_command", compile_only)
+    report = kit.setup("apple")
+    assert report.kit_version == 2 and report.stage == "SETUP_READY" and report.error == "NONE"
+    assert report.step == "COMPLETE"
+    assert commands == ["/usr/bin/clang", "/usr/bin/clang", "/usr/bin/codesign"]
+    assert kit._manifest(root).app == kit._installed_image(app)
+    assert _CANARY not in report.model_dump_json()
+    with pytest.raises(kit.DiagnosticError) as failure:
+        kit.setup("apple")
+    assert (failure.value.code, failure.value.step) == ("KIT_ALREADY_USED", "SETUP_LOCK")
+
+
+def test_missing_setup_rejects_capture_before_platform_commands_or_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(kit, "_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        kit.sys,
+        "argv",
+        ["private_terminal_startup.py", "capture", "--fresh-launch", "--private-run"],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        kit.main()
+    assert stopped.value.code == 2
+    report = kit.Report.model_validate_json(capsys.readouterr().out)
+    assert report.kit_version == 2
+    assert (report.error, report.step) == ("SETUP_REQUIRED", "SETUP_MANIFEST")
+    assert not (tmp_path / "SESSION-LOCK").exists()
+
+
+@pytest.mark.parametrize(
+    "exception,expected",
+    [
+        (kit.reference.PrivateError("LOCATION"), "LOCATION"),
+        (kit.reference.PrivateError("BUILD"), "BUILD"),
+        (PermissionError(_CANARY), "IO"),
+    ],
+)
+def test_fixed_diagnostics_preserve_known_error_codes_without_messages(
+    exception: BaseException, expected: str
+) -> None:
+    assert kit._failure(exception) == expected
+
+    def fail() -> None:
+        raise exception
+
+    with pytest.raises(kit.DiagnosticError) as failure:
+        kit._at_step("INSTALLED_APP", fail)
+    assert (failure.value.code, failure.value.step) == (expected, "INSTALLED_APP")
+    assert _CANARY not in str(failure.value)
 
 
 def test_collector_failure_reports_cleanup_and_writes_no_native_rows(
@@ -323,7 +497,9 @@ def test_main_never_prints_failure_text(
         raise subprocess.CalledProcessError(2, _CANARY, output=_CANARY, stderr=_CANARY)
 
     monkeypatch.setattr(kit, "setup", failed_setup)
-    kit.main()
+    with pytest.raises(SystemExit) as stopped:
+        kit.main()
+    assert stopped.value.code == 2
     output = capsys.readouterr()
     assert _CANARY not in output.out + output.err
     assert kit.Report.model_validate_json(output.out).error == "IO"

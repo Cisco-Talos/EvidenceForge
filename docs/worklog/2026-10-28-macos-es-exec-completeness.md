@@ -936,3 +936,41 @@ Once used, do not inspect these directories or their native records without new 
 This is a diagnostic kit, not new native qualification. The in-window app/login/initial-shell
 gate remains open pending the human's fixed reports; no additional Finder test-app capture,
 fresh GUI login or machine-wide historical log access is needed.
+
+### Terminal kit version 2: installed binary permissions and setup failure diagnostics
+
+The human reported an immediate capture `IO` with all controls inconclusive and confirmed
+that setup had returned `ERROR / LOCATION`. Code review and invented-file reproduction found
+the owning defect: `_image` reused the GUI helper's private-file reader for the installed
+Terminal executable. That reader deliberately rejects files with another owner or public
+permissions, which are normal for an installed app. Setup therefore never sealed its manifest;
+the subsequent capture reported the missing manifest as generic `IO`. No private kit, capture,
+native record, system log or process listing was inspected to diagnose this.
+
+Version 2 has a separate descriptor-bound installed-executable reader. It accepts ordinary
+system/user-owned public executables, retains regular-file/no-symlink/change checks, streams
+the hash with a 256 MiB bound and no longer applies the private-record reader's 16 MiB limit.
+Private code, provenance, marker/guard and record readers retain their existing strict checks.
+Setup and verification share the corrected installed-file reader. No app is launched by it.
+
+Fixed failure steps now distinguish installed app, setup manifest, build, private artifacts,
+run preparation and publication stages without exposing exception text or native values.
+Missing setup returns `SETUP_REQUIRED` before platform commands or collector activation;
+repeated one-shot operations return `KIT_ALREADY_USED`. Failed CLI operations exit 2, so
+shell success chaining cannot continue after a failed setup. The saved version-1 fixed report
+shape remains readable. Native collection scope and all simulation evidence gates are unchanged.
+
+All 248 terminal and existing GUI reference-kit tests pass. New tests reproduce the original
+private-reader rejection with invented public files; cover system ownership, strict private
+permissions, bounded large-file hashing, symlinks/writers/file changes, and successful mocked
+setup plus manifest verification without native execution. Missing setup never starts a
+command or creates a session lock; error messages remain outside the shareable JSON.
+
+Fresh version-2 code-only copies replace the earlier instructions:
+
+- Apple Terminal: `/private/tmp/eforge-terminal-startup-kit-jlgbqbs1`.
+- iTerm2: `/private/tmp/eforge-terminal-startup-kit-vcnw5bf8`.
+
+The old version-1 directories are untouched; do not reuse or inspect them. No setup, native
+collector, real app, marker or private-file review was run by the agent. Whole Ruff, formatting,
+whitespace and the unchanged revision-358 behavior-surface check pass.
