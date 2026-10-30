@@ -467,3 +467,35 @@ or synthetic marker is needed. No evidence gate has yet been closed by these che
 Whole Ruff/format and whitespace checks pass. These are private-kit code and documentation
 changes, not a generation-behavior or product-version change. No native capture files are part
 of the commit; the diagnostic source and its invented-layout work remain outside Git.
+
+## October 30: successful launcher experiment and missing-prefix follow-up
+
+The human shared a completed marker-free version-2 report from the final replacement kit.
+Provenance, platform, readiness, bounded collection, cleanup and sequence continuity pass under
+v11. Both app exec/exit shapes, image/identity/argv/descriptor comparisons and known zero status
+pass. Finder again has a launchd parent, self responsibility and non-TTY vnode stdio. Environment
+comparison remains different from main entry, consistent with the earlier reference distinction.
+No raw capture, own-process snapshot or Terminal was inspected by the agent.
+
+`launcher_retained: NONE` leaves the first xpcproxy phase unresolved. Code review found a real
+filter blind spot: the candidate ring accepted xpcproxy execs only during Finder phase, so a
+matching candidate observed in readiness/control was discarded. The ring now spans those
+three phases while retaining the same 64-row/4-MiB bounds and exact full-token, lifetime,
+file-object and code-identity persistence proof. Invented-input tests cover earlier-phase
+prefixes without persisting unrelated data. This does not prove the cause of this report's
+missing prefix, and no native source admission or process-census requirement was relaxed.
+
+The version-5 offline reviewer now accepts original app-only and launcher-chain kits without
+modifying them. It isolates retained app phases from any launcher prefix, preserves the chain's
+missing-data labels and classifies the Finder preimage lifetime relative to control birth/exit.
+It exports no times, durations, identifiers or arbitrary environment/signing data and starts no
+process, collector, app or role query. It cannot recover a discarded candidate ring or establish
+the collection-subscription instant. All 223 reference-kit tests pass, including v2 read-only
+review, lifetime categories, provenance/canary guards and cross-phase prefix matching. Obtain
+the bounded offline supplement before asking for any repeat collection. Initial launcher and
+populated-entitlement gates remain open; GUI ULF and other launch methods remain uncollected.
+
+Code-only version-5 reviewer prepared at `/private/tmp/eforge-gui-launch-kit-h5zvt6u_`.
+It has not been set up or run against a real capture. Whole Ruff/format and whitespace checks
+pass. The next operation needs permission for the fixed-output offline read of the existing
+capture under the standing local-log rule; it requires no native execution or new collection.

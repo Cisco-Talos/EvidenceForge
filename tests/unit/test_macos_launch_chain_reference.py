@@ -75,6 +75,23 @@ def test_chain_filter_retains_launcher_and_fork_only_after_exact_owned_app_exec(
     assert len(kit._app_case_rows(tracker.records["finder"], _IMAGE)) == 2
 
 
+@pytest.mark.parametrize("phase", ["ready", "control"])
+def test_owned_launcher_prefix_can_precede_finder_phase_without_ambient_persistence(
+    phase: str,
+) -> None:
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    fork, first, app, exit_row = _raws(_chain())
+    tracker.phase = phase
+    assert tracker.accept(fork) == tracker.accept(first) == []
+    assert not any(tracker.records.values())
+    tracker.phase = "finder"
+    accepted = tracker.accept(app)
+    assert [kit._decode(raw)["event_type"] for _, raw in accepted] == [11, 9, 9]
+    tracker.accept(exit_row)
+    assert kit.analyze_launch_chain(tracker.records["finder"], _IMAGE).launcher_linkage == "PASS"
+    assert not tracker.records["control"]
+
+
 @pytest.mark.parametrize("damage", ["credential", "pid_version", "birth", "file", "code"])
 def test_pid_path_or_partial_token_matching_cannot_persist_an_ambient_launcher(damage: str) -> None:
     rows = _chain()

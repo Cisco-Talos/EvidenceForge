@@ -626,7 +626,7 @@ def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model
             model.model_validate({field: _CANARY})
 
 
-@pytest.mark.parametrize("value", [True, "4", 1, 2, 3, None])
+@pytest.mark.parametrize("value", [True, "5", 1, 2, 3, 4, None])
 def test_supplemental_version_rejects_coercion(value: object) -> None:
     with pytest.raises(ValidationError):
         kit.ExistingReviewReport(review_version=value)
@@ -707,6 +707,70 @@ def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
     for private in (_CANARY, str(root), str(_run), _CANARY.encode().hex(), "a" * 64):
         assert private not in serialized
     assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == files
+
+
+@pytest.mark.parametrize(
+    "birth,label",
+    [
+        ("2026-10-19T12:29:58.000000Z", "BEFORE_CONTROL_BIRTH"),
+        ("2026-10-19T12:29:59.500000Z", "BETWEEN_CONTROL_BIRTH_AND_EXIT"),
+        ("2026-10-19T12:30:01.000000Z", "AFTER_CONTROL_EXIT"),
+    ],
+)
+def test_chain_reviewer_uses_retained_app_lifetime_and_preserves_its_unknown_prefix(
+    existing_capture: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    birth: str,
+    label: str,
+) -> None:
+    root, run = existing_capture
+    setup_path = root / "SETUP.json"
+    manifest = json.loads(setup_path.read_bytes())
+    manifest.update(kit_version=2, collection_mode="launch_chain", synthetic_entitlement=False)
+    setup_path.write_text(json.dumps(manifest))
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_bytes())
+    provenance["setup"] = manifest
+    provenance_path.write_text(json.dumps(provenance))
+    summary_path = run / "SHAREABLE-REPORT.json"
+    summary = json.loads(summary_path.read_bytes())
+    summary.update(
+        kit_version=2,
+        collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER",
+        synthetic_entitlement=False,
+    )
+    summary_path.write_text(json.dumps(summary))
+    rows_path = run / "finder-events.jsonl"
+    rows = [json.loads(line) for line in rows_path.read_bytes().splitlines()]
+    for row in rows:
+        row["time"] = "2026-10-19T12:30:05.123456789Z"
+        row["process"]["start_time"] = birth
+        if row["event_type"] == 9:
+            row["process"]["executable"]["path"] = "/usr/libexec/xpcproxy"
+            row["event"]["exec"]["target"]["start_time"] = birth
+    rows_path.write_bytes(b"\n".join(_raws(rows)))
+    own_path = run / "finder-self.json"
+    own = json.loads(own_path.read_bytes())
+    micros = kit._timestamp_microseconds(birth)
+    own.update(start_seconds=micros // 1_000_000, start_microseconds=micros % 1_000_000)
+    own_path.write_text(json.dumps(own))
+    files = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("No native operations or writes during offline review")
+
+    for name in ("_role", "_start", "_preflight", "_write", "_replace"):
+        monkeypatch.setattr(kit, name, forbidden)
+    report = kit.review_existing(root)
+    assert report.review_version == 5
+    assert report.finder_launch.before_image_role == "XPCPROXY"
+    assert report.finder_preimage_birth == label
+    assert report.launch_chain.launcher_retained == "NONE"
+    assert report.finder_fork == "NOT_RETAINED"
+    assert report.collectors == "NOT_STARTED" and report.live_role_queries == "NOT_PERFORMED"
+    assert _CANARY not in report.model_dump_json()
+    assert str(root) not in report.model_dump_json()
+    assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == files
 
 
 @pytest.mark.parametrize("damage", ["helper", "provenance", "own", "wire", "duplicate_exec"])

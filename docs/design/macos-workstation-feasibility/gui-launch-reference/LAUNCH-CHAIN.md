@@ -26,6 +26,9 @@ without that field retain an unknown choice, rather than inventing an absent mar
 
 The collector's machine-wide stream remains transient in the existing bounded filter. In this
 opt-in variant, a second ring holds at most 64 xpcproxy exec candidates and 4 MiB **in memory**.
+It spans readiness, control and Finder phases, because a matched launcher's activation can
+precede the manual Finder step. Older kits buffered launcher candidates only during Finder;
+their missing-prefix result cannot distinguish that blind spot from other causes.
 A candidate is written only after the controlled app's exact device/inode proves ownership
 and its preimage matches the candidate's full eight-word audit token, PID version, birth time,
 native file object and code identity. A preceding fork is retained only if its full child token
@@ -106,8 +109,25 @@ backups and existing endpoint software remain separate from this filter's persis
    /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_gui_launch.py report --private-run
    ```
 
-   Use `report`, not the older v4 `review-existing` command. This reads only this kit's bounded
-   current capture and provenance; it starts no collector, app or live role query.
+   This reads only this kit's bounded current capture and provenance; it starts no collector,
+   app or live role query.
+
+## Offline supplement for an existing capture
+
+A separately prepared version-5 reviewer supports both original app-only and launcher-chain
+kits. Do not copy it over the original helper or run setup in a used kit. From the new
+reviewer directory, run `private_gui_launch.py review-existing --private-run` with the same
+isolated Python command. At its hidden prompt choose the original outer kit, not its run
+subfolder. Share only the fixed JSON. No sudo, collection, app launch, role query or file
+mutation occurs during review.
+
+The supplement classifies the already-retained app preimage, environment changes and whether
+its process lifetime began before, during or after the control lifetime. These are relationship
+labels; no timestamps, identifiers, private names or values are exported. It also preserves
+the retained launch-chain result. `NONE` still does not establish no launcher exec: a reviewer
+cannot reconstruct the discarded transient ring, prove a collection subscription time from a
+control timestamp, or justify a fabricated missing phase. Review the existing capture before
+considering another collection.
 
 The result may qualify the bounded controlled launcher after review and tests. Populated
 entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,

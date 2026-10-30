@@ -403,7 +403,7 @@ class ExistingLaunchFacts(Model):
 class ExistingReviewReport(Model):
     """Offline-only supplemental diagnostic for an unchanged original private kit."""
 
-    review_version: Annotated[int, Field(strict=True, ge=4, le=4)] = 4
+    review_version: Annotated[int, Field(strict=True, ge=5, le=5)] = 5
     purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     error: Code = "NONE"
@@ -415,6 +415,13 @@ class ExistingReviewReport(Model):
     finder_environment: EnvironmentDifference = Field(default_factory=EnvironmentDifference)
     control_launch: ExistingLaunchFacts = Field(default_factory=ExistingLaunchFacts)
     finder_launch: ExistingLaunchFacts = Field(default_factory=ExistingLaunchFacts)
+    finder_preimage_birth: Literal[
+        "BEFORE_CONTROL_BIRTH",
+        "BETWEEN_CONTROL_BIRTH_AND_EXIT",
+        "AFTER_CONTROL_EXIT",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    launch_chain: LaunchChainDiagnostic | None = None
     control_fork: Literal["RETAINED_MATCH", "NOT_RETAINED", "INCONSISTENT", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
     )
@@ -898,8 +905,8 @@ def _token(process: dict, field: str = "audit_token") -> tuple[int, ...]:
     return words
 
 
-def _birth(process: dict) -> int:
-    value = process.get("start_time")
+def _timestamp_microseconds(value: object) -> int:
+    """Compare validated timestamps locally without exporting values or durations."""
     if type(value) is not str or len(value) > 64:
         raise PrivateError("DATA")
     parsed = datetime.fromisoformat(value)
@@ -907,6 +914,10 @@ def _birth(process: dict) -> int:
         raise PrivateError("DATA")
     parsed = parsed.astimezone(UTC)
     return calendar.timegm(parsed.utctimetuple()) * 1_000_000 + parsed.microsecond
+
+
+def _birth(process: dict) -> int:
+    return _timestamp_microseconds(process.get("start_time"))
 
 
 def _identity(process: dict) -> tuple[int, int, int]:
@@ -1011,7 +1022,6 @@ class Tracker:
                 identity = _identity(target)
                 if (
                     self.launch_chain
-                    and self.phase == "finder"
                     and target.get("executable", {}).get("path") == "/usr/libexec/xpcproxy"
                 ):
                     self.launchers.append((raw, target))
@@ -1831,8 +1841,6 @@ def review_existing(root: Path) -> ExistingReviewReport:
     root = root.resolve(strict=True)
     _outside_git(root)
     manifest = _manifest(root)
-    if manifest.collection_mode != "app":
-        raise PrivateError("INPUT")
     run = _active(root)
     provenance = _decode(_read(run / "provenance.json"))
     if (
@@ -1864,13 +1872,20 @@ def review_existing(root: Path) -> ExistingReviewReport:
     if not controls:
         return ExistingReviewReport(**values)
     control_signature = None
+    control_birth: int | None = None
+    control_exit: int | None = None
     for case in ("control", "finder"):
         raw = _read(run / f"{case}-events.jsonl", MAX_RETAINED * (MAX_LINE + 1))
         rows = [line for line in raw.splitlines() if line]
         if len(rows) > MAX_RETAINED:
             raise PrivateError("LIMIT")
         own = _own(run, case)
-        checked = analyze_case(rows, own, _complete(run, case), manifest.image)
+        app_rows = (
+            _app_case_rows(rows, manifest.image)
+            if manifest.collection_mode == "launch_chain"
+            else rows
+        )
+        checked = analyze_case(app_rows, own, _complete(run, case), manifest.image)
         required = (
             "native_shapes",
             "one_exec_and_exit",
@@ -1887,7 +1902,7 @@ def review_existing(root: Path) -> ExistingReviewReport:
             or any(getattr(checked, name) != "PASS" for name in required)
         ):
             raise PrivateError("DATA")
-        decoded = [_decode(line) for line in rows]
+        decoded = [_decode(line) for line in app_rows]
         execs = [row for row in decoded if row.get("event_type") == 9]
         environment = tuple(entry.encode("utf-8") for entry in execs[0]["event"]["exec"]["env"])
         main = tuple(bytes.fromhex(entry) for entry in own.environment_hex)
@@ -1902,6 +1917,22 @@ def review_existing(root: Path) -> ExistingReviewReport:
         )
         if case == "control":
             control_signature = _signature(execs[0]["event"]["exec"]["target"])
+            control_birth = _birth(execs[0]["event"]["exec"]["target"])
+            exit_row = next(row for row in decoded if row.get("event_type") == 15)
+            control_exit = _timestamp_microseconds(exit_row["time"])
+        elif (
+            control_birth is not None and control_exit is not None and control_birth <= control_exit
+        ):
+            birth = _birth(execs[0]["process"])
+            values["finder_preimage_birth"] = (
+                "BEFORE_CONTROL_BIRTH"
+                if birth < control_birth
+                else "BETWEEN_CONTROL_BIRTH_AND_EXIT"
+                if birth <= control_exit
+                else "AFTER_CONTROL_EXIT"
+            )
+        if case == "finder" and manifest.collection_mode == "launch_chain":
+            values["launch_chain"] = analyze_launch_chain(rows, manifest.image)
         values[f"{case}_fork"] = (
             "RETAINED_MATCH"
             if checked.fork_linkage == "PASS"

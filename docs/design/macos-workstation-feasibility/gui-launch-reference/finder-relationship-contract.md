@@ -163,3 +163,26 @@ the exact userspace calls, flags or unretained callbacks in the private experime
    and baseline acceptance case; a new blind panel is not required for every implementation slice.
 
 The fixed report deliberately retains `reference_review: REQUIRED` and `gate_status: NOT_EVALUATED`.
+
+## October 30 launcher-chain capture
+
+The human's marker-free version-2 collection completed with provenance, readiness, cleanup,
+bounded delivery and sequence continuity passing under v11. Control and Finder app exec/exit
+shapes, image/identity/argv/descriptor comparisons and zero terminal status pass again. Finder
+retains the launchd parent and self-responsibility relationship. Environment comparisons differ
+from main entry, as in the earlier reference; no private variables are requested to explain
+their names or values. The probe's exec entitlements are null.
+
+No preceding launcher exec was retained. Its linkage, first-image/security/argument/environment
+and fork facts therefore remain inconclusive. This does not close first-xpcproxy admission,
+prove an absent first exec/fork, qualify populated entitlements or supply GUI Unified Log.
+Reviewing the collector found that its launcher ring was limited to Finder phase; a matching
+prefix observed earlier in the same stream would be lost. The corrected ring spans all three
+bounded phases with the identical full-token, lifetime, native-file and code-identity retention
+proof. Its bounds and prohibition on writing unrelated candidates remain unchanged. That code
+finding is a possible explanation, not an attribution of this capture's missing prefix.
+
+Version 5 of the offline supplement accepts an unchanged launcher-chain kit, selects the exact
+retained app phases for comparison and classifies its preimage lifetime relative to the control.
+It preserves missing-prefix uncertainty and cannot recover discarded candidates or establish
+the precise collection-subscription boundary. No new collection is required for this supplement.
