@@ -212,8 +212,23 @@ type CandidateSelection = Literal[
     "NO_EXECUTION_MATCH",
     "TOKEN_MISMATCH",
     "IMAGE_MISMATCH",
+    "ORDER_MISMATCH",
+    "AMBIGUOUS_EXECUTION",
     "MATCHED",
 ]
+
+
+class ExecutionTokenAgreement(Model):
+    """Compare token snapshots without exporting credentials or identifiers."""
+
+    audit_user: Check = "INCONCLUSIVE"
+    effective_user: Check = "INCONCLUSIVE"
+    effective_group: Check = "INCONCLUSIVE"
+    real_user: Check = "INCONCLUSIVE"
+    real_group: Check = "INCONCLUSIVE"
+    pid: Check = "INCONCLUSIVE"
+    audit_session: Check = "INCONCLUSIVE"
+    pid_version: Check = "INCONCLUSIVE"
 
 
 class LaunchChainDiagnostic(Model):
@@ -226,6 +241,9 @@ class LaunchChainDiagnostic(Model):
     candidate_selection: CandidateSelection = "NOT_RECORDED"
     candidate_ring_evicted: bool | None = None
     launcher_linkage: Check = "INCONCLUSIVE"
+    launcher_token_agreement: ExecutionTokenAgreement = Field(
+        default_factory=ExecutionTokenAgreement
+    )
     launcher_fork_linkage: Literal["RETAINED_MATCH", "NOT_RETAINED", "MULTIPLE", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
     )
@@ -501,8 +519,50 @@ def _shape_without_entitlements(row: dict) -> Check:
 def _same_loaded_image(left: dict, right: dict) -> bool:
     """Match the linked launcher's native file object and code identity in memory."""
     lstat, rstat = left["executable"]["stat"], right["executable"]["stat"]
-    return all(lstat[key] == rstat[key] for key in ("st_dev", "st_ino")) and all(
-        left.get(key) == right.get(key) for key in ("cdhash", "signing_id", "team_id")
+    return (
+        all(
+            type(lstat[key]) is int and type(rstat[key]) is int and lstat[key] == rstat[key]
+            for key in ("st_dev", "st_ino")
+        )
+        and all(
+            process["executable"]["path"] == "/usr/libexec/xpcproxy"
+            and process["executable"]["path_truncated"] is False
+            and type(process["cdhash"]) is str
+            and re.fullmatch(r"[0-9a-fA-F]{40}", process["cdhash"]) is not None
+            and process["signing_id"] == "com.apple.xpcproxy"
+            and (process["team_id"] is None or type(process["team_id"]) is str)
+            for process in (left, right)
+        )
+        and all(left[key] == right[key] for key in ("cdhash", "signing_id", "team_id"))
+    )
+
+
+def _precedes(left: dict, right: dict) -> bool:
+    """Require source ordering inside the single bounded native stream."""
+    return (
+        type(left.get("global_seq_num")) is int
+        and type(right.get("global_seq_num")) is int
+        and 0 <= left["global_seq_num"] < right["global_seq_num"]
+    )
+
+
+def compare_execution_tokens(left: dict, right: dict) -> ExecutionTokenAgreement:
+    """Keep mutable audit/credential agreement separate from execution identity."""
+    fields = (
+        "audit_user",
+        "effective_user",
+        "effective_group",
+        "real_user",
+        "real_group",
+        "pid",
+        "audit_session",
+        "pid_version",
+    )
+    return ExecutionTokenAgreement.model_validate(
+        {
+            field: _check(old == new)
+            for field, old, new in zip(fields, _token(left), _token(right), strict=True)
+        }
     )
 
 
@@ -545,8 +605,8 @@ def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnost
     target = payload["target"]
     linked = (
         _identity(target) == _identity(app_before)
-        and _token(target) == _token(app_before)
         and _same_loaded_image(target, app_before)
+        and _precedes(launcher, app)
     )
     forks = [
         row
@@ -560,6 +620,7 @@ def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnost
     token, app_token = _token(target), _token(app_before)
     values.update(
         launcher_linkage=_check(linked),
+        launcher_token_agreement=compare_execution_tokens(target, app_before),
         launcher_fork_linkage="RETAINED_MATCH"
         if len(forks) == 1
         else "MULTIPLE"
@@ -1078,18 +1139,32 @@ class Tracker:
                 linked = [(case, data) for data, child_id in self.forks if child_id == before]
                 if self.launch_chain and case == "finder":
                     progress = 1 if self.launchers else 0
+                    matches: list[bytes] = []
                     for data, launcher in self.launchers:
                         try:
                             if _identity(launcher) != before:
                                 continue
                             progress = max(progress, 2)
-                            if _token(launcher) != _token(process):
+                            if not _same_loaded_image(launcher, process):
                                 continue
                             progress = max(progress, 3)
-                            if not _same_loaded_image(launcher, process):
+                            if not _precedes(_decode(data), row):
                                 continue
                         except (AttributeError, TypeError, ValueError, KeyError):
                             continue
+                        matches.append(data)
+                        progress = 4
+                    self.launcher_selection = (
+                        "NO_CANDIDATES",
+                        "NO_EXECUTION_MATCH",
+                        "IMAGE_MISMATCH",
+                        "ORDER_MISMATCH",
+                        "MATCHED",
+                    )[progress]
+                    if len(matches) > 1:
+                        self.launcher_selection = "AMBIGUOUS_EXECUTION"
+                    if len(matches) == 1:
+                        data = matches[0]
                         launcher_before = _decode(data)["process"]
                         linked.extend(
                             (case, fork_raw)
@@ -1099,14 +1174,6 @@ class Tracker:
                             == _token(launcher_before)
                         )
                         linked.append((case, data))
-                        progress = 4
-                    self.launcher_selection = (
-                        "NO_CANDIDATES",
-                        "NO_EXECUTION_MATCH",
-                        "TOKEN_MISMATCH",
-                        "IMAGE_MISMATCH",
-                        "MATCHED",
-                    )[progress]
                     linked = list(dict.fromkeys(linked))
                     linked.sort(key=lambda item: _decode(item[1])["global_seq_num"])
                 rows = [*linked, (case, raw)]

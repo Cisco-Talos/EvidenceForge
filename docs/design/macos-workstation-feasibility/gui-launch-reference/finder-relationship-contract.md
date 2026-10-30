@@ -186,3 +186,19 @@ Version 5 of the offline supplement accepts an unchanged launcher-chain kit, sel
 retained app phases for comparison and classifies its preimage lifetime relative to the control.
 It preserves missing-prefix uncertainty and cannot recover discarded candidates or establish
 the precise collection-subscription boundary. No new collection is required for this supplement.
+
+The next human-run capture completed with the same app/control passes and returned
+`candidate_selection: TOKEN_MISMATCH`, with no candidate-ring eviction. This establishes that
+the filter saw an xpcproxy candidate with the same PID, PID version and birth time, then
+rejected it before comparing its file/code identity because one or more credential/audit
+words differed. It does not establish which words differed or prove the later image check
+would have passed. The rejected raw candidate was never persisted and cannot be recovered.
+
+The collector now separates execution identity from mutable credential snapshots. It retains
+only a unique earlier candidate with matching PID, PID version, birth, native file device/inode,
+cdhash and signing/team identity, with both untruncated xpcproxy paths and the expected signing
+identifier. Per-field token agreement is exported separately as fixed checks. This follows
+Apple's PID/version process lookup and current-credential token construction; see the
+[retention procedure and references](LAUNCH-CHAIN.md). No PID-only join, additional ambient
+retention or production admission was introduced. Actual first-exec facts still require a
+new human-run capture with the corrected filter.

@@ -30,8 +30,16 @@ It spans readiness, control and Finder phases, because a matched launcher's acti
 precede the manual Finder step. Older kits buffered launcher candidates only during Finder;
 their missing-prefix result cannot distinguish that blind spot from other causes.
 A candidate is written only after the controlled app's exact device/inode proves ownership
-and its preimage matches the candidate's full eight-word audit token, PID version, birth time,
-native file object and code identity. A preceding fork is retained only if its full child token
+and its preimage matches the candidate's PID, PID version, birth time, native file object,
+cdhash and signing/team identity. Both images must be untruncated xpcproxy paths with the
+expected signing identifier. Exactly one candidate must satisfy those checks and precede the
+app exec in the same stream. The remaining audit-token words are mutable credential/audit
+snapshots and are compared separately; they must not be treated as immutable execution IDs.
+Apple's [process lookup](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_proc.c)
+validates PID and PID version, while its
+[token construction](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_prot.c)
+also includes the current user/group and audit origin. The extra birth/file/code checks here
+remain required for this private retention boundary. A preceding fork is retained only if its full child token
 and lifetime match that same launcher preimage. No PID-only or path-only persistence is used.
 Unrelated candidates are discarded. The original fork ring remains capped at 64 rows/4 MiB;
 the entire stream remains capped at 32 MiB and retained evidence at 16 rows per case.
@@ -131,11 +139,15 @@ considering another collection.
 
 If another collection is needed, the corrected filter also returns fixed
 `candidate_selection` labels: `NO_CANDIDATES`, `NO_EXECUTION_MATCH`, `TOKEN_MISMATCH`,
-`IMAGE_MISMATCH` or `MATCHED`. These distinguish what the bounded filter observed from why a
+`IMAGE_MISMATCH`, `ORDER_MISMATCH`, `AMBIGUOUS_EXECUTION` or `MATCHED`. These distinguish what the bounded filter observed from why a
 candidate was rejected. `candidate_ring_evicted` records only whether the bounded ring lost
 an earlier entry. No candidate contents, identities, counts or arbitrary strings are exported.
 Old reports retain `NOT_RECORDED` and an unknown eviction state; an offline reviewer cannot
-retroactively manufacture these observations. Matching and disk-persistence rules are unchanged.
+retroactively manufacture these observations. `TOKEN_MISMATCH` is preserved when reviewing
+older reports; the corrected filter no longer rejects an otherwise proven execution because
+its mutable credentials changed. `launcher_token_agreement` reports only per-field
+`PASS`/`FAIL` comparisons. Such a difference does not identify the syscall or cause of the
+change and does not qualify its simulation. Unmatched/ambiguous raw candidates remain transient.
 
 The result may qualify the bounded controlled launcher after review and tests. Populated
 entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,

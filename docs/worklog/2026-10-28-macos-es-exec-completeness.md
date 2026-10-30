@@ -531,3 +531,40 @@ fixed rejection/eviction reasons rather than another unexplained `NONE`. No setu
 changes to the completed original capture are needed. Initial-xpcproxy qualification still
 requires actual retained first-exec facts; no process census, collection policy or native
 qualification gate was weakened to accept this report.
+
+## October 30: token mismatch identifies the remaining collector join defect
+
+The human shared a complete corrected-filter report with all original collection controls
+passing, no ring eviction, and `candidate_selection: TOKEN_MISMATCH`. Both app cases retain
+passing shapes, image/identity/argv/descriptors, completion and zero exit status; the launcher
+is still unretained. The decision proves matching PID, PID version and birth but does not
+establish file/code agreement, which the old loop checked only after full-token equality.
+No private capture, native record, Terminal content or process listing was read by the agent.
+
+Code/primary-source review identified the overstrict join: the full audit token includes
+mutable current user/group/audit-origin fields. Apple's XNU `proc_find_audit_token` validates
+PID and PID version; `proc_calc_audit_token` combines those with current credential/audit data.
+The [process implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_proc.c)
+and [credential implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_prot.c)
+support separating execution ownership from snapshot agreement. They do not establish the
+specific syscall, token words or transition in this human capture.
+
+The collector now requires a unique earlier xpcproxy candidate with the same PID/version/birth,
+device/inode, cdhash and signing/team identity. Both paths must be exact/untruncated and the
+signing identifier must be xpcproxy's expected identifier. Missing code fields no longer compare
+equal by default. Ambiguous or out-of-order candidates are rejected. Credential/audit word
+agreement is reported separately using fixed PASS/FAIL fields; all raw data stays private and
+the same rings/byte/time bounds apply. Old TOKEN_MISMATCH reports remain readable without
+inventing lost history. The fork retention proof is unchanged. This fixes a collection join,
+not native generation qualification or canonical process census policy.
+
+All 241 reference-kit tests pass with invented inputs, including all six mutable token words,
+reused/mismatched execution identity, image/code mismatch, absent identity fields, ordering and
+ambiguous candidates. The rejected candidate was never written, so the existing capture cannot
+provide the missing first-exec metadata offline. Corrected marker-free kit
+`/private/tmp/eforge-gui-launch-kit-5h1iiz9q` is built with `SETUP_READY`, `error: NONE` and
+passing platform/provenance checks. A first sandboxed compile failed with BUILD in a separate
+unused copy; the fresh kit compiled successfully with normal compiler access. No probe, app,
+collector or live role query was started. Use the new kit for the next human-run capture; do
+not run setup again or change any completed private capture. Initial-launch qualification
+remains open pending the actual retained first-exec facts.
