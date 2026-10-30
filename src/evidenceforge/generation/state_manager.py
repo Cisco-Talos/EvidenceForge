@@ -706,6 +706,7 @@ class _ProcessAllocatorPatch:
     thread_counter: tuple[str, int] | None
     thread_rng_state: tuple[str, object] | None
     macos_anonymous_audit_session: tuple[str, int] | None = None
+    macos_boot_audit_session: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1385,6 +1386,7 @@ class MaterializationBatchBuilder:
         macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
         responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
@@ -1423,6 +1425,7 @@ class MaterializationBatchBuilder:
             macos_standard_io=macos_standard_io,
             new_posix_session=new_posix_session,
             new_posix_group=new_posix_group,
+            macos_boot_audit_session=macos_boot_audit_session,
             responsibility=responsibility,
             parent_plan=parent_plan,
             session_plan=session_plan,
@@ -3099,6 +3102,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
         responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
@@ -3158,6 +3162,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 macos_standard_io=macos_standard_io,
                 new_posix_session=new_posix_session,
                 new_posix_group=new_posix_group,
+                macos_boot_audit_session=macos_boot_audit_session,
                 responsibility=responsibility,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
@@ -6818,6 +6823,23 @@ class StateManager:
         )
         if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Process materialization plan integrity validation failed")
+        patch = plan._allocator_patch.macos_boot_audit_session
+        if patch is not None:
+            identity = plan.identity
+            if (
+                patch[0] != identity.hostname
+                or type(patch[1]) is not int
+                or not 100_000 <= patch[1] < 2**32 - 1
+                or identity.pid != 1
+                or identity.parent_pid != 0
+                or identity.image != "/sbin/launchd"
+                or identity.principal != "root"
+                or identity.credentials is None
+                or not identity.credentials.is_unattributed_root
+                or identity.credentials.audit_session_id != patch[1]
+                or plan._allocator_patch.macos_anonymous_audit_session is not None
+            ):
+                raise StateError("Boot audit session lost its exact root process or allocator")
 
     def _validate_process_termination_materialization_plan(
         self,
@@ -7073,6 +7095,8 @@ class StateManager:
         patch = plan._allocator_patch
         if type(patch) is not _ProcessAllocatorPatch:
             raise StateError("SMB connection root process allocator patch is malformed")
+        if patch.macos_boot_audit_session is not None:
+            raise StateError("SMB process roots cannot allocate a boot audit session")
 
         def text_int_pair(value: object, label: str) -> None:
             if type(value) is not tuple or len(value) != 2:
@@ -11289,6 +11313,45 @@ class StateManager:
             terminal = self._macos_terminal_sessions.get(session)
             return terminal.observe(at) if terminal is not None else None
 
+    def _plan_macos_boot_audit_origin(
+        self,
+        *,
+        system: str,
+        platform: str,
+        parent_pid: int,
+        fixed_pid: int | None,
+        image: str,
+        username: str,
+        credentials: PosixProcessCredentials | None,
+        requested: bool,
+        new_posix_session: bool,
+    ) -> tuple[PosixProcessCredentials | None, tuple[str, int] | None]:
+        """Reserve one modeled assigned boot origin without inventing an authenticated login."""
+        if type(requested) is not bool:
+            raise StateError("Boot audit assignment requires an exact boolean")
+        if not requested:
+            return credentials, None
+        if (
+            platform != "macos"
+            or parent_pid != 0
+            or type(fixed_pid) is not int
+            or fixed_pid != 1
+            or image != "/sbin/launchd"
+            or username != "root"
+            or not new_posix_session
+            or credentials is None
+            or not credentials.is_unattributed_root
+            or credentials.audit_uid != 2**32 - 1
+        ):
+            raise StateError(
+                "Assigned boot audit origin requires the exact unattributed Mac launchd"
+            )
+        previous = self._macos_audit_session_counters.get(system, 99_999)
+        if type(previous) is not int or not 99_999 <= previous < 2**32 - 2:
+            raise StateError("macOS boot audit session namespace is exhausted or invalid")
+        assigned = previous + 1
+        return replace(credentials, audit_session_id=assigned), (system, assigned)
+
     def plan_process_materialization(
         self,
         *,
@@ -11321,6 +11384,7 @@ class StateManager:
         macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
         responsibility: ProcessResponsibility | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
@@ -11335,6 +11399,17 @@ class StateManager:
                 credentials=credentials,
             )
             self._validate_process_credentials(credentials, os_category)
+            credentials, boot_audit_patch = self._plan_macos_boot_audit_origin(
+                system=system,
+                platform=os_category,
+                parent_pid=parent_pid,
+                fixed_pid=fixed_pid,
+                image=image,
+                username=username,
+                credentials=credentials,
+                requested=macos_boot_audit_session,
+                new_posix_session=new_posix_session,
+            )
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
             validate_macos_image_security(image_security, os_category)
@@ -11554,6 +11629,7 @@ class StateManager:
                 pid_candidate_probe_delta=candidate_delta,
                 thread_counter=thread_counter,
                 thread_rng_state=thread_rng_state,
+                macos_boot_audit_session=boot_audit_patch,
             )
             expected_version = self._materialization_version
             return ProcessMaterializationPlan(
@@ -11742,6 +11818,7 @@ class StateManager:
         macos_standard_io: Literal["terminal", "null", "inherit"] | None,
         new_posix_session: bool,
         new_posix_group: bool,
+        macos_boot_audit_session: bool,
         responsibility: ProcessResponsibility | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
@@ -11766,6 +11843,17 @@ class StateManager:
                 credentials=credentials,
             )
             self._validate_process_credentials(credentials, os_category)
+            credentials, boot_audit_patch = self._plan_macos_boot_audit_origin(
+                system=system,
+                platform=os_category,
+                parent_pid=parent_pid,
+                fixed_pid=fixed_pid,
+                image=image,
+                username=username,
+                credentials=credentials,
+                requested=macos_boot_audit_session,
+                new_posix_session=new_posix_session,
+            )
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
             validate_macos_image_security(image_security, os_category)
@@ -12118,6 +12206,7 @@ class StateManager:
                 pid_candidate_probe_delta=candidate_delta,
                 thread_counter=thread_counter,
                 thread_rng_state=thread_rng_state,
+                macos_boot_audit_session=boot_audit_patch,
             )
             plan = ProcessMaterializationPlan(
                 _expected_version=builder.expected_version,
@@ -14000,6 +14089,7 @@ class StateManager:
                 (self._thread_id_counters, patch.thread_counter),
                 (self._thread_id_rngs, patch.thread_rng_state),
                 (self._macos_audit_session_counters, patch.macos_anonymous_audit_session),
+                (self._macos_audit_session_counters, patch.macos_boot_audit_session),
             ):
                 if entry is not None:
                     capture_mapping(mapping, entry[0])  # type: ignore[arg-type]
@@ -16695,6 +16785,9 @@ class StateManager:
         patch = plan._allocator_patch
         if patch.macos_anonymous_audit_session is not None:
             host, counter = patch.macos_anonymous_audit_session
+            self._macos_audit_session_counters[host] = counter
+        if patch.macos_boot_audit_session is not None:
+            host, counter = patch.macos_boot_audit_session
             self._macos_audit_session_counters[host] = counter
         self._commit_pid_allocator_patch(
             patch,

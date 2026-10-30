@@ -693,8 +693,8 @@ terminal and file facts. Exec additionally requires exact argv, environment, cwd
 script presence and complete post-exec descriptors. The bounded v11 codec exports null
 `entitlements` when the canonical binary explicitly models absence or a nonempty flat Boolean
 dictionary. Unknown entitlement facts and other value/container shapes do not qualify. The
-macOS 27 Finder reference confirms the Apple xpcproxy Boolean template; its first activation
-still needs the canonical fork/exec/credential producer before complete coverage can pass.
+macOS 27 Finder reference confirms the Apple xpcproxy Boolean template and the complete
+boot-parent fork, root launcher exec, GUI credential change and app exec chain.
 Exit requires an explicit canonical completed status or
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
@@ -708,12 +708,14 @@ own exec; it does not automatically generate the commands inside that argument. 
 operators and substitutions require a separate execution plan, and effect-bearing launches
 retain their existing gates. This bounded coverage is not yet the all-process guarantee.
 
-An explicit internal GUI transition can render xpcproxy replacing its image with an app under
-launchd, adopting an authenticated local audit origin and forming its own process group within
-the boot POSIX session. PID/lifetime stay unchanged. This requires exact canonical session
-authority and complete pre/post snapshots; it creates no synthetic fork. The complete Finder
-launcher producer is still separate from ordinary authored/baseline GUI births, and this adds no
-GUI Unified Log messages. Unknown launcher/exec metadata remains unavailable.
+An explicit `process.launch_method: finder` and the selected baseline reference-app policy
+share a canonical launchd fork, root xpcproxy exec, separate GUI-account credential change and
+app exec. The same PID/lifetime survives both execs. The app adopts the authenticated local
+audit origin and forms its own process group within the boot POSIX session. Launchd's own
+assigned unattributed audit session is distinct from its PID-zero parent's default token;
+State owns synthetic audit IDs and inheritance. This bounded producer requires explicit app
+bundle metadata, installed native images and exact GUI authority. Unsupported app/helper and
+Dock/Spotlight paths remain separate; this adds no GUI Unified Log messages.
 
 The ordinary completion owner preserves explicit normal/signal outcomes for an exact live
 execution. Frozen policy also declares nominal zero results for the exact natural query
@@ -726,7 +728,8 @@ counts, source decisions, the first blocking qualification reason and per-author
 counts for exact process cohorts and explicit authored aggregate births. The Markdown ground truth shows the host summary.
 `aggregate_birth_only` is diagnostic and consumes no ES sequence; `entitlements_unknown`,
 `entitlements_present`, `descriptors_unknown`, `thread_replacement_unknown` and
-`exit_outcome_unknown`, `executable_version_unknown` and `gui_exec_metadata_unknown` explain unavailable phases. Deliberate filtering, loss and collection
+`exit_outcome_unknown`, `executable_version_unknown`, `gui_exec_metadata_unknown` and
+`boot_parent_token_unknown` explain unavailable phases in unqualified/frozen profiles. Deliberate filtering, loss and collection
 windows remain separate source decisions. Older queued snapshots may report `not_recorded`.
 This is a workload coverage account, not a new native reference qualification or an inventory
 of unannotated background aggregate births or every compatibility path. Authored no-child outcomes remain explained by

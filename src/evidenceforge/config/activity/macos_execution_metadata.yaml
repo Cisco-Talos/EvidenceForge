@@ -4,6 +4,9 @@ profile: modeled-macos-execution-v1
 # Explicit model selection; older frozen profiles retain unknown audit origin.
 # XNU bsd/bsm/audit.h and bsd/security/audit/audit_session.c define this origin.
 system_audit_origin: default_unattributed
+# The reviewed boot launchd uses an assigned, nonzero unattributed session.
+# State allocates its synthetic ID once; children inherit that same origin.
+boot_audit_origin: assigned_unattributed
 system_responsibility: none # clean service launch with no other responsible lifetime
 # One canonical origin per explicit GUI login, shared across terminal POSIX sessions.
 # Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.

@@ -41,7 +41,11 @@ from datetime import UTC, datetime, timedelta
 
 from evidenceforge.events.collection_policy import canonical_source_hostname
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
-from evidenceforge.events.identity import PosixProcessCredentials, validate_process_arguments
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    validate_process_arguments,
+)
 from evidenceforge.events.process_executable import (
     ProcessExecutableVersion,
     validate_process_executable_version,
@@ -1316,6 +1320,16 @@ class EmitterSetupMixin:
                     getattr(self, "activity_generator", None), "macos_execution_metadata", None
                 ),
             )
+            credentials, assign_boot_audit = EmitterSetupMixin._macos_boot_audit_inputs(
+                member,
+                metadata,
+                state.get_process_identity(host.hostname, pids[member.parent_alias])
+                if member.parent_alias
+                else None,
+                getattr(
+                    getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                ),
+            )
             plan = state.plan_process_materialization(
                 system=host.hostname,
                 parent_pid=pids[member.parent_alias] if member.parent_alias else 0,
@@ -1325,9 +1339,8 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=host.os_category,
-                credentials=metadata.credentials
-                if metadata
-                else PosixProcessCredentials(0, 0, 0, 0),
+                credentials=credentials,
+                macos_boot_audit_session=assign_boot_audit,
                 new_posix_session=True,
                 executable_version=member.executable_version,
                 arguments=member.arguments,
@@ -1566,6 +1579,40 @@ class EmitterSetupMixin:
         )
 
     @staticmethod
+    def _macos_boot_audit_inputs(
+        member: _BootProcessSpec,
+        metadata: MacosLaunchMetadata | None,
+        parent: ProcessIdentity | None,
+        provider: MacosExecutionMetadataProducer | None,
+    ) -> tuple[PosixProcessCredentials | None, bool]:
+        """Select explicit boot assignment and inheritance through canonical process plans."""
+        credentials = (
+            metadata.credentials
+            if metadata is not None
+            else PosixProcessCredentials(0, 0, 0, 0)
+            if member.os_category == "macos" and member.username == "root"
+            else None
+        )
+        if (
+            type(provider) is not MacosExecutionMetadataProducer
+            or member.os_category != "macos"
+            or provider.profile.boot_audit_origin is None
+        ):
+            return credentials, False
+        if parent is None:
+            return credentials, True
+        if (
+            parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or parent.credentials.audit_uid != 2**32 - 1
+            or parent.credentials.audit_session_id in {None, 0}
+        ):
+            raise StateError(
+                "Mac boot child requires its assigned unattributed parent audit origin"
+            )
+        return parent.credentials, False
+
+    @staticmethod
     def _plan_boot_host_spec(
         batch_builder: MaterializationBatchBuilder,
         host_spec: _BootHostSpec,
@@ -1591,6 +1638,12 @@ class EmitterSetupMixin:
             metadata = EmitterSetupMixin._macos_boot_launch_metadata(
                 host_spec.hostname, member, metadata_provider
             )
+            credentials, assign_boot_audit = EmitterSetupMixin._macos_boot_audit_inputs(
+                member,
+                metadata,
+                parent_plan.identity if parent_plan is not None else None,
+                metadata_provider,
+            )
             plan = batch_builder.plan_process(
                 system=host_spec.hostname,
                 fixed_pid=member.fixed_pid,
@@ -1600,13 +1653,8 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=member.os_category,
-                credentials=(
-                    metadata.credentials
-                    if metadata
-                    else PosixProcessCredentials(0, 0, 0, 0)
-                    if member.os_category == "macos" and member.username == "root"
-                    else None
-                ),
+                credentials=credentials,
+                macos_boot_audit_session=assign_boot_audit,
                 logon_id=member.logon_id,
                 new_posix_session=member.os_category == "macos",
                 executable_version=member.executable_version,

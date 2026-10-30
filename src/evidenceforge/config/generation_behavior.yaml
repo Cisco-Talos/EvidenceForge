@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 356
+current_revision: 357
 history_start_revision: 1
-behavior_surface_sha256: 65c4b5839cf08e8fdee59c7eb7e7ca6fc2f155a03d4f527978172c1d692c228a
+behavior_surface_sha256: 21e248cba8e19d14a43d181f7e9b358f3bafedb53660676bb71d68c068757195
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3400,3 +3400,14 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Replaces aggregate Finder births with retained boot-parent fork, root xpcproxy exec, GUI account binding and app exec. Missing boot-parent wire policy stays gated; unfinished startup rejects checkpoints.
+  - revision: 357
+    id: macos-finder-qualified-boot-origin
+    impact: localized
+    domains:
+      - macos-audit-identity
+      - native-process-observation
+      - checkpoint-recovery
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Qualifies Finder's boot-parent token and assigns launchd a separate unattributed audit session through the canonical allocator, preserving inheritance and GUI namespace isolation. Complete Finder fork/exec coverage now passes.

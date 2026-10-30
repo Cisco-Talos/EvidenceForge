@@ -173,12 +173,14 @@ class PosixProcessCredentials:
 
     @property
     def has_no_authenticated_audit_origin(self) -> bool:
-        """Distinguish legacy unknown or explicit XNU default from an authenticated origin."""
-        return (self.audit_uid, self.audit_session_id) in {(None, None), (2**32 - 1, 0)}
+        """Distinguish unknown or unattributed origins, including assigned boot sessions."""
+        return (self.audit_uid, self.audit_session_id) == (None, None) or (
+            self.audit_uid == 2**32 - 1 and self.audit_session_id is not None
+        )
 
     @property
     def is_unattributed_root(self) -> bool:
-        """Return whether this is root with legacy unknown or modeled default audit origin."""
+        """Return whether root has an unknown or explicitly unattributed audit origin."""
         return (self.real_uid, self.effective_uid, self.real_gid, self.effective_gid) == (
             0,
             0,

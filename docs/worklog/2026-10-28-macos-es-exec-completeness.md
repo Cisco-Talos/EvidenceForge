@@ -820,3 +820,44 @@ and whitespace checks pass. Revision-356 generation surface digest:
 The final public CLI/filter/checkpoint and per-phase fault tier passed all 11 cases against
 that exact surface in 64.45 seconds. The v7 private review remains unrun pending the requested
 permission. No native logs are included in this commit.
+
+## Revision 357: approved v7 offline review and Finder fork qualification
+
+The user authorized the prepared v7 reviewer against the existing completed capture. It ran
+read-only and only the fixed JSON reached the agent. Error NONE, provenance PASS, original
+collection controls PASS, retained chain PASS and fork parent/image/credential comparisons PASS.
+The new labels are boot_parent_ppids_zero PASS, boot_parent_group_and_session_one PASS,
+boot_parent_parent_token DEFAULT_UNATTRIBUTED_KERNEL and boot_parent_default_audit_origin FAIL.
+Given the established sentinel audit user and valid unsigned token fields, the last FAIL means
+launchd's own ASID is nonzero. This inference requests or reveals no private numeric ID. No
+collector, app, probe, live role query or capture mutation occurred.
+
+The production profile selects the reviewed parent token. Canonical State reserves a synthetic
+assigned unattributed boot audit session through the existing host audit counter, rather than
+using the PID-zero parent's default session. Both primitive and batch planning expose the same
+bounded boot intent: Mac root launchd, fixed PID 1, parent zero, new POSIX session and explicit
+unattributed credentials. It is allocation-free until commit and participates in rollback.
+Boot descendants inherit that pair. GUI authentication uses the same namespace after the boot
+reservation, so its session cannot collide. Audit-user sentinel membership remains unattributed
+with a nonzero session; no authenticated account is invented for launchd.
+
+The reviewed Finder chain now publishes native fork plus both execs, and known exit when
+explicitly supplied. Authored and baseline complete-census tests use the active production
+profile with a genuinely pre-window GUI login; their previous invented boot-policy override
+was removed. A missing policy remains an explicit unavailable-fork diagnostic and complete
+mode still rejects it. Existing generic/in-window GUI, terminal, service/helper and Dock/
+Spotlight gaps remain separate. Public docs and inventory now distinguish this closed producer
+from the remaining all-process work. No native records or private capture files are committed.
+
+Revision-357 verification: 33 boot/Finder/audit-namespace cases passed; the broader initial
+275-case source/audit/materialization run passed 274 and exposed a direct-mixin Mock compatibility
+call, subsequently corrected. Its boot/profile/manifest group then passed all 61 cases. A separate
+SSH/SMB/process/provisioning regression passed 65 cases (one slow exclusion); its old zero-boot-ASID
+expectation now checks the assigned origin and exact receiver inheritance instead. The final
+public Finder CLI/filter/checkpoint plus nine per-phase interruption cases passed all 11 in
+61.57 seconds. Production-profile native output includes the fork, both execs and an explicitly
+known exit; the independent complete census has one fork, two execs and no aggregate birth.
+Whole Ruff, format, whitespace and behavior-surface checks pass. Revision-357 digest:
+`21e248cba8e19d14a43d181f7e9b358f3bafedb53660676bb71d68c068757195`.
+The private review returned only fixed labels, changed no capture files and requires no rerun
+for this gate. All new test records are invented; no native records enter the repository.

@@ -273,3 +273,26 @@ Invented-policy tests exercise native fork -> exec -> exec -> known-exit output,
 baseline routing, a complete in-window census with a genuinely pre-existing GUI login, and
 every startup phase's exact recovery. These tests establish implementation behavior; they
 do not close the remaining native representation gate.
+
+## Revision 357: approved v7 result closes the Finder fork gate
+
+The human approved the prepared v7 review of the existing bounded capture. It returned
+error NONE, provenance PASS, original controls PASS, retained chain PASS, boot-parent PPIDs
+zero PASS and group/session one PASS. The no-parent token is DEFAULT_UNATTRIBUTED_KERNEL.
+Boot-parent default-audit-origin is FAIL; combined with the previously verified unattributed
+sentinel audit user and bounded unsigned fields, this establishes a nonzero launchd audit
+session. This is a relationship inference from fixed labels; no captured numeric ID was
+requested or disclosed. The reviewer wrote nothing and started no collection, app or live query.
+
+The active profile now selects that token form. Canonical boot planning reserves one assigned
+unattributed session through State's existing host audit namespace and inherits it through the
+modeled boot forest. The launcher fork and first exec preserve it; user credential binding
+preserves it again; only app exec adopts the separate GUI login audit origin. The same counter
+owns GUI login allocation, preventing anonymous/authenticated session-ID reuse. Legacy profiles
+with no boot policy retain their prior unknown/default behavior. Unattributed audit identity is
+determined by the audit-user sentinel, not by requiring session ID zero.
+
+Production-profile authored/baseline tests now exercise fork -> exec -> exec -> declared exit
+with exact independent coverage, without an invented-policy override. Unknown-policy tests
+still reject complete coverage. Qualification is for this controlled reference-app family;
+it does not cover in-window terminal/login startup, arbitrary GUI helpers, Dock or Spotlight.

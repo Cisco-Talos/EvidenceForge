@@ -4,6 +4,7 @@
 """Actual boot/SSH producers supply complete fork metadata without native defaults."""
 
 import json
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -37,7 +38,10 @@ def test_real_ssh_metadata_inheritance_authentication_native_forks_and_close(
         state = engine.state_manager
         generator = engine.activity_generator
         root = state.get_process_identity("MAC-01", 1)
-        assert root.credentials == PosixProcessCredentials(0, 0, 0, 0, 2**32 - 1, 0)
+        assert root.credentials.audit_session_id > 0
+        assert replace(root.credentials, audit_session_id=0) == PosixProcessCredentials(
+            0, 0, 0, 0, 2**32 - 1, 0
+        )
         assert root.responsibility.responsible is None
         generator.generate_ssh_session(
             scenario.environment.users[0],
@@ -76,7 +80,7 @@ def test_real_ssh_metadata_inheritance_authentication_native_forks_and_close(
             decode_endpoint_security_record(json.dumps(record))
             assert record["event_type"] == 11 and record["version"] == 11
         assert records[0]["process"]["audit_token"]["auid"] == 2**32 - 1
-        assert records[0]["process"]["audit_token"]["asid"] == 0
+        assert records[0]["process"]["audit_token"]["asid"] == root.credentials.audit_session_id
         assert records[1]["process"]["audit_token"]["auid"] == 501
         assert records[2]["event"]["fork"]["child"]["audit_token"]["auid"] == 501
 

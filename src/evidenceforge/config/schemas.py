@@ -4272,6 +4272,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
     code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
     system_audit_origin: Literal["default_unattributed"] | None = None
+    boot_audit_origin: Literal["assigned_unattributed"] | None = None
     system_responsibility: Literal["none"] | None = None
     gui_audit_origin: Literal["authenticated_local_account"] | None = None
     terminal_responsibility: Literal["terminal_application"] | None = Field(

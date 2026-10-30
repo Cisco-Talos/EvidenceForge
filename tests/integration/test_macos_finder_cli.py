@@ -42,9 +42,7 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
     overlay.parent.mkdir(parents=True)
     overlay.write_text(yaml.safe_dump(selected, sort_keys=False))
     raw = _scenario().model_dump(mode="json", exclude_none=True)
-    raw["macos_process_coverage"] = (
-        "partial"  # Boot-parent token and GUI login startup remain gated.
-    )
+    raw["macos_process_coverage"] = "partial"  # In-window GUI/terminal startup remains separate.
     raw["environment"]["systems"] = raw["environment"]["systems"][:1]
     raw["environment"]["users"] = raw["environment"]["users"][:1]
     raw["environment"]["network"]["segments"][0]["systems"] = ["MAC-01"]
@@ -136,6 +134,16 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
             and launcher_execs[0].process.executable.path == "/sbin/launchd"
         )
         assert launcher_execs[0].event.exec.target.audit_token.euid == 0
+        fork_records = [
+            record
+            for path in paths
+            for line in path.read_text().splitlines()
+            if (record := decode_endpoint_security_record(line)).event_type == 11
+            and record.event.fork.child.audit_token.pid == authored["attributes"]["pid"]
+        ]
+        assert len(fork_records) == 1
+        assert fork_records[0].process.audit_token.asid > 0
+        assert fork_records[0].process.parent_audit_token.asid == 0
     assert snapshots[0] == snapshots[1]
 
 

@@ -2,18 +2,19 @@
 
 ## Current generation admission (2026-10-27)
 
-October 30, revision 356: explicit `process.launch_method: finder` and the narrowly selected
-baseline reference app share a canonical launchd fork, root xpcproxy exec, GUI credential
-binding and app exec in one process lifetime. Qualified launcher and app exec records can be
-exported now; a known app completion also produces native exit. The aggregate Finder birth
-has been removed. Phase recovery and independent census checks are exercised.
+October 30, revision 357: explicit `process.launch_method: finder` and the narrowly selected
+baseline reference app share the complete canonical launchd fork, root xpcproxy exec, GUI
+credential binding and app exec in one process lifetime. Native fork and both exec records are
+qualified; a declared app completion also produces native exit. The production profile passes
+the independent complete census when the owning GUI login predates collection. Phase recovery,
+filtering and checkpoint/resume remain part of acceptance.
 
-One native wire fact is still unqualified: the no-parent audit token in the boot launchd fork
-snapshot. Explicit partial output records that fork gap while retaining both execs; complete
-mode rejects it. A prepared offline check of the existing bounded capture can close this gate
-without another collection. Generic apps, in-window GUI/terminal startup and Dock/Spotlight
-remain separate obligations. See the
-[current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
+The approved v7 offline review closed the boot-parent token gate. Launchd's parent token has
+the default unattributed kernel form; launchd itself has an assigned nonzero unattributed audit
+session. Canonical State allocates the synthetic ID once and shares its origin through the
+startup chain until authenticated GUI adoption. No private numeric value was disclosed.
+Generic apps, in-window GUI/terminal startup and Dock/Spotlight remain separate obligations.
+See the [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of

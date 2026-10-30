@@ -90,8 +90,9 @@ Revision 356 replaces the Finder aggregate with the observed boot-parent fork, r
 exec, GUI-account credential binding and app exec. The same PID/lifetime survives both image
 replacements; the app is not an invented child of xpcproxy. Each phase retains exact source
 recovery before advancing, and pending startup rejects checkpoint sealing. Authored and baseline
-activity share this owner. Production native startup still requires the boot parent's
-no-parent audit-token wire classification; the existing capture can supply it offline.
+activity share this owner. Revision 357 qualifies the boot parent's no-parent token from the
+approved v7 offline report and assigns launchd its separate unattributed audit session in
+canonical State. The production profile now passes this bounded Finder startup census.
 
 The human's version-4 offline report resolves the preimage audit/session/group and token
 relationships. The source responsibility observation keeps the old audit pair/PID/PID version but

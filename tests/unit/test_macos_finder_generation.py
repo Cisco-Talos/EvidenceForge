@@ -28,7 +28,9 @@ def test_unknown_boot_parent_wire_fact_keeps_both_execs_and_exposes_missing_fork
     monkeypatch: pytest.MonkeyPatch,
     complete: bool,
 ) -> None:
-    engine = _finder_engine(tmp_path, monkeypatch, native=True, boot_policy=None, complete=complete)
+    engine = _finder_engine(
+        tmp_path, monkeypatch, native=True, missing_boot_policy=True, complete=complete
+    )
     try:
         engine._initialize()
         generator = engine.activity_generator
@@ -78,7 +80,7 @@ def _finder_engine(
     monkeypatch: pytest.MonkeyPatch,
     *,
     native: bool,
-    boot_policy: str | None = "all_zero",
+    missing_boot_policy: bool = False,
     complete: bool = True,
 ) -> GenerationEngine:
     raw = _scenario().model_dump(mode="json", exclude_none=True)
@@ -108,25 +110,24 @@ def _finder_engine(
         )
     )
     scenario = tmp_path / "invented-finder.yaml"
-    # This is an invented no-parent export observation, pending separate reference
-    # qualification. It does not change the production profile's unknown policy.
-    from evidenceforge.config.schemas import MacosEndpointSecurityProfilesConfig
-    from evidenceforge.generation.activity import macos_endpoint_security_profiles as profiles
+    if missing_boot_policy:
+        from evidenceforge.config.schemas import MacosEndpointSecurityProfilesConfig
+        from evidenceforge.generation.activity import macos_endpoint_security_profiles as profiles
 
-    original_profiles = profiles.load_macos_endpoint_security_profiles
+        original_profiles = profiles.load_macos_endpoint_security_profiles
 
-    def invented_profiles() -> MacosEndpointSecurityProfilesConfig:
-        catalog = original_profiles()
-        return catalog.model_copy(
-            update={
-                "profiles": tuple(
-                    entry.model_copy(update={"boot_parent_token": boot_policy})
-                    for entry in catalog.profiles
-                )
-            }
-        )
+        def unavailable_profiles() -> MacosEndpointSecurityProfilesConfig:
+            catalog = original_profiles()
+            return catalog.model_copy(
+                update={
+                    "profiles": tuple(
+                        entry.model_copy(update={"boot_parent_token": None})
+                        for entry in catalog.profiles
+                    )
+                }
+            )
 
-    monkeypatch.setattr(profiles, "load_macos_endpoint_security_profiles", invented_profiles)
+        monkeypatch.setattr(profiles, "load_macos_endpoint_security_profiles", unavailable_profiles)
     scenario.write_text(yaml.safe_dump(raw, sort_keys=False))
     compiled = compile_scenario(scenario, project_root=tmp_path)
     engine = GenerationEngine(
@@ -230,10 +231,16 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
     if native:
         fork, launcher_exec, exec_record, exit_record = records
         assert fork.process.audit_token.pid == 1
+        assert fork.process.audit_token.auid == 2**32 - 1
+        assert fork.process.audit_token.asid > 0
+        assert fork.process.parent_audit_token.auid == 2**32 - 1
+        assert fork.process.parent_audit_token.asid == fork.process.parent_audit_token.pid == 0
+        assert fork.process.parent_audit_token.pidversion == 0
         assert (
             fork.process.executable.path == fork.event.fork.child.executable.path == "/sbin/launchd"
         )
         assert launcher_exec.process.executable.path == "/sbin/launchd"
+        assert launcher_exec.process.audit_token.asid == fork.process.audit_token.asid
         assert launcher_exec.event.exec.target.executable.path == "/usr/libexec/xpcproxy"
         assert (
             launcher_exec.process.audit_token.euid
@@ -250,6 +257,8 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
             == exec_record.process.audit_token.pidversion
         )
         assert exec_record.process.executable.path == "/usr/libexec/xpcproxy"
+        assert exec_record.process.audit_token.asid == fork.process.audit_token.asid
+        assert exec_record.event.exec.target.audit_token.asid != fork.process.audit_token.asid
         assert exec_record.process.signing_id == "com.apple.xpc.proxy"
         assert exec_record.process.codesigning_flags == 0x26015B11
         assert exec_record.event.exec.target.executable.path == _APP
