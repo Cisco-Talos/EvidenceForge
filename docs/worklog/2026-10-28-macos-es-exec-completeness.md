@@ -499,3 +499,35 @@ Code-only version-5 reviewer prepared at `/private/tmp/eforge-gui-launch-kit-h5z
 It has not been set up or run against a real capture. Whole Ruff/format and whitespace checks
 pass. The next operation needs permission for the fixed-output offline read of the existing
 capture under the standing local-log rule; it requires no native execution or new collection.
+
+## Approved version-5 offline result and finite next capture diagnostic
+
+The human approved running the offline reviewer on the completed capture. It finished with
+`error: NONE`, provenance and original collection controls passing, and no collector, app,
+probe or live role query started. The agent received only fixed labels through the hidden-path
+review command; no raw native record or private snapshot was returned or changed.
+
+The Finder preimage is XPCPROXY and its birth is `AFTER_CONTROL_EXIT`. It therefore began
+during the active collection, rather than being an old pre-collection process. This does not
+locate that birth relative to the controller's Finder-phase switch. Control environment
+differences are only the known CF text-encoding addition at main; Finder has changed common
+values, as previously observed. Its native audit/session/group/descriptor/argv facts reproduce
+the earlier reviewed transition, including the distinct preimage responsibility token. The
+preceding launcher exec/fork remains unretained, so no first-launch source gate is closed.
+
+Because the discarded transient ring cannot be recovered offline, the corrected collector now
+also exports a fixed matching decision and a ring-eviction boolean. It distinguishes no
+candidate, no execution-identity match, full-token mismatch, image mismatch and an exact match.
+It exports no identifiers, values or counts and retains exactly the same raw-row ownership
+proof. A malformed unretained candidate cannot discard the otherwise valid controlled app
+record. Offline reports preserve these recorded labels and leave older reports unknown. All
+226 reference-kit tests pass with invented inputs; no repeat collection has been started.
+
+Corrected collector kit `/private/tmp/eforge-gui-launch-kit-_wy8qxd6` is built with version 2,
+no synthetic entitlement, `SETUP_READY` and `error: NONE`. It has not run a probe, GUI control
+or collector. The C probe and watchdog sources are unchanged from the working marker-free
+capture. A repeat, if performed by the human, will retain earlier-phase candidates and report
+fixed rejection/eviction reasons rather than another unexplained `NONE`. No setup rerun or
+changes to the completed original capture are needed. Initial-xpcproxy qualification still
+requires actual retained first-exec facts; no process census, collection policy or native
+qualification gate was weakened to accept this report.

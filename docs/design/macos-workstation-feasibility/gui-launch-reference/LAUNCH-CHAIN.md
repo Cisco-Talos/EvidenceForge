@@ -129,6 +129,14 @@ cannot reconstruct the discarded transient ring, prove a collection subscription
 control timestamp, or justify a fabricated missing phase. Review the existing capture before
 considering another collection.
 
+If another collection is needed, the corrected filter also returns fixed
+`candidate_selection` labels: `NO_CANDIDATES`, `NO_EXECUTION_MATCH`, `TOKEN_MISMATCH`,
+`IMAGE_MISMATCH` or `MATCHED`. These distinguish what the bounded filter observed from why a
+candidate was rejected. `candidate_ring_evicted` records only whether the bounded ring lost
+an earlier entry. No candidate contents, identities, counts or arbitrary strings are exported.
+Old reports retain `NOT_RECORDED` and an unknown eviction state; an offline reviewer cannot
+retroactively manufacture these observations. Matching and disk-persistence rules are unchanged.
+
 The result may qualify the bounded controlled launcher after review and tests. Populated
 entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,
 services, PTY helpers, Dock, Spotlight or Unified Log families.

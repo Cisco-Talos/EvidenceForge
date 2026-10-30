@@ -59,8 +59,9 @@ def test_chain_filter_retains_launcher_and_fork_only_after_exact_owned_app_exec(
     accepted = tracker.accept(app)
     assert [kit._decode(raw)["event_type"] for _, raw in accepted] == [11, 9, 9]
     tracker.accept(exit_row)
-    report = kit.analyze_launch_chain(tracker.records["finder"], _IMAGE)
+    report = tracker.launch_chain_report()
     assert report.launcher_retained == "ONE"
+    assert report.candidate_selection == "MATCHED" and report.candidate_ring_evicted is False
     assert report.launcher_linkage == "PASS"
     assert report.launcher_fork_linkage == "RETAINED_MATCH"
     assert report.launcher_shape_excluding_entitlements == "PASS"
@@ -115,9 +116,53 @@ def test_pid_path_or_partial_token_matching_cannot_persist_an_ambient_launcher(d
         or kit._owned(kit._decode(raw)["event"]["exec"]["target"], _IMAGE)
         for raw in tracker.records["finder"]
     )
-    report = kit.analyze_launch_chain(tracker.records["finder"], _IMAGE)
+    report = tracker.launch_chain_report()
     assert report.launcher_retained == "NONE"
+    assert report.candidate_selection == (
+        "NO_EXECUTION_MATCH"
+        if damage in {"pid_version", "birth"}
+        else "TOKEN_MISMATCH"
+        if damage == "credential"
+        else "IMAGE_MISMATCH"
+    )
     assert _CANARY not in report.model_dump_json()
+
+
+def test_no_candidate_is_distinct_from_rejected_or_unrecorded_candidates() -> None:
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    tracker.phase = "finder"
+    assert tracker.launch_chain_report().candidate_selection == "NOT_RECORDED"
+    tracker.accept(_raws(_chain())[2])
+    assert tracker.launch_chain_report().candidate_selection == "NO_CANDIDATES"
+    old = kit.analyze_launch_chain(tracker.records["finder"], _IMAGE)
+    assert old.candidate_selection == "NOT_RECORDED" and old.candidate_ring_evicted is None
+
+
+def test_malformed_unretained_candidate_does_not_drop_the_exact_owned_app() -> None:
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    tracker.phase = "finder"
+    rows = _chain()
+    rows[1]["event"]["exec"]["target"]["executable"]["stat"].pop("st_ino")
+    for raw in _raws(rows):
+        tracker.accept(raw)
+    report = tracker.launch_chain_report()
+    assert report.candidate_selection == "IMAGE_MISMATCH"
+    assert (
+        report.launcher_retained == "NONE" and report.probe_shape_excluding_entitlements == "PASS"
+    )
+    assert [kit._decode(raw)["event_type"] for raw in tracker.records["finder"]] == [9, 15]
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_offline_candidate_selection_preserves_recorded_labels_without_inventing_history() -> None:
+    source = kit.LaunchChainDiagnostic(
+        candidate_selection="TOKEN_MISMATCH", candidate_ring_evicted=True
+    )
+    analyzed = kit.analyze_launch_chain(_raws(_chain())[2:], _IMAGE)
+    result = kit._preserve_candidate_selection(analyzed, source)
+    assert result.launcher_retained == "NONE"
+    assert result.candidate_selection == "TOKEN_MISMATCH" and result.candidate_ring_evicted is True
+    assert kit._preserve_candidate_selection(analyzed, None) == analyzed
 
 
 @pytest.mark.parametrize("form", ["object", "json", "plist", "other", "null"])
@@ -151,6 +196,7 @@ def test_launcher_buffer_is_bounded_and_disabled_for_original_mode() -> None:
         assert original.accept(_raws([row])[0]) == []
     assert len(tracker.launchers) <= 64
     assert tracker.launcher_bytes <= kit.MAX_RING_BYTES
+    assert tracker.launch_chain_report().candidate_ring_evicted is True
     assert not original.launchers and not any(tracker.records.values())
 
 

@@ -206,6 +206,16 @@ class EntitlementShape(Model):
     only_controlled_marker: Check = "INCONCLUSIVE"
 
 
+type CandidateSelection = Literal[
+    "NOT_RECORDED",
+    "NO_CANDIDATES",
+    "NO_EXECUTION_MATCH",
+    "TOKEN_MISMATCH",
+    "IMAGE_MISMATCH",
+    "MATCHED",
+]
+
+
 class LaunchChainDiagnostic(Model):
     """Supplementary diagnostic only; never a native generation qualification."""
 
@@ -213,6 +223,8 @@ class LaunchChainDiagnostic(Model):
         "CONTROLLED_LAUNCHER_AND_ENTITLEMENT_DIAGNOSTIC"
     )
     launcher_retained: Literal["ONE", "NONE", "MULTIPLE"] = "NONE"
+    candidate_selection: CandidateSelection = "NOT_RECORDED"
+    candidate_ring_evicted: bool | None = None
     launcher_linkage: Check = "INCONCLUSIVE"
     launcher_fork_linkage: Literal["RETAINED_MATCH", "NOT_RETAINED", "MULTIPLE", "INCONCLUSIVE"] = (
         "INCONCLUSIVE"
@@ -597,6 +609,20 @@ def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnost
     return LaunchChainDiagnostic(**values)
 
 
+def _preserve_candidate_selection(
+    analyzed: LaunchChainDiagnostic, recorded: LaunchChainDiagnostic | None
+) -> LaunchChainDiagnostic:
+    """Preserve fixed capture-time labels; discarded candidates cannot be reconstructed."""
+    if recorded is None:
+        return analyzed
+    return analyzed.model_copy(
+        update={
+            "candidate_selection": recorded.candidate_selection,
+            "candidate_ring_evicted": recorded.candidate_ring_evicted,
+        }
+    )
+
+
 def compare_environment(
     native: tuple[bytes, ...], main: tuple[bytes, ...], *, controlled: bool = False
 ) -> EnvironmentDifference:
@@ -968,6 +994,8 @@ class Tracker:
         self.launch_chain = launch_chain
         self.launchers: deque[tuple[bytes, dict]] = deque()
         self.launcher_bytes = 0
+        self.launcher_selection: CandidateSelection = "NOT_RECORDED"
+        self.launcher_ring_evicted = False
         self.phase: Literal["ready", "control", "finder"] = "ready"
         self.ready_pids: set[int] = set()
         self.ready_ids: set[tuple[int, int, int]] = set()
@@ -1029,6 +1057,7 @@ class Tracker:
                     while len(self.launchers) > 64 or self.launcher_bytes > MAX_RING_BYTES:
                         removed, _ = self.launchers.popleft()
                         self.launcher_bytes -= len(removed)
+                        self.launcher_ring_evicted = True
                     return []
                 if not _owned(target, self.image):
                     return []
@@ -1048,12 +1077,18 @@ class Tracker:
                 self.live[identity] = case
                 linked = [(case, data) for data, child_id in self.forks if child_id == before]
                 if self.launch_chain and case == "finder":
+                    progress = 1 if self.launchers else 0
                     for data, launcher in self.launchers:
-                        if (
-                            _identity(launcher) != before
-                            or _token(launcher) != _token(process)
-                            or not _same_loaded_image(launcher, process)
-                        ):
+                        try:
+                            if _identity(launcher) != before:
+                                continue
+                            progress = max(progress, 2)
+                            if _token(launcher) != _token(process):
+                                continue
+                            progress = max(progress, 3)
+                            if not _same_loaded_image(launcher, process):
+                                continue
+                        except (AttributeError, TypeError, ValueError, KeyError):
                             continue
                         launcher_before = _decode(data)["process"]
                         linked.extend(
@@ -1064,6 +1099,14 @@ class Tracker:
                             == _token(launcher_before)
                         )
                         linked.append((case, data))
+                        progress = 4
+                    self.launcher_selection = (
+                        "NO_CANDIDATES",
+                        "NO_EXECUTION_MATCH",
+                        "TOKEN_MISMATCH",
+                        "IMAGE_MISMATCH",
+                        "MATCHED",
+                    )[progress]
                     linked = list(dict.fromkeys(linked))
                     linked.sort(key=lambda item: _decode(item[1])["global_seq_num"])
                 rows = [*linked, (case, raw)]
@@ -1090,6 +1133,15 @@ class Tracker:
                 raise PrivateError("LIMIT")
             self.records[case].append(data)
         return rows
+
+    def launch_chain_report(self) -> LaunchChainDiagnostic:
+        """Export only fixed matching outcomes, never unretained candidate contents."""
+        return analyze_launch_chain(self.records["finder"], self.image).model_copy(
+            update={
+                "candidate_selection": self.launcher_selection,
+                "candidate_ring_evicted": self.launcher_ring_evicted,
+            }
+        )
 
 
 def analyze_case(
@@ -1768,9 +1820,7 @@ def capture() -> Report:
                 manifest.image,
                 launch_chain=chain,
             ),
-            "launch_chain": analyze_launch_chain(tracker.records["finder"], manifest.image)
-            if chain
-            else None,
+            "launch_chain": tracker.launch_chain_report() if chain else None,
         }
     )
     if cleaned and probe_cleanup:
@@ -1830,7 +1880,11 @@ def offline_report() -> Report:
         )
         if case == "finder" and manifest.collection_mode == "launch_chain":
             report = report.model_copy(
-                update={"launch_chain": analyze_launch_chain(rows, manifest.image)}
+                update={
+                    "launch_chain": _preserve_candidate_selection(
+                        analyze_launch_chain(rows, manifest.image), report.launch_chain
+                    )
+                }
             )
     return report.model_copy(update={"stage": "OFFLINE_REPORT"})
 
@@ -1932,7 +1986,9 @@ def review_existing(root: Path) -> ExistingReviewReport:
                 else "AFTER_CONTROL_EXIT"
             )
         if case == "finder" and manifest.collection_mode == "launch_chain":
-            values["launch_chain"] = analyze_launch_chain(rows, manifest.image)
+            values["launch_chain"] = _preserve_candidate_selection(
+                analyze_launch_chain(rows, manifest.image), original.launch_chain
+            )
         values[f"{case}_fork"] = (
             "RETAINED_MATCH"
             if checked.fork_linkage == "PASS"
