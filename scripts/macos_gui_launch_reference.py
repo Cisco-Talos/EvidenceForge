@@ -72,6 +72,7 @@ type Code = Literal[
     "DATA",
     "LIMIT",
     "INCOMPLETE",
+    "SESSION_LOCKED",
     "COLLECTOR",
     "INTERRUPTED",
     "INTERNAL",
@@ -1564,8 +1565,16 @@ def capture() -> Report:
     lock = root / "SESSION-LOCK"
     try:
         _write(lock, b"ACTIVE\n")
-    except FileExistsError as error:
-        raise PrivateError("INCOMPLETE") from error
+    except FileExistsError:
+        return Report(
+            kit_version=manifest.kit_version,
+            collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"
+            if manifest.collection_mode == "launch_chain"
+            else "CONTROLLED_TEST_APP_ONLY",
+            error="SESSION_LOCKED",
+            target_platform="PASS",
+            provenance="PASS",
+        )
     run = root / f"run-{uuid.uuid4().hex}"
     collector: subprocess.Popen[bytes] | None = None
     probes: list[subprocess.Popen[bytes]] = []

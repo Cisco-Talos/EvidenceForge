@@ -387,3 +387,29 @@ with agents closed. Only the fixed JSON report is requested. The agent must not 
 capture, report or review or inspect the kit after handoff. Once that bounded reference is
 available, implement the exact supported first-launch facts before requesting another broader
 experiment. No new assessment panel is a prerequisite.
+
+## October 30: authorized helper run and session-lock diagnostic
+
+The human explicitly requested that the agent run the capture and obtain its fixed JSON.
+This authorizes the bounded helper commands for this experiment; the prohibition on exposing
+private native records or committing captures remains. The agent ran only the original kit's
+fixed-output offline reporter, which returned `INTERNAL`; no cause was inferred from that
+generic error and no capture files were opened directly. A fresh sandboxed setup failed with
+`BUILD`; a new copy built successfully with normal compiler access. Sudo readiness reported
+`REQUIRED`. Authentication and capture were therefore opened in a standalone Terminal, with
+the password staying in its native prompt and the Finder launch left to the human. The chat
+was interrupted after opening that command; the external Terminal was not assumed stopped.
+
+The human's subsequent immediate `INCOMPLETE` report with all default fields identifies the
+pre-collection `SESSION-LOCK` collision. Its displayed version 1 was the generic exception
+template, not proof of a wrong kit. The helper now returns `SESSION_LOCKED` with the already
+verified manifest version, collection mode and platform/provenance labels. It neither reads
+nor removes the existing lock and starts no collector on this branch. Both versioned modes
+have invented-input lock/canary/no-side-effect tests; all 204 selected reference-kit tests pass.
+The procedure now explains single-session use, cancellation and fresh-kit recovery. Existing
+capture directories, Terminal contents and process listings were not inspected or changed.
+
+Replacement kit `/private/tmp/eforge-gui-launch-kit-3k5m_j_1` is built with version 2,
+`SETUP_READY`, `error: NONE`. No capture, probe launch or automatic Terminal runner was started
+from this replacement. Stop the earlier Terminal attempt and allow its watchdog/cleanup before
+starting exactly one manual capture in the replacement. No evidence gate has been closed.

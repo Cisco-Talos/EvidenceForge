@@ -407,6 +407,40 @@ def test_mock_collection_cleans_up_and_persists_only_owned_rows(
         assert kit.offline_report().stage == "OFFLINE_REPORT"
 
 
+@pytest.mark.parametrize("launch_chain", [False, True])
+def test_existing_session_lock_returns_specific_error_without_reading_or_collecting(
+    prepared: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    launch_chain: bool,
+) -> None:
+    manifest = kit._manifest(prepared).model_copy(
+        update={
+            "kit_version": 2 if launch_chain else 1,
+            "collection_mode": "launch_chain" if launch_chain else "app",
+        }
+    )
+    monkeypatch.setattr(kit, "_manifest", lambda _root: manifest)
+    monkeypatch.setattr(kit, "_read", lambda *_args: pytest.fail("No private files may be read"))
+    lock = prepared / "SESSION-LOCK"
+    kit._write(lock, _CANARY.encode())
+    before = set(prepared.iterdir())
+    assert kit.main(["capture", "--finder", "--private-run"]) == 2
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert report["error"] == "SESSION_LOCKED"
+    assert report["kit_version"] == manifest.kit_version
+    assert report["target_platform"] == report["provenance"] == "PASS"
+    assert report["collector_ready"] == report["collector_cleanup"] == "INCONCLUSIVE"
+    assert report["context"] == "NOT_ATTESTED"
+    assert report["collection"] == (
+        "CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER" if launch_chain else "CONTROLLED_TEST_APP_ONLY"
+    )
+    assert set(prepared.iterdir()) == before
+    assert lock.read_bytes() == _CANARY.encode()
+    assert _CANARY not in output.out + output.err
+
+
 @pytest.mark.parametrize("reply", [b"FINDER\n", b"LAUNCHD\n", _CANARY.encode(), b"1234\n"])
 def test_role_lookup_uses_exact_private_token_pipe_and_fixed_output(
     prepared: Path, monkeypatch: pytest.MonkeyPatch, reply: bytes

@@ -56,6 +56,14 @@ backups and existing endpoint software remain separate from this filter's persis
    Only the fixed internal collector guard uses sudo. Never put sudo before Python. Do not
    add `tee`, shell tracing or recording wrappers.
 
+   Run this command only once, in one Terminal. An existing `SESSION-LOCK` returns
+   `SESSION_LOCKED` before starting any collector; older copies report `INCOMPLETE` with
+   default inconclusive fields instead. Stop the earlier attempt with one Ctrl+C and wait
+   for its prompt and cleanup result. Do not delete the lock or modify an old capture to
+   force a retry. If cleanup failed or the earlier attempt is unavailable, wait for the
+   55-second collector watchdog and cleanup interval to finish, then use a newly prepared
+   kit. A fresh setup alone does not establish that an older collector has stopped.
+
 4. Wait for `COLLECTOR_READY`; the command-line control window appears and closes itself.
    Wait for the distinct `FINDER_READY` message, then double-click the app in Finder within
    30 seconds. Its second small window closes itself. No policy alert is expected; stop
