@@ -568,3 +568,43 @@ unused copy; the fresh kit compiled successfully with normal compiler access. No
 collector or live role query was started. Use the new kit for the next human-run capture; do
 not run setup again or change any completed private capture. Initial-launch qualification
 remains open pending the actual retained first-exec facts.
+
+## October 30: static xpcproxy identity correction and complete comparison report
+
+The next human capture completed with passing collection/app controls, no candidate-ring
+eviction, and `candidate_selection: IMAGE_MISMATCH`. This confirms that the corrected token
+join reached image checks, not which image predicate failed. No actual capture, own-process
+snapshot, Terminal content or process listing was inspected. The rejected raw candidate is
+not recoverable from this kit's retained evidence.
+
+Before asking for a repeat, a read-only inspection of the fixed Apple system binary
+`/usr/libexec/xpcproxy` used codesign with captured in-memory output. Only allowlisted
+comparison labels were returned: the old `com.apple.xpcproxy` expectation does not match,
+and `com.apple.xpc.proxy` does. No raw signature metadata, records, personal values, collector,
+probe or app execution was involved. The wrong spelling existed in both the private-kit
+checker and the application catalog and was repeated in the invented fixture. It was
+sufficient to reject a valid candidate pair, though this static inspection does not establish
+that it was the only failed predicate in the discarded human candidate.
+
+Both expectations are corrected. Generation revision 354 records the catalog-owned signing
+identity correction; the initial-activation, populated-entitlement and completeness gates are
+unchanged. The shared Finder engine test now checks the native preimage signing identifier
+from the actual catalog-driven event path. Behavior digest:
+`b360e6b475e4de1e333e2411809539e7229d6762889225bd0527c8e9500a3020`.
+
+The image predicate now computes all checks independently in one typed fixed-label model,
+which also controls retention and offline linkage. For a unique execution match, the capture
+report records the full image comparison, eight token comparisons and source ordering even
+when it rejects the raw candidate. Missing fields, bad representation and mismatched values
+cannot become a permissive match; ambiguous execution-only comparisons remain inconclusive.
+Offline reporting preserves the recorded comparisons and leaves older history absent. Raw
+retention scope and bounds are unchanged. No native source admission follows from a diagnostic.
+
+All 356 selected tests pass: private GUI/launcher kits, Finder engine generation/adoption,
+application catalog and behavior compatibility. Invented negative cases cover the wrong
+identifier, simultaneous independent predicate failures, ambiguous comparisons and private
+canaries; generated native Finder evidence carries the corrected catalog identifier.
+The marker-free replacement `/private/tmp/eforge-gui-launch-kit-jsdpx_t1` is built with
+`SETUP_READY`, `error: NONE` and platform/provenance passing. No probe, app or collector was
+started. Do not rerun setup or modify any completed capture; the next human-run experiment
+uses this fresh kit and can explain all image predicates in a single fixed report.

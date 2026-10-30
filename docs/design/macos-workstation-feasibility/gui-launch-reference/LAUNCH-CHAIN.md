@@ -149,6 +149,24 @@ its mutable credentials changed. `launcher_token_agreement` reports only per-fie
 `PASS`/`FAIL` comparisons. Such a difference does not identify the syscall or cause of the
 change and does not qualify its simulation. Unmatched/ambiguous raw candidates remain transient.
 
+The expected signing identifier is `com.apple.xpc.proxy`. A fixed-output inspection of the
+installed Apple system binary on the macOS 27 reference host confirmed this spelling without
+reading any native records or executing xpcproxy. Earlier code and catalog entries incorrectly
+used `com.apple.xpcproxy`; the expectation itself could therefore reject a valid matching pair.
+This static-file check does not establish that it was the only failed predicate in an earlier
+capture. The generation catalog and diagnostic now use the corrected spelling.
+
+`candidate_comparison` records every image predicate, all eight token-word comparisons and
+source ordering for a unique PID/version/birth match, even when image retention fails. It is
+computed transiently and saves only fixed checks. `image` separates device, inode, paths and
+truncation, hash form/equality, expected signing identifiers/equality, and team identifier
+form/equality. A `FAIL` against an expected identifier is distinct from two identifiers that
+do not agree. No predicate short-circuits the other diagnostic checks. With multiple execution
+matches, the report returns `MULTIPLE` and inconclusive per-candidate comparisons instead of
+arbitrarily choosing one; it still retains only a unique candidate satisfying every proof.
+Old reports retain an absent comparison rather than inventing observations. No rejected raw
+candidate is written to disk and no native qualification gate is closed by these diagnostics.
+
 The result may qualify the bounded controlled launcher after review and tests. Populated
 entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,
 services, PTY helpers, Dock, Spotlight or Unified Log families.

@@ -130,6 +130,7 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
     if native:
         exec_record, exit_record = records
         assert exec_record.process.executable.path == "/usr/libexec/xpcproxy"
+        assert exec_record.process.signing_id == "com.apple.xpc.proxy"
         assert exec_record.event.exec.target.executable.path == _APP
         assert exec_record.process.responsible_audit_token.euid == 0
         assert exec_record.process.audit_token.euid == process.credentials.effective_uid

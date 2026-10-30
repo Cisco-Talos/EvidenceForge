@@ -29,7 +29,7 @@ def _chain() -> list[dict]:
     launcher_target = deepcopy(app["process"])
     launcher_target["executable"]["path"] = "/usr/libexec/xpcproxy"
     launcher_target["executable"]["stat"]["st_ino"] += 100
-    launcher_target["signing_id"] = "com.apple.xpcproxy"
+    launcher_target["signing_id"] = "com.apple.xpc.proxy"
     before = deepcopy(launcher_target)
     before["audit_token"]["pidversion"] -= 1
     before["executable"]["path"] = "/sbin/launchd"
@@ -220,6 +220,86 @@ def test_no_candidate_is_distinct_from_rejected_or_unrecorded_candidates() -> No
     assert tracker.launch_chain_report().candidate_selection == "NO_CANDIDATES"
     old = kit.analyze_launch_chain(tracker.records["finder"], _IMAGE)
     assert old.candidate_selection == "NOT_RECORDED" and old.candidate_ring_evicted is None
+    assert old.candidate_comparison is None
+
+
+def test_incorrect_undotted_identifier_explains_rejection_without_native_values() -> None:
+    rows = _chain()
+    for process in (rows[1]["event"]["exec"]["target"], rows[2]["process"]):
+        process["signing_id"] = "com.apple.xpcproxy"
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    tracker.phase = "finder"
+    for raw in _raws(rows):
+        tracker.accept(raw)
+    report = tracker.launch_chain_report()
+    assert report.candidate_selection == "IMAGE_MISMATCH" and report.launcher_retained == "NONE"
+    comparison = report.candidate_comparison
+    assert comparison is not None and comparison.execution_matches == "ONE"
+    assert comparison.image.signing_identifier == comparison.source_order == "PASS"
+    assert comparison.image.model_dump() == {
+        field: "FAIL"
+        if field in {"candidate_signing_identifier", "preimage_signing_identifier"}
+        else "PASS"
+        for field in type(comparison.image).model_fields
+    }
+    assert not comparison.image.agrees
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_rejected_candidate_reports_all_independent_checks_without_persisting_it() -> None:
+    rows = _chain()
+    target = rows[1]["event"]["exec"]["target"]
+    target["audit_token"]["egid"] += 1
+    target["executable"]["stat"]["st_ino"] += 1
+    target["cdhash"] = _CANARY
+    target["signing_id"] = _CANARY
+    target["team_id"] = {_CANARY: _CANARY}
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    tracker.phase = "finder"
+    for raw in _raws(rows):
+        tracker.accept(raw)
+    report = tracker.launch_chain_report()
+    assert report.candidate_selection == "IMAGE_MISMATCH" and report.launcher_retained == "NONE"
+    comparison = report.candidate_comparison
+    assert comparison is not None and comparison.execution_matches == "ONE"
+    assert comparison.token.effective_group == "FAIL" and comparison.token.pid_version == "PASS"
+    assert comparison.image.model_dump() == {
+        field: "FAIL"
+        if field
+        in {
+            "file_inode",
+            "candidate_cdhash_form",
+            "cdhash",
+            "candidate_signing_identifier",
+            "signing_identifier",
+            "candidate_team_identifier_form",
+            "team_identifier",
+        }
+        else "PASS"
+        for field in type(comparison.image).model_fields
+    }
+    assert [kit._decode(raw)["event_type"] for raw in tracker.records["finder"]] == [9, 15]
+    assert _CANARY not in report.model_dump_json()
+
+
+def test_ambiguous_candidates_do_not_select_one_candidates_private_comparisons() -> None:
+    rows = _chain()
+    duplicate = deepcopy(rows[1])
+    duplicate["event"]["exec"]["target"]["signing_id"] = _CANARY
+    rows.insert(2, duplicate)
+    for index, row in enumerate(rows):
+        row["global_seq_num"] = index + 1
+    tracker = kit.Tracker(_IMAGE, launch_chain=True)
+    tracker.phase = "finder"
+    for raw in _raws(rows):
+        tracker.accept(raw)
+    report = tracker.launch_chain_report()
+    # Exactly one candidate passes retention, but the execution-only comparison is ambiguous.
+    assert report.candidate_selection == "MATCHED" and report.launcher_retained == "ONE"
+    assert report.candidate_comparison == kit.LauncherCandidateComparison(
+        execution_matches="MULTIPLE"
+    )
+    assert _CANARY not in report.model_dump_json()
 
 
 def test_malformed_unretained_candidate_does_not_drop_the_exact_owned_app() -> None:
@@ -240,12 +320,18 @@ def test_malformed_unretained_candidate_does_not_drop_the_exact_owned_app() -> N
 
 def test_offline_candidate_selection_preserves_recorded_labels_without_inventing_history() -> None:
     source = kit.LaunchChainDiagnostic(
-        candidate_selection="TOKEN_MISMATCH", candidate_ring_evicted=True
+        candidate_selection="IMAGE_MISMATCH",
+        candidate_ring_evicted=True,
+        candidate_comparison=kit.LauncherCandidateComparison(
+            execution_matches="ONE",
+            image=kit.LauncherImageAgreement(file_inode="FAIL"),
+        ),
     )
     analyzed = kit.analyze_launch_chain(_raws(_chain())[2:], _IMAGE)
     result = kit._preserve_candidate_selection(analyzed, source)
     assert result.launcher_retained == "NONE"
-    assert result.candidate_selection == "TOKEN_MISMATCH" and result.candidate_ring_evicted is True
+    assert result.candidate_selection == "IMAGE_MISMATCH" and result.candidate_ring_evicted is True
+    assert result.candidate_comparison == source.candidate_comparison
     assert kit._preserve_candidate_selection(analyzed, None) == analyzed
 
 

@@ -2999,7 +2999,7 @@ applications:
       macos:
         image_path: /usr/libexec/xpcproxy
         executable_format: mach_o
-        code_signature: {signing_id: com.apple.xpcproxy, team_id: null}
+        code_signature: {signing_id: com.apple.xpc.proxy, team_id: null}
         deployment:
           kind: catalog
           product_id: apple-macos

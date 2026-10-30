@@ -202,3 +202,18 @@ Apple's PID/version process lookup and current-credential token construction; se
 [retention procedure and references](LAUNCH-CHAIN.md). No PID-only join, additional ambient
 retention or production admission was introduced. Actual first-exec facts still require a
 new human-run capture with the corrected filter.
+
+The next human report again completed with passing collection/app controls and no ring
+eviction, but selected `IMAGE_MISMATCH`. That combined label does not identify which predicate
+failed. Static inspection of the installed Apple xpcproxy binary, returning only comparisons
+against fixed spellings, confirmed `com.apple.xpc.proxy`. Both the collector's expected value
+and canonical application catalog incorrectly used `com.apple.xpcproxy`. They are corrected;
+this static-file fact does not establish that the expectation was the only mismatch in the
+discarded candidate. Native initial-exec/fork admission remains unqualified.
+
+The collector now computes all image checks independently and records their fixed results,
+token comparisons and ordering for a unique PID/version/birth match even if it rejects that
+candidate's raw record. The same comparison model controls retention and offline linkage;
+there is no separate weaker persistence predicate. Existing report review preserves these
+capture-time labels and cannot reconstruct them for older captures. No further local native
+record was inspected to diagnose this report.

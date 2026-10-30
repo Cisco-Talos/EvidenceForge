@@ -60,6 +60,7 @@ MAX_STREAM = 32 * MAX_LINE
 MAX_RETAINED = 16
 MAX_RING_BYTES = 4 * MAX_LINE
 ENTITLEMENT_MARKER = "org.evidenceforge.reference.synthetic"
+XPCPROXY_SIGNING_ID = "com.apple.xpc.proxy"
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type Case = Literal["control", "finder"]
 type Code = Literal[
@@ -231,6 +232,40 @@ class ExecutionTokenAgreement(Model):
     pid_version: Check = "INCONCLUSIVE"
 
 
+class LauncherImageAgreement(Model):
+    """Evaluate every image-retention predicate without exporting observed values."""
+
+    file_device: Check = "INCONCLUSIVE"
+    file_inode: Check = "INCONCLUSIVE"
+    candidate_path: Check = "INCONCLUSIVE"
+    preimage_path: Check = "INCONCLUSIVE"
+    candidate_path_untruncated: Check = "INCONCLUSIVE"
+    preimage_path_untruncated: Check = "INCONCLUSIVE"
+    candidate_cdhash_form: Check = "INCONCLUSIVE"
+    preimage_cdhash_form: Check = "INCONCLUSIVE"
+    cdhash: Check = "INCONCLUSIVE"
+    candidate_signing_identifier: Check = "INCONCLUSIVE"
+    preimage_signing_identifier: Check = "INCONCLUSIVE"
+    signing_identifier: Check = "INCONCLUSIVE"
+    candidate_team_identifier_form: Check = "INCONCLUSIVE"
+    preimage_team_identifier_form: Check = "INCONCLUSIVE"
+    team_identifier: Check = "INCONCLUSIVE"
+
+    @property
+    def agrees(self) -> bool:
+        """Require all retention predicates, including presence and representation."""
+        return all(value == "PASS" for value in self.model_dump().values())
+
+
+class LauncherCandidateComparison(Model):
+    """Fixed comparisons of a unique execution match, even if its raw row is rejected."""
+
+    execution_matches: Literal["NONE", "ONE", "MULTIPLE"] = "NONE"
+    image: LauncherImageAgreement = Field(default_factory=LauncherImageAgreement)
+    token: ExecutionTokenAgreement = Field(default_factory=ExecutionTokenAgreement)
+    source_order: Check = "INCONCLUSIVE"
+
+
 class LaunchChainDiagnostic(Model):
     """Supplementary diagnostic only; never a native generation qualification."""
 
@@ -240,6 +275,7 @@ class LaunchChainDiagnostic(Model):
     launcher_retained: Literal["ONE", "NONE", "MULTIPLE"] = "NONE"
     candidate_selection: CandidateSelection = "NOT_RECORDED"
     candidate_ring_evicted: bool | None = None
+    candidate_comparison: LauncherCandidateComparison | None = None
     launcher_linkage: Check = "INCONCLUSIVE"
     launcher_token_agreement: ExecutionTokenAgreement = Field(
         default_factory=ExecutionTokenAgreement
@@ -516,25 +552,45 @@ def _shape_without_entitlements(row: dict) -> Check:
     return "PASS"
 
 
+def compare_launcher_images(left: dict, right: dict) -> LauncherImageAgreement:
+    """Report every predicate independently; never expose candidate contents or errors."""
+    values: dict[str, Check] = {}
+    for side, process in (("candidate", left), ("preimage", right)):
+        executable = process.get("executable")
+        executable = executable if type(executable) is dict else {}
+        values[f"{side}_path"] = _check(executable.get("path") == "/usr/libexec/xpcproxy")
+        values[f"{side}_path_untruncated"] = _check(executable.get("path_truncated") is False)
+        cdhash = process.get("cdhash")
+        values[f"{side}_cdhash_form"] = _check(
+            type(cdhash) is str and re.fullmatch(r"[0-9a-fA-F]{40}", cdhash) is not None
+        )
+        values[f"{side}_signing_identifier"] = _check(
+            process.get("signing_id") == XPCPROXY_SIGNING_ID
+        )
+        values[f"{side}_team_identifier_form"] = _check(
+            "team_id" in process and (process["team_id"] is None or type(process["team_id"]) is str)
+        )
+    for key, label in (("st_dev", "file_device"), ("st_ino", "file_inode")):
+        stats: list[dict] = []
+        for process in (left, right):
+            executable = process.get("executable")
+            metadata = executable.get("stat") if type(executable) is dict else None
+            stats.append(metadata if type(metadata) is dict else {})
+        values[label] = _check(
+            all(type(item.get(key)) is int for item in stats) and stats[0][key] == stats[1][key]
+        )
+    for key, label in (
+        ("cdhash", "cdhash"),
+        ("signing_id", "signing_identifier"),
+        ("team_id", "team_identifier"),
+    ):
+        values[label] = _check(key in left and key in right and left[key] == right[key])
+    return LauncherImageAgreement.model_validate(values)
+
+
 def _same_loaded_image(left: dict, right: dict) -> bool:
-    """Match the linked launcher's native file object and code identity in memory."""
-    lstat, rstat = left["executable"]["stat"], right["executable"]["stat"]
-    return (
-        all(
-            type(lstat[key]) is int and type(rstat[key]) is int and lstat[key] == rstat[key]
-            for key in ("st_dev", "st_ino")
-        )
-        and all(
-            process["executable"]["path"] == "/usr/libexec/xpcproxy"
-            and process["executable"]["path_truncated"] is False
-            and type(process["cdhash"]) is str
-            and re.fullmatch(r"[0-9a-fA-F]{40}", process["cdhash"]) is not None
-            and process["signing_id"] == "com.apple.xpcproxy"
-            and (process["team_id"] is None or type(process["team_id"]) is str)
-            for process in (left, right)
-        )
-        and all(left[key] == right[key] for key in ("cdhash", "signing_id", "team_id"))
-    )
+    """Use the same complete comparison for retention and offline linkage."""
+    return compare_launcher_images(left, right).agrees
 
 
 def _precedes(left: dict, right: dict) -> bool:
@@ -641,7 +697,7 @@ def analyze_launch_chain(raws: list[bytes], image: Image) -> LaunchChainDiagnost
         if before["executable"]["path"] == "/usr/libexec/xpcproxy"
         else "OTHER",
         launcher_signing_identifier="EXPECTED_XPCPROXY"
-        if target.get("signing_id") == "com.apple.xpcproxy"
+        if target.get("signing_id") == XPCPROXY_SIGNING_ID
         else "OTHER",
         launcher_posix_credentials="ROOT"
         if all(token[index] == 0 for index in (1, 2, 3, 4))
@@ -680,6 +736,7 @@ def _preserve_candidate_selection(
         update={
             "candidate_selection": recorded.candidate_selection,
             "candidate_ring_evicted": recorded.candidate_ring_evicted,
+            "candidate_comparison": recorded.candidate_comparison,
         }
     )
 
@@ -1057,6 +1114,7 @@ class Tracker:
         self.launcher_bytes = 0
         self.launcher_selection: CandidateSelection = "NOT_RECORDED"
         self.launcher_ring_evicted = False
+        self.launcher_comparison: LauncherCandidateComparison | None = None
         self.phase: Literal["ready", "control", "finder"] = "ready"
         self.ready_pids: set[int] = set()
         self.ready_ids: set[tuple[int, int, int]] = set()
@@ -1140,15 +1198,26 @@ class Tracker:
                 if self.launch_chain and case == "finder":
                     progress = 1 if self.launchers else 0
                     matches: list[bytes] = []
+                    comparisons: list[LauncherCandidateComparison] = []
                     for data, launcher in self.launchers:
                         try:
                             if _identity(launcher) != before:
                                 continue
                             progress = max(progress, 2)
-                            if not _same_loaded_image(launcher, process):
+                            image_agreement = compare_launcher_images(launcher, process)
+                            source_order = _precedes(_decode(data), row)
+                            comparisons.append(
+                                LauncherCandidateComparison(
+                                    execution_matches="ONE",
+                                    image=image_agreement,
+                                    token=compare_execution_tokens(launcher, process),
+                                    source_order=_check(source_order),
+                                )
+                            )
+                            if not image_agreement.agrees:
                                 continue
                             progress = max(progress, 3)
-                            if not _precedes(_decode(data), row):
+                            if not source_order:
                                 continue
                         except (AttributeError, TypeError, ValueError, KeyError):
                             continue
@@ -1163,6 +1232,13 @@ class Tracker:
                     )[progress]
                     if len(matches) > 1:
                         self.launcher_selection = "AMBIGUOUS_EXECUTION"
+                    self.launcher_comparison = (
+                        comparisons[0]
+                        if len(comparisons) == 1
+                        else LauncherCandidateComparison(
+                            execution_matches="MULTIPLE" if comparisons else "NONE"
+                        )
+                    )
                     if len(matches) == 1:
                         data = matches[0]
                         launcher_before = _decode(data)["process"]
@@ -1207,6 +1283,7 @@ class Tracker:
             update={
                 "candidate_selection": self.launcher_selection,
                 "candidate_ring_evicted": self.launcher_ring_evicted,
+                "candidate_comparison": self.launcher_comparison,
             }
         )
 

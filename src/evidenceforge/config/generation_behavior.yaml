@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 353
+current_revision: 354
 history_start_revision: 1
-behavior_surface_sha256: bba265f00315ade770be1f45d880d7cf780be4e5fc562a2daaa25f54df8f5df7
+behavior_surface_sha256: b360e6b475e4de1e333e2411809539e7229d6762889225bd0527c8e9500a3020
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3370,3 +3370,12 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Publishes qualified shell fork/exec with authenticated retained file creation, modification or removal in the existing exact transaction, rejecting unrelated mixed effect plans and preserving artifact rollback and recovery.
+  - revision: 354
+    id: macos-xpcproxy-signing-identifier
+    impact: localized
+    domains:
+      - canonical-binary-identity
+      - macos-gui-execution
+    formats:
+      - macos_endpoint_security
+    summary: Corrects the catalog-owned xpcproxy signing identifier to com.apple.xpc.proxy, preserving the unqualified initial-activation gate and all process completeness requirements.
