@@ -866,7 +866,7 @@ for this gate. All new test records are invented; no native records enter the re
 
 The user requested both terminal applications in the Mac catalog and the same process logging
 contract for each. `macos-iterm2` now has its own native executable, product/deployment identity
-and per-session singleton policy. Upstream iTerm2's `plists/release-iTerm2.plist` confirms the
+and per-session singleton policy. [Upstream iTerm2's release plist](https://github.com/gnachman/iTerm2/blob/master/plists/release-iTerm2.plist) confirms the
 `iTerm2` executable and `com.googlecode.iterm2` bundle vocabulary. The catalog does not infer
 a signing identity from that bundle identifier or copy Apple's validation/entitlement policy.
 Both apps have the `macos_terminal` role and the same modeled login child spawn rule.
@@ -892,3 +892,47 @@ on a sampled command still being live. All 120 terminal/catalog/metadata/foundat
 The next reference must establish app activation, helper/login/shell exec boundaries and native
 metadata for each app; existing GUI audit probes establish inheritance but not those births.
 No system logs, private captures, live apps or process listings were inspected.
+
+Final revision-358 regression passed 204 command/audit/Finder/signature/terminal cases in
+66.41 seconds. Whole Ruff, formatting and whitespace checks pass. The behavior manifest
+passes with digest `c15a02a4a12e96bdd8e3244623ffc48e7bf0e42e8dab33a4ec97676bd28ecc56`.
+Catalog/session milestone `ee01457a` is pushed to the existing branch.
+
+### Two-terminal private startup kit, prepared only
+
+`scripts/macos_terminal_startup_reference.py` prepares a separate human-run experiment for
+each real terminal. The ordinary-user controller reuses the existing bounded root eslogger
+guard and fixed-output ABI/shape helpers. Readiness is proved by the known compiled marker;
+the human then launches the selected terminal and invokes that same marker once. A bounded
+transient ring retains no unrelated candidates on disk. Only the marker-authenticated launch
+chain can be saved, and only when the selected app's exact device/inode is observed in an exec.
+An ancestry link and a kernel responsibility link have distinct fixed labels: responsibility
+does not imply parentage. Same-PID replacements, actual forks and unmatched forks remain
+separate. Raw rows are written only after successful chain proof and collector cleanup.
+
+The fixed report includes role order, audit/credential/session relationships, public signing
+flag/category labels, slice/entitlement shapes, argv classes, stdio kinds, terminal/cwd classes
+and environment comparisons. It cannot export arbitrary native strings, IDs, paths, hashes,
+environment values or entitlement keys. Private provenance binds normal-user account inputs,
+OS version/build, code/codec hashes and both binary objects. Setup compiles/signs but launches
+nothing; replay reads only the saved fixed JSON. Neither operation is run by the agent.
+
+All 235 terminal-kit and existing GUI reference-kit invented-input cases pass, including
+replaced identity/birth cases, unrelated candidates, responsibility-only linkage, ring loss,
+sequence/stream limits, fixed-output failure handling, cleanup and successful selective writes.
+Both C sources pass clang's warning-as-error syntax checks without execution. The isolated
+prepared helper's help command succeeds. The public Finder CLI/filter/checkpoint and complete
+coverage rejection tier also passes all four cases in 39.41 seconds against revision 358.
+
+Prepared code-only copies (no setup, collector, marker, real app launch or native-record read):
+
+- Apple Terminal: `/private/tmp/eforge-terminal-startup-kit-58skrbfu`.
+- iTerm2: `/private/tmp/eforge-terminal-startup-kit-lt0qqywk`.
+
+Each contains `private_terminal_startup.py` and `PRIVATE-RUN.md`; setup uses `--terminal apple`
+or `--terminal iterm2` respectively. Control each test from the other terminal app so the test
+app can be fully quit before a fresh launch. The human must run privately with agents closed.
+Once used, do not inspect these directories or their native records without new permission.
+This is a diagnostic kit, not new native qualification. The in-window app/login/initial-shell
+gate remains open pending the human's fixed reports; no additional Finder test-app capture,
+fresh GUI login or machine-wide historical log access is needed.
