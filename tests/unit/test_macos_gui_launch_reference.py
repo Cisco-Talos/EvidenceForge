@@ -195,15 +195,17 @@ def test_filter_holds_ambient_fork_until_exact_owned_exec_and_never_pid_only() -
     assert tracker.accept(_raws([reused])[0]) == []
 
 
-def test_readiness_requires_known_probe_and_matching_exit() -> None:
+@pytest.mark.parametrize("status", [0, 9, 256, -9, False, "0", None])
+def test_readiness_requires_known_probe_and_matching_successful_exit(status: object) -> None:
     rows = _rows()
     rows[1]["event"]["exec"]["args"].append("--ready")
     tracker = kit.Tracker(_IMAGE)
     tracker.ready_pids.add(1200)
     tracker.accept(_raws(rows[1:2])[0])
     assert not tracker.ready
+    rows[2]["event"]["exit"]["stat"] = status
     tracker.accept(_raws(rows[2:])[0])
-    assert tracker.ready
+    assert tracker.ready is (type(status) is int and status == 0)
     assert not any(tracker.records.values())
     tracker.phase = "control"
     assert tracker.accept(_raws(rows[1:2])[0]) == []
@@ -342,11 +344,14 @@ def test_human_commands_require_flags_and_never_echo_inputs(
     assert json.loads(result.out)["error"] == "INPUT"
 
 
-@pytest.mark.parametrize("failure", [None, "interrupt", "cleanup"])
+@pytest.mark.parametrize("failure", [None, "interrupt", "cleanup", "finder-timeout"])
 def test_mock_collection_cleans_up_and_persists_only_owned_rows(
     prepared: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
 ) -> None:
     image = kit._manifest(prepared).image
+    if failure == "finder-timeout":
+        counter = iter(range(1000))
+        monkeypatch.setattr(kit.time, "monotonic", lambda: next(counter))
     monkeypatch.setattr(kit, "_role", lambda *args: "FINDER")
     processes: list[SimpleNamespace] = []
 
@@ -379,6 +384,8 @@ def test_mock_collection_cleans_up_and_persists_only_owned_rows(
                 return
             if failure == "interrupt" and case == "finder":
                 raise KeyboardInterrupt
+            if failure == "finder-timeout" and case == "finder":
+                return
             if case in self.fed:
                 return
             self.fed.add(case)
@@ -395,9 +402,17 @@ def test_mock_collection_cleans_up_and_persists_only_owned_rows(
     monkeypatch.setattr(kit, "Pump", Pump)
     report = kit.capture()
     assert report.collector_cleanup == ("FAIL" if failure == "cleanup" else "PASS")
-    assert report.error == (
-        "NONE" if failure is None else "COLLECTOR" if failure == "cleanup" else "INTERRUPTED"
+    assert (
+        report.error
+        == {
+            None: "NONE",
+            "cleanup": "COLLECTOR",
+            "interrupt": "INTERRUPTED",
+            "finder-timeout": "FINDER_TIMEOUT",
+        }[failure]
     )
+    if failure in {"interrupt", "finder-timeout"}:
+        assert report.stage == "FINDER_READY"
     assert (prepared / "SESSION-LOCK").exists() == (failure == "cleanup")
     assert _CANARY not in report.model_dump_json()
     assert kit._read(kit._active(prepared) / "ACTIVE-CASE") == b"CLOSED\n"
@@ -439,6 +454,32 @@ def test_existing_session_lock_returns_specific_error_without_reading_or_collect
     assert set(prepared.iterdir()) == before
     assert lock.read_bytes() == _CANARY.encode()
     assert _CANARY not in output.out + output.err
+
+
+@pytest.mark.parametrize(
+    "status,expected", [(-9, "PROBE_KILLED"), (2, "PROBE_FAILED"), (None, "PROBE_TIMEOUT")]
+)
+def test_probe_preflight_failure_reaps_without_starting_collection_or_creating_run_files(
+    prepared: Path, monkeypatch: pytest.MonkeyPatch, status: int | None, expected: str
+) -> None:
+    def wait(**_kwargs: object) -> int:
+        if status is None:
+            raise subprocess.TimeoutExpired(_CANARY, 3)
+        return status
+
+    probe = SimpleNamespace(wait=wait)
+    stopped: list[object] = []
+    monkeypatch.setattr(kit, "_start", lambda *_args: probe)
+    monkeypatch.setattr(kit, "_stop_probe", stopped.append)
+    before = set(prepared.iterdir())
+    report = kit.capture()
+    assert report.error == expected and report.stage == "PROBE_CHECK"
+    assert report.collector_ready == "INCONCLUSIVE"
+    assert report.collector_cleanup == "PASS" and report.wire_profile == "NOT_OBSERVED"
+    assert report.sequence_continuity == "INCONCLUSIVE"
+    assert set(prepared.iterdir()) == before
+    assert stopped == [probe]
+    assert _CANARY not in report.model_dump_json()
 
 
 @pytest.mark.parametrize("reply", [b"FINDER\n", b"LAUNCHD\n", _CANARY.encode(), b"1234\n"])

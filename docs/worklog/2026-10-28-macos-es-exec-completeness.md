@@ -413,3 +413,57 @@ Replacement kit `/private/tmp/eforge-gui-launch-kit-3k5m_j_1` is built with vers
 `SETUP_READY`, `error: NONE`. No capture, probe launch or automatic Terminal runner was started
 from this replacement. Stop the earlier Terminal attempt and allow its watchdog/cleanup before
 starting exactly one manual capture in the replacement. No evidence gate has been closed.
+
+The next human report reached `COLLECTOR_READY` with v11 delivery, sequence continuity and
+cleanup passing, then failed `INCOMPLETE` before `FINDER_READY`. This is the automatic control
+probe, not another lock collision or a missed Finder click. Its own snapshot/completion was
+not available for comparison. No private capture or Terminal output was inspected to diagnose
+this. A code-derived collector-free own-process diagnostic is prepared at
+`/private/tmp/eforge-gui-control-self-check.py`; it isolates session, audit-token, BSD-info and
+descriptor API failure stages and returns only an allowlisted label. It reads no private
+capture and opens no GUI. Automatic approval review rejected executing this new probe under
+the standing compile-only restriction. Compile-only verification subsequently passed with
+`COMPILED_NOT_EXECUTED`; native execution has not occurred. An explicit async permission
+question is pending. Do not execute the diagnostic until that answer arrives, and do not
+request another full capture without using the bounded diagnosis to narrow this failure.
+
+## October 30: control-launch failure isolated with the approved self-check
+
+The human explicitly approved the collector-free own-process self-check. The original API
+check returned `PASS`. An isolated replica then exercised the same own-process APIs, bundle
+path and run-directory validation against newly invented sidecars; it never opened a human
+kit, native record or GUI and never saved observed identity/descriptor values. The ad-hoc
+variant without the synthetic entitlement passed. The marker-signed variant was killed;
+explicit DER generation and a fresh-inode copy of the signed executable both left that result
+unchanged. This isolates the marker-signing variant
+as the failing condition in this controlled experiment. The specific OS policy/component
+behind the kill was not established because no local security logs were inspected. No security
+setting, certificate/keychain identity or entitlement granting an Apple capability was used.
+Apple's [signing guidance](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
+requires standard XML entitlement input; its general rules do not identify this kill's cause.
+
+Launcher collection now defaults to no added synthetic entitlement. The marker is a separate
+explicit `--synthetic-entitlement` setup option requiring `--launch-chain`; the new manifest
+and fixed report retain that choice. Existing manifests without the field preserve an unknown
+choice and their original serialized provenance. Populated-entitlement generation admission
+is unchanged and remains gated. No failed probe is substituted as successful native reference.
+
+The investigation also found that readiness accepted a matching exec/exit even when the
+process was killed. Native readiness now requires wait status zero, and subprocess checks
+require successful completion too. A short non-GUI check runs before any capture files or
+collector are created; failures return fixed `PROBE_*` labels. Control launch errors have
+specific `CONTROL_*` labels. Finder timeout retains `FINDER_READY` and reports `FINDER_TIMEOUT`;
+an empty pre-collection stream no longer claims sequence continuity. All 217 reference-kit
+tests pass using invented inputs, including native-execution guards, marker opt-in/default,
+legacy provenance, failed readiness, pre-collector failure cleanup and Finder timeout.
+
+Final replacement kit: `/private/tmp/eforge-gui-launch-kit-j2f7qyi4`, already built with
+`kit_version: 2`, `synthetic_entitlement: false`, `SETUP_READY` and `error: NONE`. Its actual
+non-GUI `--ready` path also returned the fixed `PASS` label under the approved self-check.
+No full GUI control or collector was started by the agent. Earlier kits and captures remain
+untouched. Use this replacement for the next single human-run Finder capture; no setup rerun
+or synthetic marker is needed. No evidence gate has yet been closed by these checks.
+
+Whole Ruff/format and whitespace checks pass. These are private-kit code and documentation
+changes, not a generation-behavior or product-version change. No native capture files are part
+of the commit; the diagnostic source and its invented-layout work remain outside Git.

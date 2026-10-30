@@ -73,12 +73,21 @@ type Code = Literal[
     "LIMIT",
     "INCOMPLETE",
     "SESSION_LOCKED",
+    "PROBE_KILLED",
+    "PROBE_FAILED",
+    "PROBE_TIMEOUT",
+    "CONTROL_KILLED",
+    "CONTROL_FAILED",
+    "CONTROL_TIMEOUT",
+    "CONTROL_INCOMPLETE",
+    "FINDER_TIMEOUT",
     "COLLECTOR",
     "INTERRUPTED",
     "INTERNAL",
 ]
 type Stage = Literal[
     "SETUP_READY",
+    "PROBE_CHECK",
     "COLLECTOR_READY",
     "FINDER_READY",
     "COMPLETE",
@@ -151,6 +160,7 @@ class Image(Model):
 class Manifest(Model):
     kit_version: Annotated[int, Field(strict=True, ge=1, le=2)] = 1
     collection_mode: Literal["app", "launch_chain"] = "app"
+    synthetic_entitlement: bool | None = None
     image: Image
     guard_sha256: Digest
     plist_sha256: Digest
@@ -162,6 +172,8 @@ class Manifest(Model):
         """Bind the new collection scope to an explicit versioned setup choice."""
         if (self.kit_version == 2) != (self.collection_mode == "launch_chain"):
             raise ValueError("Private kit collection variant and version disagree")
+        if self.synthetic_entitlement is not None and self.collection_mode != "launch_chain":
+            raise ValueError("Synthetic entitlement choice requires launcher collection mode")
         return self
 
     @model_serializer(mode="wrap")
@@ -170,6 +182,8 @@ class Manifest(Model):
         data = handler(self)
         if self.collection_mode == "app":
             data.pop("collection_mode", None)
+        if self.synthetic_entitlement is None:
+            data.pop("synthetic_entitlement", None)
         return data
 
 
@@ -252,6 +266,7 @@ class CaseReport(Model):
 
 class Report(Model):
     kit_version: Annotated[int, Field(strict=True, ge=1, le=2)] = 1
+    synthetic_entitlement: bool | None = None
     purpose: Literal["GUI_LAUNCH_RELATIONSHIP_DIAGNOSTIC"] = "GUI_LAUNCH_RELATIONSHIP_DIAGNOSTIC"
     collection: Literal["CONTROLLED_TEST_APP_ONLY", "CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"] = (
         "CONTROLLED_TEST_APP_ONLY"
@@ -1048,6 +1063,8 @@ class Tracker:
                     self.phase == "ready"
                     and identity in self.ready_ids
                     and _owned(process, self.image)
+                    and type(event.get("exit", {}).get("stat")) is int
+                    and event["exit"]["stat"] == 0
                 ):
                     self.ready = True
                     return []
@@ -1327,8 +1344,10 @@ def _codec_digest() -> str:
     ).hexdigest()
 
 
-def setup(*, launch_chain: bool = False) -> Report:
+def setup(*, launch_chain: bool = False, synthetic_entitlement: bool = False) -> Report:
     """HUMAN ONLY: compile/sign the controlled app; launch nothing."""
+    if synthetic_entitlement and not launch_chain:
+        raise PrivateError("INPUT")
     root = _root()
     _preflight()
     app = root / "GUIProbe.app"
@@ -1363,7 +1382,7 @@ def setup(*, launch_chain: bool = False) -> Report:
     )
     _executable(root).chmod(0o700)
     signing = ["/usr/bin/codesign", "--force", "--sign", "-"]
-    if launch_chain:
+    if synthetic_entitlement:
         entitlements = root / "CONTROLLED-ENTITLEMENTS.plist"
         _write(entitlements, plistlib.dumps({ENTITLEMENT_MARKER: True}))
         signing.extend(["--entitlements", str(entitlements)])
@@ -1385,6 +1404,7 @@ def setup(*, launch_chain: bool = False) -> Report:
     manifest = Manifest(
         kit_version=2 if launch_chain else 1,
         collection_mode="launch_chain" if launch_chain else "app",
+        synthetic_entitlement=synthetic_entitlement if launch_chain else None,
         image=_image(_executable(root)),
         guard_sha256=_digest(root / "collector-guard"),
         plist_sha256=_digest(app / "Contents/Info.plist"),
@@ -1394,6 +1414,7 @@ def setup(*, launch_chain: bool = False) -> Report:
     _write(root / "SETUP.json", manifest.model_dump_json().encode())
     return Report(
         kit_version=manifest.kit_version,
+        synthetic_entitlement=manifest.synthetic_entitlement,
         stage="SETUP_READY",
         target_platform="PASS",
         provenance="PASS",
@@ -1568,6 +1589,7 @@ def capture() -> Report:
     except FileExistsError:
         return Report(
             kit_version=manifest.kit_version,
+            synthetic_entitlement=manifest.synthetic_entitlement,
             collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"
             if manifest.collection_mode == "launch_chain"
             else "CONTROLLED_TEST_APP_ONLY",
@@ -1583,6 +1605,7 @@ def capture() -> Report:
     chain = manifest.collection_mode == "launch_chain"
     report = Report(
         kit_version=manifest.kit_version,
+        synthetic_entitlement=manifest.synthetic_entitlement,
         collection="CONTROLLED_TEST_APP_AND_LINKED_LAUNCHER"
         if chain
         else "CONTROLLED_TEST_APP_ONLY",
@@ -1592,6 +1615,15 @@ def capture() -> Report:
     )
     tracker = Tracker(manifest.image, launch_chain=chain)
     try:
+        report = report.model_copy(update={"stage": "PROBE_CHECK"})
+        check = _start(_executable(root), "--ready")
+        probes.append(check)
+        try:
+            status = check.wait(timeout=3)
+        except subprocess.TimeoutExpired as error:
+            raise PrivateError("PROBE_TIMEOUT") from error
+        if status != 0:
+            raise PrivateError("PROBE_KILLED" if status < 0 else "PROBE_FAILED")
         run.mkdir(mode=0o700)
         _replace(root / "ACTIVE-RUN", (run.name + "\n").encode())
         _write(
@@ -1634,7 +1666,9 @@ def capture() -> Report:
         report = report.model_copy(update={"collector_ready": "PASS", "stage": "COLLECTOR_READY"})
         _progress(report)
         for probe in probes:
-            probe.wait(timeout=1)
+            status = probe.wait(timeout=1)
+            if status != 0:
+                raise PrivateError("PROBE_KILLED" if status < 0 else "PROBE_FAILED")
         _replace(run / "ACTIVE-CASE", b"control\n")
         tracker.phase = "control"
         control = _start(_executable(root))
@@ -1646,11 +1680,17 @@ def capture() -> Report:
                 _decode(r)["event_type"] == 15 for r in tracker.records["control"]
             ):
                 break
-        if control.poll() != 0 or not _complete(run, "control"):
-            raise PrivateError("INCOMPLETE")
+        status = control.poll()
+        if status is None:
+            raise PrivateError("CONTROL_TIMEOUT")
+        if status != 0:
+            raise PrivateError("CONTROL_KILLED" if status < 0 else "CONTROL_FAILED")
+        if not _complete(run, "control"):
+            raise PrivateError("CONTROL_INCOMPLETE")
         _replace(run / "ACTIVE-CASE", b"finder\n")
         tracker.phase = "finder"
-        _progress(report.model_copy(update={"stage": "FINDER_READY"}))
+        report = report.model_copy(update={"stage": "FINDER_READY"})
+        _progress(report)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             pump.tick()
@@ -1659,7 +1699,7 @@ def capture() -> Report:
             ):
                 break
         else:
-            raise PrivateError("INCOMPLETE")
+            raise PrivateError("FINDER_TIMEOUT")
         _manifest(root)
         report = report.model_copy(update={"stage": "COMPLETE", "bounded_collection": "PASS"})
     except KeyboardInterrupt:
@@ -1681,7 +1721,7 @@ def capture() -> Report:
             except (OSError, subprocess.SubprocessError):
                 probe_cleanup = False
         try:
-            cleaned = _stop_collector(collector) if collector is not None else False
+            cleaned = _stop_collector(collector) if collector is not None else True
         except (OSError, subprocess.SubprocessError):
             cleaned = False
         if run.is_dir():
@@ -1700,7 +1740,9 @@ def capture() -> Report:
     report = report.model_copy(
         update={
             "collector_cleanup": _check(cleaned and probe_cleanup),
-            "sequence_continuity": _check(tracker.sequence_ok),
+            "sequence_continuity": _check(tracker.sequence_ok)
+            if tracker.sequence
+            else "INCONCLUSIVE",
             "wire_profile": wire,
             "control": analyze_case(
                 tracker.records["control"],
@@ -1734,7 +1776,8 @@ def capture() -> Report:
                     )
                 }
             )
-    _write(run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode())
+    if run.is_dir():
+        _write(run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode())
     return report
 
 
@@ -1902,7 +1945,12 @@ def main(argv: list[str] | None = None) -> int:
             stage.add_argument(
                 "--launch-chain",
                 action="store_true",
-                help="Opt into controlled launcher and synthetic-entitlement diagnostics",
+                help="Opt into controlled launcher diagnostics without adding entitlements",
+            )
+            stage.add_argument(
+                "--synthetic-entitlement",
+                action="store_true",
+                help="Separate opt-in marker experiment; requires --launch-chain",
             )
         if name == "capture":
             stage.add_argument(
@@ -1920,7 +1968,10 @@ def main(argv: list[str] | None = None) -> int:
             report = review_existing(_hidden_existing_root())
         else:
             report = (
-                setup(launch_chain=args.launch_chain)
+                setup(
+                    launch_chain=args.launch_chain,
+                    synthetic_entitlement=args.synthetic_entitlement,
+                )
                 if args.command == "setup"
                 else capture()
                 if args.command == "capture"

@@ -137,8 +137,9 @@ def test_launcher_buffer_is_bounded_and_disabled_for_original_mode() -> None:
     assert not original.launchers and not any(tracker.records.values())
 
 
-def test_new_setup_variant_signs_only_the_synthetic_marker_and_binds_its_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("synthetic_entitlement", [False, True])
+def test_launcher_setup_separates_the_marker_experiment_and_binds_its_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synthetic_entitlement: bool
 ) -> None:
     root = kit.prepare(tmp_path / "new-code-only-kit")
     monkeypatch.setattr(kit, "_root", lambda: root)
@@ -151,17 +152,32 @@ def test_new_setup_variant_signs_only_the_synthetic_marker_and_binds_its_scope(
             kit._write(Path(arguments[arguments.index("-o") + 1]), b"INVENTED BINARY")
 
     monkeypatch.setattr(kit, "_command", command)
-    report = kit.setup(launch_chain=True)
+    report = kit.setup(launch_chain=True, synthetic_entitlement=synthetic_entitlement)
     assert report.kit_version == 2 and report.stage == "SETUP_READY"
+    assert report.synthetic_entitlement is synthetic_entitlement
     manifest = kit._manifest(root)
     assert manifest.collection_mode == "launch_chain" and manifest.kit_version == 2
-    assert plistlib.loads((root / "CONTROLLED-ENTITLEMENTS.plist").read_bytes()) == {
-        kit.ENTITLEMENT_MARKER: True
-    }
-    assert any("--entitlements" in command for command in commands)
+    assert manifest.synthetic_entitlement is synthetic_entitlement
+    assert (root / "CONTROLLED-ENTITLEMENTS.plist").exists() is synthetic_entitlement
+    if synthetic_entitlement:
+        assert plistlib.loads((root / "CONTROLLED-ENTITLEMENTS.plist").read_bytes()) == {
+            kit.ENTITLEMENT_MARKER: True
+        }
+    assert any("--entitlements" in command for command in commands) is synthetic_entitlement
     assert "collection_mode" in manifest.model_dump()
-    old = manifest.model_copy(update={"kit_version": 1, "collection_mode": "app"})
+    legacy = manifest.model_dump()
+    legacy.pop("synthetic_entitlement")
+    assert kit.Manifest.model_validate(legacy).model_dump() == legacy
+    old = manifest.model_copy(
+        update={"kit_version": 1, "collection_mode": "app", "synthetic_entitlement": None}
+    )
     assert "collection_mode" not in old.model_dump()
+    assert "synthetic_entitlement" not in old.model_dump()
+
+
+def test_marker_requires_explicit_launcher_mode_before_any_native_operation() -> None:
+    with pytest.raises(kit.PrivateError, match="INPUT"):
+        kit.setup(synthetic_entitlement=True)
 
 
 def test_absent_entitlements_remain_distinct_from_explicit_null() -> None:

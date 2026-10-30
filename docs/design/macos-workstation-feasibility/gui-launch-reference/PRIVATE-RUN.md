@@ -1,6 +1,7 @@
 # Human-only private Finder launch reference
 
-For a **new** opt-in launcher/entitlement experiment, use [LAUNCH-CHAIN.md](LAUNCH-CHAIN.md).
+For a **new** opt-in launcher experiment, use [LAUNCH-CHAIN.md](LAUNCH-CHAIN.md).
+Its default setup adds no synthetic entitlement; populated-entitlement qualification is separate.
 The original procedure below remains the app-only mode and must not be applied to old private
 kits as an upgrade. Agents prepare a fresh code-only copy for the new experiment.
 
@@ -80,7 +81,9 @@ Keep the `&&`: Python stays your ordinary user. Only its fixed collector guard r
 The `--finder` flag attests that you will use Finder for the second launch. Never run the whole
 Python command under sudo or add `tee`, shell tracing or output logging wrappers.
 
-1. The helper waits up to ten seconds for a matching harmless readiness exec/exit. It makes at
+1. The helper first checks a non-GUI readiness process before starting the collector and
+   reports a specific `PROBE_*` error if it fails. It then waits up to ten seconds for a
+   matching harmless readiness exec/exit with successful exit status. It makes at
    most eight attempts and prints `COLLECTOR_READY` only after observing a controlled pair.
 2. It launches the command-line control automatically. **A small test window should appear and
    close by itself. Do not launch the Finder copy during this stage.** No policy alert is expected.

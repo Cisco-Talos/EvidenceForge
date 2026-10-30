@@ -1,20 +1,28 @@
-# Human-only controlled launcher and entitlement experiment
+# Human-only controlled launcher experiment
 
 Use a **new prepared kit**, never an earlier kit containing private evidence. Agents may prepare
 code and run invented-input tests. Only you run the commands below, with agents closed. Do not
 share native records, paths, own-process snapshots, transcripts or screenshots.
 
 This extends the successful Finder experiment to the missing **first xpcproxy activation**.
-It also signs the same harmless local probe with one fixed synthetic marker entitlement,
-`org.evidenceforge.reference.synthetic: true`. The marker requests no Apple service or security
-capability. The probe still reads only its own identity/descriptors, opens its small temporary
-window and exits; it reads no personal documents and makes no network requests. No server,
-download, new privilege, historical log read or system/security setting change is needed.
+The default launcher setup adds **no synthetic entitlement**. In the October 30 collector-free
+diagnostic, the variant signed with the synthetic marker was killed, while the same diagnostic
+without that marker passed. Explicit DER generation did not fix it. No system/security policy
+was changed, and no security log was inspected to attribute the kill to a specific component.
+The separate marker experiment must not block launcher collection.
+
+The probe reads only its own identity/descriptors, opens its small temporary window and exits;
+it reads no personal documents and makes no network requests. No server, download, new privilege,
+historical log read or system/security setting change is needed.
 
 Apple documents an XPC dictionary or NULL for
 [exec entitlements](https://developer.apple.com/documentation/endpointsecurity/es_exec_entitlements(_:)).
-That does not establish eslogger's JSON representation. This diagnostic compares the known
-marker locally and returns fixed representation labels. It does not enable native generation.
+That does not establish eslogger's JSON representation. This diagnostic returns fixed
+representation labels for the observed entitlements. It does not enable native generation.
+The separate `setup --launch-chain --synthetic-entitlement` option requests only the fixed marker
+`org.evidenceforge.reference.synthetic: true`; do not use it for this launcher collection. The
+setup/provenance and report explicitly retain whether the marker was requested. Older manifests
+without that field retain an unknown choice, rather than inventing an absent marker.
 
 The collector's machine-wide stream remains transient in the existing bounded filter. In this
 opt-in variant, a second ring holds at most 64 xpcproxy exec candidates and 4 MiB **in memory**.
@@ -40,7 +48,8 @@ backups and existing endpoint software remain separate from this filter's persis
    /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_gui_launch.py setup --launch-chain --private-run
    ```
 
-   Expect `kit_version: 2`, `stage: SETUP_READY`, `error: NONE`. This builds/signs only the
+   Expect `kit_version: 2`, `synthetic_entitlement: false`, `stage: SETUP_READY`, `error: NONE`.
+   This builds/signs only the
    test app and collector guard; it starts no collector and launches no app. If setup fails,
    keep the fixed error report and use a fresh kit rather than replacing private files.
 
@@ -64,7 +73,13 @@ backups and existing endpoint software remain separate from this filter's persis
    55-second collector watchdog and cleanup interval to finish, then use a newly prepared
    kit. A fresh setup alone does not establish that an older collector has stopped.
 
-4. Wait for `COLLECTOR_READY`; the command-line control window appears and closes itself.
+4. The command first runs a short **non-GUI** probe check without a collector. A killed,
+   failed or timed-out probe reports `PROBE_KILLED`, `PROBE_FAILED` or `PROBE_TIMEOUT` at
+   `PROBE_CHECK`, before opening capture files or starting eslogger. Stop on those errors;
+   do not change security policy or retry with the synthetic marker. Readiness also requires
+   successful native and subprocess exit status, rather than accepting any exec/exit pair.
+
+   Wait for `COLLECTOR_READY`; the command-line control window appears and closes itself.
    Wait for the distinct `FINDER_READY` message, then double-click the app in Finder within
    30 seconds. Its second small window closes itself. No policy alert is expected; stop
    rather than overriding one. The guard's 55-second watchdog and existing cleanup apply.
@@ -72,11 +87,17 @@ backups and existing endpoint software remain separate from this filter's persis
    expire and resolve cleanup privately before another attempt.
 
 5. Review the final fixed JSON. `error: NONE`, `collector_cleanup: PASS`, collection controls
-   and `launch_chain` are the relevant diagnostics. The current production codec rejects
-   populated entitlements, so the older app-only `native_shapes: FAIL` is expected in this
-   variant. `*_shape_excluding_entitlements` deliberately isolates that one field and is
+   and `launch_chain` are the relevant diagnostics. A nonzero, killed, timed-out or
+   non-completing automatic control now reports a specific `CONTROL_*` error. The current
+   production codec still rejects populated entitlements, but this default variant adds no
+   marker; do not automatically dismiss a shape failure as expected. The
+   `*_shape_excluding_entitlements` checks deliberately isolate that one field and are
    **not** a full shape pass or a generation admission decision. No fork retained means
    `NOT_RETAINED`; it never proves that no fork happened.
+
+   A missing Finder completion before its deadline reports `FINDER_TIMEOUT` with stage
+   `FINDER_READY`. A failure before starting the collector reports sequence continuity as
+   inconclusive, rather than claiming a pass on an empty stream.
 
 6. Share only the reviewed fixed JSON. If needed, rerun the offline-only reporter as your
    normal user while agents remain closed:
@@ -88,6 +109,6 @@ backups and existing endpoint software remain separate from this filter's persis
    Use `report`, not the older v4 `review-existing` command. This reads only this kit's bounded
    current capture and provenance; it starts no collector, app or live role query.
 
-The result may qualify the bounded controlled launcher and entitlement representation after
-review and tests. It does not by itself qualify Terminal, arbitrary vendor entitlements,
+The result may qualify the bounded controlled launcher after review and tests. Populated
+entitlement qualification remains separate. It does not by itself qualify Terminal, vendor entitlements,
 services, PTY helpers, Dock, Spotlight or Unified Log families.
