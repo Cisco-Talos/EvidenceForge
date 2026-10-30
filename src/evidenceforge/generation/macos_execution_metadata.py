@@ -383,7 +383,8 @@ class MacosExecutionMetadataProducer:
         The policy explicitly selects a successful runtime outcome, independently
         of static signer metadata. It does not create missing signing facts.
         Runtime artifacts and unlisted installed images retain unknown outcomes.
-        These values are synthetic model choices, never host measurements.
+        Profiles select the outcome, including bounded reviewed references.
+        Generation never reads host binaries or measures live validation state.
         """
         if validation is not None:
             if (

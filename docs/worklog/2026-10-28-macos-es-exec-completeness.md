@@ -974,3 +974,68 @@ Fresh version-2 code-only copies replace the earlier instructions:
 The old version-1 directories are untouched; do not reuse or inspect them. No setup, native
 collector, real app, marker or private-file review was run by the agent. Whole Ruff, formatting,
 whitespace and the unchanged revision-358 behavior-surface check pass.
+
+## Revision 359: successful Terminal reference and bounded runtime metadata
+
+The human supplied the version-2 fixed Terminal JSON directly. Error NONE, complete stage,
+provenance/platform/readiness/cleanup/bounds/sequence PASS, no ring eviction, retained app exec
+PASS via ANCESTRY, wire V11 and marker exit zero PASS. Only that attachment was read; the
+private kit, native records, system logs and process listings were not inspected.
+
+The retained exec roles are xpcproxy (launchd preimage), Apple Terminal (xpcproxy preimage),
+login (Terminal preimage), zsh (login preimage) and the marker (zsh preimage). Matched forks
+are reported for xpcproxy, login, zsh and marker. Same-PID replacement describes each exec's
+before/after pair; it does not make this entire chain one PID. The Terminal app has no matched
+fork for its xpcproxy-to-app replacement, which is consistent with the existing Finder owner.
+The detailed offline reviewer will explicitly classify each retained fork's parent image.
+
+Terminal's native shape fails while the shape excluding entitlements passes, isolating the
+remaining codec mismatch to that value. Its exact value layout is not yet established.
+Login's argument class is OTHER, its credential tuple differs from an all-user tuple, and
+its "only standard descriptors" predicate fails. That last result can reflect extra open
+descriptors or a different last-FD bound; do not infer an inventory from the single Boolean.
+The app's audit/group changes and the false ES-client predicates are observations, not failed
+collection controls. Marker-entitlement predicates are not vendor-app validity checks.
+
+The active execution profile now selects the observed clean runtime flags and ARM64e/PTRAUTH
+slice separately for Terminal, login and zsh: 0x26017b01, 0x26015b11 and 0x26010b01 respectively,
+with signed subtype -2147483646. Existing xpcproxy policy agrees. Other utilities retain their
+explicit existing policy; iTerm2 receives none of these Apple signing/runtime defaults.
+No entitlement, argument, FD or credential transition is invented to enable startup. The
+complete-mode in-window startup rejection remains in force. No raw records are committed.
+
+### Offline terminal detail reviewer
+
+The new `scripts/macos_terminal_startup_review.py` prepares a code-only, offline reader of the
+existing completed version-2 capture. It verifies exact capture code/codec, setup and run
+provenance, controlled marker/guard metadata, collection controls and retained chain scope.
+It opens no installed app, runs no command or live role query, starts no collector/probe and
+writes nothing during review. The report exports closed labels for entitlement value types,
+login argv words/flags, descriptor slots and last-FD extent, per-word local/root credential
+classes, parent/child fork images and transitions, and exact responsibility comparisons.
+Unknown native strings stay hidden. No entitlement keys/values, usernames, paths, hashes,
+PID/audit/pipe IDs or environment values can enter the fixed report.
+
+The reviewer is not yet run against private evidence. Reading the original kit requires a
+new explicit permission under the standing local-log rule. No additional Terminal collection
+is proposed. The independent iTerm2 startup reference remains necessary before treating its
+real helper/metadata behavior as equivalent to Apple's.
+
+The focused regression passed 341 tests in 48.19 seconds, including 19 new offline-review
+cases and the complete selected/filtered terminal command boundary. Those cases cover
+same-PID exec versus separate forks, fork-parent images, credential/membership transitions,
+closed argv/FD/type vocabulary, unchanged files, broken provenance/code/guard/codec/control,
+extra/unlinked rows, bad marker exit and private file permissions. Native commands and
+installed-app reads are explicitly forbidden in the reviewer tests. One existing zsh policy
+expectation was updated to the new observed flags; legacy missing policy still stays unknown.
+The public Finder CLI/filter/checkpoint and complete-mode rejection tier passed all four
+cases in 40.68 seconds against revision 359. Whole Ruff, formatting, whitespace and surface
+checks pass; digest `df38fab309196c7e5c1e185298f80ce8934694f386484ef53f6da1153d273b64`.
+
+Prepared reviewer, code only: `/private/tmp/eforge-terminal-startup-kit-9_bkj8sj`.
+Its `private_terminal_review.py --help` passes with isolated Python. The exact pending
+permission request is to run that reader against the completed original Terminal outer kit
+`/private/tmp/eforge-terminal-startup-kit-jlgbqbs1`; it has not been run. The alternate human
+command is `python -I -B private_terminal_review.py review-existing --private-run`, selecting
+that original outer directory at the hidden prompt. No new collection, setup, app/marker
+execution, live query, capture mutation or direct record display is authorized by preparing it.

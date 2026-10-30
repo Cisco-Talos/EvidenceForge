@@ -12,8 +12,8 @@ system_responsibility: none # clean service launch with no other responsible lif
 # Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.
 gui_audit_origin: authenticated_local_account
 # Selected canonical ownership for this modeled terminal chain. The app owns
-# its login/shell/command descendants. This is not a native Terminal capture or
-# qualification of the app's own exec/entitlement export. Old profiles stay unknown.
+# its login/shell/command descendants. The app's own startup and entitlement
+# qualification remain separately gated. Old profiles stay unknown.
 terminal_responsibility: terminal_application
 # Human-reviewed regular Finder test-app relationship, not every GUI/helper class.
 # This selects parent/audit/responsibility only: no inferred exec environment,
@@ -86,7 +86,6 @@ first_pipe_id: 1000000 # host-local monotonic synthetic native pipe-object names
 code_validation:
   - product_id: apple-macos
     artifact_names:
-      - Terminal
       - bash
       - df
       - dscl
@@ -94,7 +93,6 @@ code_validation:
       - find
       - id
       - ifconfig
-      - login
       - logind
       - loginwindow
       - mds
@@ -111,7 +109,6 @@ code_validation:
       - sw_vers
       - tccd
       - uname
-      - zsh
     codesigning_flags: 603979777 # 0x24000001
     is_platform_binary: true
     validation_category: 1 # explicit modeled platform validation outcome
@@ -129,6 +126,27 @@ code_validation:
     is_platform_binary: true
     validation_category: 1
     cpu_subtype: -2147483646 # ARM64E | PTRAUTH_ABI, distinct from generic app arm64
+  # Human-reviewed clean Apple Terminal startup on macOS 27. These select only
+  # the observed runtime security and slice; missing argv/FD/entitlement and
+  # transition facts still prevent qualification of initial app/login starts.
+  - product_id: apple-macos
+    artifact_names: [Terminal]
+    codesigning_flags: 0x26017b01
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [login]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [zsh]
+    codesigning_flags: 0x26010b01
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
   # This invented ad-hoc app is a selected model, not an inventory claim about
   # third-party applications. XNU cs_blobs.h defines SIGNED|ADHOC|VALID and NONE.
   - product_id: eforge-reference

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 358
+current_revision: 359
 history_start_revision: 1
-behavior_surface_sha256: c15a02a4a12e96bdd8e3244623ffc48e7bf0e42e8dab33a4ec97676bd28ecc56
+behavior_surface_sha256: df38fab309196c7e5c1e185298f80ce8934694f386484ef53f6da1153d273b64
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3423,3 +3423,13 @@ changes:
       - macos_endpoint_security
       - zsh_history
     summary: Adds iTerm2 with a distinct deployment and uses frozen terminal application assignments for the shared login, shell and native command path, preserving rejection of unqualified in-window startup.
+  - revision: 359
+    id: reviewed-apple-terminal-runtime-metadata
+    impact: localized
+    domains:
+      - macos-image-security
+      - macos-exec-image
+    formats:
+      - macos_endpoint_security
+      - ecar
+    summary: Selects reviewed clean Terminal, login and zsh signing flags and ARM64e slices per artifact, preserving unknown startup facts and independent iTerm2 policy.

@@ -120,6 +120,46 @@ def _terminal(
     )
 
 
+@pytest.mark.parametrize(
+    "path,flags,subtype",
+    [
+        (
+            "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            0x26017B01,
+            -2147483646,
+        ),
+        ("/usr/bin/login", 0x26015B11, -2147483646),
+        ("/bin/zsh", 0x26010B01, -2147483646),
+        ("/usr/libexec/xpcproxy", 0x26015B11, -2147483646),
+        ("/usr/bin/id", 0x24000001, 0),
+    ],
+)
+def test_reviewed_terminal_runtime_metadata_is_scoped_to_exact_apple_artifacts(
+    modeled: _Fixture, path: str, flags: int, subtype: int
+) -> None:
+    metadata = modeled.producer.deployed_launch(
+        "MAC-01", "alex", at=modeled.start, path=path, kind="user"
+    )
+    assert metadata.image_security.codesigning_flags == flags
+    assert metadata.image_security.is_platform_binary
+    assert metadata.image_security.validation_category == 1
+    assert metadata.image.cpu_subtype == subtype
+
+
+def test_terminal_reference_does_not_supply_iterm_signing_or_runtime_policy(
+    modeled: _Fixture,
+) -> None:
+    metadata = modeled.producer.deployed_launch(
+        "MAC-01",
+        "alex",
+        at=modeled.start,
+        path="/Applications/iTerm.app/Contents/MacOS/iTerm2",
+        kind="user",
+    )
+    assert metadata.image is not None
+    assert metadata.image_security is None
+
+
 def test_terminal_allocation_and_descriptors_share_birth_rollback_and_exact_retry(
     modeled: _Fixture,
 ) -> None:
@@ -376,7 +416,7 @@ def test_engine_terminal_chain_uses_produced_metadata_and_restores_actual_device
         shell = engine.state_manager.get_process_identity(system.hostname, shell_pid)
         assert shell.environment and "HOME=/Users/alex" in shell.environment
         assert shell.execution_directory.native_path == "/Users/alex"
-        assert shell.exec_image.cpu_subtype == engine.macos_execution_metadata.profile.cpu_subtype
+        assert shell.exec_image.cpu_subtype == -2147483646
         assert shell.exec_script == MacosExecScript()
         terminal = engine.state_manager.known_macos_terminal(
             shell.job_control.session, shell.started_at
@@ -679,7 +719,7 @@ def test_validation_policy_is_explicit_and_does_not_create_static_signer_facts(
         modeled.producer._filesystem.deployed_binary("MAC-01", "/bin/zsh", "alex"),
         code_signature=None,
     )
-    expected = MacosImageSecurity(0x24000001, True, 1)
+    expected = MacosImageSecurity(0x26010B01, True, 1)
     assert modeled.producer.image_security(binary) == expected
     assert binary.code_signature is None
     metadata = modeled.producer.deployed_launch(
