@@ -259,7 +259,10 @@ def test_mac_document_pools_keep_platform_paths_separate() -> None:
     ]
 
 
-def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
+def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path, terminal_id: str) -> None:
+    from evidenceforge.generation.activity.application_catalog import application_descriptor
+
     state = StateManager()
     _seed_launchd(state)
     emitter = EcarEmitter(load_format("ecar"), tmp_path / "terminal.json")
@@ -268,10 +271,18 @@ def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path) -> None:
     user, system = _user(), _system()
     logon = generator.generate_logon(user, system, _TIME)
     activity = _TIME + timedelta(seconds=30)
-    shell_pid = generator.ensure_macos_session_shell(user, system, logon, activity)
+    shell_pid = generator.ensure_macos_session_shell(
+        user, system, logon, activity, terminal_application_id=terminal_id
+    )
     assert shell_pid is not None
     assert (
-        generator.ensure_macos_session_shell(user, system, logon, activity + timedelta(seconds=10))
+        generator.ensure_macos_session_shell(
+            user,
+            system,
+            logon,
+            activity + timedelta(seconds=10),
+            terminal_application_id=terminal_id,
+        )
         == shell_pid
     )
     shell = state.get_process(system.hostname, shell_pid)
@@ -279,7 +290,7 @@ def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path) -> None:
     terminal = state.get_process(system.hostname, login.parent_pid)
     assert shell.image == "/bin/zsh" and shell.command_line == "-zsh"
     assert login.image == "/usr/bin/login"
-    assert terminal.image.endswith("Terminal.app/Contents/MacOS/Terminal")
+    assert terminal.image == application_descriptor(terminal_id)["platforms"]["macos"]["image_path"]
     assert terminal.parent_pid == 1
     assert terminal.job_control is None
     assert shell.job_control == login.job_control
@@ -509,6 +520,7 @@ def test_mac_terminal_uses_frozen_descriptors_before_process_mutation(
         entry["id"]: SimpleNamespace(
             image_path=entry["platforms"]["macos"]["image_path"],
             command_templates=entry["platforms"]["macos"]["command_templates"],
+            categories=tuple(entry["categories"]),
         )
         for entry in catalog["applications"]
         if entry["id"] in {"macos-terminal", "macos-login", "macos-zsh"}
@@ -519,7 +531,9 @@ def test_mac_terminal_uses_frozen_descriptors_before_process_mutation(
         descriptors["macos-terminal"].image_path = "/frozen/Terminal"
         descriptors["macos-terminal"].command_templates = ['"/frozen/Terminal" --test-profile']
     lookup = Mock(side_effect=lambda app_id, platform: descriptors.get(app_id))
-    dispatcher.deployment_registry = SimpleNamespace(application_descriptor=lookup)
+    dispatcher.deployment_registry = SimpleNamespace(
+        application_descriptor=lookup, user_profile_for=lambda *_args: None
+    )
     packaged_lookup = Mock(side_effect=AssertionError("consulted mutable package catalog"))
     monkeypatch.setattr(application_catalog, "application_descriptor", packaged_lookup)
     materialize = Mock(side_effect=[501, 502, 503])

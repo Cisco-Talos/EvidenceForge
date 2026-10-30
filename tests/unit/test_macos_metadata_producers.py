@@ -351,8 +351,10 @@ def test_legacy_descriptors_keep_unknown_native_extent_and_pipe_identity() -> No
         MacosExecDescriptorObservation.from_modeled_table(table)
 
 
+@pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
 def test_engine_terminal_chain_uses_produced_metadata_and_restores_actual_device(
     tmp_path: Path,
+    terminal_id: str,
 ) -> None:
     engine = GenerationEngine(_scenario(), tmp_path / "run", generation_seed=318)
     try:
@@ -365,7 +367,11 @@ def test_engine_terminal_chain_uses_produced_metadata_and_restores_actual_device
         at = engine.start_time + timedelta(minutes=10)
         logon = generator.generate_logon(user, system, at)
         shell_pid = generator.ensure_macos_session_shell(
-            user, system, logon, at + timedelta(seconds=30)
+            user,
+            system,
+            logon,
+            at + timedelta(seconds=30),
+            terminal_application_id=terminal_id,
         )
         shell = engine.state_manager.get_process_identity(system.hostname, shell_pid)
         assert shell.environment and "HOME=/Users/alex" in shell.environment

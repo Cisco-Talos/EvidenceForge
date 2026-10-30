@@ -25352,6 +25352,7 @@ class ActivityGenerator:
         activity_time: datetime,
         *,
         allow_deferred_start: bool = False,
+        terminal_application_id: str | None = None,
     ) -> int | None:
         """Materialize a catalog-backed local terminal chain in its existing GUI session.
 
@@ -25371,7 +25372,7 @@ class ActivityGenerator:
             or not _session_active_for_activity(session, activity_time, margin_seconds=1.5)
         ):
             return None
-        if session.session_shell_pid is not None:
+        if session.session_shell_pid is not None and terminal_application_id is None:
             shell = self.state_manager.get_process(
                 target_system.hostname, session.session_shell_pid
             )
@@ -25384,10 +25385,75 @@ class ActivityGenerator:
                 )
             ):
                 return shell.pid
+        registry = self.dispatcher.deployment_registry
+        if terminal_application_id is None and session.process_tree_root is None:
+            # Eligibility is frozen with the deployment, like other baseline apps.
+            # Stable first choice keeps Apple Terminal as the default when both
+            # terminals are assigned; an iTerm2-only assignment selects iTerm2.
+            profile = (
+                registry.user_profile_for(target_system.hostname, user.username, "macos")
+                if registry is not None
+                else None
+            )
+            assignment = (
+                registry.select_user_application_assignment_for_category(
+                    profile.profile_id, "macos_terminal", unit_interval=0.0
+                )
+                if profile is not None
+                else None
+            )
+            if assignment is not None:
+                terminal_application_id = assignment.application_id
+        terminal_id = terminal_application_id or "macos-terminal"
+        if registry is not None:
+            terminal_descriptor = registry.application_descriptor(terminal_id, "macos")
+            terminal_image = (
+                terminal_descriptor.image_path if terminal_descriptor is not None else None
+            )
+            terminal_categories = (
+                terminal_descriptor.categories if terminal_descriptor is not None else ()
+            )
+        else:
+            terminal_descriptor = application_descriptor(terminal_id)
+            terminal_platform = (
+                terminal_descriptor.get("platforms", {}).get("macos")
+                if terminal_descriptor is not None
+                else None
+            )
+            terminal_image = terminal_platform["image_path"] if terminal_platform else None
+            terminal_categories = (
+                terminal_descriptor["categories"] if terminal_descriptor is not None else ()
+            )
+        if terminal_image is None or "macos_terminal" not in terminal_categories:
+            raise StateError(f"Mac terminal requires a macos_terminal catalog entry: {terminal_id}")
+        if session.session_shell_pid is not None:
+            shell = self.state_manager.get_process(
+                target_system.hostname, session.session_shell_pid
+            )
+            if (
+                shell is not None
+                and shell.logon_id == logon_id
+                and self._is_pid_active_at(target_system, shell.pid, activity_time)
+                and self._process_source_bound_visible_by(
+                    system=target_system, pid=shell.pid, deadline=activity_time
+                )
+            ):
+                root = (
+                    self.state_manager.get_process(
+                        target_system.hostname, session.process_tree_root
+                    )
+                    if session.process_tree_root is not None
+                    else None
+                )
+                return (
+                    shell.pid
+                    if terminal_application_id is None
+                    or (root is not None and root.image == terminal_image)
+                    else None
+                )
 
         launches: list[tuple[str, str, tuple[str, ...]]] = []
-        registry = self.dispatcher.deployment_registry
-        for application_id in ("macos-terminal", "macos-login", "macos-zsh"):
+        for application_id in (terminal_id, "macos-login", "macos-zsh"):
             if registry is not None:
                 compiled = registry.application_descriptor(application_id, "macos")
                 if compiled is None:

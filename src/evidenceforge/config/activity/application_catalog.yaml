@@ -2935,6 +2935,36 @@ applications:
         - /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
     categories:
     - code
+    - macos_terminal
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-iterm2
+    display_name: iTerm2
+    platforms:
+      macos:
+        singleton_per_session: true
+        image_path: /Applications/iTerm.app/Contents/MacOS/iTerm2
+        executable_format: mach_o
+        # Bundle/executable vocabulary: upstream plists/release-iTerm2.plist.
+        # Signing identity and entitlements stay unknown until qualified separately.
+        deployment:
+          kind: catalog
+          release_policy: unspecified
+          scope: machine
+          product_id: iterm2
+          architectures:
+          - arm64
+        command_templates:
+        - /Applications/iTerm.app/Contents/MacOS/iTerm2
+    categories:
+    - code
+    - macos_terminal
     personas:
     - developer
     - sysadmin

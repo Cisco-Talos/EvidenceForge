@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 357
+current_revision: 358
 history_start_revision: 1
-behavior_surface_sha256: 21e248cba8e19d14a43d181f7e9b358f3bafedb53660676bb71d68c068757195
+behavior_surface_sha256: c15a02a4a12e96bdd8e3244623ffc48e7bf0e42e8dab33a4ec97676bd28ecc56
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3411,3 +3411,15 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Qualifies Finder's boot-parent token and assigns launchd a separate unattributed audit session through the canonical allocator, preserving inheritance and GUI namespace isolation. Complete Finder fork/exec coverage now passes.
+  - revision: 358
+    id: shared-macos-terminal-and-iterm2-session-applications
+    impact: localized
+    domains:
+      - macos-application-catalog
+      - macos-terminal-session
+      - process-parentage
+    formats:
+      - ecar
+      - macos_endpoint_security
+      - zsh_history
+    summary: Adds iTerm2 with a distinct deployment and uses frozen terminal application assignments for the shared login, shell and native command path, preserving rejection of unqualified in-window startup.

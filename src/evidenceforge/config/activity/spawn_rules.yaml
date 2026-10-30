@@ -541,6 +541,7 @@ macos:
       - mds
       - Finder
       - Terminal
+      - iTerm2
       - Safari
       - Google Chrome
       - Microsoft Edge
@@ -569,6 +570,10 @@ macos:
       - EForgeReference
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
+    lifetime: long
+    children: [login]
+  iTerm2:
+    command_templates: [/Applications/iTerm.app/Contents/MacOS/iTerm2]
     lifetime: long
     children: [login]
   login:

@@ -1978,6 +1978,19 @@ links rather than authoring history, so generation needs no transition-specific 
 
 ## Experimental modeled macOS workstations
 
+The application catalog contains Apple Terminal (`macos-terminal`) and iTerm2
+(`macos-iterm2`, `/Applications/iTerm.app/Contents/MacOS/iTerm2`). Both use the shared
+terminal/login/zsh session bootstrap, audit origin, terminal-device ownership, command
+publication and session-close path. An explicit `environment.deployment_overrides` entry
+with `user_applications: [{user: alex, applications: [macos-iterm2, macos-zsh]}]` selects
+iTerm2 for that user's automatically bootstrapped terminal. With both terminals eligible,
+Apple Terminal is the stable default; an existing active session shell is reused. This
+models one primary terminal shell per GUI session. App identities remain distinct, and
+iTerm2 does not inherit Apple's signing metadata. App reuse creates no new process start.
+Native command output works beneath either app. Native qualification of the terminal app,
+login and initial shell startup remains incomplete; starting them within a complete ES
+collection window still rejects rather than accepting missing records.
+
 Use existing system fields (`os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact

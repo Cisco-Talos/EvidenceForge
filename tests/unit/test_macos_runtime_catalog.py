@@ -27,7 +27,8 @@ from tests.unit.test_macos_installed_provisioning import _deployments, _scenario
 
 
 @pytest.mark.parametrize(
-    "application", ["vscode", "intellij", "sublimetext", "postman", "dbeaver", "macos-terminal"]
+    "application",
+    ["vscode", "intellij", "sublimetext", "postman", "dbeaver", "macos-terminal", "macos-iterm2"],
 )
 def test_mac_gui_platform_override_compiles_without_changing_other_platforms(
     application: str,
@@ -125,8 +126,11 @@ def test_mac_storyline_execution_does_not_invent_its_own_file_create(
 
 
 @pytest.mark.parametrize("future", [False, True])
+@pytest.mark.parametrize("application", ["macos-terminal", "macos-iterm2"])
 def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
-    tmp_path: Path, future: bool
+    tmp_path: Path,
+    future: bool,
+    application: str,
 ) -> None:
     scenario = _scenario()
     scenario.output.logs = [{"format": "ecar"}]
@@ -137,7 +141,7 @@ def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
         user, system = scenario.environment.users[0], scenario.environment.systems[0]
         logon = generator.generate_logon(user, system, engine.start_time + timedelta(minutes=1))
         at = engine.start_time + timedelta(minutes=6)
-        image = application_descriptor("macos-terminal")["platforms"]["macos"]["image_path"]
+        image = application_descriptor(application)["platforms"]["macos"]["image_path"]
         terminal = generator.generate_process(
             user,
             system,
@@ -147,7 +151,9 @@ def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
             image,
             parent_pid=1,
         )
-        shell = generator.ensure_macos_session_shell(user, system, logon, at)
+        shell = generator.ensure_macos_session_shell(
+            user, system, logon, at, terminal_application_id=application
+        )
         session = engine.state_manager.get_session(logon)
         if future:
             assert shell is None and session.session_shell_pid is None
@@ -241,13 +247,18 @@ def test_framework_module_baseline_uses_live_shell_and_closes_its_foreground_lea
         generator.execute_baseline_activity(user, system, at, "process_build")
         processes = [
             process
-            for process in engine.state_manager.get_processes_for_session(logon)
+            for process in engine.state_manager.get_processes_for_session(
+                logon, include_retained=True
+            )
             if f" -m {application} " in process.command_line
         ]
         assert len(processes) == 1
         process = processes[0]
         assert process.parent_pid == session.session_shell_pid
-        close = generator.foreground_process_termination_time(system.hostname, process.pid)
+        # Short invocations may already have published their bounded exit.
+        close = process.end_time or generator.foreground_process_termination_time(
+            system.hostname, process.pid
+        )
         assert at < close <= at + timedelta(seconds=45)
         generator.finalize_foreground_process_lifetimes(engine.end_time)
         assert engine.state_manager.get_process(system.hostname, process.pid) is None

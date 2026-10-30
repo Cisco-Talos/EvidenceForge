@@ -861,3 +861,34 @@ Whole Ruff, format, whitespace and behavior-surface checks pass. Revision-357 di
 `21e248cba8e19d14a43d181f7e9b358f3bafedb53660676bb71d68c068757195`.
 The private review returned only fixed labels, changed no capture files and requires no rerun
 for this gate. All new test records are invented; no native records enter the repository.
+
+## Revision 358: Apple Terminal and iTerm2 share the session path
+
+The user requested both terminal applications in the Mac catalog and the same process logging
+contract for each. `macos-iterm2` now has its own native executable, product/deployment identity
+and per-session singleton policy. Upstream iTerm2's `plists/release-iTerm2.plist` confirms the
+`iTerm2` executable and `com.googlecode.iterm2` bundle vocabulary. The catalog does not infer
+a signing identity from that bundle identifier or copy Apple's validation/entitlement policy.
+Both apps have the `macos_terminal` role and the same modeled login child spawn rule.
+
+Automatic shell bootstrap selects the frozen user's eligible terminal assignment, defaulting
+stably to Apple Terminal when both are eligible. An existing active shell is reused. The shared
+bootstrap also accepts an explicit terminal catalog ID, rejects another app before mutation,
+and cannot silently substitute another app for a live session shell. Both variants reuse the
+existing audit, responsibility, PTY/device, lifecycle and descendant-command owners.
+
+The new measured workload covers both apps with selected and filtered native output and with
+pre-window versus in-window startup. In each variant the external `id` has exactly one native
+exec and its responsible token points to the actual selected terminal. Pre-window startup
+passes the independent complete census; in-window startup still rejects because app/login/
+initial-shell activations remain aggregate. No denominator exclusion or invented app exec
+was introduced. This increment does not qualify either app's own native startup or assume
+that iTerm2's real helper tree is identical to Apple's.
+
+The initial focused run exposed two older framework-module assertions that searched only live
+processes after a short command's bounded termination had already been published. The test now
+uses the existing retained lifecycle lookup and checks its actual close, rather than depending
+on a sampled command still being live. All 120 terminal/catalog/metadata/foundation cases pass.
+The next reference must establish app activation, helper/login/shell exec boundaries and native
+metadata for each app; existing GUI audit probes establish inheritance but not those births.
+No system logs, private captures, live apps or process listings were inspected.
