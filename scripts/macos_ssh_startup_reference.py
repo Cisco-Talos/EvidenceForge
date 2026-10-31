@@ -937,7 +937,12 @@ def connect() -> None:
         json.dumps({"pid": os.getpid(), "nonce": manifest.nonce}).encode(),
     )
     remote = shlex.join(["exec", str(root / "ssh-marker"), "--sample", manifest.nonce])
-    print("PRIVATE_REMOTE_COMMAND (paste this after SSH authentication):\n" + remote, flush=True)
+    print(
+        "After SSH authentication there may be NO PROMPT. Paste the command below "
+        "and press Enter; do not wait for a prompt.\n"
+        "PRIVATE_REMOTE_COMMAND:\n" + remote,
+        flush=True,
+    )
     args = _client_arguments(root, manifest)
     os.execve(args[0], args, dict(os.environ) | {"EFORGE_SSH_REFERENCE_TOKEN": manifest.nonce})
 

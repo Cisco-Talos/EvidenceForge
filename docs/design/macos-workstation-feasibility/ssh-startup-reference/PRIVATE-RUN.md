@@ -60,8 +60,9 @@ after failure; do not delete locks or rerun capture in it.
 
 This prints a private `PRIVATE_REMOTE_COMMAND`, then replaces itself with the loopback SSH
 client, preserving the window's standard descriptors. Copy that one printed command privately.
-Complete SSH authentication. After authentication, paste the printed `exec ... --sample ...`
-command and press Enter. A non-PTY shell may show no prompt. This command runs the marker and
+Complete SSH authentication. **A blank screen after the password can be normal: this non-PTY
+shell may show no prompt and is waiting for your command. Do not wait for a prompt.** Paste the
+printed `exec ... --sample ...` command and press Enter. This command runs the marker and
 ends the remote shell; SSH should return to your local prompt. Do not paste any other commands.
 Do not run `id`, `env`, `ps`, or debugging commands to diagnose a failure.
 

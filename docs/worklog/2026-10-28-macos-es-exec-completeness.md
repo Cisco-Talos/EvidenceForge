@@ -1458,3 +1458,19 @@ whether result files exist. The earlier preparation-only copy is superseded. The
 human action is the documented single private non-PTY loopback run, then sharing only its fixed
 JSON. Integer native export and receiver startup remain explicitly gated until that review;
 the global all-process backlog is not marked complete.
+
+## October 31: clarify the non-PTY capture's input step
+
+The human reported that Window B appeared to hang after password entry and Ctrl+C returned
+control. Source review confirms that this client intentionally opens a non-PTY login shell
+without supplying a remote command: after authentication it waits for the human to paste the
+printed marker command, and there may be no prompt. This behavior alone cannot establish an
+SSH/authentication failure. A fixed-choice clarification asks whether the marker was pasted;
+no terminal output, native record or private path is requested.
+
+The client now explicitly prints that there may be NO PROMPT and that the human must paste the
+marker and press Enter. The tracked instructions emphasize the same step. All 36 invented
+reference tests and whole Ruff/format/whitespace checks pass. No generation behavior changes.
+Fresh code-only replacement: `/private/tmp/eforge-ssh-startup-kit-xxjb4ftc`. Setup and collection
+remain human-only; neither was run. The interrupted kit is untouched. Do not inspect either
+handed-off kit or remove its locks. The replacement also remains off-limits after handoff.
