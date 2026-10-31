@@ -21,6 +21,15 @@ force-quit or use a custom command/tmux profile. No personal dotfile edits are r
 
 ## Procedure
 
+Before setup, check **System Settings → Privacy & Security → Full Disk Access** for the
+controller, **Apple Terminal**. `eslogger` requires its responsible app to have this permission;
+iTerm2's authorization and `sudo -v` do not grant it to Terminal. Apple's
+[Endpoint Security introduction](https://developer.apple.com/videos/play/wwdc2022/110345/?time=488)
+and the installed `eslogger(1)` manual describe this requirement. If you choose to grant
+Terminal access for this experiment, quit and reopen Terminal before continuing. Agents do
+not read or change privacy settings. If you prefer not to grant it, pause before collection
+and select a different already-authorized controller.
+
 1. Keep the controller in **Apple Terminal**, with iTerm2 fully quit. Close agents. The selected
    executable must be `/Applications/iTerm.app/Contents/MacOS/iTerm2`. In Apple Terminal, `cd`
    to this fresh prepared-kit directory. As the normal user, run:
@@ -76,3 +85,11 @@ force-quit or use a custom command/tmux profile. No personal dotfile edits are r
 The comparison will select shared canonical process/lifecycle/credential/descriptor code
 where the evidence agrees, with explicit application policy or helper stages where it differs.
 One successful marker chain does not claim every iTerm2 helper or restoration mode is covered.
+
+An immediate `COLLECTOR` error at step `COLLECTOR` with no readiness means the collector
+could not become usable; it says nothing about iTerm2's startup chain. The controller hides
+all collector stderr, so that report alone cannot distinguish missing Full Disk Access, sudo
+authentication or another early exit. `collector_cleanup: FAIL` means the helper did not return
+the expected successful cleanup status; it is not proof that a collector is still running.
+Do not paste eslogger/sudo output or inspect local system logs to diagnose this. Leave a used
+kit unchanged and use a fresh prepared kit after resolving the prerequisite.

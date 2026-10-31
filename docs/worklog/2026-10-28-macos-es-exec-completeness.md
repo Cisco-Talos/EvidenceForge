@@ -1197,3 +1197,29 @@ offline provenance/scope validation, a separate intervening helper, arbitrary pi
 malformed/higher-slot bounds, canary non-disclosure and unchanged files/no native commands.
 Both prepared helpers' isolated help commands pass. Generation behavior remains revision 361;
 no engine, active generation policy, application catalog, release version or evidence gate changed.
+
+### iTerm2 controller prerequisite: Apple Terminal Full Disk Access
+
+The human supplied a fixed report from the first iTerm2 attempt: version 2, Terminal identity
+iterm2, platform/provenance PASS, immediate COLLECTOR at step COLLECTOR, readiness inconclusive,
+cleanup FAIL, no retained app/wire/phase evidence. Code inspection confirms this is the early
+collector-exit path; stderr is deliberately discarded and guard failure does not distinguish
+authorization, sudo or other startup failures. Cleanup FAIL means the helper did not return
+the expected zero status, not a claim that collection remains running.
+
+The installed eslogger manual (static documentation only) and Apple's
+[Endpoint Security introduction](https://developer.apple.com/videos/play/wwdc2022/110345/?time=488)
+require the responsible controller app to have Full Disk Access independently of root/sudo.
+The previous Terminal experiment used iTerm2 as controller; the iTerm2 experiment reverses
+those apps. Asked for only the setting's status, the human confirmed that Apple Terminal is
+disabled or absent in Full Disk Access. No privacy settings, TCC databases, private kit files,
+native records, historical/system logs or live processes were inspected by the agent.
+
+The instructions now state this prerequisite before setup and describe the early-failure
+report accurately. The human may choose to grant Apple Terminal authorization and relaunch
+it before privately collecting. No permission is changed by the agent or kit. A fresh code-only
+replacement is `/private/tmp/eforge-terminal-startup-kit-wvb_cqm5`; it has the same tested
+version-2 capture and version-3 offline reviewer plus corrected instructions. The failed
+one-shot kit remains untouched; do not reuse or modify its setup/lock/provenance files.
+No collector, probe, app or native-record read ran during diagnosis or preparation. No
+generation code or evidence-admission policy changed, and no new native qualification is claimed.

@@ -44,6 +44,13 @@ Use a **fresh prepared kit for each terminal**. Keep the controller in the *othe
 control the Apple Terminal test from iTerm2, and the iTerm2 test from Apple Terminal. Save your
 work and fully quit the app being tested before collection. Do not quit the controller app.
 
+The **controller app** must already have Full Disk Access authorization. Apple Terminal and
+iTerm2 have separate authorizations; switching the controller switches this prerequisite.
+`sudo` does not replace it. Check manually in System Settings → Privacy & Security → Full
+Disk Access. If you choose to grant the controller access, quit and reopen that app before
+setup/capture. Agents do not inspect or change these settings. No permission change is made
+by preparing the kit. See `eslogger(1)` → TCC AUTHORIZATION.
+
 1. `cd` to the prepared code-only kit. As your normal user, compile and sign its marker and
    guard (this launches neither and starts no collector):
 
