@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.events.macos_entitlements import FrozenEntitlements
 from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -26,10 +27,17 @@ from tests.unit.test_macos_execution_directory import _directory
 from tests.unit.test_macos_native_sink_publication import _prepare
 
 
-@pytest.mark.parametrize("known_entitlements", [False, True, "boolean", "string_array"])
+@pytest.mark.parametrize(
+    "known_entitlements", [False, True, "boolean", "string_array", "string", "empty"]
+)
 @pytest.mark.parametrize(
     "entitlement_policy",
-    ["absent_only", "absent_or_boolean_object", "absent_boolean_or_string_array_object"],
+    [
+        "absent_only",
+        "absent_or_boolean_object",
+        "absent_boolean_or_string_array_object",
+        "absent_or_bounded_object",
+    ],
 )
 @pytest.mark.parametrize("exit_code", [None, 7])
 @pytest.mark.parametrize("failure", [None, "before_write", "after_write"])
@@ -66,6 +74,15 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     )
     original = runtime_fixture._executable
     if known_entitlements:
+        explicit: dict[str, FrozenEntitlements] = {
+            "boolean": (("invented.enabled", True),),
+            "string_array": (
+                ("invented.enabled", True),
+                ("invented.items", ("example.one", "example.two")),
+            ),
+            "string": (("invented.identity", "example.vendor"),),
+            "empty": (),
+        }
 
         def executable() -> RuntimeArtifactDescriptor:
             descriptor = original()
@@ -73,14 +90,7 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
                 descriptor,
                 code_signature=replace(
                     descriptor.code_signature,
-                    entitlements=(("invented.enabled", True),)
-                    if known_entitlements == "boolean"
-                    else (
-                        ("invented.enabled", True),
-                        ("invented.items", ("example.one", "example.two")),
-                    )
-                    if known_entitlements == "string_array"
-                    else "absent",
+                    entitlements=explicit.get(known_entitlements, "absent"),
                 ),
             )
 
@@ -175,7 +185,12 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
         or (known_entitlements == "boolean" and entitlement_policy != "absent_only")
         or (
             known_entitlements == "string_array"
-            and entitlement_policy == "absent_boolean_or_string_array_object"
+            and entitlement_policy
+            in ("absent_boolean_or_string_array_object", "absent_or_bounded_object")
+        )
+        or (
+            known_entitlements in ("string", "empty")
+            and entitlement_policy == "absent_or_bounded_object"
         )
     )
     expected = [11] + ([9] if has_exec else []) + ([15] if exit_code is not None else [])
@@ -193,6 +208,10 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             if known_entitlements == "boolean"
             else {"invented.enabled": True, "invented.items": ["example.one", "example.two"]}
             if known_entitlements == "string_array"
+            else {"invented.identity": "example.vendor"}
+            if known_entitlements == "string"
+            else {}
+            if known_entitlements == "empty"
             else None
         )
         assert (

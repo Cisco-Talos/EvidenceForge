@@ -134,9 +134,7 @@ def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippab
 @pytest.mark.parametrize(
     "value",
     [
-        {},
         {"a": 1},
-        {"a": "true"},
         {"a": None},
         {"a": [1]},
         {"a": [True]},
@@ -190,25 +188,64 @@ def test_string_array_entitlements_are_immutable_and_use_an_explicit_checkpoint_
     )
 
 
-@pytest.mark.parametrize("application_id", ["macos-terminal", "macos-login"])
+@pytest.mark.parametrize(
+    "values", [{}, {"invented.identity": "example.vendor", "invented.enabled": True}]
+)
+def test_empty_and_scalar_string_entitlements_keep_explicit_identity_and_checkpoint_tags(
+    values: dict,
+) -> None:
+    app = _application()
+    app.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor", entitlements=values
+    )
+    binary = _release(app)
+    signature = binary.code_signature
+    assert signature.entitlements is not None and signature.entitlements != "absent"
+    assert signature.serialized_values()[3][0] == "bounded-object-v2"
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    assert (
+        MachOCodeSignature.from_serialized_values(
+            json.loads(json.dumps(signature.serialized_values()))
+        )
+        == signature
+    )
+    assert (
+        _network_request(binary).stable_id != _network_request(_release(_application())).stable_id
+    )
+    absent = replace(binary, code_signature=replace(signature, entitlements="absent"))
+    assert _network_request(binary).stable_id != _network_request(absent).stable_id
+    if values:
+        values["invented.identity"] = "mutated"
+        assert dict(signature.entitlements)["invented.identity"] == "example.vendor"
+
+
+@pytest.mark.parametrize("application_id", ["macos-terminal", "macos-login", "macos-iterm2"])
 def test_vendor_terminal_signatures_compile_without_propagating_to_helpers(
     application_id: str,
 ) -> None:
     app = ApplicationEntry.model_validate(application_descriptor(application_id))
     release = _release(app)
     signature = release.code_signature
-    assert signature is not None and signature.team_id is None
+    assert signature is not None
+    assert signature.team_id == ("H7V7XYVQ7D" if application_id == "macos-iterm2" else None)
     assert (
         signature.signing_id
         == {
             "macos-terminal": "com.apple.Terminal",
             "macos-login": "com.apple.login",
+            "macos-iterm2": "com.googlecode.iterm2",
         }[application_id]
     )
     entitlements = dict(signature.entitlements)
     if application_id == "macos-terminal":
         assert entitlements["com.apple.private.tcc.allow-prompting"] == ("kTCCServiceAll",)
         assert all(type(value) is bool for key, value in entitlements.items() if "tcc" not in key)
+    elif application_id == "macos-iterm2":
+        assert (
+            entitlements["com.apple.application-identifier"] == "H7V7XYVQ7D.com.googlecode.iterm2"
+        )
+        assert entitlements["com.apple.security.application-groups"] == ("H7V7XYVQ7D.iTerm",)
+        assert signature.serialized_values()[3][0] == "bounded-object-v2"
     else:
         assert all(type(value) is bool for value in entitlements.values())
     assert _unpack_binary_release(_pack_binary_release(release)) == release
@@ -222,6 +259,13 @@ def test_vendor_terminal_signatures_compile_without_propagating_to_helpers(
         ("boolean-v1", [["invented.array", ["value"]]]),
         ("boolean-string-array-v1", [["invented.enabled", True]]),
         ("unqualified", [["invented.array", ["value"]]]),
+        ("boolean-v1", []),
+        ("boolean-v1", [["invented.identity", "example.vendor"]]),
+        (
+            "boolean-string-array-v1",
+            [["invented.identity", "example.vendor"], ["invented.array", ["value"]]],
+        ),
+        ("bounded-object-v2", [["invented.enabled", True]]),
     ],
 )
 def test_entitlement_serialization_rejects_downgraded_or_ambiguous_tags(

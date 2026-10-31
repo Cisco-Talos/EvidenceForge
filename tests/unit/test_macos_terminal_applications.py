@@ -126,7 +126,8 @@ def test_terminal_role_has_distinct_catalog_identity_and_matching_spawn_policy(
     assert get_parent_config("macos", name)["children"] == ["login"]
     if terminal_id == "macos-iterm2":
         assert platform["deployment"]["product_id"] == "iterm2"
-        assert "code_signature" not in platform
+        assert platform["code_signature"]["signing_id"] == "com.googlecode.iterm2"
+        assert platform["code_signature"]["team_id"] == "H7V7XYVQ7D"
 
 
 def test_nonterminal_selection_rejects_before_allocating_and_cannot_replace_live_shell(

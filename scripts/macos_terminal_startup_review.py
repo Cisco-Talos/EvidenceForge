@@ -15,9 +15,10 @@ import getpass
 import hashlib
 import importlib.util
 import math
+import re
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Literal
 
@@ -46,6 +47,7 @@ reference = capture.reference
 # Exact revision-359 codec source used by the completed version-2 Terminal capture.
 # Only its qualified successor adds Boolean/string-array entitlement decoding.
 BOOLEAN_PREDECESSOR_CODEC = "8317f64282a9d79153565e6c4e21b4489ef4840982b1577bfcfed9b49fdc75f8"
+STRING_ARRAY_PREDECESSOR_CODEC = "e0dd3b9035f85440131f2481afc5b4360639a6a878cd8dc6926cfb67e4249037"
 # Independent reference oracles from verified Apple-shipped static signatures.
 # These are vendor definitions, never copied from the private capture.
 APPLE_TERMINAL_VENDOR_ENTITLEMENTS = {
@@ -60,11 +62,41 @@ LOGIN_VENDOR_ENTITLEMENTS = {
     "com.apple.private.endpoint-security.submit.login": True,
     "com.apple.private.security.clear-library-validation": True,
 }
+# Verified static signatures in the vendor bundle, independent of private records.
+ITERM2_TEAM = "H7V7XYVQ7D"
+ITERM2_MACOS = "/Applications/iTerm.app/Contents/MacOS"
+ITERM2_VENDOR_ENTITLEMENTS = {
+    "com.apple.application-identifier": "H7V7XYVQ7D.com.googlecode.iterm2",
+    "com.apple.developer.team-identifier": ITERM2_TEAM,
+    "com.apple.security.application-groups": ["H7V7XYVQ7D.iTerm"],
+    "com.apple.security.automation.apple-events": True,
+    "com.apple.security.cs.allow-jit": True,
+    "com.apple.security.device.audio-input": True,
+    "com.apple.security.device.camera": True,
+    "com.apple.security.personal-information.addressbook": True,
+    "com.apple.security.personal-information.calendars": True,
+    "com.apple.security.personal-information.location": True,
+    "com.apple.security.personal-information.photos-library": True,
+    "keychain-access-groups": ["H7V7XYVQ7D.com.googlecode.iterm2"],
+}
+ITERM2_SERVER_ENTITLEMENTS: dict[str, object] = {}
+ITERM2_SHELL_ENTITLEMENTS = {"com.apple.application-identifier": "H7V7XYVQ7D."}
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type ValueType = Literal["BOOLEAN", "STRING", "INTEGER", "REAL", "NULL", "ARRAY", "OBJECT", "OTHER"]
 type AccountWord = Literal["ZERO", "LOCAL_ACCOUNT", "ZERO_AND_LOCAL_ACCOUNT", "OTHER"]
 type MemberReference = Literal["SELF", "TERMINAL", "LOGIN", "SHELL", "PARENT", "ONE", "OTHER"]
 type ResponsibleRole = Literal["SELF", "TERMINAL", "LOGIN", "SHELL", "UNSET", "OTHER"]
+type TokenWord = Literal[
+    "audit_user",
+    "effective_user",
+    "effective_group",
+    "real_user",
+    "real_group",
+    "pid",
+    "audit_session",
+    "pid_version",
+]
+type TokenRelation = Literal["SELF", "ZERO", "SELF_AND_ZERO", "OTHER"]
 type Slot = Literal[
     "FD_0",
     "FD_1",
@@ -120,6 +152,19 @@ class PipeTopology(capture.Model):
     groups: tuple[tuple[Slot, ...], ...] = Field(default=(), max_length=16)
 
 
+class VendorImage(capture.Model):
+    """Fixed vendor/placement comparisons, not a disclosed executable path."""
+
+    candidate: Literal["ITERM2_APP", "ITERM2_SERVER", "ITERM2_SHELL_LAUNCHER", "NOT_CLASSIFIED"] = (
+        "NOT_CLASSIFIED"
+    )
+    signing_identity: Check = "INCONCLUSIVE"
+    location: Literal["APP_BUNDLE", "USER_SUPPORT_COPY", "OTHER", "NOT_CLASSIFIED"] = (
+        "NOT_CLASSIFIED"
+    )
+    entitlement_template: Check = "INCONCLUSIVE"
+
+
 class Credentials(capture.Model):
     real_uid: AccountWord
     effective_uid: AccountWord
@@ -135,6 +180,7 @@ class ProcessFacts(capture.Model):
     session: MemberReference
     responsibility: ResponsibleRole
     responsible_token_exact: Check
+    responsible_token_words: dict[TokenWord, TokenRelation] = Field(min_length=8, max_length=8)
     terminal: Literal["PRESENT", "ABSENT", "UNKNOWN"]
 
 
@@ -162,6 +208,11 @@ class Argument(capture.Model):
         "EXEC_LOGIN_ZSH",
         "EXEC_LOGIN_BASH",
         "MARKER_SAMPLE",
+        "ITERM2_SHELL_LAUNCHER_PATH",
+        "ITERM2_SHELL_LAUNCHER_NAME",
+        "LOGIN_SHELL_LAUNCHER_ARG0",
+        "FLAG_LAUNCH_SHELL",
+        "ABSOLUTE_PATH",
         "OTHER",
     ]
     flags: tuple[Literal["F", "P", "Q", "L", "H"], ...] = ()
@@ -192,10 +243,11 @@ class PhaseDetail(capture.Model):
     pipes: PipeTopology
     entitlements: EntitlementLayout
     vendor_entitlements: Check = "INCONCLUSIVE"
+    vendor_image: VendorImage = Field(default_factory=VendorImage)
 
 
 class ReviewReport(capture.Model):
-    review_version: Literal[3] = 3
+    review_version: Literal[4] = 4
     purpose: Literal["TERMINAL_STARTUP_DETAIL_REVIEW"] = "TERMINAL_STARTUP_DETAIL_REVIEW"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -206,7 +258,11 @@ class ReviewReport(capture.Model):
     ] = "INPUT"
     provenance: Check = "INCONCLUSIVE"
     codec_lineage: Literal[
-        "CURRENT", "QUALIFIED_BOOLEAN_PREDECESSOR", "UNQUALIFIED", "NOT_REVIEWED"
+        "CURRENT",
+        "QUALIFIED_BOOLEAN_PREDECESSOR",
+        "QUALIFIED_STRING_ARRAY_PREDECESSOR",
+        "UNQUALIFIED",
+        "NOT_REVIEWED",
     ] = "NOT_REVIEWED"
     original_collection_controls: Check = "INCONCLUSIVE"
     retained_chain: Check = "INCONCLUSIVE"
@@ -354,6 +410,30 @@ def _facts(process: dict, manifest: capture.Manifest, anchors: dict[str, dict]) 
         session=_member(process["session_id"], process, anchors),
         responsibility=role,
         responsible_token_exact=exact,
+        responsible_token_words={
+            name: "SELF_AND_ZERO"
+            if value == own == 0
+            else "SELF"
+            if value == own
+            else "ZERO"
+            if value == 0
+            else "OTHER"
+            for name, value, own in zip(
+                (
+                    "audit_user",
+                    "effective_user",
+                    "effective_group",
+                    "real_user",
+                    "real_group",
+                    "pid",
+                    "audit_session",
+                    "pid_version",
+                ),
+                responsible,
+                token,
+                strict=True,
+            )
+        },
         terminal="UNKNOWN"
         if "tty" not in process
         else "ABSENT"
@@ -380,6 +460,10 @@ def _argument(value: str, image: str, manifest: capture.Manifest) -> Argument:
         "--": "DASHDASH",
         "exec": "EXEC",
         "--sample": "MARKER_SAMPLE",
+        f"{ITERM2_MACOS}/ShellLauncher": "ITERM2_SHELL_LAUNCHER_PATH",
+        "ShellLauncher": "ITERM2_SHELL_LAUNCHER_NAME",
+        "-ShellLauncher": "LOGIN_SHELL_LAUNCHER_ARG0",
+        "--launch_shell": "FLAG_LAUNCH_SHELL",
         "exec -la zsh /bin/zsh": "EXEC_LOGIN_ZSH",
         "exec -la bash /bin/bash": "EXEC_LOGIN_BASH",
     }
@@ -447,6 +531,18 @@ def _pipe_topology(fds: list[dict]) -> PipeTopology:
     )
 
 
+def _matches_template(value: object, expected: dict) -> Check:
+    return capture._check(
+        type(value) is dict
+        and value == expected
+        and all(
+            type(value[key]) is type(item)
+            and (type(item) in (bool, str) or all(type(element) is str for element in value[key]))
+            for key, item in expected.items()
+        )
+    )
+
+
 def _vendor_entitlements(role: capture.Role, value: object) -> Check:
     expected = (
         APPLE_TERMINAL_VENDOR_ENTITLEMENTS
@@ -457,14 +553,66 @@ def _vendor_entitlements(role: capture.Role, value: object) -> Check:
     )
     if expected is None:
         return "INCONCLUSIVE"
-    return capture._check(
-        type(value) is dict
-        and value == expected
-        and all(
-            type(value[key]) is type(item)
-            and (type(item) is bool or all(type(element) is str for element in value[key]))
-            for key, item in expected.items()
+    return _matches_template(value, expected)
+
+
+def _iterm2_vendor_image(
+    process: dict, entitlements: object, manifest: capture.Manifest
+) -> VendorImage:
+    """Compare only public vendor identities, fixed locations and signed templates."""
+    if manifest.terminal != "iterm2":
+        return VendorImage()
+    path = process.get("executable", {}).get("path")
+    if (
+        type(path) is not str
+        or PurePosixPath(path).as_posix() != path
+        or ".." in PurePosixPath(path).parts
+    ):
+        return VendorImage()
+    signer = process.get("signing_id")
+    server_copy = (
+        path.startswith(manifest.own_home + "/Library/Application Support/iTerm2/")
+        and PurePosixPath(path).parent.as_posix()
+        == manifest.own_home + "/Library/Application Support/iTerm2"
+        and re.fullmatch(
+            r"iTermServer(?:-[0-9A-Za-z][0-9A-Za-z._-]{0,95})?", PurePosixPath(path).name
         )
+        is not None
+    )
+    if reference._owned(process, manifest.app):
+        candidate, identifier, template, expected_path = (
+            "ITERM2_APP",
+            "com.googlecode.iterm2",
+            ITERM2_VENDOR_ENTITLEMENTS,
+            capture.PATHS["iterm2"],
+        )
+    elif signer == "iTermServer" or path == f"{ITERM2_MACOS}/iTermServer" or server_copy:
+        candidate, identifier, template, expected_path = (
+            "ITERM2_SERVER",
+            "iTermServer",
+            ITERM2_SERVER_ENTITLEMENTS,
+            f"{ITERM2_MACOS}/iTermServer",
+        )
+    elif signer == "ShellLauncher" or path == f"{ITERM2_MACOS}/ShellLauncher":
+        candidate, identifier, template, expected_path = (
+            "ITERM2_SHELL_LAUNCHER",
+            "ShellLauncher",
+            ITERM2_SHELL_ENTITLEMENTS,
+            f"{ITERM2_MACOS}/ShellLauncher",
+        )
+    else:
+        return VendorImage()
+    return VendorImage(
+        candidate=candidate,
+        signing_identity=capture._check(
+            signer == identifier and process.get("team_id") == ITERM2_TEAM
+        ),
+        location="APP_BUNDLE"
+        if path == expected_path
+        else "USER_SUPPORT_COPY"
+        if candidate == "ITERM2_SERVER" and server_copy
+        else "OTHER",
+        entitlement_template=_matches_template(entitlements, template),
     )
 
 
@@ -499,6 +647,7 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
         before, payload = row["process"], row["event"]["exec"]
         target = payload["target"]
         role = capture._role(target, manifest.marker)
+        vendor_image = _iterm2_vendor_image(target, payload.get("entitlements"), manifest)
         forks = [
             item
             for item in rows
@@ -564,8 +713,14 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
                 else "INCONCLUSIVE",
                 arguments_complete=capture._check(len(payload["args"]) <= 32),
                 arguments=tuple(
-                    _argument(item, target["executable"]["path"], manifest)
-                    for item in payload["args"][:32]
+                    Argument(kind="ABSOLUTE_PATH")
+                    if vendor_image.candidate == "ITERM2_SERVER"
+                    and index == 1
+                    and item.startswith("/")
+                    and PurePosixPath(item).as_posix() == item
+                    and ".." not in PurePosixPath(item).parts
+                    else _argument(item, target["executable"]["path"], manifest)
+                    for index, item in enumerate(payload["args"][:32])
                 ),
                 descriptors=descriptors,
                 descriptors_unique=capture._check(len(numbers) == len(set(numbers))),
@@ -588,6 +743,7 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
                     payload.get("entitlements"), present="entitlements" in payload
                 ),
                 vendor_entitlements=_vendor_entitlements(role, payload.get("entitlements")),
+                vendor_image=vendor_image,
             )
         )
     return tuple(phases)
@@ -627,6 +783,8 @@ def review_existing(root: Path) -> ReviewReport:
             if manifest.codec_sha256 == reference._codec_digest()
             else "QUALIFIED_BOOLEAN_PREDECESSOR"
             if manifest.codec_sha256 == BOOLEAN_PREDECESSOR_CODEC
+            else "QUALIFIED_STRING_ARRAY_PREDECESSOR"
+            if manifest.codec_sha256 == STRING_ARRAY_PREDECESSOR_CODEC
             else "UNQUALIFIED"
         )
         report = report.model_copy(update={"codec_lineage": codec_lineage})

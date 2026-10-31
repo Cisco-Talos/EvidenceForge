@@ -3,14 +3,14 @@
 
 """Immutable bounded entitlement values qualified by the macOS 27 references."""
 
-type EntitlementValue = bool | tuple[str, ...]
+type EntitlementValue = bool | str | tuple[str, ...]
 type FrozenEntitlements = tuple[tuple[str, EntitlementValue], ...]
 
 
 def validate_entitlements(entries: object) -> FrozenEntitlements:
-    """Validate canonical Boolean/string-array entries without retaining mutable data."""
-    if type(entries) is not tuple or not 1 <= len(entries) <= 128:
-        raise ValueError("Entitlements require 1-128 immutable entries")
+    """Validate the reviewed flat object without retaining mutable or coerced data."""
+    if type(entries) is not tuple or len(entries) > 128:
+        raise ValueError("Entitlements require 0-128 immutable entries")
     keys: set[str] = set()
     nodes = 1
     extent = 0
@@ -29,17 +29,18 @@ def validate_entitlements(entries: object) -> FrozenEntitlements:
         keys.add(key)
         extent += len(key.encode("utf-8"))
         nodes += 1
-        if type(value) is bool:
-            continue
-        if type(value) is not tuple or len(value) > 128:
-            raise ValueError("Entitlement values require exact Booleans or bounded string arrays")
-        for item in value:
+        if type(value) not in (bool, str, tuple) or (type(value) is tuple and len(value) > 128):
+            raise ValueError("Entitlement values require exact Booleans, strings or string arrays")
+        strings = (value,) if type(value) is str else value if type(value) is tuple else ()
+        for item in strings:
             if type(item) is not str or len(item) > 16384 or "\0" in item:
-                raise ValueError("Entitlement arrays require bounded exact strings")
+                raise ValueError("Entitlement text requires bounded exact strings")
             extent += len(item.encode("utf-8"))
-        nodes += len(value)
-    if nodes > 4096 or extent > 1_048_576:
-        raise ValueError("Entitlement object exceeds its aggregate bound")
+            if extent > 1_048_576:
+                raise ValueError("Entitlement object exceeds its aggregate text bound")
+        nodes += len(value) if type(value) is tuple else 0
+        if nodes > 4096 or extent > 1_048_576:
+            raise ValueError("Entitlement object exceeds its aggregate node or text bound")
     return entries
 
 
@@ -55,6 +56,6 @@ def freeze_entitlements(value: object) -> FrozenEntitlements:
     )
 
 
-def native_entitlements(entries: FrozenEntitlements) -> dict[str, bool | list[str]]:
+def native_entitlements(entries: FrozenEntitlements) -> dict[str, bool | str | list[str]]:
     """Render arrays as native JSON lists without exposing mutable canonical values."""
     return {key: list(value) if type(value) is tuple else value for key, value in entries}

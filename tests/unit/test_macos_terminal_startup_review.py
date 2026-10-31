@@ -178,7 +178,26 @@ def test_entitlement_depth_and_argument_bounds_are_explicit() -> None:
     assert review._argument(_CANARY, "/bin/zsh", _manifest()).kind == "OTHER"
 
 
-def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_private_path() -> None:
+def test_responsibility_words_distinguish_zero_credentials_from_the_process_token() -> None:
+    process = _process(11)
+    process["responsible_audit_token"] = deepcopy(process["audit_token"])
+    exact = review._facts(process, _manifest(), {})
+    assert set(exact.responsible_token_words.values()) == {"SELF"}
+    for name in ("euid", "egid", "ruid", "rgid"):
+        process["responsible_audit_token"][name] = 0
+    mixed = review._facts(process, _manifest(), {})
+    assert mixed.responsible_token_exact == "FAIL" and mixed.responsibility == "SELF"
+    for name in ("effective_user", "effective_group", "real_user", "real_group"):
+        assert mixed.responsible_token_words[name] == "ZERO"
+    assert mixed.responsible_token_words["audit_session"] == "SELF"
+    assert mixed.responsible_token_words["pid_version"] == "SELF"
+    assert "100001" not in mixed.model_dump_json()
+
+
+@pytest.mark.parametrize("vendor_helper", [False, True])
+def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_private_path(
+    vendor_helper: bool,
+) -> None:
     manifest = _manifest("iterm2")
     rows = _chain(manifest)
     app = rows[2]["event"]["exec"]["target"]
@@ -191,6 +210,11 @@ def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_privat
     helper = deepcopy(child)
     helper["audit_token"]["pidversion"] += 1
     helper["executable"]["path"] = f"/Users/{_CANARY}/invented-helper"
+    if vendor_helper:
+        helper["executable"]["path"] = (
+            manifest.own_home + "/Library/Application Support/iTerm2/iTermServer-9.8.7"
+        )
+        helper["signing_id"], helper["team_id"] = "iTermServer", review.ITERM2_TEAM
     helper["executable"]["stat"]["st_ino"] = 8300
     execution = deepcopy(rows[4])
     execution["process"] = child
@@ -199,6 +223,10 @@ def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_privat
         args=[helper["executable"]["path"]],
         dyld_exec_path=helper["executable"]["path"],
     )
+    if vendor_helper:
+        execution["event"]["exec"].update(
+            entitlements={}, args=[helper["executable"]["path"], f"/private/tmp/{_CANARY}/socket"]
+        )
     rows[3]["process"] = deepcopy(helper)
     # Preserve the existing child lifetime while changing its real fork parent/image.
     for process in (
@@ -224,7 +252,70 @@ def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_privat
     ]
     assert phases[3].fork_parent_role == "OTHER"
     assert phases[4].target.responsibility == "TERMINAL"
+    if vendor_helper:
+        assert phases[2].vendor_image.candidate == "ITERM2_SERVER"
+        assert phases[2].vendor_image.location == "USER_SUPPORT_COPY"
+        assert (
+            phases[2].vendor_image.signing_identity
+            == phases[2].vendor_image.entitlement_template
+            == "PASS"
+        )
+        assert phases[2].arguments[1].kind == "ABSOLUTE_PATH"
     assert _CANARY not in review.ReviewReport(phases=phases).model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "name,signer,template,candidate",
+    [
+        ("iTerm2", "com.googlecode.iterm2", review.ITERM2_VENDOR_ENTITLEMENTS, "ITERM2_APP"),
+        ("iTermServer", "iTermServer", {}, "ITERM2_SERVER"),
+        (
+            "ShellLauncher",
+            "ShellLauncher",
+            review.ITERM2_SHELL_ENTITLEMENTS,
+            "ITERM2_SHELL_LAUNCHER",
+        ),
+    ],
+)
+def test_vendor_image_comparisons_expose_only_fixed_labels(
+    name: str,
+    signer: str,
+    template: dict,
+    candidate: str,
+) -> None:
+    manifest = _manifest("iterm2")
+    process = _process(11)
+    process["executable"]["path"] = f"{review.ITERM2_MACOS}/{name}"
+    if name == "iTerm2":
+        process["executable"]["stat"].update(st_dev=manifest.app.device, st_ino=manifest.app.inode)
+    process.update(signing_id=signer, team_id=review.ITERM2_TEAM)
+    report = review._iterm2_vendor_image(process, deepcopy(template), manifest)
+    assert report.candidate == candidate and report.location == "APP_BUNDLE"
+    assert report.signing_identity == report.entitlement_template == "PASS"
+    process["team_id"] = _CANARY
+    result = review._iterm2_vendor_image(process, {_CANARY: _CANARY}, manifest)
+    assert result.signing_identity == result.entitlement_template == "FAIL"
+    assert _CANARY not in result.model_dump_json() and signer not in result.model_dump_json()
+    assert (
+        review._iterm2_vendor_image(process, template, _manifest("apple")).candidate
+        == "NOT_CLASSIFIED"
+    )
+
+
+@pytest.mark.parametrize(
+    "argument,expected",
+    [
+        (f"{review.ITERM2_MACOS}/ShellLauncher", "ITERM2_SHELL_LAUNCHER_PATH"),
+        ("-ShellLauncher", "LOGIN_SHELL_LAUNCHER_ARG0"),
+        ("--launch_shell", "FLAG_LAUNCH_SHELL"),
+        (f"/private/tmp/{_CANARY}", "OTHER"),
+    ],
+)
+def test_iterm2_public_shell_launcher_argument_vocabulary_is_closed(
+    argument: str, expected: str
+) -> None:
+    value = review._argument(argument, "/usr/bin/login", _manifest("iterm2"))
+    assert value.kind == expected and _CANARY not in value.model_dump_json()
 
 
 @pytest.mark.parametrize("same", [True, False])
@@ -363,7 +454,7 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
     }
     report = review.review_existing(root)
     assert report.error == "NONE" and report.step == "COMPLETE"
-    assert report.review_version == 3 and report.codec_lineage == "CURRENT"
+    assert report.review_version == 4 and report.codec_lineage == "CURRENT"
     assert report.terminal == terminal
     assert report.phases[1].role == ("APPLE_TERMINAL" if terminal == "apple" else "ITERM2")
     assert (
@@ -378,15 +469,24 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
     assert _CANARY not in report.model_dump_json()
 
 
-def test_offline_review_preserves_the_exact_qualified_predecessor_codec(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "codec,lineage",
+    [
+        (review.BOOLEAN_PREDECESSOR_CODEC, "QUALIFIED_BOOLEAN_PREDECESSOR"),
+        (review.STRING_ARRAY_PREDECESSOR_CODEC, "QUALIFIED_STRING_ARRAY_PREDECESSOR"),
+    ],
+)
+def test_offline_review_preserves_the_exact_qualified_predecessor_codec(
+    tmp_path: Path, codec: str, lineage: str
+) -> None:
     root = tmp_path / "invented-capture"
     manifest, run = _bundle(root)
-    changed = manifest.model_copy(update={"codec_sha256": review.BOOLEAN_PREDECESSOR_CODEC})
+    changed = manifest.model_copy(update={"codec_sha256": codec})
     for path in (root / "SETUP.json", run / "provenance.json"):
         path.write_text(changed.model_dump_json())
     report = review.review_existing(root)
     assert report.error == "NONE" and report.step == "COMPLETE"
-    assert report.codec_lineage == "QUALIFIED_BOOLEAN_PREDECESSOR"
+    assert report.codec_lineage == lineage
     assert report.provenance == report.retained_chain == "PASS"
 
 

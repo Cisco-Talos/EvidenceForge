@@ -1223,3 +1223,49 @@ version-2 capture and version-3 offline reviewer plus corrected instructions. Th
 one-shot kit remains untouched; do not reuse or modify its setup/lock/provenance files.
 No collector, probe, app or native-record read ran during diagnosis or preparation. No
 generation code or evidence-admission policy changed, and no new native qualification is claimed.
+
+## Revision 362: paired iTerm2 reference and exact flat entitlement objects
+
+The human supplied the successful version-2 iTerm2 capture and version-3 fixed offline report.
+Provenance, platform, collection readiness/cleanup, bounded delivery, continuity, retained app
+and ancestry pass; the marker exits zero, with no candidate-ring eviction. Only these shared
+reports were read. They establish a different fresh-start topology from Apple Terminal:
+app -> helper -> login -> helper -> same-PID zsh. Login argv includes `-fpl` and the bundled
+ShellLauncher invocation; login has standard descriptors only. Its effective-UID transition,
+the child's later drop, GUI audit origin and exact app responsibility agree with the shared
+mechanisms. Native shape failures isolate to scalar-string and empty entitlement objects.
+
+The user separately approved version 4 of the prepared offline reader at
+`/private/tmp/eforge-terminal-startup-kit-3lq60k0p` against the completed private iTerm2 kit
+`/private/tmp/eforge-terminal-startup-kit-wvb_cqm5`. It ran exactly once. All original controls
+and three independent vendor signing/entitlement comparisons pass. The two helpers are
+iTermServer in a user Application Support copy and ShellLauncher in the app bundle. Their
+public argv forms and the xpcproxy responsibility-token word classes are confirmed. No private
+values were returned, no file changed and no command, app, probe, collector or live query ran.
+This approval is consumed and does not authorize future readers or direct capture inspection.
+No further collection is currently needed for these bounded startup paths. The full paired
+comparison and actual fork/exec counts are in the adjacent terminal reference COMPARISON.md.
+
+Independent, filtered static signature checks against the vendor anchor/team verified all
+three installed bundle binaries. Main iTerm2 has signer com.googlecode.iterm2, team H7V7XYVQ7D,
+and Boolean/string/string-array entitlements; iTermServer has signer iTermServer and explicit
+`{}`; ShellLauncher has signer ShellLauncher and the literal application identifier H7V7XYVQ7D.
+(including its trailing dot). These public vendor definitions, not captured private values,
+are the comparison oracles. The sealed app version is 3.7.6; the vendor downloads page dates
+that version October 15, 2026. No native hash, UUID, user identifier, path or environment value
+is copied into generation. The main catalog now contains its verified signer/template;
+helper installation/runtime policies remain the next startup implementation work.
+
+Canonical entitlements now distinguish unknown, explicit null, explicit empty object and
+bounded flat Boolean/string/string-array objects. Scalar and empty cases use a new exact
+checkpoint tag; older Boolean/array encodings retain their bytes. Native v11 decoding and
+current-profile publication accept these observed forms, while frozen older profiles retain
+their previous restrictions. Aggregate size/node/string bounds reject malformed/nested/coerced
+values before rendering. Retry tests cover all shapes and publication fault positions. Two
+older malformed-fixture tests now use nested objects because scalar strings are qualified.
+This metadata milestone does not yet enable aggregate in-window terminal startup export.
+
+Validation: all 773 selected codec/signature/runtime/source/reviewer/GUI/terminal cases pass
+in 51.87 seconds, plus all four public Finder/filter/checkpoint/complete-rejection cases in
+40.29 seconds. Whole Ruff, formatting and whitespace checks pass. Revision-362 behavior
+surface is `c5b3d1affa56502143632a23f11ac80a4117bb08e79beffc2635875434ef7d15`.

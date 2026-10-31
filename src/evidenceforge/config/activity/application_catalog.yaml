@@ -2959,8 +2959,24 @@ applications:
         singleton_per_session: true
         image_path: /Applications/iTerm.app/Contents/MacOS/iTerm2
         executable_format: mach_o
-        # Bundle/executable vocabulary: upstream plists/release-iTerm2.plist.
-        # Signing identity and entitlements stay unknown until qualified separately.
+        # Verified vendor-signed main image; helper identities remain independent.
+        # Native startup still requires its actual helper/credential/FD chain.
+        code_signature:
+          signing_id: com.googlecode.iterm2
+          team_id: H7V7XYVQ7D
+          entitlements:
+            com.apple.application-identifier: H7V7XYVQ7D.com.googlecode.iterm2
+            com.apple.developer.team-identifier: H7V7XYVQ7D
+            com.apple.security.application-groups: [H7V7XYVQ7D.iTerm]
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.calendars: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            keychain-access-groups: [H7V7XYVQ7D.com.googlecode.iterm2]
         deployment:
           kind: catalog
           release_policy: unspecified

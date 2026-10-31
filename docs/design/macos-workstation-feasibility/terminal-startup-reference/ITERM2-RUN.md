@@ -1,7 +1,7 @@
 # Paired iTerm2 startup reference
 
 Use this fresh kit to collect the equivalent of the completed Apple Terminal test before
-implementing either startup producer. It bundles the version-2 capture and version-3 offline
+implementing either startup producer. It bundles the version-2 capture and version-4 offline
 detail reviewer. Agents prepare/test code only; the human performs setup, collection and
 review privately with agents closed. No further Apple Terminal capture is needed now.
 
@@ -73,7 +73,7 @@ and select a different already-authorized controller.
 
    At `Original terminal kit (hidden):`, enter **this same outer kit directory** containing
    `SETUP.json` and `ACTIVE-RUN`, not the inner `run-...` directory. This review starts nothing
-   and changes no files. Expect `review_version: 3`, error NONE, step COMPLETE and the three
+   and changes no files. Expect `review_version: 4`, error NONE, step COMPLETE and the three
    provenance/controls/retained-chain checks PASS. Individual differences and OTHER roles are
    observations; do not try to change iTerm2 to make those labels match Terminal.
 

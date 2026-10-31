@@ -32,7 +32,7 @@ def test_v11_preserves_original_headers_named_tokens_and_category(family: str) -
 
 @pytest.mark.parametrize(
     "value",
-    [{}, [], "", False, 0, {"invented.entitlement": 1}, {"invented.entitlement": {"nested": True}}],
+    [[], "", False, 0, {"invented.entitlement": 1}, {"invented.entitlement": {"nested": True}}],
 )
 def test_v11_does_not_admit_unreviewed_nonnull_entitlements(value: object) -> None:
     fields = _record(11, "exec")
@@ -68,6 +68,24 @@ def test_v11_preserves_reviewed_string_arrays_without_retaining_mutable_values()
 @pytest.mark.parametrize(
     "values",
     [
+        {},
+        {"invented.identity": "example.vendor"},
+        {"invented.enabled": True, "invented.identity": "false", "invented.items": ["example.one"]},
+    ],
+)
+def test_v11_preserves_empty_and_scalar_string_objects_distinct_from_null(values: dict) -> None:
+    fields = _record(11, "exec")
+    fields["event"]["exec"]["entitlements"] = values
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert record.event.exec.entitlements is not None
+    assert json.loads(record.to_ndjson()) == fields
+    if "invented.identity" in values:
+        assert type(dict(record.event.exec.entitlements)["invented.identity"]) is str
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
         {"invented.array": [1]},
         {"invented.array": [True]},
         {"invented.array": [None]},
@@ -76,7 +94,9 @@ def test_v11_preserves_reviewed_string_arrays_without_retaining_mutable_values()
         {"invented.array": ["\0"]},
         {"invented.array": ["x" * 16385]},
         {"invented.array": ["x"] * 129},
-        {"invented.array": "scalar"},
+        {"invented.scalar": "\0"},
+        {"invented.scalar": "x" * 16385},
+        {"invented.scalar": None},
     ],
 )
 def test_v11_does_not_coerce_or_expand_unreviewed_array_shapes(values: object) -> None:

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 361
+current_revision: 362
 history_start_revision: 1
-behavior_surface_sha256: a9daf970835a30d72b2e7a3de021a63715715f2f31145cb603350b9dbb166fcd
+behavior_surface_sha256: c5b3d1affa56502143632a23f11ac80a4117bb08e79beffc2635875434ef7d15
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3452,3 +3452,13 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Supplies verified setuid login file permissions through exact machine-installed product/artifact/path rules, preserving unrelated images, user copies and older frozen provisioning policies.
+  - revision: 362
+    id: paired-iterm2-flat-entitlement-shapes
+    impact: localized
+    domains:
+      - macos-code-signature
+      - native-source-admission
+      - checkpoint-serialization
+    formats:
+      - macos_endpoint_security
+    summary: Preserves reviewed iTerm2 scalar-string and explicit empty entitlement objects through canonical signing identity, tagged checkpoints and bounded v11 decoding, with narrower frozen profile restrictions retained.

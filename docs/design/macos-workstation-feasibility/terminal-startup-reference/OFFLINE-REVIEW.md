@@ -36,6 +36,22 @@ Duplicate/malformed slots fail; pipe slots outside that vocabulary remain inconc
 The capture protocol and private-file scope are unchanged. A fresh paired kit can bundle this
 reader beside the capture helper; see `ITERM2-RUN.md` for the one-session collection/review flow.
 
+Review version 4 adds closed comparisons for the two iTerm2 helper stages discovered in the
+successful paired capture. It compares native signing ID/team, app-bundle versus exact user
+support-copy placement, and entitlement equality against independently verified vendor signing
+templates. It recognizes the public ShellLauncher path/name and `--launch_shell` switch; a
+server's second argument can be classified as a canonical absolute path without exporting it.
+Candidates remain separate from proven signing, placement and template matches. OTHER roles
+are not silently renamed or admitted by these comparisons.
+
+The same report classifies each responsible-token word as matching the process, zero, both
+or other. This resolves the nonexact pre-exec responsibility token without disclosing any ID.
+The exact revision-360/361 string-array codec fingerprint is now a second accepted predecessor,
+reported as `QUALIFIED_STRING_ARRAY_PREDECESSOR`; arbitrary codec fingerprints still fail.
+Code/provenance/marker/guard, collection, scope and private-file checks are unchanged. The reader
+runs no commands, opens no installed app or preference, writes nothing and starts no collection.
+Preparing version 4 does not authorize it to read an existing private capture.
+
 Only run it privately with agents closed, unless you explicitly authorize an agent to run
 this exact fixed-output reader against the original kit. Never share the original directory,
 native records, provenance, terminal contents or screenshots.

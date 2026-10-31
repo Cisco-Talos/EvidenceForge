@@ -5,7 +5,7 @@
 
 These are wire records, not canonical process or file state. Version 6 and 9
 profiles describe historical references; version 10 covers fork. The privately
-reviewed macOS 27/message-11 profile covers fork, exec with null or bounded Boolean/string-array
+reviewed macOS 27/message-11 profile covers fork, exec with null or bounded flat-object
 entitlements, and exit. Decoder admission does not enable generator sources or establish
 macOS 26 fidelity. Unsupported combinations fail closed. A notification result
 is not an authorization callback or a synthetic policy decision.
@@ -241,11 +241,11 @@ class ESExec(_Record):
 
 
 class ESExecV11(ESExec):
-    """Reviewed v11 null, Boolean and string-array entitlement exports."""
+    """Reviewed v11 null and flat Boolean/string/string-array entitlement objects."""
 
     dyld_exec_path: str = Field(description="Required native execution path")
-    entitlements: Annotated[FrozenEntitlements, Field(min_length=1, max_length=128)] | None = Field(
-        description="Required null or a nonempty bounded Boolean/string-array object"
+    entitlements: Annotated[FrozenEntitlements, Field(max_length=128)] | None = Field(
+        description="Required null or a bounded flat Boolean/string/string-array object"
     )
 
     @field_validator("entitlements", mode="before")
@@ -257,7 +257,7 @@ class ESExecV11(ESExec):
     @field_serializer("entitlements")
     def native_entitlements(
         self, value: FrozenEntitlements | None
-    ) -> dict[str, bool | list[str]] | None:
+    ) -> dict[str, bool | str | list[str]] | None:
         """Keep the validated model immutable while preserving the native JSON object."""
         return native_entitlements(value) if value is not None else None
 

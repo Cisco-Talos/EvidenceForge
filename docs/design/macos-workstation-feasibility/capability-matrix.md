@@ -24,6 +24,12 @@ Terminal/login catalog templates. Older frozen profiles retain their narrower ca
 The native terminal startup producer remains gated pending its actual fork/exec, session,
 controlling-terminal, credential and descriptor transitions. No iTerm2 metadata is inferred.
 
+Revision 362 records the successful paired iTerm2 reference and approved helper review. Its
+server and ShellLauncher add one fork and two execs relative to Terminal; login's descriptor
+inventory also differs. V11 and canonical signing now preserve scalar-string and empty-object
+entitlements, with a separate verified vendor main-image template. Shared startup implementation
+can proceed with explicit app-specific stages; the comparison does not itself enable that producer.
+
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
 output selection. The catalog can hold multiple profiles; historical wire decoders remain

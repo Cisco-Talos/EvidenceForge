@@ -111,6 +111,8 @@ def test_atomic_publication_and_checkpoint_retain_all_metadata(executable: bool)
     [
         (("invented.enabled", True),),
         (("invented.array", ("example.one", "example.two")), ("invented.enabled", True)),
+        (("invented.identity", "example.vendor"),),
+        (),
     ],
 )
 def test_signature_entitlements_survive_runtime_artifact_head_restore(entitlements: tuple) -> None:

@@ -692,11 +692,12 @@ A native fork requires an actual authenticated fork and complete signing, valida
 terminal and file facts. Exec additionally requires exact argv, environment, cwd, Mach-O slice,
 script presence and complete post-exec descriptors. The bounded v11 codec exports null
 `entitlements` when the canonical binary explicitly models absence, or an object whose values
-are exact Booleans or arrays of strings. The macOS 27 Terminal reference establishes the
-string-array shape. Objects are bounded to 128 keys, arrays to 128 strings each, and the whole
+are exact Booleans, strings or arrays of strings. The paired macOS 27 Terminal/iTerm2 references
+establish those flat shapes, including an explicit empty object distinct from null and unknown.
+Objects are bounded to 128 keys, arrays to 128 strings each, and the whole
 object to 4,096 nodes and 1 MiB of text. Canonical values are immutable and survive checkpoint
-restore. Unknown entitlement facts, scalar strings and nested objects/arrays do not qualify.
-Older frozen profiles retain their absent-only or Boolean-only restrictions. The
+restore. Unknown entitlement facts, numeric values and nested objects/arrays do not qualify.
+Older frozen profiles retain their absent-only, nonempty Boolean-only or nonempty Boolean/array restrictions. The
 macOS 27 Finder reference confirms the Apple xpcproxy Boolean template and the complete
 boot-parent fork, root launcher exec, GUI credential change and app exec chain.
 Exit requires an explicit canonical completed status or
@@ -708,7 +709,8 @@ image, identity and timestamp in eCAR and ES. The current terminal policy explic
 its app lifetime as the owner of login/shell/command descendants; older or already-unknown
 ownership remains unknown. Apple Terminal and login have explicit catalog signer/entitlement
 templates from verified Apple-shipped metadata; those templates alone do not qualify their
-startup process transitions or descriptors. iTerm2 signing facts remain independently unknown.
+startup process transitions or descriptors. iTerm2 has a separately verified vendor main-image
+signing/entitlement template; its helper identities and startup still require their own qualification.
 The installed-file owner supplies login's verified root-owned setuid mode 04555 only for its
 exact machine-installed Apple product/artifact/path. User copies and other images keep their
 own modeled permissions; older frozen policies keep their previous stat. File mode alone

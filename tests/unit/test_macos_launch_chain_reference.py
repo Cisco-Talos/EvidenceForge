@@ -39,7 +39,7 @@ def _chain() -> list[dict]:
     first["event"]["exec"].update(
         target=launcher_target,
         args=["/usr/libexec/xpcproxy", _CANARY],
-        entitlements={_CANARY: _CANARY},
+        entitlements={_CANARY: {_CANARY: _CANARY}},
     )
     fork["event"]["fork"]["child"] = deepcopy(before)
     app["process"] = deepcopy(launcher_target)

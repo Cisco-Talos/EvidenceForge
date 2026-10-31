@@ -335,12 +335,17 @@ def prepared_macos_es_process_publication(
             binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
             if binary.code_signature is None or binary.code_signature.entitlements is None:
                 return "entitlements_unknown"
-            if binary.code_signature.entitlements != "absent" and (
-                source.profile.exec_entitlements == "absent_only"
+            entitlements = binary.code_signature.entitlements
+            policy = source.profile.exec_entitlements
+            if entitlements != "absent" and not (
+                policy == "absent_or_bounded_object"
                 or (
-                    source.profile.exec_entitlements == "absent_or_boolean_object"
-                    and any(
-                        type(value) is not bool for _, value in binary.code_signature.entitlements
+                    bool(entitlements)
+                    and (
+                        policy == "absent_or_boolean_object"
+                        and all(type(value) is bool for _, value in entitlements)
+                        or policy == "absent_boolean_or_string_array_object"
+                        and all(type(value) in (bool, tuple) for _, value in entitlements)
                     )
                 )
             ):

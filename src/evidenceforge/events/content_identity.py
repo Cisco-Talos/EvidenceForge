@@ -298,13 +298,16 @@ class MachOCodeSignature:
             object.__setattr__(self, "entitlements", tuple(sorted(entries)))
 
     def serialized_values(self) -> tuple[object, ...]:
-        """Preserve older encodings and tag the bounded string-array extension."""
+        """Preserve old encodings and tag reviewed empty/scalar-string objects."""
         values = (self.signing_id, self.team_id, self.cdhash)
         if self.entitlements is None:
             return values
         encoded = (
             (
-                "boolean-string-array-v1"
+                "bounded-object-v2"
+                if not self.entitlements
+                or any(type(value) is str for _, value in self.entitlements)
+                else "boolean-string-array-v1"
                 if any(type(value) is tuple for _, value in self.entitlements)
                 else "boolean-v1",
                 self.entitlements,
@@ -320,10 +323,11 @@ class MachOCodeSignature:
         if type(values) not in {list, tuple} or len(values) not in {3, 4}:
             raise ValueError("Malformed serialized Mach-O signature")
         entries = values[3] if len(values) == 4 else None
+        tag: str | None = None
         if type(entries) in {list, tuple}:
             if (
                 len(entries) != 2
-                or entries[0] not in ("boolean-v1", "boolean-string-array-v1")
+                or entries[0] not in ("boolean-v1", "boolean-string-array-v1", "bounded-object-v2")
                 or type(entries[1]) not in {list, tuple}
             ):
                 raise ValueError("Unknown serialized entitlement representation")
@@ -331,16 +335,14 @@ class MachOCodeSignature:
             if any(type(pair) not in {list, tuple} or len(pair) != 2 for pair in pairs):
                 raise ValueError("Malformed serialized entitlement entries")
             tag = entries[0]
-            has_arrays = any(type(pair[1]) in (list, tuple) for pair in pairs)
-            if (tag == "boolean-v1" and has_arrays) or (
-                tag == "boolean-string-array-v1" and not has_arrays
-            ):
-                raise ValueError("Entitlement representation tag disagrees with its values")
             entries = tuple(
                 (pair[0], tuple(pair[1]) if type(pair[1]) in (list, tuple) else pair[1])
                 for pair in pairs
             )
-        return cls(values[0], values[1], values[2], entries)
+        restored = cls(values[0], values[1], values[2], entries)
+        if tag is not None and restored.serialized_values()[3][0] != tag:
+            raise ValueError("Entitlement representation tag disagrees with its values")
+        return restored
 
     @classmethod
     def derive(

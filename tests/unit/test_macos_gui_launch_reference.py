@@ -163,7 +163,7 @@ def test_inconsistent_observations_are_not_promoted(damage: str, field: str) -> 
 
 def test_unknown_v11_layout_is_a_fixed_shape_failure() -> None:
     rows = _rows()
-    rows[1]["event"]["exec"]["entitlements"] = {_CANARY: _CANARY}
+    rows[1]["event"]["exec"]["entitlements"] = {_CANARY: {_CANARY: _CANARY}}
     report = kit.analyze_case(_raws(rows), _own(rows), True, _IMAGE)
     assert report.native_shapes == "FAIL"
     assert _CANARY not in report.model_dump_json()

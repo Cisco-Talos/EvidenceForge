@@ -92,11 +92,13 @@ Authored interactive Mac processes submit history through their actual live Bash
 Apple Terminal (`macos-terminal`) and iTerm2 (`macos-iterm2`) use the same terminal/login/zsh bootstrap and native command path. Select iTerm2 through the user's deployment application assignment; with both eligible, Apple Terminal is the stable default. Existing active session shells are reused. Keep each app's executable/deployment identity separate; signing and helper facts are not interchangeable. Commands beneath a pre-existing terminal can satisfy complete ES coverage, but an in-window terminal/login/initial-shell startup remains unqualified and rejects in complete mode.
 
 The macOS 27 v11 codec admits explicit null entitlements and bounded objects containing exact
-Boolean values or arrays of strings. Canonical signatures freeze those values and preserve
+Boolean values, strings or arrays of strings, including an explicit empty object. Canonical signatures freeze those values and preserve
 them across checkpoint restore. Older frozen profiles keep their narrower capabilities;
 unknown values never become null. Apple Terminal and login catalog templates use verified
-Apple-shipped signing metadata. Their native startup still needs canonical credential,
-session, controlling-terminal and descriptor transitions; iTerm2 needs its own reference.
+Apple-shipped signing metadata; iTerm2 has its own verified vendor main-image template. Their
+native startup still needs canonical credential, session, controlling-terminal and descriptor
+transitions. The paired reference reveals extra iTerm2 helper execs and a different login FD
+inventory; use app-specific stages within the shared process contract.
 
 Authored history exposures use existing `spillage` / `surface: shell_history` semantics with an ordinary local Mac user and `zsh_history` collection. An explicit earlier local login gives the Terminal/login/zsh owner time to become ready. Use ASCII invented values. The profile records a submitted command without asserting success, a child process or a network request. Missing zsh ownership suppresses the exposure label; output filtering cannot select a different shell. Root/service-account exposure, SSH-owned history exposure and metafied Unicode remain outside this authored profile. See `scenarios/macos-workstation-example/history-exposure.yaml`.
 
