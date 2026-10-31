@@ -35,12 +35,18 @@ Select explicit app-specific stages, arguments and FD tables. Do not force ident
 inherit Apple signer/runtime flags into iTerm2, or retain an aggregate fallback in complete mode.
 App reuse and restoration of existing jobs remain distinct from this fresh-start workload.
 
-The current increment extends immutable entitlement values and bounded v11 decoding to scalar
-strings and explicit empty objects. Explicit empty, explicit null and unknown stay distinct.
-The new checkpoint tag preserves those states; earlier Boolean/array encodings and frozen
-profile restrictions are retained. A verified vendor template now supplies the iTerm2 main
-image's signer and entitlement definitions, independently of captured values. This supplies
-metadata; it does not enable the still-unimplemented startup producer.
+Revisions 362–363 qualified immutable entitlement values, installed helper placement, runtime
+security, setuid/drop and session/TTY prerequisites. Explicit empty, explicit null and unknown
+entitlements stay distinct. New checkpoint tags preserve those states; earlier encodings and
+frozen profile restrictions are retained. Verified vendor templates supply signer and entitlement
+definitions independently of captured values.
+
+Revision 364 implements both fresh startups through `MacosTerminalStartup`, sharing the retained
+GUI-prefix publisher and canonical lifecycle owners. Each measured tail selects its own stages,
+arguments and exec-owned FD actions. Complete collection reconciles every fork and exec with
+the canonical census; no aggregate birth bypasses admission. Public CLI workloads cover both
+apps, one subsequent command, format filtering and checkpoint/resume. Existing-app windows,
+restored jobs and arbitrary launch-shell customization still require separate qualified plans.
 
 ## Helper qualification
 

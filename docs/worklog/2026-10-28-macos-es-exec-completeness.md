@@ -1314,3 +1314,71 @@ SSH-versus-local admission separation, parent/child authority, provisional rollb
 history reconstruction. The four public Finder/filter/checkpoint/complete-rejection cases pass
 in 39.70 seconds. Whole Ruff, formatting and whitespace checks pass. Revision-363 surface:
 `574e5c2c0f6449b4b5a0843a2d8c72d190c7f05eaac1410a730cf44e30c501a8`.
+
+## Revision 364: shared native Terminal/iTerm2 startup integration
+
+The current profile now replaces the aggregate fresh-start path for both terminals with
+`MacosTerminalStartup`. It inherits the already qualified launchd/xpcproxy/GUI prefix and
+exact retained phase publisher; one stage machine selects each measured tail. Apple Terminal
+has three actual forks and four execs. iTerm2 has four forks and six execs, including the
+support server, login, ShellLauncher and same-PID replacement with zsh. Extra kernel/API
+calls are not invented as native fork records. Both use the same State, lifecycle, collector,
+source timing, installed release, descriptor and native publication owners. Existing shells
+reuse their PID; a new window or restored job in an already running app is still an explicit
+unsupported plan. Older frozen profiles without terminal policies keep their previous path.
+
+Exec-owned file actions create the exact complete post-exec tables. Apple login has TTY
+vnode standard descriptors plus FD 4/5 sharing one pipe; its shell closes the extra descriptors.
+iTermServer has sockets 0/1, different pipe identities at 2/3 and vnode FD 4; iTerm login has
+only standard TTY descriptors. All pipe identities/counter transitions commit and roll back
+with exec. Native socket tag 2 is now supported by the canonical FD observation, alongside
+vnode 1 and pipe 6; these are the [Apple native constants](https://github.com/apple/darwin-xnu/blob/main/bsd/sys/proc_info.h).
+The [public server implementation](https://github.com/gnachman/iTerm2/blob/master/sources/Tasks/iTermFileDescriptorMultiServer.c)
+independently identifies its listening/connected sockets, distinct pipe roles and lock FD.
+The [connection owner](https://github.com/gnachman/iTerm2/blob/master/sources/Tasks/iTermMultiServerConnection.m)
+supplies the public home-support `iterm2-daemon-N.socket` naming. The bounded fresh-server
+policy selects slot 1; no private native path or peer is copied or inferred. Each internal
+transition has its own scoped sampled gap; timing is selected simulation policy, not a
+claimed native latency measurement. Startup-specific lifetime IDs include their invocation.
+
+Local login's drop changes only effective UID, with the same logical principal/integrity
+token. Canonical State and source occurrences own that change; lifecycle activity advances
+without inventing a different registry token. Missing ordinary command parents now request
+the shared native terminal owner. Public CLI acceptance exposed a suspicious-command path
+that previously created aggregate zsh directly under launchd. The fix materializes the
+dependency before optional effects freeze their actor/time and uses the parent's current
+execution readiness rather than its older fork birth. Windows/Linux timing paths retain
+their previous anchors. Required prepared actors remain immutable. Deferred shell reuse can
+return the exact already published ready dependency without allocating another app.
+
+The focused all-start tests now pass complete coverage with no aggregate births: one command
+plus fresh Terminal has four forks/five execs; the same iTerm2 workload has five forks/seven
+execs. Pre-window startup correctly contributes only the in-window command's fork/exec.
+Both apps' bounded public CLI workloads also pass complete reconciliation, including
+suspicious-command noise, and their native bytes match with eCAR selected or filtered out
+across distinct PYTHONHASHSEED values. No native log collection/read was performed for these
+engineering checks; all generation inputs and outputs are invented fixtures.
+
+The native startup journal stays on ActivityGenerator, and pending phases explicitly block
+checkpoint capture. Routine lost-return tests preserve allocation and full census for both
+apps. All 66 exhaustive per-phase interruption checks pass: failure before commit, lost commit
+return and source release failure at every Apple/iTerm2 stage. A broader focused suite passes
+666 checks, including canonical state, source/runtime metadata, descriptors, lifecycle,
+parent readiness, checkpoint state and the behavior manifest.
+
+Checkpoint acceptance exposed a warm-up lookahead defect in shared POSIX membership. Explicit
+`setsid` now uses the same lifetime-boundary handling as exec/session transitions: another
+member's later activity cannot block a child from leaving the shared group/session, and the
+remaining membership preserves its later frontier. Retiring the last member before that
+frontier still rejects. The targeted regression and existing POSIX/GUI/metadata cases pass.
+Both public terminal checkpoint/resume tests pass, with nonempty native startup state, later
+commands and byte equality against uninterrupted generation. The final 70-case slow run passes
+all 66 interruption cases plus the existing Finder/filter/checkpoint and complete-mode
+rejection contracts. The two paired terminal CLI/filter tests also pass. Whole Ruff, formatting,
+whitespace and all 23 behavior-manifest checks pass. Revision-364 surface:
+`d2a9bad7070d0a105cab1b7ecc0ac843f3863d595cf06def49d252683b297207`.
+
+This closes the bounded fresh-terminal producer milestone, not the global all-process backlog.
+No new ULF GUI-launch layout,
+generic app helper tree, existing-app restoration, SSH PTY command contract or script-child
+expansion is claimed by this increment. No additional private evidence is currently required.

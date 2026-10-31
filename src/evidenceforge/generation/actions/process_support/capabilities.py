@@ -134,6 +134,21 @@ class WorkstationLogonLockedAtCapability(Protocol):
         ...
 
 
+class EnsureMacosSessionShellCapability(Protocol):
+    def __call__(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        activity_time: datetime,
+        *,
+        allow_deferred_start: bool = False,
+        terminal_application_id: str | None = None,
+    ) -> int | None:
+        """Delegate to the shared local Mac terminal startup and reuse owner."""
+        ...
+
+
 class EnsureLinuxSessionShellCapability(Protocol):
     def __call__(
         self,

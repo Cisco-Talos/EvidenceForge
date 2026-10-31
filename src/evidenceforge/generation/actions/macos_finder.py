@@ -38,7 +38,7 @@ from evidenceforge.models.exceptions import StateError
 
 
 @dataclass(slots=True)
-class _PendingFinderPhase:
+class PendingMacosStartupPhase:
     batch: PreparedActionCohortBatch
     after: ProcessIdentity
     events: tuple[OccurrenceBuilder, ...]
@@ -148,7 +148,7 @@ class MacosFinderStartup:
         if self._fork_directory.metadata != current.metadata:
             raise StateError("Finder startup changed the boot parent's directory object")
         self._phase = 0
-        self._pending: _PendingFinderPhase | None = None
+        self._pending: PendingMacosStartupPhase | None = None
         self.process: ProcessIdentity | None = None
         self.birth: ProcessMaterializationPlan | None = None
         self.fork_event: OccurrenceBuilder | None = None
@@ -193,7 +193,7 @@ class MacosFinderStartup:
         self._phase += 1
         self._pending = None
 
-    def _prepare_next(self) -> _PendingFinderPhase:
+    def _prepare_next(self) -> PendingMacosStartupPhase:
         builder = self._state.begin_action_cohort_materialization()
         birth = None
         if self._phase == 0:
@@ -283,7 +283,7 @@ class MacosFinderStartup:
             if self._phase == 1
             else f"process-exec:{after.execution_id}"
         )
-        return _PendingFinderPhase(
+        return PendingMacosStartupPhase(
             self._prepare_publication(plan, events, root), after, events, birth
         )
 

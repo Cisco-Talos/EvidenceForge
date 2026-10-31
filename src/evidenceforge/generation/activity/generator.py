@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_support.system import SystemProcessService
 
 import evidenceforge.events.dispatcher as dispatcher_types
+from evidenceforge.config.schemas import MacosTerminalStartupPolicy
 from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
@@ -269,6 +270,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedProcessEffectActor,
     PreparedProcessEndpointEffectPlan,
 )
+from evidenceforge.generation.actions.macos_terminal import MacosTerminalStartup
 from evidenceforge.generation.actions.network_connection import (
     DeferredSessionNetworkAuthority,
 )
@@ -3303,6 +3305,14 @@ class _FrozenActivityTimingDelta:
         )
 
 
+@dataclass(slots=True)
+class _RetainedMacosTerminalStartup:
+    startup: MacosTerminalStartup
+    policy: MacosTerminalStartupPolicy
+    timing: tuple[_FrozenActivityTimingDelta, ...]
+    published_timing: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class _NmapProbeAnchorPlan:
     """One scanner anchor plus its deferred timing-audit operation."""
@@ -3715,6 +3725,7 @@ class ActivityGenerator:
         self.dispatcher = dispatcher
         self._runtime_content_manager = runtime_content_manager
         self._macos_finder_startups: dict[str, RetainedFinderLaunch] = {}
+        self._macos_terminal_startups: dict[str, _RetainedMacosTerminalStartup] = {}
         if dispatcher is not None:
             bind_execution_effect_audit = getattr(
                 dispatcher,
@@ -17049,6 +17060,40 @@ class ActivityGenerator:
         """
         provider = self.macos_execution_metadata if _get_os_category(system.os) == "macos" else None
         if (
+            provider is not None
+            and provider.profile.terminal_startups
+            and macos_launch_kind is None
+            and not require_exact_parent
+            and parent_pid in {0, 4}
+            and logon_id
+        ):
+            from evidenceforge.generation.activity.process_helpers import _macos_process_uses_shell
+
+            owner = self.state_manager.get_session_at(logon_id, time)
+            if (
+                owner is not None
+                and owner.session_kind == "interactive"
+                and owner.username == user.username
+                and _macos_process_uses_shell(process_name)
+            ):
+                # Materialize dependencies before optional effects freeze their
+                # actor/time. A prepared actor cannot move after a late bootstrap.
+                shell_pid = self.ensure_macos_session_shell(
+                    user,
+                    system,
+                    logon_id,
+                    time,
+                    allow_deferred_start=source_visible_by is None,
+                )
+                if shell_pid is None:
+                    return 0
+                shell = self.state_manager.get_process_identity(system.hostname, shell_pid)
+                if shell is None:
+                    raise StateError("Mac command lost its completed native terminal shell")
+                parent_pid = shell_pid
+                if ensure_utc(time) <= shell.execution_started_at:
+                    time = shell.execution_started_at + timedelta(milliseconds=50)
+        if (
             _get_os_category(system.os) == "macos"
             and macos_launch_kind is None
             and not require_exact_parent
@@ -25372,18 +25417,35 @@ class ActivityGenerator:
             or not _session_active_for_activity(session, activity_time, margin_seconds=1.5)
         ):
             return None
+
+        def shell_ready_or_deferred(shell: RunningProcess | None) -> bool:
+            if shell is None or shell.logon_id != logon_id:
+                return False
+            if (
+                allow_deferred_start
+                and shell.end_time is None
+                and shell.execution_ordinal > 0
+                and shell.image in {"/bin/zsh", "/bin/bash"}
+            ):
+                execution = self.state_manager.get_process_identity(
+                    target_system.hostname, shell.pid
+                )
+                if execution is not None and execution.execution_started_at > ensure_utc(
+                    activity_time
+                ):
+                    return True
+            return self._is_pid_active_at(
+                target_system, shell.pid, activity_time
+            ) and self._process_source_bound_visible_by(
+                system=target_system, pid=shell.pid, deadline=activity_time
+            )
+
         if session.session_shell_pid is not None and terminal_application_id is None:
             shell = self.state_manager.get_process(
                 target_system.hostname, session.session_shell_pid
             )
-            if (
-                shell is not None
-                and shell.logon_id == logon_id
-                and self._is_pid_active_at(target_system, shell.pid, activity_time)
-                and self._process_source_bound_visible_by(
-                    system=target_system, pid=shell.pid, deadline=activity_time
-                )
-            ):
+            if shell_ready_or_deferred(shell):
+                assert shell is not None
                 return shell.pid
         registry = self.dispatcher.deployment_registry
         if terminal_application_id is None and session.process_tree_root is None:
@@ -25430,14 +25492,8 @@ class ActivityGenerator:
             shell = self.state_manager.get_process(
                 target_system.hostname, session.session_shell_pid
             )
-            if (
-                shell is not None
-                and shell.logon_id == logon_id
-                and self._is_pid_active_at(target_system, shell.pid, activity_time)
-                and self._process_source_bound_visible_by(
-                    system=target_system, pid=shell.pid, deadline=activity_time
-                )
-            ):
+            if shell_ready_or_deferred(shell):
+                assert shell is not None
                 root = (
                     self.state_manager.get_process(
                         target_system.hostname, session.process_tree_root
@@ -25451,6 +25507,25 @@ class ActivityGenerator:
                     or (root is not None and root.image == terminal_image)
                     else None
                 )
+
+        provider = self.macos_execution_metadata
+        policy = (
+            next(
+                (p for p in provider.profile.terminal_startups if p.application_id == terminal_id),
+                None,
+            )
+            if provider is not None
+            else None
+        )
+        if policy is not None:
+            return self._ensure_native_macos_terminal(
+                user,
+                target_system,
+                session,
+                policy,
+                activity_time,
+                allow_deferred_start=allow_deferred_start,
+            )
 
         launches: list[tuple[str, str, tuple[str, ...]]] = []
         for application_id in (terminal_id, "macos-login", "macos-zsh"):
@@ -25569,6 +25644,104 @@ class ActivityGenerator:
         session.process_tree_root = terminal_pid
         session.session_shell_pid = parent_pid
         return parent_pid
+
+    def _ensure_native_macos_terminal(
+        self,
+        user: User,
+        system: System,
+        session: ActiveSession,
+        policy: MacosTerminalStartupPolicy,
+        activity_time: datetime,
+        *,
+        allow_deferred_start: bool,
+    ) -> int | None:
+        """Complete retained native startup before exposing the session's initial shell."""
+        key = session.logon_id
+        retained = self._macos_terminal_startups.get(key)
+        if retained is not None and retained.policy != policy:
+            raise StateError("Finish the pending Mac terminal startup before selecting another app")
+        if retained is None:
+            if len(self._macos_terminal_startups) >= 128:
+                raise StateError("Finish pending Mac terminal startups before admitting another")
+            registry, provider = self.dispatcher.deployment_registry, self.macos_execution_metadata
+            if registry is None or provider is None:
+                raise StateError(
+                    "Native terminal startup requires its compiled deployment and metadata owners"
+                )
+            app = registry.application_descriptor(policy.application_id, "macos")
+            if app is None:
+                raise StateError("Native terminal startup requires its exact compiled app")
+            if any(
+                p.image == app.image_path for p in self.state_manager.get_processes_for_session(key)
+            ):
+                raise StateError(
+                    "Native terminal startup currently requires a fresh app; existing-app window or server reuse needs its own qualified plan"
+                )
+            stable_id = (
+                f"mac-terminal:{system.hostname}:{key}:{ensure_utc(activity_time).isoformat()}"
+            )
+            ready = self._freeze_profile_activity_gap(
+                "macos.terminal_stage_ready",
+                stable_id=stable_id,
+                host=system.hostname,
+                source="macos_terminal",
+                lifecycle_id=session.lifecycle_group_id,
+                sample_key="stage_gap",
+            )
+            deltas = tuple(
+                self._freeze_profile_activity_gap(
+                    "macos.terminal_native_transition",
+                    stable_id=stable_id,
+                    host=system.hostname,
+                    source="macos_terminal",
+                    lifecycle_id=session.lifecycle_group_id,
+                    ordinal=i,
+                    sample_key="native_phase",
+                )
+                for i in range(3 + len(MacosTerminalStartup.stages(policy)))
+            )
+            if any(delta.value <= timedelta(0) for delta in deltas):
+                raise StateError(
+                    "Native terminal startup requires positive configured transition timing"
+                )
+            duration = sum((delta.value for delta in deltas), timedelta(0))
+            start = ensure_utc(activity_time) - ready.value - duration
+            if start <= ensure_utc(session.start_time):
+                if not allow_deferred_start:
+                    return None
+                start = ensure_utc(session.start_time) + timedelta(milliseconds=1)
+            times = [start]
+            for delta in deltas:
+                times.append(times[-1] + delta.value)
+            owner = self.state_manager.get_session_identity(key)
+            if owner is None:
+                raise StateError("Native terminal startup lost its authenticated GUI session")
+            suffix = tuple(
+                _stable_seed(f"{stable_id}:service:{part}") % 10**9 for part in ("first", "second")
+            )
+            startup = MacosTerminalStartup(
+                state=self.state_manager,
+                dispatcher=self.dispatcher,
+                metadata=provider,
+                registry=registry,
+                host=self._build_host_context(system),
+                session=owner,
+                policy=policy,
+                service_label=f"application.{policy.bundle_identifier}.{suffix[0]}.{suffix[1]}",
+                times=tuple(times),
+            )
+            retained = _RetainedMacosTerminalStartup(startup, policy, (ready, *deltas))
+            self._macos_terminal_startups[key] = retained
+        while not retained.startup.complete:
+            retained.startup.advance()
+        shell, app = retained.startup.process, retained.startup.application
+        assert shell is not None and app is not None
+        while retained.published_timing < len(retained.timing):
+            retained.timing[retained.published_timing].publish()
+            retained.published_timing += 1
+        session.process_tree_root, session.session_shell_pid = app.pid, shell.pid
+        del self._macos_terminal_startups[key]
+        return shell.pid
 
     def ensure_linux_session_shell(
         self,
@@ -37010,6 +37183,12 @@ class ActivityGenerator:
             dispatcher=self.dispatcher,
             ensure_linux_session_shell=self.ensure_linux_session_shell,
             ensure_linux_visible_shell_parent=self.ensure_linux_visible_shell_parent,
+            ensure_macos_session_shell=(
+                self.ensure_macos_session_shell
+                if self.macos_execution_metadata is not None
+                and self.macos_execution_metadata.profile.terminal_startups
+                else None
+            ),
             generate_process=self.generate_process,
             generate_system_process=self.generate_system_process,
             state_manager=self.state_manager,

@@ -98,6 +98,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     history_spillage: bool = False,
     endpoint_forks: bool = False,
     finder: bool = False,
+    terminal_id: str | None = None,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -262,6 +263,55 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
+    if terminal_id is not None:
+        scenario_data["macos_process_coverage"] = "complete"
+        scenario_data["output"]["logs"] = [
+            {"format": "ecar"},
+            {"format": "macos_endpoint_security"},
+            {"format": "zsh_history"},
+            {"format": "zeek"},
+        ]
+        scenario_data["environment"]["deployment_overrides"] = [
+            {
+                "system": "MAC-01",
+                "user_applications": [{"user": "alex", "applications": [terminal_id]}],
+            }
+        ]
+        scenario_data["baseline_activity"]["traffic_rates"] = {
+            "user_activity": 1,
+            "persona_connections": 1,
+        }
+        scenario_data["storyline"] = [
+            {
+                "id": "close-warmup",
+                "time": "+5s",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Close the warmup desktop",
+                "events": [{"type": "logoff"}],
+            },
+            {
+                "id": "fresh-login",
+                "time": "+1m",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Start the measured terminal workload",
+                "events": [{"type": "logon", "logon_type": 2}],
+            },
+            *[
+                {
+                    "id": f"query-{i}",
+                    "time": when,
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Local query across checkpoint recovery",
+                    "events": [
+                        {"type": "process", "process_name": "/usr/bin/id", "supplementary": "none"}
+                    ],
+                }
+                for i, when in enumerate(("+2m", "+1h30m"))
+            ],
+        ]
     if helpers:
         # Cross the normal GUI session close, not only the collection cutoff.
         scenario_data["time_window"]["duration"] = "12h"
@@ -379,6 +429,25 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "The active continuation must retain its authored end owner"
             )
     retained_helpers: set[str] = set()
+    if terminal_id is not None:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        app_suffix = "/Terminal" if terminal_id == "macos-terminal" else "/iTerm2"
+        apps = [process for _key, process in processes if process.image.endswith(app_suffix)]
+        assert apps and all(process.execution_ordinal == 2 for process in apps)
+        assert len({process.logon_id for process in apps}) == len(apps)
+        shells = [
+            process
+            for _key, process in processes
+            if process.image == "/bin/zsh" and process.privilege_drop is not None
+        ]
+        assert shells and all(process.credentials.effective_uid != 0 for process in shells)
     if finder:
         from evidenceforge.generation.checkpoints.packed import loads
         from evidenceforge.generation.checkpoints.state_values import decode_state_value

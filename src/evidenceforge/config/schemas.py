@@ -4286,6 +4286,47 @@ class MacosFinderApplicationPolicy(BaseModel, extra="forbid", frozen=True):
     )
 
 
+class MacosTerminalStartupPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit fresh terminal topology and public launch inputs, separate from app identity."""
+
+    application_id: str = Field(min_length=1, max_length=256)
+    kind: Literal["apple", "iterm2"]
+    bundle_identifier: str = Field(
+        min_length=3, max_length=255, pattern=r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+    )
+    shell_environment: tuple[str, ...] = Field(default=(), max_length=32)
+    server_application_id: str | None = Field(default=None, min_length=1, max_length=256)
+    shell_launcher_application_id: str | None = Field(default=None, min_length=1, max_length=256)
+    server_socket_path: str | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="after")
+    def exact_helper_scope(self) -> Self:
+        """Require all iTerm2 dependencies and keep Apple startup free of helper defaults."""
+        helpers = (
+            self.server_application_id,
+            self.shell_launcher_application_id,
+            self.server_socket_path,
+        )
+        if (self.kind == "iterm2" and not all(helpers)) or (
+            self.kind == "apple" and any(v is not None for v in helpers)
+        ):
+            raise ValueError("Terminal startup helper policy must match its declared topology")
+        for value in self.shell_environment:
+            if "=" not in value or "\0" in value or not value.split("=", 1)[0]:
+                raise ValueError("Terminal startup environment requires literal assignments")
+        if self.server_socket_path is not None:
+            if (
+                "\0" in self.server_socket_path
+                or not self.server_socket_path.startswith("{home}/")
+                or self.server_socket_path.count("{home}") != 1
+                or "{" in self.server_socket_path.replace("{home}", "")
+                or "}" in self.server_socket_path.replace("{home}", "")
+                or ".." in PurePosixPath(self.server_socket_path).parts
+            ):
+                raise ValueError("Terminal server socket requires a canonical home-scoped template")
+        return self
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4311,6 +4352,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         description="Explicit modeled terminal-app ownership of its login/shell/command chain",
     )
     login_setuid_execution: Literal["installed_owner"] | None = None
+    terminal_startups: tuple[MacosTerminalStartupPolicy, ...] = Field(default=(), max_length=32)
     finder_launch_relationships: Literal["launchd_self"] | None = None
     finder_launch_execution: Literal["xpcproxy_app_exec"] | None = None
     finder_launch_images: tuple[str, ...] = Field(default=(), max_length=64)
@@ -4348,6 +4390,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         selectors = [
             (rule.product_id, name) for rule in self.code_validation for name in rule.artifact_names
         ]
+        terminals = [entry.application_id for entry in self.terminal_startups]
+        if len(terminals) != len(set(terminals)):
+            raise ValueError("Terminal startup policies must have distinct application IDs")
         if len(selectors) != len(set(selectors)):
             raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
         finder_images = [entry.image for entry in self.finder_applications]

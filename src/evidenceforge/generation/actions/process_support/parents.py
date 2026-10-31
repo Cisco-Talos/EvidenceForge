@@ -38,6 +38,7 @@ from .capabilities import (
     CreateWindowsSessionShellLifecycleCapability,
     EnsureLinuxSessionShellCapability,
     EnsureLinuxVisibleShellParentCapability,
+    EnsureMacosSessionShellCapability,
     GenerateProcessCapability,
     GenerateSystemProcessCapability,
     ProcessIdentityCapabilities,
@@ -75,6 +76,7 @@ class ProcessParentResolver:
     sources: ProcessSourceTiming
     queries: ProcessStateQueries
     identity: ProcessIdentityCapabilities
+    ensure_macos_session_shell: EnsureMacosSessionShellCapability | None = None
 
     @property
     def history(self) -> ProcessParentHistory:
@@ -114,8 +116,9 @@ class ProcessParentResolver:
         parent_pid: int = 0,
         *,
         process_name: str = "",
+        materialize_shell: bool = True,
     ) -> int:
-        """Select a live Mac owner without synthesizing a Linux init or shell."""
+        """Select or request the canonical local shell; SSH retains its own startup owner."""
         if parent_pid not in {0, 4} and self.queries._is_pid_active_at(system, parent_pid, time):
             parent = self.state_manager.get_process(system.hostname, parent_pid)
             if parent is not None and (not parent.logon_id or parent.logon_id == logon_id):
@@ -123,6 +126,18 @@ class ProcessParentResolver:
         session = self.state_manager.get_session(logon_id) if logon_id else None
         ssh_session = session is not None and session.session_kind == "ssh"
         if logon_id and (ssh_session or _macos_process_uses_shell(process_name)):
+            if session is not None and session.session_shell_pid is not None:
+                bound = self.state_manager.get_process(system.hostname, session.session_shell_pid)
+                if (
+                    bound is not None
+                    and bound.logon_id == logon_id
+                    and bound.image in {"/bin/zsh", "/bin/bash"}
+                    and bound.execution_ordinal > 0
+                    and bound.end_time is None
+                ):
+                    # A just-completed startup may be ahead of the request. The
+                    # launch scheduler consumes its execution-readiness boundary.
+                    return bound.pid
             for process in self.state_manager.get_processes_for_session(logon_id):
                 if (
                     process.system == system.hostname
@@ -130,6 +145,20 @@ class ProcessParentResolver:
                     and self.queries._is_pid_active_at(system, process.pid, time)
                 ):
                     return process.pid
+            if (
+                not ssh_session
+                and session is not None
+                and session.session_kind == "interactive"
+                and materialize_shell
+                and self.ensure_macos_session_shell is not None
+            ):
+                user = self.identity.user_for_username(session.username)
+                pid = self.ensure_macos_session_shell(
+                    user, system, logon_id, time, allow_deferred_start=True
+                )
+                if pid is None:
+                    raise StateError("Mac local command requires a ready canonical terminal shell")
+                return pid
         if ssh_session:
             raise StateError("Mac SSH process creation requires its live session shell")
         init = self.state_manager.get_process(system.hostname, 1)
@@ -481,7 +510,9 @@ class ProcessParentResolver:
 
         os_category = _get_os_category(system.os)
         if os_category == "macos":
-            return self._macos_existing_parent(system, time, logon_id, parent_pid)
+            return self._macos_existing_parent(
+                system, time, logon_id, parent_pid, materialize_shell=False
+            )
         if parent_pid not in {0, 4}:
             if (
                 os_category == "windows"

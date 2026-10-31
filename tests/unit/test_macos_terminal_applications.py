@@ -54,10 +54,22 @@ def test_assigned_terminal_owns_commands_and_preserves_complete_coverage_boundar
         state = engine.state_manager
         shell = state.get_process_identity(system.hostname, shell_pid)
         login = state.get_process_identity(system.hostname, shell.parent_pid)
-        terminal = state.get_process_identity(system.hostname, login.parent_pid)
+        terminal = state.get_process_identity(
+            system.hostname, state.get_session(logon).process_tree_root
+        )
         catalog = application_descriptor(terminal_id)
         assert terminal.image == catalog["platforms"]["macos"]["image_path"]
         assert shell.image == "/bin/zsh" and login.image == "/usr/bin/login"
+        if terminal_id == "macos-iterm2":
+            server = state.get_process_identity(system.hostname, login.parent_pid)
+            assert server.image.endswith("/iTermServer-3.7.6")
+            assert server.parent_pid == terminal.pid
+            assert shell.execution_ordinal == 2
+        else:
+            assert login.parent_pid == terminal.pid
+            assert shell.execution_ordinal == 1
+        assert login.credentials.effective_uid == 0
+        assert shell.credentials.real_uid == shell.credentials.effective_uid != 0
         assert (
             shell.credentials.audit_uid
             == login.credentials.audit_uid
@@ -89,11 +101,20 @@ def test_assigned_terminal_owns_commands_and_preserves_complete_coverage_boundar
         assert command.execution_ordinal == 1
         assert command.parent_pid == shell_pid
         assert command.responsibility == shell.responsibility
-        if native and not preexisting:
-            with pytest.raises(StateError, match="Incomplete native macOS process coverage"):
-                engine._finalize_macos_process_coverage()
-        else:
-            engine._finalize_macos_process_coverage()
+        engine._finalize_macos_process_coverage()
+        if native:
+            census = engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census
+            assert census.complete and census.aggregate_births == 0
+            assert (
+                census.expected_forks
+                == census.published_forks
+                == (1 if preexisting else 4 if terminal_id == "macos-terminal" else 5)
+            )
+            assert (
+                census.expected_execs
+                == census.published_execs
+                == (1 if preexisting else 5 if terminal_id == "macos-terminal" else 7)
+            )
     finally:
         engine._close_emitters()
     records = [
@@ -103,8 +124,12 @@ def test_assigned_terminal_owns_commands_and_preserves_complete_coverage_boundar
     ]
     if native:
         execs = [row for row in records if row.event_type == 9]
-        assert len(execs) == 1
-        target = execs[0].event.exec.target
+        assert len(execs) == (1 if preexisting else 5 if terminal_id == "macos-terminal" else 7)
+        target = next(
+            row.event.exec.target
+            for row in execs
+            if row.event.exec.target.audit_token.pid == command.pid
+        )
         assert target.audit_token.pid == command.pid
         assert target.audit_token.pidversion == command.audit_pid_version
         assert target.responsible_audit_token.pid == terminal.pid
@@ -164,5 +189,41 @@ def test_nonterminal_selection_rejects_before_allocating_and_cannot_replace_live
             is None
         )
         assert engine.state_manager.materialization_digest() == before
+    finally:
+        engine._close_emitters()
+
+
+@pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
+def test_ordinary_process_request_bootstraps_a_missing_terminal_and_waits_for_shell_exec(
+    tmp_path: Path, terminal_id: str
+) -> None:
+    engine = _engine(tmp_path, terminal_id)
+    try:
+        engine._initialize()
+        generator, state = engine.activity_generator, engine.state_manager
+        system, user = engine.scenario.environment.systems[0], engine.scenario.environment.users[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
+        assert state.get_session(logon).session_shell_pid is None
+        pid = generator.generate_process(
+            user, system, at + timedelta(milliseconds=1), logon, "/usr/bin/id", "/usr/bin/id"
+        )
+        assert pid > 0
+        command = state.get_process_identity(system.hostname, pid)
+        session = state.get_session(logon)
+        shell = state.get_process_identity(system.hostname, session.session_shell_pid)
+        assert command.parent_pid == shell.pid
+        assert command.started_at > shell.execution_started_at
+        digest = state.materialization_digest()
+        assert (
+            generator.ensure_macos_session_shell(
+                user, system, logon, at + timedelta(milliseconds=2), allow_deferred_start=True
+            )
+            == shell.pid
+        )
+        assert state.materialization_digest() == digest
+        assert not generator._macos_terminal_startups
+        engine._finalize_macos_process_coverage()
+        assert engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.complete
     finally:
         engine._close_emitters()

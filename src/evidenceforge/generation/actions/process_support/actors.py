@@ -182,7 +182,19 @@ class ProcessActorResolver:
             if started_at <= shell_ready:
                 started_at = shell_ready + timedelta(milliseconds=50)
         parent = self.state_manager.get_process(system.hostname, request.parent_pid)
-        if parent is not None and started_at <= ensure_utc(parent.start_time):
+        parent_execution = (
+            self.state_manager.get_process_identity(system.hostname, request.parent_pid)
+            if _get_os_category(system.os) == "macos"
+            else None
+        )
+        parent_ready_at = (
+            parent_execution.execution_started_at
+            if parent_execution is not None
+            else ensure_utc(parent.start_time)
+            if parent is not None
+            else None
+        )
+        if parent_ready_at is not None and started_at <= parent_ready_at:
             offset_ms = 50 + (
                 _stable_seed(
                     f"process_after_parent:{system.hostname}:{request.parent_pid}:{process_name}:"
@@ -190,7 +202,7 @@ class ProcessActorResolver:
                 )
                 % 450
             )
-            started_at = ensure_utc(parent.start_time) + timedelta(milliseconds=offset_ms)
+            started_at = parent_ready_at + timedelta(milliseconds=offset_ms)
 
         if not request.from_storyline and request.source_visible_by is None:
             started_at = self.scheduling._preview_one_shot_cli_launch(

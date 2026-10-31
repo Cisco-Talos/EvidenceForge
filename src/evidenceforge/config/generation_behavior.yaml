@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 363
+current_revision: 364
 history_start_revision: 1
-behavior_surface_sha256: 574e5c2c0f6449b4b5a0843a2d8c72d190c7f05eaac1410a730cf44e30c501a8
+behavior_surface_sha256: d2a9bad7070d0a105cab1b7ecc0ac843f3863d595cf06def49d252683b297207
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3473,3 +3473,15 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Supplies exact iTerm2 helper placement and runtime policies, post-fork session-owned terminals, installed-file login setuid execution and authenticated child privilege drop for the shared terminal startup producer.
+  - revision: 364
+    id: native-paired-terminal-startup-publication
+    impact: material
+    domains:
+      - macos-process-lifecycle
+      - native-source-admission
+      - process-descriptor-state
+      - checkpoint-recovery
+    formats:
+      - macos_endpoint_security
+      - ecar
+    summary: Replaces current-profile aggregate terminal startup with shared retained native GUI, fork, session, credential and exec phases for Apple Terminal and iTerm2, with atomic descriptor file actions and exact all-start census reconciliation.

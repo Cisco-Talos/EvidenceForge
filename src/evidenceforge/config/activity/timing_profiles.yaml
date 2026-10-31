@@ -215,6 +215,13 @@ relationships:
     position: after
     min_ms: 1800
     max_ms: 3000
+  # Selected native transition separation, independently sampled for each phase.
+  # This is synthetic occurrence ordering, not measured startup latency.
+  macos.terminal_native_transition:
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
   # Modeled shell fork/exec separation, not empirical native calibration.
   macos.shell_fork_before_exec:
     class: causal_prerequisite

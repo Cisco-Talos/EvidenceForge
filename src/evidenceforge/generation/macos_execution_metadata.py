@@ -26,6 +26,7 @@ from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileTime
 from evidenceforge.events.macos_runtime import MacosCodeValidationDecision, MacosImageSecurity
+from evidenceforge.events.macos_spawn_io import MacosSpawnIO
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.responsibility import ProcessResponsibility
@@ -440,6 +441,7 @@ class MacosExecutionMetadataProducer:
         parent: ProcessIdentity,
         *,
         at: datetime,
+        responsibility: ProcessResponsibility | None = None,
     ) -> ProcessMaterializationPlan:
         """Observe the current modeled directory for an exact canonical fork.
 
@@ -454,7 +456,32 @@ class MacosExecutionMetadataProducer:
         directory = self.directory(parent.hostname, current.native_path, at)
         if directory.metadata.canonical_json() != current.metadata.canonical_json():
             raise StateError("Mac fork working directory no longer matches its provisioned object")
-        return builder.fork_process(parent, forked_at=at, execution_directory=directory)
+        return builder.fork_process(
+            parent, forked_at=at, execution_directory=directory, responsibility=responsibility
+        )
+
+    def login_setuid_owner(
+        self, hostname: str, principal: str, binary: BinaryReleaseIdentity, at: datetime
+    ) -> int:
+        """Preflight the exact installed login file before allocating a startup chain."""
+        if (
+            self.profile.login_setuid_execution != "installed_owner"
+            or type(binary) is not BinaryReleaseIdentity
+            or binary.key.product_id != "apple-macos"
+            or binary.key.artifact_name != "login"
+        ):
+            raise StateError("Mac login setuid exec requires its qualified installed Apple image")
+        installed = self._filesystem.observe_image(
+            hostname, "/usr/bin/login", principal, binary=binary, observed_at=at
+        )
+        if (
+            installed.installation.scope != "machine"
+            or installed.metadata.mode != 0o104555
+            or installed.metadata.uid != 0
+            or installed.metadata.gid != 0
+        ):
+            raise StateError("Mac login setuid exec requires its provisioned root-owned 04555 file")
+        return installed.metadata.uid
 
     def plan_exec(
         self,
@@ -473,6 +500,7 @@ class MacosExecutionMetadataProducer:
         execution_directory: MacosExecutionDirectory | None = None,
         observe_descriptors: bool = True,
         gui_session: SessionIdentity | None = None,
+        spawn_io: MacosSpawnIO | None = None,
     ) -> MacosPreparedExecution:
         """Produce an exact direct image replacement through the existing State builder.
 
@@ -542,24 +570,8 @@ class MacosExecutionMetadataProducer:
                 raise StateError(
                     "Mac login setuid exec requires its exact authenticated user input"
                 )
-            installed = self._filesystem.observe_image(
-                process.hostname, image, process.principal, binary=binary, observed_at=at
-            )
-            if (
-                installed.installation.scope != "machine"
-                or installed.metadata.mode != 0o104555
-                or installed.metadata.uid != 0
-                or installed.metadata.gid != 0
-            ):
-                raise StateError(
-                    "Mac login setuid exec requires its provisioned root-owned 04555 file"
-                )
-            credentials = replace(before, effective_uid=installed.metadata.uid)
-        descriptors = (
-            MacosExecDescriptorObservation.from_modeled_table(table.after_exec(at))
-            if observe_descriptors and table is not None
-            else None
-        )
+            owner_uid = self.login_setuid_owner(process.hostname, process.principal, binary, at)
+            credentials = replace(before, effective_uid=owner_uid)
         after = builder.execute_process(
             process,
             image=image,
@@ -574,5 +586,12 @@ class MacosExecutionMetadataProducer:
             executable_version=ProcessExecutableVersion.from_binary(binary),
             image_security=self.image_security(binary, validation=validation),
             macos_gui_session=gui_session,
+            macos_spawn_io=spawn_io,
+        )
+        table_after = builder.process_execution_descriptors(after)
+        descriptors = (
+            MacosExecDescriptorObservation.from_modeled_table(table_after)
+            if observe_descriptors and table_after is not None
+            else None
         )
         return MacosPreparedExecution(after, descriptors)

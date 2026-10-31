@@ -1,6 +1,14 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-10-27)
+## Current generation admission (2026-10-31)
+
+Revision 364 qualifies bounded fresh Apple Terminal and iTerm2 3.7.6 startup through one
+retained native phase owner. Terminal produces three real forks and four execs; iTerm2
+produces four forks and six execs, including its server and same-PID ShellLauncher-to-zsh
+replacement. Complete local-command workloads now reconcile every in-window start through
+the public CLI, with canonical credentials, session/TTY and FD tables. Existing shells reuse
+their identities. Other GUI apps, existing-app new windows/restoration and SSH PTY/helper
+inventories remain separate obligations; no general all-process completion is claimed.
 
 October 30, revision 357: explicit `process.launch_method: finder` and the narrowly selected
 baseline reference app share the complete canonical launchd fork, root xpcproxy exec, GUI
@@ -13,7 +21,7 @@ The approved v7 offline review closed the boot-parent token gate. Launchd's pare
 the default unattributed kernel form; launchd itself has an assigned nonzero unattributed audit
 session. Canonical State allocates the synthetic ID once and shares its origin through the
 startup chain until authenticated GUI adoption. No private numeric value was disclosed.
-Generic apps, in-window GUI/terminal startup and Dock/Spotlight remain separate obligations.
+Generic apps and Dock/Spotlight attribution remain separate obligations.
 See the [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 
 October 30, revision 360: the approved offline Terminal review establishes bounded Boolean

@@ -883,11 +883,19 @@ class ProcessExecutionService:
             )
             time = session.start_time + logon_gap
         explicit_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
-        if (
-            admission.actor is None
-            and explicit_parent is not None
-            and time <= explicit_parent.start_time
-        ):
+        explicit_execution = (
+            self.state_manager.get_process_identity(request.system.hostname, parent_pid)
+            if _get_os_category(request.system.os) == "macos"
+            else None
+        )
+        explicit_ready_at = (
+            explicit_execution.execution_started_at
+            if explicit_execution is not None
+            else explicit_parent.start_time
+            if explicit_parent is not None
+            else None
+        )
+        if admission.actor is None and explicit_ready_at is not None and time <= explicit_ready_at:
             parent_gap = self.activity_timing.sample_gap(
                 relationship_key="activity.process.start_after_parent",
                 stable_id=request.stable_id,
@@ -898,7 +906,7 @@ class ProcessExecutionService:
                 lifecycle_id=actor.logon_id,
                 sample_key="after_parent_gap",
             )
-            time = explicit_parent.start_time + parent_gap
+            time = explicit_ready_at + parent_gap
         # A caller-supplied source deadline means this process owns an already
         # anchored causal occurrence (for example an SSH socket). Optional
         # human-spacing must not move the canonical start beyond that anchor.
@@ -967,12 +975,20 @@ class ProcessExecutionService:
             request, admission, actor, time=time, parent_pid=parent_pid
         )
         repaired_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
-        if (
-            admission.actor is None
-            and repaired_parent is not None
-            and time <= repaired_parent.start_time
-        ):
-            time = repaired_parent.start_time + timedelta(milliseconds=50)
+        repaired_execution = (
+            self.state_manager.get_process_identity(request.system.hostname, parent_pid)
+            if _get_os_category(request.system.os) == "macos"
+            else None
+        )
+        repaired_ready_at = (
+            repaired_execution.execution_started_at
+            if repaired_execution is not None
+            else repaired_parent.start_time
+            if repaired_parent is not None
+            else None
+        )
+        if admission.actor is None and repaired_ready_at is not None and time <= repaired_ready_at:
+            time = repaired_ready_at + timedelta(milliseconds=50)
         if (
             admission.actor is None
             and _get_os_category(request.system.os) == "linux"

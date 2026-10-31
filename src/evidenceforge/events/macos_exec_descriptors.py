@@ -12,8 +12,8 @@ from evidenceforge.events.macos_descriptors import MacosDescriptorTable
 class MacosNativeDescriptor:
     """An observed native tag/pipe identifier for an existing open-object binding.
 
-    The initial profile admits vnode and pipe tags already represented by the
-    historical wire contract. It does not allocate pipe IDs or infer them from
+    The qualified profile admits vnode, socket and pipe tags represented by the
+    native wire contract. It does not allocate pipe IDs or infer them from
     descriptor numbers, file inodes or opaque canonical object IDs.
     """
 
@@ -30,7 +30,7 @@ class MacosNativeDescriptor:
             or not self.object_id.strip()
             or "\0" in self.object_id
             or type(self.fdtype) is not int
-            or self.fdtype not in {1, 6}
+            or self.fdtype not in {1, 2, 6}
             or (
                 self.fdtype == 6
                 and (type(self.pipe_id) is not int or not 0 <= self.pipe_id < 2**64)
@@ -77,7 +77,9 @@ class MacosExecDescriptorObservation:
         for binding, native in zip(self.table.bindings, self.descriptors, strict=True):
             if binding.native_pipe_id is not None and binding.native_pipe_id != native.pipe_id:
                 raise ValueError("Native pipe identity contradicts its canonical open object")
-            if binding.kind != ("pipe" if native.fdtype == 6 else "file"):
+            if binding.kind != (
+                "pipe" if native.fdtype == 6 else "socket" if native.fdtype == 2 else "file"
+            ):
                 raise ValueError("Native FD tag contradicts its canonical open-object kind")
             tag = (native.fdtype, native.pipe_id)
             if object_tags.setdefault(binding.object_id, tag) != tag:
@@ -97,9 +99,7 @@ class MacosExecDescriptorObservation:
         table.__post_init__()
         native = []
         for binding in table.bindings:
-            if binding.kind == "socket" or (
-                binding.kind == "pipe" and binding.native_pipe_id is None
-            ):
+            if binding.kind == "pipe" and binding.native_pipe_id is None:
                 raise ValueError(
                     "Native descriptor production requires supported known open objects"
                 )
@@ -107,7 +107,7 @@ class MacosExecDescriptorObservation:
                 MacosNativeDescriptor(
                     binding.fd,
                     binding.object_id,
-                    6 if binding.kind == "pipe" else 1,
+                    6 if binding.kind == "pipe" else 2 if binding.kind == "socket" else 1,
                     binding.native_pipe_id,
                 )
             )

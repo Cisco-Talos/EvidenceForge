@@ -722,7 +722,14 @@ keeps its privileged receiver/audit-binding requirements. Explicit post-fork `se
 allocate a new session-owned TTY through the existing device/counter owner; rollback and
 checkpoints retain the association. iTerm2's independently signed helpers use the frozen
 3.7.6 release and parent application placement, with a pre-existing user support cache.
-These primitives do not yet replace the public aggregate terminal startup producer.
+The current profile consumes these through `MacosTerminalStartup`, reusing the Finder GUI
+prefix and exact phase publisher. Its Apple/iTerm2 stage graphs share canonical transitions
+and differ in helper/argv/descriptor policy. Descriptor file actions and native pipe allocations
+belong to the exec transaction. An effective-UID-only drop advances canonical State/activity
+without inventing a change to the lifecycle registry's unchanged logical principal/integrity
+token. Missing local command parents route through this startup before effect actors freeze;
+readiness uses the parent's current execution, including same-PID replacements. Pending
+phases block checkpoints; finished startup uses the existing checkpoint owners.
 
 Auth/session callers supply successful logon, failed logon, logoff, service
 logon, machine-account logon, anonymous logon, NTLM validation, or workstation

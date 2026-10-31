@@ -240,6 +240,37 @@ def test_post_fork_setsid_terminal_is_atomic_historical_and_checkpointed(
             owner.known_macos_terminal(after.job_control.session, before.started_at)
 
 
+def test_post_fork_setsid_preserves_unrelated_shared_membership_lookahead(
+    modeled: _Fixture,
+) -> None:
+    from evidenceforge.generation.posix_job_control import reservation_key
+
+    state = modeled.state
+    parent = _terminal(modeled)
+    state.materialize_process(parent)
+    children = []
+    for seconds in (2, 20):
+        builder = state.begin_action_cohort_materialization()
+        child = modeled.producer.plan_fork(
+            builder, state, parent.identity, at=modeled.start + timedelta(seconds=seconds)
+        )
+        state.materialize_action_cohort(builder.seal())
+        children.append(child.identity)
+    key = reservation_key(parent.identity.job_control.session)
+    observed_until = state._posix_job_control_reservations[key][-1].updated_at
+    builder = state.begin_action_cohort_materialization()
+    after = builder.change_posix_job_control(
+        children[0],
+        operation="setsid",
+        changed_at=modeled.start + timedelta(seconds=3),
+        macos_terminal=modeled.producer.profile.terminal,
+    )
+    state.materialize_action_cohort(builder.seal())
+    shared = state._posix_job_control_reservations[key][-1]
+    assert shared.updated_at == observed_until and shared.members == 2 and shared.ended_at is None
+    assert state.get_process_identity(after.hostname, after.pid) == after
+
+
 def test_staged_terminals_allocate_distinct_slots_and_reuse_only_after_canonical_watermark(
     modeled: _Fixture,
 ) -> None:

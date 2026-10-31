@@ -422,11 +422,15 @@ available independently of generation admission.
 
 The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
 and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
-profile. Exec needs explicit absent or flat Boolean entitlements and complete descriptors; exit needs an explicit
+profile. Exec needs explicit null or bounded Boolean/string/string-array entitlements and complete descriptors; exit needs an explicit
 completed result. Qualified literal local-terminal and non-PTY SSH commands share canonical
 fork/exec production, including the exec of a shell receiving a quoted command argument.
-Inner commands are not automatically expanded. GUI/bootstrap starts, PTY/helper inventories,
-complex command plans and unknown binary metadata still limit complete process coverage.
+Fresh Apple Terminal and iTerm2 3.7.6 startup now share a native phase owner, including their
+different helper chains, login credentials, TTYs and descriptor layouts. Bounded command
+workloads pass complete fork/exec reconciliation through the public CLI. Existing shells
+reuse their identities. Inner commands are not automatically expanded. Other GUI apps,
+restored jobs/new windows in an existing app, SSH PTY/helper inventories, complex command
+plans and unknown binary metadata still limit broader complete process coverage.
 Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
 and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).
 

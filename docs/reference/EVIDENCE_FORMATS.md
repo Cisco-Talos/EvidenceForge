@@ -721,9 +721,20 @@ The bounded exec metadata producer can now consume that exact provisioned root-o
 login file to change effective UID while retaining real and audit identity. Its forked child
 has a separate authenticated privilege-drop occurrence before shell/helper execution. A
 post-fork `setsid` can allocate the session's controlling terminal through the same canonical
-device owner and rollback/checkpoint path. These primitives do not yet replace the aggregate
-public terminal startup. iTerm2 3.7.6 has separate main/server/ShellLauncher placements and
+device owner and rollback/checkpoint path. The current profile's shared native terminal
+startup consumes these primitives. iTerm2 3.7.6 has separate main/server/ShellLauncher placements and
 runtime policies; its user support cache is explicitly pre-existing, with no inferred copy.
+
+Fresh Apple Terminal startup emits three fork and four exec records; iTerm2 emits four fork
+and six exec records. Both include launchd/xpcproxy, GUI audit adoption, login setuid and
+the separate child drop. Their exact app-specific argv, helper, session and FD sequences are
+owned before rendering. Exec file actions allocate pipe IDs atomically with the corresponding
+table; iTermServer's native socket tag is supported without inventing peer metadata. Source
+failure retries retain the same phase, process identity and pipe allocation. Missing required
+installed facts reject before the first fork. Existing shells reuse their identities; existing-app
+window creation/restoration, other app trees and unexpanded script children remain outside this
+bounded startup contract. No new Unified Log app-launch messages are inferred.
+
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
 operators and substitutions require a separate execution plan, and effect-bearing launches

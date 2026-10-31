@@ -89,14 +89,22 @@ Ordinary Mac process launches retain resolved executable-version identity indepe
 
 Authored interactive Mac processes submit history through their actual live Bash/zsh owner after successful launch admission. Foreground scheduling consults live and retained child intervals rather than jumping to later baseline reservations; explicitly bounded utility profiles can finish before the next command. Unknown long-running invocations still require a modeled release. Ground truth records rejected launches as skipped, and evaluation rejects legacy successful process records with nonpositive PIDs. The informational host profile lists native and shell-history sources as conditional, reports process/fork/exec counts separately from FLOW volume, and does not interpret an unused Bash source as missing Mac telemetry.
 
-Apple Terminal (`macos-terminal`) and iTerm2 (`macos-iterm2`) use the same terminal/login/zsh bootstrap and native command path. Select iTerm2 through the user's deployment application assignment; with both eligible, Apple Terminal is the stable default. Existing active session shells are reused. Keep each app's executable/deployment identity separate; signing and helper facts are not interchangeable. Commands beneath a pre-existing terminal can satisfy complete ES coverage, but an in-window terminal/login/initial-shell startup remains unqualified and rejects in complete mode.
+Apple Terminal (`macos-terminal`) and iTerm2 (`macos-iterm2`) share a retained native startup
+and command owner. Both use launchd fork, xpcproxy exec, GUI binding and same-PID app exec.
+Terminal then forks login and the initial zsh; iTerm2 3.7.6 additionally forks iTermServer and
+execs ShellLauncher before same-PID zsh. Select iTerm2 through the user's deployment assignment;
+with both eligible, Apple Terminal is the stable default. In-window fresh startup can now
+satisfy complete ES coverage, including setuid/drop, job control, TTY and exact FD layouts.
+Existing active shells are reused without new starts. New windows/restored jobs in an already
+running app remain separately gated. Signing/helper facts are not interchangeable. Older
+frozen profiles retain their previous bootstrap and cannot claim the new native capability.
 
 The macOS 27 v11 codec admits explicit null entitlements and bounded objects containing exact
 Boolean values, strings or arrays of strings, including an explicit empty object. Canonical signatures freeze those values and preserve
 them across checkpoint restore. Older frozen profiles keep their narrower capabilities;
 unknown values never become null. Apple Terminal and login catalog templates use verified
 Apple-shipped signing metadata; iTerm2 has its own verified vendor main-image template. Their
-native startup still needs canonical credential, session, controlling-terminal and descriptor
+native startup uses canonical credential, session, controlling-terminal and descriptor
 transitions. The paired reference reveals extra iTerm2 helper execs and a different login FD
 inventory; use app-specific stages within the shared process contract.
 

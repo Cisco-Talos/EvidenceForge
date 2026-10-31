@@ -4066,13 +4066,17 @@ class GeneratorLifecycleAuthority:
                             after.revision,
                         ),
                     )
-                process_change = ProcessRuntimeChange(
-                    before,
-                    after,
-                    "gui_credentials"
-                    if patch.service_drop is not None and drop.gui_session is not None
-                    else "credentials",
-                )
+                # Effective-UID-only login drops preserve this registry's
+                # principal/integrity/auth token. Canonical State owns numeric
+                # POSIX credentials; this activity still advances its frontier.
+                if after.token != before.token:
+                    process_change = ProcessRuntimeChange(
+                        before,
+                        after,
+                        "gui_credentials"
+                        if patch.service_drop is not None and drop.gui_session is not None
+                        else "credentials",
+                    )
             if (
                 patch.job_control_actor is not None
                 and patch.job_control_actor.object_id != identity.object_id

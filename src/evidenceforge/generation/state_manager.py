@@ -78,6 +78,7 @@ from evidenceforge.events.macos_execution_directory import (
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
 from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
 from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
+from evidenceforge.events.macos_spawn_io import MacosSpawnIO
 from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalObservation, MacosTerminalSession
 from evidenceforge.events.network import (
@@ -116,6 +117,7 @@ from evidenceforge.generation.indexes import (
 )
 from evidenceforge.generation.macos_process_census import MacosProcessCensus
 from evidenceforge.generation.macos_process_overlay import MacosProcessRelationshipOverlay
+from evidenceforge.generation.macos_spawn_descriptors import plan_spawn_descriptors
 from evidenceforge.generation.macos_terminal_devices import (
     plan_macos_standard_io,
     plan_macos_terminal,
@@ -2380,6 +2382,8 @@ class ActionCohortProcessExecution:
     descriptors_after: MacosDescriptorTable | None = None
     gui_session: SessionIdentity | None = None
     finder_spawn: bool = False
+    spawn_io: MacosSpawnIO | None = None
+    spawn_pipe_counter: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -4012,6 +4016,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         macos_ssh_standard_io: bool = False,
         macos_gui_session: SessionIdentity | None = None,
         macos_finder_spawn: bool = False,
+        macos_spawn_io: MacosSpawnIO | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -4157,6 +4162,39 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             if descriptors is not None:
                 raise StateError("SSH command contract cannot replace a known inherited FD table")
             descriptors_after = self._manager._macos_ssh_command_descriptor_table(birth, timestamp)
+        spawn_pipe_counter = None
+        if macos_spawn_io is not None:
+            if (
+                type(macos_spawn_io) is not MacosSpawnIO
+                or platform != "macos"
+                or macos_ssh_standard_io
+                or macos_finder_spawn
+                or macos_gui_session is not None
+                or any(p.native_pipe_allocation is not None for p in self._process_activity_patches)
+            ):
+                raise StateError(
+                    "Mac spawn file actions require a separate qualified exec boundary"
+                )
+            counter = self._manager._macos_pipe_counters.get(normalized.hostname)
+            for prior in self._process_execution_drafts:
+                if (
+                    prior.target.hostname == normalized.hostname
+                    and prior.spawn_pipe_counter is not None
+                ):
+                    first, _, last = prior.spawn_pipe_counter
+                    counter = first, last
+            terminal = (
+                self._manager.known_macos_terminal(after.job_control.session, timestamp)
+                if after.job_control is not None
+                else None
+            )
+            descriptors_after, spawn_pipe_counter = plan_spawn_descriptors(
+                after,
+                macos_spawn_io,
+                inherited=descriptors,
+                terminal=terminal,
+                pipe_counter=counter,
+            )
         if audit_pid_version is not None:
             self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
         if thread_counter is not None:
@@ -4173,9 +4211,21 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 descriptors_after=descriptors_after,
                 gui_session=macos_gui_session,
                 finder_spawn=macos_finder_spawn,
+                spawn_io=macos_spawn_io,
+                spawn_pipe_counter=spawn_pipe_counter,
             )
         )
         return after
+
+    def process_execution_descriptors(
+        self, process: ProcessIdentity
+    ) -> MacosDescriptorTable | None:
+        """Read the exact prepared post-exec table without deriving or reallocating it."""
+        self._require_open()
+        for execution in self._process_execution_drafts:
+            if execution.after == process:
+                return execution.descriptors_after
+        raise StateError("Descriptor lookup requires an exact staged process execution")
 
     def patch_session_activity(
         self,
@@ -4652,6 +4702,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         PosixGroupIdentity,
         PosixSessionIdentity,
         MacosTerminalSession,
+        MacosSpawnIO,
         ProcessParentage,
         ProcessParentageChange,
         ProcessParentReference,
@@ -5100,6 +5151,11 @@ def _action_cohort_semantic_preimage(
                     else ()
                 )
                 + ((("macos-finder-spawn-v1",),) if patch.finder_spawn else ())
+                + (
+                    (("macos-spawn-io-v1", patch.spawn_io, patch.spawn_pipe_counter),)
+                    if patch.spawn_io is not None
+                    else ()
+                )
                 for patch in process_executions
             ),
         ),
@@ -7803,6 +7859,15 @@ class StateManager:
                 or type(execution.after) is not ProcessIdentity
                 or type(execution.retired_threads) is not tuple
                 or type(execution.finder_spawn) is not bool
+                or (execution.spawn_io is not None and type(execution.spawn_io) is not MacosSpawnIO)
+                or (
+                    execution.spawn_pipe_counter is not None
+                    and (
+                        type(execution.spawn_pipe_counter) is not tuple
+                        or len(execution.spawn_pipe_counter) != 3
+                        or any(type(value) is not int for value in execution.spawn_pipe_counter)
+                    )
+                )
                 or (
                     execution.gui_session is not None
                     and type(execution.gui_session) is not SessionIdentity
@@ -13285,7 +13350,36 @@ class StateManager:
                     if current_descriptors is not None
                     else None
                 )
-                if execution.finder_spawn:
+                if execution.spawn_io is not None:
+                    if (
+                        not is_macos
+                        or execution.finder_spawn
+                        or execution.gui_session is not None
+                        or any(p.native_pipe_allocation is not None for p in plan._process_activity)
+                    ):
+                        raise StateError("Mac spawn file actions changed their separate exec owner")
+                    terminal = (
+                        self.known_macos_terminal(
+                            after.job_control.session, after.execution_started_at
+                        )
+                        if after.job_control is not None
+                        else None
+                    )
+                    expected_descriptors, counter_change = plan_spawn_descriptors(
+                        after,
+                        execution.spawn_io,
+                        inherited=current_descriptors,
+                        terminal=terminal,
+                        pipe_counter=pipe_counters.get(before.hostname),
+                    )
+                    if counter_change != execution.spawn_pipe_counter:
+                        raise StateError("Mac spawn pipe allocation changed its exact counter")
+                    if counter_change is not None:
+                        first, _, last = counter_change
+                        pipe_counters[before.hostname] = first, last
+                elif execution.spawn_pipe_counter is not None:
+                    raise StateError("Mac spawn pipe allocation lost its file-action owner")
+                elif execution.finder_spawn:
                     expected_descriptors = self._macos_finder_spawn_descriptor_table(birth, after)
                 elif expected_descriptors is None and execution.descriptors_after is not None:
                     expected_descriptors = self._macos_ssh_command_descriptor_table(
@@ -14264,6 +14358,8 @@ class StateManager:
                 )
         for execution in plan._process_executions:
             capture_mapping(self._macos_process_census, execution.target.hostname)
+            if execution.spawn_pipe_counter is not None:
+                capture_mapping(self._macos_pipe_counters, execution.target.hostname)
             capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
             capture_object(
                 process_rows.get(execution.target.object_id)
@@ -16040,6 +16136,9 @@ class StateManager:
             process.execution_directory = execution.after.execution_directory
             if execution.descriptors_after is not None:
                 self._append_process_descriptors(process, execution.descriptors_after)
+            if execution.spawn_pipe_counter is not None:
+                first, _, last = execution.spawn_pipe_counter
+                self._macos_pipe_counters[process.system] = first, last
             if execution.after.execution_directory is not None:
                 self._append_process_directory(process, execution.after.execution_directory)
             process.credentials = execution.after.credentials
@@ -16051,7 +16150,7 @@ class StateManager:
                     execution.after.execution_started_at,
                 )
                 self._commit_posix_membership(
-                    change.before, change.after, change.changed_at, gui_exec_boundary=True
+                    change.before, change.after, change.changed_at, lifetime_boundary=True
                 )
                 process.job_control = change.after
                 process.job_control_history = (*process.job_control_history, change)
@@ -16097,7 +16196,12 @@ class StateManager:
                 self._append_process_directory(process, patch.directory_change)
             if patch.job_control_change is not None:
                 change = patch.job_control_change
-                self._commit_posix_membership(change.before, change.after, change.changed_at)
+                self._commit_posix_membership(
+                    change.before,
+                    change.after,
+                    change.changed_at,
+                    lifetime_boundary=change.operation == "setsid",
+                )
                 if patch.terminal_after is not None:
                     terminal = patch.terminal_after
                     self._macos_terminal_sessions[terminal.session] = terminal
@@ -16417,14 +16521,14 @@ class StateManager:
         after: PosixGroupIdentity | None,
         at: datetime,
         *,
-        gui_exec_boundary: bool = False,
+        lifetime_boundary: bool = False,
     ) -> None:
         for key, rows in membership_updates(
             self._posix_job_control_reservations,
             before,
             after,
             at,
-            lifetime_boundary=before is None or after is None or gui_exec_boundary,
+            lifetime_boundary=before is None or after is None or lifetime_boundary,
         ).items():
             self._replace_posix_reservation_rows(key, rows)
 
@@ -16617,7 +16721,7 @@ class StateManager:
             before,
             after,
             change.changed_at,
-            lifetime_boundary=gui_exec_boundary,
+            lifetime_boundary=gui_exec_boundary or change.operation == "setsid",
         )
 
     def _plan_macos_gui_exec_relationships(
