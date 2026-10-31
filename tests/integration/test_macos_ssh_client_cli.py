@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""A full local terminal plus outbound SSH now satisfies complete native coverage."""
+"""Complete native client and receiver coverage survives filtering and recovery."""
 
 import json
 import os
@@ -17,13 +17,17 @@ from tests.support.macos_ssh import macos_ssh_scenario
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("macos_receiver", [False, True])
 @pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
 def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
     tmp_path: Path,
     scenarios_dir: Path,
     terminal_id: str,
+    macos_receiver: bool,
 ) -> None:
-    raw = macos_ssh_scenario(scenarios_dir).model_dump(mode="json", exclude_none=True)
+    raw = macos_ssh_scenario(scenarios_dir, macos_receiver=macos_receiver).model_dump(
+        mode="json", exclude_none=True
+    )
     raw["time_window"]["duration"] = "15m"
     raw["macos_process_coverage"] = "complete"
     raw["baseline_activity"]["traffic_rates"] = {"user_activity": 1, "persona_connections": 1}
@@ -98,17 +102,53 @@ def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
             assert target["tty"] is not None
             assert payload["args"][0] == "/usr/bin/ssh"
         truth = json.loads((output / "GROUND_TRUTH.json").read_text())
-        census = truth["macos_native_coverage"]["hosts"][0]["process_census"]
-        assert census["complete"] and census["aggregate_births"] == 0
-        assert census["expected_execs"] == census["published_execs"]
-        assert census["expected_forks"] == census["published_forks"]
+        hosts = truth["macos_native_coverage"]["hosts"]
+        assert len(hosts) == (2 if macos_receiver else 1)
+        for host in hosts:
+            census = host["process_census"]
+            assert census["complete"] and census["aggregate_births"] == 0
+            assert census["expected_execs"] == census["published_execs"]
+            assert census["expected_forks"] == census["published_forks"]
+        if macos_receiver:
+            receiver_rows = [
+                json.loads(line)
+                for path in paths
+                if "SSH-TEST." in str(path)
+                for line in path.read_text().splitlines()
+            ]
+            workers = [
+                row["event"]["exec"]["target"]
+                for row in receiver_rows
+                if row["event_type"] == 9
+                and row["event"]["exec"]["target"]["executable"]["path"]
+                == "/usr/libexec/sshd-session"
+                and row["event"]["exec"]["target"]["ppid"] == 1
+            ]
+            assert workers
+            for worker in workers:
+                forks = [
+                    row
+                    for row in receiver_rows
+                    if row["event_type"] == 11
+                    and row["event"]["fork"]["child"]["audit_token"]["pid"]
+                    == worker["audit_token"]["pid"]
+                    and row["event"]["fork"]["child"]["start_time"] == worker["start_time"]
+                ]
+                assert len(forks) == 1
+                assert forks[0]["process"]["executable"]["path"] == "/sbin/launchd"
+                assert (
+                    forks[0]["event"]["fork"]["child"]["executable"]
+                    == forks[0]["process"]["executable"]
+                )
     assert snapshots[0] == snapshots[1]
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("macos_receiver", [False, True])
 def test_complete_ssh_client_checkpoint_resume_preserves_integer_signatures_and_execs(
     tmp_path: Path,
     scenarios_dir: Path,
+    macos_receiver: bool,
 ) -> None:
     from tests.integration.test_checkpoint_smoke import (
         test_short_generation_checkpoint_suspension_and_resume as checkpoint_gate,
@@ -122,7 +162,7 @@ def test_complete_ssh_client_checkpoint_resume_preserves_integer_signatures_and_
         True,
         None,
         True,
+        macos_receiver,
         False,
-        False,
-        complete_ssh_client=True,
+        complete_native_ssh=True,
     )

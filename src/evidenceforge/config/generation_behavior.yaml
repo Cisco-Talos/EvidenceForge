@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 368
+current_revision: 369
 history_start_revision: 1
-behavior_surface_sha256: 394abeb6b9d1bea6c40b6e3b5be675cf246555e7676b49cbc1a9af74539f1f17
+behavior_surface_sha256: 68e68f530c95b248893b66f8b14e0fb8615b0043e412e77095a8cd8231fa0bef
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3533,3 +3533,17 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Corrects wrapper basename argv and adds retained measured receiver stages with launcher/shell file actions; the production receiver awaits atomic deferred initial-fork publication.
+  - revision: 369
+    id: native-ssh-receiver-integration
+    impact: material
+    domains:
+      - deferred-session-publication
+      - process-materialization
+      - macos-process-lifecycle
+      - ssh-source-timing
+    formats:
+      - macos_endpoint_security
+      - ecar
+      - zeek
+      - syslog
+    summary: Integrates the reviewed non-PTY launchd fork with atomic deferred source ingress, selects nineteen-stage receiver startup and preserves legacy frozen-profile and checkpoint graph verification.

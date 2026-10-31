@@ -31,7 +31,11 @@ from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.observation import ObservationDecision
-from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
+from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
+    MaterializationBatchPlan,
+    StateManager,
+)
 from evidenceforge.models.exceptions import StateError
 
 
@@ -254,7 +258,7 @@ class ESCollectionActionOwner:
 
     def validate_observing_cohort(
         self,
-        cohort: ActionCohortMaterializationPlan,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
         collector: ProcessIdentity,
         *,
         observed_at: datetime | None = None,
@@ -277,14 +281,21 @@ class ESCollectionActionOwner:
             )
 
     def observing_execution_boundary(
-        self, cohort: ActionCohortMaterializationPlan, collector: ProcessIdentity
+        self,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+        collector: ProcessIdentity,
     ) -> datetime | None:
         """Return the earliest modeled transition that retires this exact observer view."""
         if (
-            type(cohort) is not ActionCohortMaterializationPlan
+            type(cohort) not in {ActionCohortMaterializationPlan, MaterializationBatchPlan}
             or type(collector) is not ProcessIdentity
         ):
             raise StateError("ES self-observation requires exact cohort and execution facts")
+        if type(cohort) is MaterializationBatchPlan:
+            self.state.validate_macos_process_observation_plan(cohort)
+            # This bounded batch contains a new child only. It cannot replace
+            # or terminate the existing collector execution.
+            return None
         boundaries = (
             [
                 item.end_time

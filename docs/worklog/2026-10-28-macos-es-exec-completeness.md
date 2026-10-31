@@ -1662,3 +1662,58 @@ recognize nineteen stages and audit index 13. Restored receiver verification mus
 initial launchd/four execs and a root setsid after birth; legacy wrapper/two-exec recovery
 remains supported. Complete CLI/filter/checkpoint and exact six-fork/six-exec reconciliation
 are required before claiming the bounded receiver milestone. Do not mark the global P0 done.
+
+## Revision 369: complete non-PTY SSH receiver production integration
+
+The current macOS 27 profile now selects the reviewed native non-PTY receiver graph and its
+public launchd service-label prefix. Both fields are frozen, paired schema policy; older
+resolved inputs default to the legacy coordinator. Normal generation selects this canonical
+graph independently of output filtering. Low-level compatibility fixtures without occurrence
+ingress retain their previous diagnostic behavior.
+
+The deferred transport/session batch plans a real inherited launchd fork, not an aggregate
+wrapper birth. Read-only planned relationship/installed-file observation accepts only that
+integrity-authenticated one-session/one-fork batch; it gains no action-cohort commit authority
+or exec/exit observation capability. The exact initial fork's frozen native occurrence joins
+the same source-publication batch as transport/eCAR evidence. Its bytes count toward retained
+capacity, and its exact authenticated source tail is checked before ordinary target proofs.
+Committed source failures retain the original ingress/body/State plan for retry. Neither
+the process-start denominator nor source-proof requirements are weakened.
+
+The retained nineteen-stage coordinator supplies the remaining five forks, six execs, three
+short known exits and separate audit/credential/job transitions. Deferred timing replay uses
+the correct audit boundary and preserves strictly increasing sampled stages. Recovery checks
+the initial launchd image, four same-lifetime receiver replacements and the root setsid
+between xpcproxy and wrapper. Frozen legacy wrapper/two-exec/session-at-birth recovery remains
+supported. The earlier compatibility fixture's hardcoded wrapper argv was updated to the
+reviewed basename; production descriptor/identity validation remains strict.
+
+Measurable acceptance is now successful: complete Mac-to-Mac workloads through both Terminal
+and iTerm2 reconcile all in-window starts on both hosts, with zero aggregate births and equal
+expected/published fork and exec counts. Full and native-only CLI output matches byte for byte
+across different PYTHONHASHSEED values. The receiver's initial native row preserves the exact
+launchd-loaded executable and lifetime. Complete receiver suspension/checkpoint/resume matches
+uninterrupted bytes. Initial native-source failure before write and committed lost-return
+recover without another canonical commit, PID or native row; the isolated receiver ends with
+exactly six native forks and six execs. Unsupported GUI app launch still rejects actionably,
+and removing the native source still rejects before accepting a complete bundle.
+
+Validation: all 688 selected routine SSH/native fork/collection/snapshot/publication/manifest
+checks pass in 64.68 seconds (196 extended exclusions). All 322 shared deferred-session,
+network-contract and exact-publication checks pass in 6.75 seconds, including Linux/Windows
+compatibility. The six public complete-client/receiver/filter/rejection cases pass in 48.37
+seconds. The complete receiver checkpoint/resume case passes in 26.64 seconds. The additional
+three initial-fork snapshot/recovery checks pass in 4.28 seconds. Whole Ruff, formatting and
+whitespace checks pass. Revision-369 surface:
+`68e68f530c95b248893b66f8b14e0fb8615b0043e412e77095a8cd8231fa0bef`.
+
+No additional private access occurred after the single approved reviewer run recorded under
+revision 367. Its permission is consumed. All subsequent checks use invented inputs and
+synthetic outputs; no raw reference records were inspected, copied or committed.
+
+This closes the bounded non-PTY receiver startup gap, not the global all-process P0. Generic
+final worker outcomes stay unknown rather than adopting the controlled capture's exit 255.
+PTY startup/commands, other GUI application/helper trees and Dock/Spotlight relationships,
+existing-app new windows/restoration and launchd job activation remain separate producer
+obligations. Native SSH Unified Log messages were not collected or added. No blind assessment
+loop or further collection was required for this milestone.

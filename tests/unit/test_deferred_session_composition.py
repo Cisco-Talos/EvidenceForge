@@ -491,7 +491,7 @@ def _fixture(
                 else r"C:\Windows\System32\rdpclip.exe"
             ),
             command_line=(
-                "/usr/libexec/sshd-keygen-wrapper"
+                "sshd-keygen-wrapper"
                 if macos_receiver
                 else "sshd: analyst@pts/0"
                 if is_ssh

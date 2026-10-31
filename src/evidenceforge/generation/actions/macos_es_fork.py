@@ -38,7 +38,10 @@ from evidenceforge.generation.macos_endpoint_security import (
     prepare_planned_runtime_es_source,
 )
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
-from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
+    MaterializationBatchPlan,
+)
 from evidenceforge.generation.timing.macos import MacosBootClock
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
@@ -102,7 +105,7 @@ def _fork_record(
     owner: ESCollectionActionOwner,
     executables: LocalArtifactVersionRegistry | DeploymentContentRegistry,
     *,
-    cohort: ActionCohortMaterializationPlan,
+    cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
     observation: ESCollectorObservation,
     collector_process: ProcessIdentity,
     parent: MacosProcessCollectionObservation,
@@ -118,7 +121,7 @@ def _fork_record(
     if (
         type(owner) is not ESCollectionActionOwner
         or type(executables) not in {LocalArtifactVersionRegistry, DeploymentContentRegistry}
-        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(cohort) not in {ActionCohortMaterializationPlan, MaterializationBatchPlan}
         or type(observation) is not ESCollectorObservation
         or type(parent) is not MacosProcessCollectionObservation
         or type(child) is not MacosProcessCollectionObservation
@@ -129,6 +132,11 @@ def _fork_record(
         or version not in {6, 10, 11}
     ):
         raise StateError("Native fork preparation requires exact supported owners and profile")
+    if (
+        type(cohort) is MaterializationBatchPlan
+        and type(executables) is not DeploymentContentRegistry
+    ):
+        raise StateError("Deferred native fork requires the installed boot image owner")
     if installed_filesystem is not None:
         if (
             type(installed_filesystem) is not MacosInstalledFilesystem
@@ -149,7 +157,7 @@ def _fork_record(
     child.__post_init__()
     action = ESAction.model_validate_json(action.model_dump_json())
     state = owner.state
-    state.validate_action_cohort_materialization(cohort)
+    state.validate_macos_process_observation_plan(cohort)
     owner.validate_observing_cohort(cohort, collector_process, observed_at=observation.observed_at)
     owner.validate_client_observation(parent)
     owner.validate_client_observation(child)

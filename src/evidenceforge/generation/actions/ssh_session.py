@@ -2197,11 +2197,15 @@ class _SshReceiverStartupBinding:
                 or request.receiver.logon_id != plan.logon_id
                 or request.receiver.started_at != plan.receiver_started_at
                 or request.receiver.image != plan.initial_receiver_image
-                or request.wrapper.image_path != plan.initial_receiver_image
+                or (
+                    request.launcher is None
+                    and request.wrapper.image_path != plan.initial_receiver_image
+                )
                 or request.session_worker.image_path != plan.receiver_image
-                or request.phase_times[6] != plan.auth_state.receiver.authenticated_at
+                or request.phase_times[request.audit_phase]
+                != plan.auth_state.receiver.authenticated_at
                 or request.phase_times[-1] > plan.auth_state.receiver.ready_at
-                or (len(request.phase_times) == 12) != plan.auth_state.owns_posix_session
+                or (len(request.phase_times) in {12, 19}) != plan.auth_state.owns_posix_session
             ):
                 raise StateError("Mac SSH retained startup crossed its exact close facts")
             request.__post_init__()
@@ -2225,7 +2229,16 @@ class _SshReceiverStartupBinding:
             # Construction requires the committed live receiver. Keep the exact
             # coordinator after failures, including committed source failures.
             if self._coordinator is None:
-                self._coordinator = MacosSshReceiverStartup(
+                from evidenceforge.generation.actions.macos_ssh_native_startup import (
+                    MacosNativeSshReceiverStartup,
+                )
+
+                coordinator_type = (
+                    MacosNativeSshReceiverStartup
+                    if request.launcher is not None
+                    else MacosSshReceiverStartup
+                )
+                self._coordinator = coordinator_type(
                     request,
                     state=executor.state_manager,
                     dispatcher=executor.dispatcher,
@@ -2273,6 +2286,7 @@ class _SshReceiverStartupBinding:
             else None
         )
         shell_state = state.get_process(session.system, session.session_shell_pid)
+        native_graph = plan.initial_receiver_image == "/sbin/launchd"
         if (
             root is None
             or shell is None
@@ -2280,7 +2294,7 @@ class _SshReceiverStartupBinding:
             or shell_state is None
             or root.image != plan.receiver_image
             or root.initial_image != plan.initial_receiver_image
-            or root.execution_ordinal != 2
+            or root.execution_ordinal != (4 if native_graph else 2)
             or root.started_at != plan.receiver_started_at
             or root.credentials is None
             or root.credentials.effective_uid != 0
@@ -2327,8 +2341,9 @@ class _SshReceiverStartupBinding:
                 or root_group.session.sid != root.pid
                 or root_group.leader_object_id != root.object_id
                 or root_group.session.leader_object_id != root.object_id
-                or root_group.started_at != root.started_at
-                or root_group.session.started_at != root.started_at
+                or root_group.started_at != root_group.session.started_at
+                or (not native_graph and root_group.started_at != root.started_at)
+                or (native_graph and root_group.started_at <= root.started_at)
                 or parent.job_control != root_group
                 or shell_group == root_group
                 or shell_group.pgid != shell.pid
@@ -2341,6 +2356,22 @@ class _SshReceiverStartupBinding:
                 < first_shell_exec.execution_started_at
             ):
                 raise StateError("Restored Mac SSH startup lost its exact POSIX session ownership")
+            if native_graph:
+                running = state.get_process(session.system, root.pid)
+                history = {item.execution_ordinal: item for item in running.prior_executions}
+                launcher, wrapper = history.get(1), history.get(2)
+                if (
+                    launcher is None
+                    or wrapper is None
+                    or launcher.image != "/usr/libexec/xpcproxy"
+                    or wrapper.image != "/usr/libexec/sshd-keygen-wrapper"
+                    or not launcher.execution_started_at
+                    < root_group.started_at
+                    < wrapper.execution_started_at
+                ):
+                    raise StateError(
+                        "Restored native SSH startup lost its launcher/setsid boundary"
+                    )
         self._restored_complete = True
 
     def require_checkpoint_ready(self, prepared: _PreparedSshCloseContinuation) -> None:
@@ -4247,6 +4278,14 @@ class SshSessionActionBundle:
             raise StateError("Exact SSH session end cannot precede its transport close")
 
         macos = _get_os_category(request.target_system.os) == "macos"
+        provider = getattr(executor, "macos_execution_metadata", None)
+        native_receiver = bool(
+            macos
+            and provider is not None
+            and provider.profile.ssh_receiver_startup == "launchd_non_pty_v11"
+            and executor.dispatcher.macos_es_ingress is not None
+            and executor.dispatcher.macos_es_ingress.enabled
+        )
         environment = None
         phase_times: tuple[datetime, ...] = ()
         if macos:
@@ -4259,6 +4298,7 @@ class SshSessionActionBundle:
                 state=executor.state_manager,
                 identities=executor.identity_directory,
                 deployment=executor.dispatcher.deployment_registry,
+                native=native_receiver,
             )
             phase_times = plan_macos_ssh_startup_times(
                 connection_time=connection_time,
@@ -4267,6 +4307,7 @@ class SshSessionActionBundle:
                 ready_at=logind_time,
                 timing_runtime=timing_preview,
                 scope=timing_scope,
+                phase_count=19 if native_receiver else 12,
             )
         batch_builder = executor.state_manager.begin_materialization_batch()
         session_plan = batch_builder.plan_session(
@@ -4324,7 +4365,7 @@ class SshSessionActionBundle:
             )
         receiver_executable_version = None
         receiver_metadata = None
-        if environment is not None:
+        if environment is not None and not native_receiver:
             binary = executor.dispatcher.resolve_process_binary_identity(
                 request.target_system.hostname, "root", environment.wrapper.image_path, "macos"
             )
@@ -4340,41 +4381,57 @@ class SshSessionActionBundle:
                     binary=binary,
                     kind="system",
                 )
-        receiver_plan = batch_builder.plan_process(
-            system=request.target_system.hostname,
-            parent_pid=receiver_parent_pid,
-            image=environment.wrapper.image_path if environment else "/usr/sbin/sshd",
-            command_line=environment.wrapper.command_templates[0]
-            if environment
-            else f"sshd: {request.user.username} [priv]",
-            username="root",
-            integrity_level="System",
-            os_category="macos" if environment else "linux",
-            credentials=environment.parent.credentials if environment else None,
-            new_posix_session=environment is not None,
-            executable_version=receiver_executable_version,
-            arguments=macos_ssh_command_arguments(environment.wrapper) if environment else None,
-            environment=receiver_metadata.environment if receiver_metadata else None,
-            execution_directory=receiver_metadata.directory if receiver_metadata else None,
-            exec_image=receiver_metadata.image if receiver_metadata else None,
-            exec_script=receiver_metadata.script if receiver_metadata else None,
-            image_security=receiver_metadata.image_security if receiver_metadata else None,
-            responsibility=receiver_metadata.responsibility if receiver_metadata else None,
-            macos_terminal="absent" if receiver_metadata else None,
-            logon_id=session_plan.identity.logon_id,
-            lifecycle_group_id=stable_uuid(
-                "ssh-deferred-receiver-lifecycle",
-                execution_id,
-            ),
-            parent_lifecycle_group_id=(
-                receiver_parent_group or session_plan.identity.lifecycle_group_id
-            ),
-            start_time=receiver_start,
-            require_session=True,
-            session_plan=session_plan,
-            auth_session_id=session_plan.identity.session_id,
-            auth_logon_type=10,
-        )
+        if native_receiver:
+            current_directory = executor.state_manager.process_directory_at(
+                environment.parent, event_time=receiver_start
+            )
+            if current_directory is None:
+                raise StateError("Native SSH startup requires its boot parent's directory")
+            receiver_plan = batch_builder.plan_macos_ssh_receiver_fork(
+                environment.parent,
+                session=session_plan,
+                forked_at=receiver_start,
+                execution_directory=provider.directory(
+                    request.target_system.hostname, current_directory.native_path, receiver_start
+                ),
+                lifecycle_group_id=stable_uuid("ssh-deferred-receiver-lifecycle", execution_id),
+            )
+        else:
+            receiver_plan = batch_builder.plan_process(
+                system=request.target_system.hostname,
+                parent_pid=receiver_parent_pid,
+                image=environment.wrapper.image_path if environment else "/usr/sbin/sshd",
+                command_line=environment.wrapper.command_templates[0]
+                if environment
+                else f"sshd: {request.user.username} [priv]",
+                username="root",
+                integrity_level="System",
+                os_category="macos" if environment else "linux",
+                credentials=environment.parent.credentials if environment else None,
+                new_posix_session=environment is not None,
+                executable_version=receiver_executable_version,
+                arguments=macos_ssh_command_arguments(environment.wrapper) if environment else None,
+                environment=receiver_metadata.environment if receiver_metadata else None,
+                execution_directory=receiver_metadata.directory if receiver_metadata else None,
+                exec_image=receiver_metadata.image if receiver_metadata else None,
+                exec_script=receiver_metadata.script if receiver_metadata else None,
+                image_security=receiver_metadata.image_security if receiver_metadata else None,
+                responsibility=receiver_metadata.responsibility if receiver_metadata else None,
+                macos_terminal="absent" if receiver_metadata else None,
+                logon_id=session_plan.identity.logon_id,
+                lifecycle_group_id=stable_uuid(
+                    "ssh-deferred-receiver-lifecycle",
+                    execution_id,
+                ),
+                parent_lifecycle_group_id=(
+                    receiver_parent_group or session_plan.identity.lifecycle_group_id
+                ),
+                start_time=receiver_start,
+                require_session=True,
+                session_plan=session_plan,
+                auth_session_id=session_plan.identity.session_id,
+                auth_logon_type=10,
+            )
         batch_builder.bind_session_processes(
             session_plan,
             transport_plan=receiver_plan,
@@ -4402,7 +4459,7 @@ class SshSessionActionBundle:
         if environment is not None:
             auth_state = _SshMacAuthState(
                 receiver=authentication,
-                initial_receiver_image=environment.wrapper.image_path,
+                initial_receiver_image=receiver_plan.identity.image,
                 receiver_image=environment.session_worker.image_path,
                 owns_posix_session=True,
             )
@@ -4415,6 +4472,13 @@ class SshSessionActionBundle:
                 authentication_worker=environment.authentication_worker,
                 shell=environment.shell,
                 phase_times=phase_times,
+                launcher=environment.launcher,
+                service_label=(
+                    f"{provider.profile.ssh_receiver_service_label}."
+                    f"{stable_uuid('macos-ssh-service-instance', execution_id).upper()}"
+                    if native_receiver
+                    else None
+                ),
             )
         else:
             auth_state = _SshLinuxAuthState(
@@ -4495,7 +4559,9 @@ class SshSessionActionBundle:
                     "ssh-deferred-receiver-occurrence",
                     receiver_plan.identity.object_id,
                 ),
-                event_type=EventKind.SYSTEM_PROCESS_CREATE,
+                event_type=EventKind.PROCESS_FORK
+                if receiver_plan.forked
+                else EventKind.SYSTEM_PROCESS_CREATE,
                 canonical_time=receiver_plan.identity.started_at,
                 member_references=(receiver_plan.identity.object_id,),
                 publication_ordinal=1,

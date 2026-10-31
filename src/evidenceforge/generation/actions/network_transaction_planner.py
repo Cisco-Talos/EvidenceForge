@@ -1305,6 +1305,7 @@ class NetworkTransactionPlanner:
                     identity_plan=EventIdentityPlan(
                         subject=identity,
                         actor=member.parent_identity,
+                        session=owning_session if member.forked else None,
                     ),
                     lifecycle=ActionLifecycleContext(
                         group_id=identity.lifecycle_group_id,

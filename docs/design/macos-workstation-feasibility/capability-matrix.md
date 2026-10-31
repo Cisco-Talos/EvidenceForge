@@ -2,21 +2,29 @@
 
 ## Current generation admission (2026-10-31)
 
+Revision 369 qualifies bounded non-PTY SSH receiver startup: six actual forks, six successful
+execs and three known short-helper exits. The approved fixed-output offline review resolves
+the launchd/xpcproxy prefix, fork-only children, audit/credential transitions, job control,
+responsibility and per-exec descriptor tables. The initial fork shares the exact deferred
+transport/source journal; later stages share the retained native phase coordinator. Complete
+Mac-to-Mac workloads through Terminal and iTerm2 pass exact census reconciliation and output
+filtering; receiver checkpoint/resume is byte-identical to uninterrupted generation. Generic
+worker teardown outcomes remain unknown. PTY startup, SCP/SFTP helpers and native SSH Unified
+Log messages remain outside this bounded qualification. No further collection was needed.
+
 Revision 366 qualifies complete outbound SSH-client ES coverage to a modeled Linux receiver
 from both terminal variants. The private fixed report establishes the public SSH integer
 entitlement shape and runtime flags/architecture. Exact integer types survive checkpoint
 recovery. Automatic SSH source ports now use the canonical bundle's collision-aware allocator;
-authored exact ports retain exact semantics. Native receiver startup remains independently
-gated on its full helper graph, arguments and descriptor production. The existing bounded
-capture can resolve its remaining relationship questions through an approved offline review;
-no further collection is currently required.
+authored exact ports retain exact semantics. Its separate receiver obligation is closed for
+the bounded non-PTY startup by revision 369 above.
 
 Revision 364 qualifies bounded fresh Apple Terminal and iTerm2 3.7.6 startup through one
 retained native phase owner. Terminal produces three real forks and four execs; iTerm2
 produces four forks and six execs, including its server and same-PID ShellLauncher-to-zsh
 replacement. Complete local-command workloads now reconcile every in-window start through
 the public CLI, with canonical credentials, session/TTY and FD tables. Existing shells reuse
-their identities. Other GUI apps, existing-app new windows/restoration and SSH PTY/helper
+their identities. Other GUI apps, existing-app new windows/restoration and SSH PTY
 inventories remain separate obligations; no general all-process completion is claimed.
 
 October 30, revision 357: explicit `process.launch_method: finder` and the narrowly selected
@@ -69,8 +77,9 @@ and bounded native-source acceptance, with broader realism work recorded in that
 The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
 publication. Local GUI audit origins now belong to the canonical login and survive explicit
 user launches, inherited children and recovery. Qualified external commands without a PTY now
-receive their SSH channel's three pipe descriptors at exec. Shell/helper descriptor inventories,
-PTY command generation, GUI responsible-process relationships and unspecified exit results remain
+receive their SSH channel's three pipe descriptors at exec. The current non-PTY startup now
+supplies its shell/helper inventories. PTY command generation, other GUI responsible-process
+relationships and unspecified exit results remain
 coverage limits. Natural completion of three literal query invocations now supplies declared
 nominal results; ordinary termination also preserves exact explicit normal/signal results.
 See the [completion worklog](../../worklog/2026-10-26-macos-command-exit-outcomes.md).

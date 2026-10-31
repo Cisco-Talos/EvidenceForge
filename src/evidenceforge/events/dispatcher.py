@@ -1287,6 +1287,7 @@ class _PreparedDeferredSessionPublicationRecord:
     all_suppressed: bool
     retained_bytes: int
     integrity_token: str
+    es_ingress: PreparedESIngress | None = None
     exact_publication_batch: ExactPublicationBatch | None = None
     prepared_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     prepared_target_proofs: tuple[DeferredSessionExactTargetProof, ...] = ()
@@ -4649,6 +4650,10 @@ class EventDispatcher:
                 EventKind.PROCESS_SERVICE_DROP,
             }
             and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+            and not (
+                event.event_type is EventKind.PROCESS_FORK
+                and state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT
+            )
         ):
             raise EventContractError("Process mutation requires its exact State action cohort")
         if (
@@ -5128,13 +5133,22 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared deferred-session session dependent lost its session identity"
                 )
-        elif type(lifecycle_ticket) is ProcessMaterializationPlan and event.event_type not in {
-            EventKind.PROCESS_CREATE,
-            EventKind.SYSTEM_PROCESS_CREATE,
-        }:
-            raise EventContractError(
-                "Prepared deferred-session process dependent has an unsupported event kind"
+        elif type(lifecycle_ticket) is ProcessMaterializationPlan:
+            expected_kinds = (
+                {EventKind.PROCESS_FORK}
+                if lifecycle_ticket.forked
+                else {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}
             )
+            if event.event_type not in expected_kinds:
+                raise EventContractError(
+                    "Prepared deferred-session process dependent changed its start provenance"
+                )
+            if lifecycle_ticket.forked:
+                from evidenceforge.events.process import process_fork_identities
+
+                parent, child = process_fork_identities(event)
+                if child != exact_identity or parent != lifecycle_ticket.parent_identity:
+                    raise EventContractError("Deferred fork lost its exact inherited parent")
         elif type(lifecycle_ticket) is ConnectionExistingSessionPatch and (
             event.event_type is not EventKind.RDP_RECONNECT
             or identity_plan.session is not exact_identity
@@ -14116,6 +14130,41 @@ class EventDispatcher:
             identifiers_by_member.append(tuple(sorted(member_identifiers.items())))
         return tuple(identifiers_by_member), tuple(proofs)
 
+    def _freeze_deferred_session_with_native(
+        self, record: _PreparedDeferredSessionPublicationRecord
+    ) -> tuple[
+        tuple[tuple[tuple[str, str], ...], ...], tuple[DeferredSessionExactTargetProof, ...]
+    ]:
+        """Stage native occurrence ingress in the same exact sibling-source attempt."""
+        result = self._freeze_deferred_session_exact_projection(record.dispatches)
+        ingress = record.es_ingress
+        if ingress is not None:
+            ingress.owner.validate(ingress, record.root.state_plan.batch.publication_token)
+            for line in ingress.encoded:
+                ingress.sink.write(line)
+        return result
+
+    def _deferred_session_regular_row_facts(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+        facts: tuple[tuple[str, str, int], ...],
+    ) -> tuple[tuple[str, str, int], ...]:
+        """Authenticate the exact native tail before validating ordinary source proofs."""
+        ingress = record.es_ingress
+        if ingress is None:
+            return facts
+        if ingress.owner is not self.macos_es_ingress:
+            raise EventContractError("Deferred native ingress changed its source owner")
+        ingress.owner.validate(ingress, record.root.state_plan.batch.publication_token)
+        count = len(ingress.encoded)
+        if (
+            not count
+            or len(facts) < count
+            or tuple(row[0] for row in facts[-count:]) != ingress.encoded
+        ):
+            raise EventContractError("Deferred native ingress changed its exact staged rows")
+        return facts[:-count]
+
     @staticmethod
     def _is_macos_ssh_receiver_projection_cohort(
         dispatches: tuple[PreparedDispatch, ...],
@@ -14132,7 +14181,7 @@ class EventDispatcher:
         host = session.dst_host
         return bool(
             transport.event_type is EventKind.CONNECTION
-            and process.event_type is EventKind.SYSTEM_PROCESS_CREATE
+            and process.event_type in {EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
             and session.event_type is EventKind.SSH_SESSION
             and host is not None
             and host.os_category == "macos"
@@ -14898,7 +14947,13 @@ class EventDispatcher:
                         )
                     if (
                         dependent_event.event_type
-                        not in {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}
+                        not in {
+                            EventKind.PROCESS_CREATE,
+                            EventKind.SYSTEM_PROCESS_CREATE,
+                            EventKind.PROCESS_FORK,
+                        }
+                        or dependent_plan.forked
+                        != (dependent_event.event_type is EventKind.PROCESS_FORK)
                         or process is None
                         or process.pid != process_identity.pid
                         or process.parent_pid != process_identity.parent_pid
@@ -14961,6 +15016,23 @@ class EventDispatcher:
             for prepared in dispatches
         )
 
+        es_ingress = None
+        native_forks = tuple(
+            prepared._occurrence
+            for prepared in dispatches
+            if prepared._occurrence.event_type is EventKind.PROCESS_FORK
+        )
+        if native_forks:
+            from evidenceforge.generation.macos_es_publication import (
+                prepared_macos_es_process_publication,
+            )
+
+            with prepared_macos_es_process_publication(
+                self, root.state_plan.batch, native_forks
+            ) as native:
+                if native is not None:
+                    es_ingress = native.ingress
+
         retained_bytes = len(
             repr(
                 (
@@ -14977,6 +15049,8 @@ class EventDispatcher:
                 )
             ).encode("utf-8")
         )
+        if es_ingress is not None:
+            retained_bytes += sum(len(line.encode()) for line in es_ingress.encoded)
         with self._deferred_session_publication_lock:
             if (
                 len(self._deferred_session_publication_batches)
@@ -15019,6 +15093,7 @@ class EventDispatcher:
                 all_suppressed=all_suppressed,
                 retained_bytes=retained_bytes,
                 integrity_token="",
+                es_ingress=es_ingress,
                 state="freezing",
                 active_thread_id=get_ident(),
             )
@@ -15076,16 +15151,19 @@ class EventDispatcher:
         try:
             participants = self._deferred_session_exact_projection_participants(dispatches)
             exact_batch = self._exact_publication_authority.issue_batch()
-            exact_batch.reserve_participants(cast(tuple[object, ...], participants))
+            exact_participants: tuple[object, ...] = participants
+            if record.es_ingress is not None:
+                exact_participants += (record.es_ingress.sink,)
+            exact_batch.reserve_participants(exact_participants)
             prepared_identifiers, prepared_target_proofs = (
                 self._deferred_session_prepared_projection_shape(
-                    exact_batch.prepare(
-                        lambda: self._freeze_deferred_session_exact_projection(dispatches)
-                    ),
+                    exact_batch.prepare(lambda: self._freeze_deferred_session_with_native(record)),
                     member_count=len(dispatches),
                 )
             )
-            prepared_row_facts = exact_batch._prepared_row_facts()
+            prepared_row_facts = self._deferred_session_regular_row_facts(
+                record, exact_batch._prepared_row_facts()
+            )
             if all_suppressed:
                 self._validate_deferred_session_all_suppressed_projection(
                     dispatches,
@@ -15343,7 +15421,9 @@ class EventDispatcher:
             if exact_batch is None or exact_batch.state != "ready":
                 raise EventContractError("Deferred-session exact source projection is not ready")
             exact_batch._require_authority()
-            prepared_row_facts = exact_batch._prepared_row_facts()
+            prepared_row_facts = self._deferred_session_regular_row_facts(
+                record, exact_batch._prepared_row_facts()
+            )
             if record.all_suppressed:
                 self._validate_deferred_session_all_suppressed_projection(
                     record.dispatches,

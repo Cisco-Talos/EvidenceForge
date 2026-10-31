@@ -427,9 +427,12 @@ completed result. Qualified literal local-terminal and non-PTY SSH commands shar
 fork/exec production, including the exec of a shell receiving a quoted command argument.
 Fresh Apple Terminal and iTerm2 3.7.6 startup now share a native phase owner, including their
 different helper chains, login credentials, TTYs and descriptor layouts. Bounded command
-workloads pass complete fork/exec reconciliation through the public CLI. Existing shells
-reuse their identities. Inner commands are not automatically expanded. Other GUI apps,
-restored jobs/new windows in an existing app, SSH PTY/helper inventories, complex command
+workloads pass complete fork/exec reconciliation through the public CLI. Non-PTY SSH receivers
+also have a qualified launchd/xpcproxy/helper/shell chain: six real forks, six execs and three
+known short-helper exits. Complete Mac-to-Mac SSH workloads pass through both terminals,
+including output filtering and checkpoint recovery. Generic session teardown retains unknown
+exit results. Existing shells reuse their identities. Inner commands are not automatically
+expanded. Other GUI apps, restored jobs/new windows in an existing app, SSH PTY startup, complex command
 plans and unknown binary metadata still limit broader complete process coverage.
 Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
 and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).

@@ -100,7 +100,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     endpoint_forks: bool = False,
     finder: bool = False,
     terminal_id: str | None = None,
-    complete_ssh_client: bool = False,
+    complete_native_ssh: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -125,8 +125,8 @@ def test_short_generation_checkpoint_suspension_and_resume(
             second_close = dict(scenario_data["storyline"][2])
             second_close.update(id="close-after-resume", time="+2h45m")
             scenario_data["storyline"].append(second_close)
-    if complete_ssh_client:
-        assert ssh_client and not macos_receiver
+    if complete_native_ssh:
+        assert ssh_client
         scenario_data["macos_process_coverage"] = "complete"
         scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
         scenario_data["baseline_activity"]["traffic_rates"] = {

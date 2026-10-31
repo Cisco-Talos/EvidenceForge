@@ -785,11 +785,11 @@ class DeferredSshTimingIntent:
         if type(phases) is not tuple or (
             phases
             and (
-                len(phases) not in {11, 12}
+                len(phases) not in {11, 12, 19}
                 or any(type(at) is not datetime or at.utcoffset() is None for at in phases)
                 or phases[0] <= open_time + receiver_bootstrap_headroom
-                or phases[6] != accepted_at
-                or phases[7] <= pam_at
+                or phases[13 if len(phases) == 19 else 6] != accepted_at
+                or phases[14 if len(phases) == 19 else 7] <= pam_at
                 or phases[-1] > ready_at
                 or any(left >= right for left, right in zip(phases, phases[1:], strict=False))
             )
@@ -1657,7 +1657,9 @@ class DeferredSessionNetworkAuthority:
                     raise ValueError("Deferred SSH login dependent changed semantic identity")
             elif spec.publication_ordinal != 1:
                 raise ValueError("Deferred SSH process dependent changed its publication ordinal")
-            elif spec.event_type is not EventKind.SYSTEM_PROCESS_CREATE:
+            elif spec.event_type is not (
+                EventKind.PROCESS_FORK if member.forked else EventKind.SYSTEM_PROCESS_CREATE
+            ):
                 raise ValueError("Deferred SSH process dependent requires system-process evidence")
             elif spec.canonical_time != identity.started_at:
                 raise ValueError("Deferred SSH process dependent changed its State start time")

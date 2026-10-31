@@ -3091,8 +3091,8 @@ def plan_macos_ssh_startup_times(
     The variable transition delays use an ordinary overlayable relationship.
     An incompatible overlay fails before admission rather than compressing stages.
     """
-    if type(phase_count) is not int or phase_count not in {11, 12}:
-        raise ValueError("Mac SSH startup supports only legacy or session-owning phase counts")
+    if type(phase_count) is not int or phase_count not in {11, 12, 19}:
+        raise ValueError("Mac SSH startup requires a supported explicit graph phase count")
     key = "macos.ssh_receiver_stage"
     window = get_timing_window(key, default_min_ms=0, default_max_ms=0, default_position="after")
     if window.position != "after" or window.min_ms <= 0:
@@ -3101,7 +3101,7 @@ def plan_macos_ssh_startup_times(
     phases: list[datetime] = []
     current = connection_time
     for ordinal in range(phase_count):
-        if ordinal == 6:
+        if ordinal == (13 if phase_count == 19 else 6):
             if current >= authenticated_at:
                 raise ValueError("Mac SSH receiver stages exceed the authentication budget")
             phases.append(authenticated_at)

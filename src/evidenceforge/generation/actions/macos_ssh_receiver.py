@@ -98,6 +98,7 @@ class MacosSshReceiverEnvironment:
     session_worker: CompiledApplicationDescriptor
     authentication_worker: CompiledApplicationDescriptor
     shell: CompiledApplicationDescriptor
+    launcher: CompiledApplicationDescriptor | None = None
 
 
 def resolve_macos_ssh_receiver_environment(
@@ -108,8 +109,11 @@ def resolve_macos_ssh_receiver_environment(
     state: StateManager,
     identities: IdentityDirectory | None,
     deployment: DeploymentContentRegistry | None,
+    native: bool = False,
 ) -> MacosSshReceiverEnvironment:
     """Resolve existing modeled owners without allocating identities or host I/O."""
+    if type(native) is not bool:
+        raise StateError("Mac SSH receiver graph selection requires an exact boolean")
     if identities is None or deployment is None:
         raise StateError("Mac SSH receiver requires modeled accounts and compiled applications")
     account = identities.macos_account(username, hostname)
@@ -166,8 +170,11 @@ def resolve_macos_ssh_receiver_environment(
         or not parent.credentials.is_unattributed_root
     ):
         raise StateError("Mac SSH receiver requires its live modeled launchd parent")
+    launcher = deployment.application_descriptor("macos-xpcproxy", "macos") if native else None
+    if native and (launcher is None or launcher.image_path != "/usr/libexec/xpcproxy"):
+        raise StateError("Native SSH receiver requires its exact installed xpcproxy")
     return MacosSshReceiverEnvironment(
-        account, service, parent, wrapper, daemon, worker, authentication, shells[0]
+        account, service, parent, wrapper, daemon, worker, authentication, shells[0], launcher
     )
 
 

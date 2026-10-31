@@ -18357,9 +18357,50 @@ class StateManager:
                 self.observe_process_responsibility(identity, observed_at=observed_at),
             )
 
+    def validate_macos_process_observation_plan(
+        self, plan: ActionCohortMaterializationPlan | MaterializationBatchPlan
+    ) -> None:
+        """Authenticate a process cohort or the exact initial deferred SSH fork.
+
+        This is a read-only source projection boundary. A session batch gains
+        no action-cohort commit capability and cannot substitute exec/exit plans.
+        """
+        if type(plan) is ActionCohortMaterializationPlan:
+            self.validate_action_cohort_materialization(plan)
+            return
+        if type(plan) is not MaterializationBatchPlan:
+            raise StateError("Mac process observation requires an exact canonical State plan")
+        self.validate_materialization_batch(plan)
+        session = plan.session
+        if session is None or len(plan.processes) != 1:
+            raise StateError("Deferred Mac source observation requires one SSH session and fork")
+        birth = plan.processes[0]
+        parent, child = birth.parent_identity, birth.identity
+        if (
+            not birth.forked
+            or parent is None
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or parent.principal != "root"
+            or parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or self._pid_os.get(parent.hostname) != "macos"
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.identity.hostname != child.hostname
+            or session.identity.logon_id != child.logon_id
+            or child.execution_ordinal != 0
+            or child.image != parent.image
+            or child.arguments != parent.arguments
+            or child.credentials != parent.credentials
+            or child.job_control != parent.job_control
+            or child.executable_version != parent.executable_version
+        ):
+            raise StateError("Deferred Mac source observation lost its inherited boot-parent fork")
+
     def _observe_planned_relationships_locked(
         self,
-        cohort: ActionCohortMaterializationPlan,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
         identity: ProcessIdentity,
         at: datetime,
     ) -> ProcessRelationshipObservation:
@@ -18367,7 +18408,7 @@ class StateManager:
         birth = next((item for item in cohort.processes if item.identity == identity), None)
         platform = (
             self._action_cohort_process_pid_namespaces(cohort.processes)[id(birth)]
-            if birth is not None
+            if birth is not None and type(cohort) is ActionCohortMaterializationPlan
             else self._pid_os.get(identity.hostname)
         )
         if platform != "macos":
@@ -18376,7 +18417,7 @@ class StateManager:
 
     def observe_planned_process_relationships(
         self,
-        cohort: ActionCohortMaterializationPlan,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
         *,
         process: ProcessIdentity | None = None,
     ) -> ProcessRelationshipObservation:
@@ -18388,7 +18429,7 @@ class StateManager:
         Explicit staged birth references retain their authenticated ordering.
         """
         with self._lock:
-            self.validate_action_cohort_materialization(cohort)
+            self.validate_macos_process_observation_plan(cohort)
             if process is None:
                 if len(cohort.processes) != 1:
                     raise StateError("Planned observation requires an exact selected birth")
@@ -18404,13 +18445,16 @@ class StateManager:
             )
 
     def observe_planned_fork_parent_relationships(
-        self, cohort: ActionCohortMaterializationPlan, *, child: ProcessIdentity
+        self,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+        *,
+        child: ProcessIdentity,
     ) -> ProcessRelationshipObservation:
         """Freeze the exact performing parent of a selected authenticated fork."""
         if type(child) is not ProcessIdentity:
             raise StateError("Planned fork source requires its exact selected fork birth")
         with self._lock:
-            self.validate_action_cohort_materialization(cohort)
+            self.validate_macos_process_observation_plan(cohort)
             birth = next((item for item in cohort.processes if item.identity == child), None)
             if (
                 type(child) is not ProcessIdentity

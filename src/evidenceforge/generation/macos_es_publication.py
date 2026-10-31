@@ -50,7 +50,10 @@ if TYPE_CHECKING:
     from evidenceforge.events.dispatcher import EventDispatcher
     from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
     from evidenceforge.generation.macos_es_ingress import PreparedESIngress
-    from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+    from evidenceforge.generation.state_manager import (
+        ActionCohortMaterializationPlan,
+        MaterializationBatchPlan,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +163,7 @@ def _observation(
 @contextmanager
 def prepared_macos_es_process_publication(
     dispatcher: EventDispatcher,
-    cohort: ActionCohortMaterializationPlan,
+    cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
     events: tuple[CanonicalOccurrence, ...],
 ) -> Iterator[MacosESPublication | None]:
     """Join supported canonical phases to their existing atomic source journal.
@@ -172,6 +175,22 @@ def prepared_macos_es_process_publication(
     from evidenceforge.generation.emitters.macos_endpoint_security import (
         MacosEndpointSecurityEmitter,
     )
+    from evidenceforge.generation.state_manager import MaterializationBatchPlan
+
+    if type(cohort) is MaterializationBatchPlan:
+        dispatcher.state_manager.validate_macos_process_observation_plan(cohort)
+        birth = cohort.processes[0]
+        if (
+            len(events) != 1
+            or events[0].event_type != "process_fork"
+            or events[0].identity_plan is None
+            or events[0].identity_plan.subject != birth.identity
+            or events[0].identity_plan.actor != birth.parent_identity
+            or events[0].identity_plan.session != cohort.session.identity
+        ):
+            raise StateError("Deferred native publication requires its exact initial SSH fork")
+        if dispatcher.macos_es_ingress is None or not dispatcher.macos_es_ingress.enabled:
+            raise StateError("Deferred native publication requires occurrence ingress")
 
     # Canonical endpoint effects remain members of the exact action journal;
     # they are not additional native process observations or generation triggers.

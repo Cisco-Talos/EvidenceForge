@@ -29,7 +29,8 @@ def macos_ssh_scenario(
     """Build existing authored intent without new platform configuration fields."""
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
-    # Receiver startup remains partial until its full graph/FDs are qualified.
+    # Legacy compatibility diagnostics retain partial coverage; public CLI acceptance
+    # separately exercises complete client and receiver startup with the current profile.
     # Client-to-Linux acceptance can explicitly request complete Mac coverage.
     data["macos_process_coverage"] = "partial"
     data["time_window"] = {"start": "2026-10-15T10:00:00Z", "duration": "1h", "warmup": "1h"}

@@ -30,8 +30,8 @@ export against publication receipts. A complete bundle cannot be accepted after 
 | Parent-chain repair/implicit parents | `actions/process_support/parents.py` | Canonical starts are counted even when a producer suppresses a CREATE row as “pre-existing.” Only the actual start time decides window eligibility. |
 | System/service worker reuse or creation | `actions/process_support/system.py` | Reuse adds no start. New aggregate workers are unresolved and reject complete coverage. |
 | launchd jobs and persistence activation | `actions/macos_launch_item.py` and process/service composite | Registering/loading a job is not a process start. An actual job process is counted and currently lacks a qualified initial exec producer. |
-| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py` | Explicit forks/execs are counted independently. The current small receiver model has 3 native forks but 5 expected execs: the wrapper is still an aggregate birth, and helper/shell exec descriptors remain unknown. The reviewed reference also reveals xpcproxy and additional fork-only children missing from that simplified model. Revision 365 supplies verified static helper entitlements without inventing FD tables. A partial phase pass cannot satisfy the whole session census. |
-| Native SSH client | `activity/generator.py:_ensure_macos_ssh_client_process` | Shares the qualified local terminal/command owner. Revision 366 admits its reviewed v11 array/integer entitlement object and measured Apple runtime security/slice. Public complete client-to-Linux workloads through both terminals pass exact reconciliation and filtered-output equality. Receiver startup remains separately gated. |
+| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py`; `actions/ssh_session.py` deferred transport batch | Revision 369 integrates the reviewed non-PTY launchd/xpcproxy/daemon/auth/user/shell topology. Six real forks, six execs and three known short-helper exits replace the aggregate startup. Every start is independently counted. Complete Mac-to-Mac public CLI, filtering, initial-source fault recovery and checkpoint/resume pass. Generic final worker exits remain unknown; PTY and additional helper families remain unsupported. Frozen legacy diagnostics keep their partial model. |
+| Native SSH client | `activity/generator.py:_ensure_macos_ssh_client_process` | Shares the qualified local terminal/command owner. Revision 366 admits its reviewed v11 array/integer entitlement object and measured Apple runtime security/slice. Public complete client-to-Linux and client-to-Mac workloads through both terminals pass exact reconciliation and filtered-output equality. |
 | Generic SSH receiver compatibility | `actions/ssh_session.py` | Mac receivers delegate to the Mac owner. Linux-only aggregate receiver code does not qualify a Mac helper. |
 | Persistent SMB client materialization | `actions/network_connection.py` | Existing client reuse adds no start. A newly materialized Mac client is counted; a generic aggregate client cannot silently pass complete mode. |
 | Generic network responder preparation | `activity/generator.py` network responder batches | Linux receiver branches remain Linux-specific. Any actual modeled Mac aggregate reached through compatibility paths is still counted. Mac SMB serving remains outside the supported capability set. |
@@ -61,11 +61,11 @@ not a supported extension path.
 | Legacy registration | Direct aggregate materialization without any ES factory still adds an exec obligation. |
 | Publication faults | Omitted/doubled native writes reject; physical export duplication or alteration rejects against receipt fingerprints. |
 | Collection policy | Disabled source, removed process capability, loss and shortened windows reject during preflight, even with no process events. Partial collection requires an explicit partial policy. |
-| Filter/recovery regression | Finder and paired-terminal public CLI workloads pass complete reconciliation and nonempty checkpoint/resume. SSH receiver/helper workloads remain bounded partial diagnostics until their remaining metadata/startup contracts are qualified. |
+| Filter/recovery regression | Finder, paired-terminal and non-PTY SSH client/receiver public CLI workloads pass complete reconciliation and nonempty checkpoint/resume. Initial receiver-fork source faults recover without another State commit or native row. |
 
 The source profile and native reference gates remain separate. Qualified Finder/terminal
-startup does not qualify other application/service activations, SSH helper tables, PTY helpers
+startup does not qualify other application/service activations, PTY helpers
 or Dock/Spotlight attribution. Unresolved starts remain in the denominator. The reviewed
-[non-PTY SSH reference](ssh-startup-reference/REFERENCE.md) closes integer export; further
-receiver relationship classification uses that existing capture with explicit permission.
+[non-PTY SSH reference](ssh-startup-reference/REFERENCE.md) and approved offline review qualify
+the bounded receiver graph, helper metadata, credentials and descriptors.
 No new blind assessment panel is required.

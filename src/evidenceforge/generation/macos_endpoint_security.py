@@ -31,7 +31,11 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
 )
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
-from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
+from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
+    MaterializationBatchPlan,
+    StateManager,
+)
 from evidenceforge.models.exceptions import StateError
 
 
@@ -460,7 +464,7 @@ def prepare_planned_installed_es_process_snapshot(
     state: StateManager,
     deployments: DeploymentContentRegistry,
     *,
-    cohort: ActionCohortMaterializationPlan,
+    cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
     collection: MacosProcessCollectionObservation,
     phase: Literal["birth", "exec", "terminal", "exec_source", "fork_source"],
     fork_child: ProcessIdentity | None = None,
@@ -478,13 +482,15 @@ def prepare_planned_installed_es_process_snapshot(
     if (
         type(state) is not StateManager
         or type(deployments) is not DeploymentContentRegistry
-        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(cohort) not in {ActionCohortMaterializationPlan, MaterializationBatchPlan}
         or type(collection) is not MacosProcessCollectionObservation
         or type(phase) is not str
         or phase not in {"birth", "exec", "terminal", "exec_source", "fork_source"}
     ):
         raise StateError("Planned installed ES process requires exact canonical owners and phase")
     collection.__post_init__()
+    if type(cohort) is MaterializationBatchPlan and phase not in {"birth", "fork_source"}:
+        raise StateError("Deferred installed ES observation supports its initial fork only")
     with state._lock:
         if phase == "birth":
             relationships = state.observe_planned_process_relationships(

@@ -696,7 +696,7 @@ are exact Booleans, strings or arrays of strings. The paired macOS 27 Terminal/i
 establish those flat shapes, including an explicit empty object distinct from null and unknown.
 Objects are bounded to 128 keys, arrays to 128 strings each, and the whole
 object to 4,096 nodes and 1 MiB of text. Canonical values are immutable and survive checkpoint
-restore. Unknown entitlement facts, numeric values and nested objects/arrays do not qualify.
+restore. Unknown entitlement facts, floating-point values and nested objects/arrays do not qualify.
 Older frozen profiles retain their absent-only, nonempty Boolean-only or nonempty Boolean/array restrictions. The
 macOS 27 Finder reference confirms the Apple xpcproxy Boolean template and the complete
 boot-parent fork, root launcher exec, GUI credential change and app exec chain.
@@ -740,8 +740,16 @@ Canonical signatures distinguish integer 1 from Boolean true, including equality
 encoding. The reviewed non-PTY SSH reference confirms native integer export against the exact
 public Apple SSH template. Complete outbound-client workloads through Terminal or iTerm2 now
 include every native fork/exec. Older frozen profiles retain their previous value restrictions.
-Receiver helper execs still need their separate graph and descriptor qualification; client
-acceptance does not qualify those missing facts.
+Revision 369 also qualifies the bounded non-PTY receiver: launchd forks the receiver, which
+execs xpcproxy, the basename-argument wrapper, sshd and sshd-session. Separate canonical
+forks represent the short daemon/session children, authentication child, user worker and shell;
+only the authentication child and shell execute new images. The whole startup has six actual
+forks and six execs, with three known short-helper exits. Audit adoption, credential drops,
+POSIX sessions, responsibility and each exec's socket/vnode/pipe table belong to the shared
+State/action owners. The initial fork uses the same atomic deferred transport/source journal.
+Complete Mac-to-Mac CLI workloads through both terminals reconcile every in-window start;
+native-only output and checkpoint/resume preserve identical bytes. Generic worker teardown
+results remain unknown. This qualifies neither PTY startup nor additional SSH helper families.
 
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
@@ -778,11 +786,13 @@ their ground-truth event's `skipped_reason`.
 Unsupported individual phases retain nonexported counter observations, without placeholder
 native records. Known sibling forks remain available; later exported rows retain the resulting
 sequence gaps. Qualified external SSH commands without a PTY use three channel-owned pipe
-descriptors after exec; the shell/helper inventories remain unknown. Plain nested `/bin/zsh`
+descriptors after exec. The current non-PTY receiver supplies its measured shell/helper tables;
+old frozen compatibility paths retain their unknown inventories. Plain nested `/bin/zsh`
 and `/bin/bash` command parents are admitted by the frozen `nested_command_shells` policy
 only when their existing audit, responsibility, image, terminal and descriptor facts pass the
 same gates. Shell command strings, scripts and flags do not inherit that qualification. Local GUI audit origins
-are modeled, while GUI responsible-process relationships remain unknown. PTY command generation
+and the qualified Finder/terminal responsibility relationships are modeled; other GUI paths
+retain their independent gates. PTY command generation
 is unavailable. The controlled, fully specified v11 process
 path supports all three phases; this does not imply native coverage for every ordinary command.
 

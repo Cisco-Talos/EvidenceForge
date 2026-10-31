@@ -24,6 +24,24 @@ def test_default_native_completeness_rejects_unresolved_starts_or_removed_source
     raw.pop("macos_process_coverage")
     raw["time_window"]["duration"] = "15m"
     raw["output"]["logs"].append({"format": "macos_endpoint_security"})
+    raw["storyline"].append(
+        {
+            "id": "unqualified-gui-app",
+            "time": "+12m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "An unqualified app tree must remain an actionable rejection",
+            "events": [
+                {
+                    "type": "process",
+                    "launch_method": "finder",
+                    "process_name": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "command_line": "'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'",
+                    "supplementary": "none",
+                }
+            ],
+        }
+    )
     source = tmp_path / "invented-complete.yaml"
     source.write_text(yaml.safe_dump(raw))
     output = tmp_path / "output"
@@ -44,10 +62,10 @@ def test_default_native_completeness_rejects_unresolved_starts_or_removed_source
         command.extend(["--formats", "ecar"])
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     assert result.returncode != 0
-    text = result.stdout + result.stderr
+    text = " ".join((result.stdout + result.stderr).split())
     assert (
         "native macos_endpoint_security output is not selected" in text
         if filter_native
-        else "Incomplete native macOS process coverage" in text
-    )
+        else "Finder startup requires an explicit app bundle-identifier policy" in text
+    ), text
     assert not (output / "GROUND_TRUTH.json").exists()

@@ -29,7 +29,10 @@ already established before that exec. This sample qualifies its exec metadata; i
 independently establish how a direct shell fork assigns foreground job control. Canonical
 parent/group/session ownership remains an independent process contract.
 
-## Receiver relationships and remaining classification
+## Initial report's receiver classification gaps
+
+The approved core-graph review below resolves these initial classification gaps. This section
+preserves the distinction between what the original report established and the later review.
 
 The receiver prefix includes a launchd fork and same-lifetime xpcproxy → wrapper → sshd →
 sshd-session activations. xpcproxy begins in its parent's POSIX membership; the wrapper's
@@ -92,3 +95,13 @@ exec is added for the two short-lived children or the authenticated worker. Exac
 an observation of this controlled connection, not a success default for arbitrary cancellation,
 deadline truncation or unrelated SSH failure. Private shell startup commands remain excluded
 from the portable default workload, not from the simulator's process-start census.
+
+## Production integration
+
+Revision 369 integrates this bounded non-PTY topology in the current macOS 27 profile. The
+initial inherited launchd fork and subsequent nineteen transitions share canonical State,
+native occurrence ingress and existing exact publication/recovery owners. Public CLI
+Mac-to-Mac workloads through both terminal apps reconcile every in-window fork and exec,
+with zero aggregate births. Native-only filtering and receiver checkpoint/resume retain
+identical bytes. PTY startup and additional SSH helper families remain unqualified. The
+captured final worker exit 255 is not used as a generic simulated teardown result.

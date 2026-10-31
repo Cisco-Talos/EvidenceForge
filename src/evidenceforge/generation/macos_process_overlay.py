@@ -19,7 +19,11 @@ from evidenceforge.events.responsibility import ResponsibleProcessReference
 from evidenceforge.models.exceptions import StateError
 
 if TYPE_CHECKING:
-    from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
+    from evidenceforge.generation.state_manager import (
+        ActionCohortMaterializationPlan,
+        MaterializationBatchPlan,
+        StateManager,
+    )
 
 
 class MacosProcessRelationshipOverlay:
@@ -33,9 +37,22 @@ class MacosProcessRelationshipOverlay:
     authenticated dependency order.
     """
 
-    def __init__(self, state: StateManager, cohort: ActionCohortMaterializationPlan) -> None:
+    def __init__(
+        self,
+        state: StateManager,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+    ) -> None:
+        from evidenceforge.generation.state_manager import MaterializationBatchPlan
+
         self._state = state
         self._births = {item.identity.object_id: item.identity for item in cohort.processes}
+        if type(cohort) is MaterializationBatchPlan:
+            # The validated deferred SSH batch contains one initial fork and
+            # its session, with no execution/credential/exit transitions.
+            self._executions = {}
+            self._activity = {}
+            self._closes = {}
+            return
         self._executions = {item.target.object_id: item for item in cohort.process_executions}
         self._activity = {
             state._action_process_identity(item.target).object_id: item
