@@ -241,23 +241,23 @@ class ESExec(_Record):
 
 
 class ESExecV11(ESExec):
-    """Reviewed v11 null and flat Boolean/string/string-array entitlement objects."""
+    """Bounded v11 entitlement objects; decoding does not qualify a source profile."""
 
     dyld_exec_path: str = Field(description="Required native execution path")
     entitlements: Annotated[FrozenEntitlements, Field(max_length=128)] | None = Field(
-        description="Required null or a bounded flat Boolean/string/string-array object"
+        description="Required null or a bounded flat Boolean/integer/string/string-array object"
     )
 
     @field_validator("entitlements", mode="before")
     @classmethod
     def bounded_entitlements(cls, value: object) -> object:
-        """Admit only the reviewed value types, with exact types and shared bounds."""
+        """Admit bounded exact values independently of generation-profile qualification."""
         return freeze_entitlements(value) if value is not None else None
 
     @field_serializer("entitlements")
     def native_entitlements(
         self, value: FrozenEntitlements | None
-    ) -> dict[str, bool | str | list[str]] | None:
+    ) -> dict[str, bool | int | str | list[str]] | None:
         """Keep the validated model immutable while preserving the native JSON object."""
         return native_entitlements(value) if value is not None else None
 

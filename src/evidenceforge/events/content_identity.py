@@ -284,6 +284,25 @@ class MachOCodeSignature:
     cdhash: str
     entitlements: Literal["absent"] | FrozenEntitlements | None = None
 
+    def _comparison_key(self) -> tuple[object, ...]:
+        entries = self.entitlements
+        typed = (
+            tuple((key, type(value).__name__, value) for key, value in entries)
+            if type(entries) is tuple
+            else entries
+        )
+        return self.signing_id, self.team_id, self.cdhash, typed
+
+    def __eq__(self, other: object) -> bool:
+        """Keep integer 1 distinct from Boolean true even in mixed entitlement objects."""
+        if type(other) is not MachOCodeSignature:
+            return NotImplemented
+        return self._comparison_key() == other._comparison_key()
+
+    def __hash__(self) -> int:
+        """Use the same exact-type key as equality; never use this hash for derivation."""
+        return hash(self._comparison_key())
+
     def __post_init__(self) -> None:
         """Reject malformed signing metadata without filling unknown fields."""
 
@@ -298,13 +317,15 @@ class MachOCodeSignature:
             object.__setattr__(self, "entitlements", tuple(sorted(entries)))
 
     def serialized_values(self) -> tuple[object, ...]:
-        """Preserve old encodings and tag reviewed empty/scalar-string objects."""
+        """Preserve old encodings and tag newly supported value families explicitly."""
         values = (self.signing_id, self.team_id, self.cdhash)
         if self.entitlements is None:
             return values
         encoded = (
             (
-                "bounded-object-v2"
+                "integer-object-v1"
+                if any(type(value) is int for _, value in self.entitlements)
+                else "bounded-object-v2"
                 if not self.entitlements
                 or any(type(value) is str for _, value in self.entitlements)
                 else "boolean-string-array-v1"
@@ -327,7 +348,13 @@ class MachOCodeSignature:
         if type(entries) in {list, tuple}:
             if (
                 len(entries) != 2
-                or entries[0] not in ("boolean-v1", "boolean-string-array-v1", "bounded-object-v2")
+                or entries[0]
+                not in (
+                    "boolean-v1",
+                    "boolean-string-array-v1",
+                    "bounded-object-v2",
+                    "integer-object-v1",
+                )
                 or type(entries[1]) not in {list, tuple}
             ):
                 raise ValueError("Unknown serialized entitlement representation")

@@ -134,7 +134,9 @@ def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippab
 @pytest.mark.parametrize(
     "value",
     [
-        {"a": 1},
+        {"a": 1.0},
+        {"a": 2**63},
+        {"a": -(2**63) - 1},
         {"a": None},
         {"a": [1]},
         {"a": [True]},
@@ -147,7 +149,7 @@ def test_catalog_boolean_entitlements_reject_unreviewed_or_coerced_values(value:
         MacCodeSignatureEntry(signing_id="test.example.editor", entitlements=value)
 
 
-@pytest.mark.parametrize("value", [[], (("a", 1),), (("a", True), ("a", False)), (("a", []),)])
+@pytest.mark.parametrize("value", [[], (("a", 1.0),), (("a", True), ("a", False)), (("a", []),)])
 def test_canonical_entitlements_cannot_retain_mutable_or_ambiguous_data(value: object) -> None:
     with pytest.raises(ValueError):
         MachOCodeSignature("invented", None, "a" * 40, value)
@@ -186,6 +188,75 @@ def test_string_array_entitlements_are_immutable_and_use_an_explicit_checkpoint_
         _network_request(replace(binary, code_signature=changed)).stable_id
         != _network_request(binary).stable_id
     )
+
+
+@pytest.mark.parametrize("value", [-(2**63), -1, 0, 1, 2**63 - 1])
+def test_integer_entitlements_preserve_exact_types_identity_and_checkpoint_tag(value: int) -> None:
+    app = _application()
+    app.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor",
+        entitlements={"invented.version": value, "invented.enabled": True},
+    )
+    binary = _release(app)
+    signature = binary.code_signature
+    assert type(dict(signature.entitlements)["invented.version"]) is int
+    assert type(dict(signature.entitlements)["invented.enabled"]) is bool
+    assert signature.serialized_values()[3][0] == "integer-object-v1"
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    assert (
+        MachOCodeSignature.from_serialized_values(
+            json.loads(json.dumps(signature.serialized_values()))
+        )
+        == signature
+    )
+    boolean = replace(
+        binary,
+        code_signature=replace(signature, entitlements=(("invented.version", True),)),
+    )
+    assert _network_request(binary).stable_id != _network_request(boolean).stable_id
+
+
+def test_signature_equality_distinguishes_boolean_and_integer_words_with_identical_cdhash() -> None:
+    left = MachOCodeSignature(
+        "invented", None, "a" * 40, (("invented.version", 1), ("invented.flag", True))
+    )
+    right = replace(left, entitlements=(("invented.version", 1), ("invented.flag", 1)))
+    assert left != right
+    assert len({left, right}) == 2
+    assert MachOCodeSignature.from_serialized_values(left.serialized_values()) == left
+
+
+@pytest.mark.parametrize(
+    "application_id",
+    [
+        "macos-ssh",
+        "macos-sshd",
+        "macos-sshd-session",
+        "macos-sshd-auth",
+        "macos-sshd-keygen-wrapper",
+    ],
+)
+def test_apple_ssh_vendor_entitlements_compile_without_becoming_helper_defaults(
+    application_id: str,
+) -> None:
+    app = ApplicationEntry.model_validate(application_descriptor(application_id))
+    binary = _release(app)
+    signature = binary.code_signature
+    assert (
+        signature.signing_id == f"com.apple.{app.platforms['macos'].image_path.rsplit('/', 1)[-1]}"
+    )
+    assert signature.team_id is None
+    values = dict(signature.entitlements)
+    if application_id == "macos-ssh":
+        assert values == {
+            "keychain-access-groups": ("com.apple.ssh.passphrases",),
+            "com.apple.private.amfi.version-restriction": 1,
+        }
+        assert type(values["com.apple.private.amfi.version-restriction"]) is int
+    else:
+        assert values and all(type(value) is bool for value in values.values())
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    assert _release(app, "/invented/helper").code_signature is None
 
 
 @pytest.mark.parametrize(
@@ -266,6 +337,9 @@ def test_vendor_terminal_signatures_compile_without_propagating_to_helpers(
             [["invented.identity", "example.vendor"], ["invented.array", ["value"]]],
         ),
         ("bounded-object-v2", [["invented.enabled", True]]),
+        ("bounded-object-v2", [["invented.version", 1]]),
+        ("boolean-v1", [["invented.version", 1]]),
+        ("integer-object-v1", [["invented.enabled", True]]),
     ],
 )
 def test_entitlement_serialization_rejects_downgraded_or_ambiguous_tags(

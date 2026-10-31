@@ -126,7 +126,12 @@ class ProcessParentResolver:
         session = self.state_manager.get_session(logon_id) if logon_id else None
         ssh_session = session is not None and session.session_kind == "ssh"
         if logon_id and (ssh_session or _macos_process_uses_shell(process_name)):
-            if session is not None and session.session_shell_pid is not None:
+            if (
+                session is not None
+                and session.session_kind == "interactive"
+                and ensure_utc(session.start_time) <= ensure_utc(time)
+                and session.session_shell_pid is not None
+            ):
                 bound = self.state_manager.get_process(system.hostname, session.session_shell_pid)
                 if (
                     bound is not None

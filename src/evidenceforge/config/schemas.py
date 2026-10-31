@@ -845,9 +845,12 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
 
     signing_id: str = Field(min_length=1, max_length=512)
     team_id: str | None = Field(default=None, min_length=1, max_length=128)
-    entitlements: Literal["absent"] | dict[str, bool | str | tuple[str, ...]] | None = Field(
+    entitlements: Literal["absent"] | dict[str, bool | int | str | tuple[str, ...]] | None = Field(
         default=None,
-        description="Explicit absence or a bounded Boolean/string/string-array object; null is unknown",
+        description=(
+            "Explicit absence or a bounded Boolean/integer/string/string-array object; "
+            "null is unknown"
+        ),
     )
 
     @field_validator("entitlements", mode="before")
@@ -4191,6 +4194,7 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
         "absent_or_boolean_object",
         "absent_boolean_or_string_array_object",
         "absent_or_bounded_object",
+        "absent_or_bounded_integer_object",
     ]
     boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
 

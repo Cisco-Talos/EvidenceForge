@@ -28,7 +28,7 @@ from tests.unit.test_macos_native_sink_publication import _prepare
 
 
 @pytest.mark.parametrize(
-    "known_entitlements", [False, True, "boolean", "string_array", "string", "empty"]
+    "known_entitlements", [False, True, "boolean", "string_array", "string", "empty", "integer"]
 )
 @pytest.mark.parametrize(
     "entitlement_policy",
@@ -37,6 +37,7 @@ from tests.unit.test_macos_native_sink_publication import _prepare
         "absent_or_boolean_object",
         "absent_boolean_or_string_array_object",
         "absent_or_bounded_object",
+        "absent_or_bounded_integer_object",
     ],
 )
 @pytest.mark.parametrize("exit_code", [None, 7])
@@ -82,6 +83,7 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             ),
             "string": (("invented.identity", "example.vendor"),),
             "empty": (),
+            "integer": (("invented.version", 1),),
         }
 
         def executable() -> RuntimeArtifactDescriptor:
@@ -186,11 +188,20 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
         or (
             known_entitlements == "string_array"
             and entitlement_policy
-            in ("absent_boolean_or_string_array_object", "absent_or_bounded_object")
+            in (
+                "absent_boolean_or_string_array_object",
+                "absent_or_bounded_object",
+                "absent_or_bounded_integer_object",
+            )
         )
         or (
             known_entitlements in ("string", "empty")
-            and entitlement_policy == "absent_or_bounded_object"
+            and entitlement_policy
+            in ("absent_or_bounded_object", "absent_or_bounded_integer_object")
+        )
+        or (
+            known_entitlements == "integer"
+            and entitlement_policy == "absent_or_bounded_integer_object"
         )
     )
     expected = [11] + ([9] if has_exec else []) + ([15] if exit_code is not None else [])
@@ -212,6 +223,8 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             if known_entitlements == "string"
             else {}
             if known_entitlements == "empty"
+            else {"invented.version": 1}
+            if known_entitlements == "integer"
             else None
         )
         assert (

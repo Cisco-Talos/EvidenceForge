@@ -25,11 +25,13 @@ export against publication receipts. A complete bundle cannot be accepted after 
 | Boot, long-lived system tree and collector | `engine/emitter_setup.py` Mac host bootstrap and boot batches | Actual pre-window starts are existing state; in-window starts are counted. No retrospective exec is invented. |
 | Ordinary local and non-PTY SSH commands | `actions/process_execution_service.py` shell root | Qualified fork plus exec for supported literal argv and known metadata. Each activation has its own identity, including nested supported shells. |
 | Finder reference app | Same process service and retained `actions/macos_finder.py` coordinator | Qualified canonical/native boot-parent fork, root xpcproxy exec, GUI-account credential binding and app exec replace the aggregate birth. Known app exit uses the existing completion owner. Revision 357 closes the no-parent token gate with approved fixed-output evidence and an assigned canonical boot audit origin. Complete census, phase recovery, filtering and checkpoint/resume cover this bounded producer. |
-| Generic apps, terminal, login and initial shell | Same process service, generic root; `activity/generator.py:ensure_macos_session_shell` | Apple Terminal and iTerm2 share the session chain and qualified descendant-command path. Their own aggregate starts remain counted, including baseline and authored logins. They cause complete-mode rejection when in-window. |
+| Fresh Terminal/iTerm2, login and initial shell | `actions/macos_terminal.py`; `activity/generator.py:ensure_macos_session_shell` | Revision 364 replaces the current-profile aggregate with retained native startup. Apple has 3 forks/4 execs; iTerm2 3.7.6 has 4 forks/6 execs. Public complete workloads, exact interruption recovery, filtering and checkpoint/resume pass. Existing shells reuse identity; new windows/restored jobs in an existing app remain unsupported. |
+| Generic apps | Process service generic root | Unqualified aggregate starts remain counted and reject complete mode; other applications do not inherit the reference app's signing or launch facts. |
 | Parent-chain repair/implicit parents | `actions/process_support/parents.py` | Canonical starts are counted even when a producer suppresses a CREATE row as “pre-existing.” Only the actual start time decides window eligibility. |
 | System/service worker reuse or creation | `actions/process_support/system.py` | Reuse adds no start. New aggregate workers are unresolved and reject complete coverage. |
 | launchd jobs and persistence activation | `actions/macos_launch_item.py` and process/service composite | Registering/loading a job is not a process start. An actual job process is counted and currently lacks a qualified initial exec producer. |
-| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py` | Explicit forks/execs are counted independently. Supported forks and command execs publish natively; unknown helper tables/entitlements and PTY paths retain gates. A partial phase pass cannot satisfy the whole session census. |
+| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py` | Explicit forks/execs are counted independently. A small receiver startup has 3 native forks but 5 expected execs: the wrapper is still an aggregate birth, and helper/shell exec descriptors remain unknown. Revision 365 supplies verified static helper entitlements without inventing FD tables. A partial phase pass cannot satisfy the whole session census. |
+| Native SSH client | `activity/generator.py:_ensure_macos_ssh_client_process` | Shares the qualified local terminal/command owner. Its verified vendor signature includes a signed integer entitlement. Canonical values, checkpoints and decoder preserve that type; the current generation profile still gates its native export until a reference confirms the wire shape. |
 | Generic SSH receiver compatibility | `actions/ssh_session.py` | Mac receivers delegate to the Mac owner. Linux-only aggregate receiver code does not qualify a Mac helper. |
 | Persistent SMB client materialization | `actions/network_connection.py` | Existing client reuse adds no start. A newly materialized Mac client is counted; a generic aggregate client cannot silently pass complete mode. |
 | Generic network responder preparation | `activity/generator.py` network responder batches | Linux receiver branches remain Linux-specific. Any actual modeled Mac aggregate reached through compatibility paths is still counted. Mac SMB serving remains outside the supported capability set. |
@@ -51,7 +53,7 @@ not a supported extension path.
 | File-producing workload | A literal shell command with one or several planned file reads has one fork and exec, with every file effect bound to the executed identity. Selected/filtered output, immediate/ordered source publication and interrupted journal acknowledgement are covered. Invalid effect timing and capacity reject before process allocation. |
 | Retained file mutation | Qualified interpreter commands create, modify or remove a retained synthetic file in the same fork/exec transaction. Native-only and eCAR-filtered output, full State/artifact checkpoint restoration, artifact-tail rollback and interrupted journal recovery retain exact identities and versions. A mismatched file publication time or unrelated effect plan cannot claim native completeness. |
 | Producer bypass | Disable the qualified shell producer: aggregate starts remain in the census and complete finalization rejects. |
-| Session boundary | Move terminal startup into the collection window: its unresolved initial activations reject, even though the subsequent commands have native execs. |
+| Session boundary | Fresh terminal startup inside the window reconciles every fork/exec for both apps. Pre-window startup contributes no retrospective native rows. Unsupported aggregate families still reject even when their subsequent commands have native execs. |
 | Same PID, multiple execs | Each execution identity counts independently; full State checkpoint round-trip and subsequent exec agree. |
 | PID reuse | A new lifetime with the same PID has a different obligation. |
 | Window boundaries | Pre-window births and end-boundary starts are excluded; an in-window exec in an old lifetime is included. |
@@ -59,9 +61,10 @@ not a supported extension path.
 | Legacy registration | Direct aggregate materialization without any ES factory still adds an exec obligation. |
 | Publication faults | Omitted/doubled native writes reject; physical export duplication or alteration rejects against receipt fingerprints. |
 | Collection policy | Disabled source, removed process capability, loss and shortened windows reject during preflight, even with no process events. Partial collection requires an explicit partial policy. |
-| Filter/recovery regression | Existing ordinary local/SSH, Finder, mixed-fleet and nonempty checkpoint/resume CLI contracts remain bounded partial diagnostics where launcher/helper starts are not yet qualified. |
+| Filter/recovery regression | Finder and paired-terminal public CLI workloads pass complete reconciliation and nonempty checkpoint/resume. SSH receiver/helper workloads remain bounded partial diagnostics until their remaining metadata/startup contracts are qualified. |
 
-The source profile and native reference gates remain separate. Completing accounting does not
-qualify initial xpcproxy/terminal/service activations, populated entitlement representations,
-PTY helpers, Dock or Spotlight. Those paths are classified unresolved rather than excluded from
-the denominator. No new blind assessment panel is required to use this matrix.
+The source profile and native reference gates remain separate. Qualified Finder/terminal
+startup does not qualify other application/service activations, SSH helper tables, integer
+entitlement export, PTY helpers or Dock/Spotlight attribution. Unresolved starts remain in the
+denominator. The prepared human-only [SSH reference](ssh-startup-reference/PRIVATE-RUN.md)
+targets one whole non-PTY loopback connection. No new blind assessment panel is required.

@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Immutable bounded entitlement values qualified by the macOS 27 references."""
+"""Immutable bounded entitlement values, separate from source-profile admission."""
 
-type EntitlementValue = bool | str | tuple[str, ...]
+type EntitlementValue = bool | int | str | tuple[str, ...]
 type FrozenEntitlements = tuple[tuple[str, EntitlementValue], ...]
 
 
@@ -29,8 +29,14 @@ def validate_entitlements(entries: object) -> FrozenEntitlements:
         keys.add(key)
         extent += len(key.encode("utf-8"))
         nodes += 1
-        if type(value) not in (bool, str, tuple) or (type(value) is tuple and len(value) > 128):
-            raise ValueError("Entitlement values require exact Booleans, strings or string arrays")
+        if (
+            type(value) not in (bool, int, str, tuple)
+            or (type(value) is tuple and len(value) > 128)
+            or (type(value) is int and not -(2**63) <= value < 2**63)
+        ):
+            raise ValueError(
+                "Entitlement values require exact Booleans, signed 64-bit integers, strings or string arrays"
+            )
         strings = (value,) if type(value) is str else value if type(value) is tuple else ()
         for item in strings:
             if type(item) is not str or len(item) > 16384 or "\0" in item:
@@ -56,6 +62,6 @@ def freeze_entitlements(value: object) -> FrozenEntitlements:
     )
 
 
-def native_entitlements(entries: FrozenEntitlements) -> dict[str, bool | str | list[str]]:
+def native_entitlements(entries: FrozenEntitlements) -> dict[str, bool | int | str | list[str]]:
     """Render arrays as native JSON lists without exposing mutable canonical values."""
     return {key: list(value) if type(value) is tuple else value for key, value in entries}

@@ -2624,6 +2624,12 @@ applications:
         code_signature:
           signing_id: com.apple.ssh
           team_id: null
+          # Apple OpenSSH Entitlements/ssh.entitlements, independently matched
+          # against the fixed installed vendor binary. Native integer export
+          # remains outside the current generation profile until reviewed.
+          entitlements:
+            keychain-access-groups: [com.apple.ssh.passphrases]
+            com.apple.private.amfi.version-restriction: 1
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2645,6 +2651,9 @@ applications:
         code_signature:
           signing_id: com.apple.sshd-keygen-wrapper
           team_id: null
+          entitlements:
+            com.apple.keystore.class.wku: true
+            com.apple.private.security.storage.ssh: true
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2665,6 +2674,9 @@ applications:
         code_signature:
           signing_id: com.apple.sshd
           team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2685,6 +2697,10 @@ applications:
         code_signature:
           signing_id: com.apple.sshd-session
           team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
+            com.apple.private.xpc.launchd.reboot-pivot-root: true
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2705,6 +2721,10 @@ applications:
         code_signature:
           signing_id: com.apple.sshd-auth
           team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
+            com.apple.private.xpc.launchd.reboot-pivot-root: true
         deployment:
           kind: catalog
           release_policy: host_build

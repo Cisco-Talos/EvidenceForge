@@ -1382,3 +1382,79 @@ This closes the bounded fresh-terminal producer milestone, not the global all-pr
 No new ULF GUI-launch layout,
 generic app helper tree, existing-app restoration, SSH PTY command contract or script-child
 expansion is claimed by this increment. No additional private evidence is currently required.
+
+## October 31, revision 365: whole-SSH measurement and bounded reference preparation
+
+The user authorized the next SSH milestone after paired terminal startup. A small invented
+receiver workload independently expects three forks and five image activations. All three
+forks publish; no exec currently publishes. The wrapper is still an aggregate initial start,
+and four subsequent helper/shell execs need exact native FD inventories. Before the metadata
+changes, three of those execs first failed on unknown entitlements and one on descriptors.
+Afterward all four fail precisely on unknown descriptors. No denominator was narrowed and the
+whole session still rejects complete mode. One pre-auth helper's exit outcome also stays
+unknown rather than becoming an assumed successful result.
+
+A separate public synthetic Mac-client-to-Linux workload has four of five required in-window
+execs and no aggregate births. Its SSH client signature needs an integer entitlement in addition
+to a string array. Apple's [public SSH entitlement definition](https://github.com/apple-oss-distributions/OpenSSH/blob/main/Entitlements/ssh.entitlements)
+supplies the template. A read-only static code comparison against the fixed Apple SSH binary
+matched exactly, returning only the template label. Equivalent fixed comparisons matched the
+public [daemon](https://github.com/apple-oss-distributions/OpenSSH/blob/main/Entitlements/sshd.entitlements),
+[session worker](https://github.com/apple-oss-distributions/OpenSSH/blob/main/Entitlements/sshd-session.entitlements),
+[authentication worker](https://github.com/apple-oss-distributions/OpenSSH/blob/main/Entitlements/sshd-auth.entitlements)
+and [wrapper](https://github.com/apple-oss-distributions/OpenSSH/blob/main/Entitlements/sshd-keygen-wrapper.entitlements)
+templates. These checks read vendor code metadata, not captures or logs, and started no SSH
+connection, collector, app or probe. No observed code hash or private value was exported.
+
+Canonical signing values now retain exact signed 64-bit integers, with a separate checkpoint
+tag and exact-type equality/hash semantics: integer 1 and Boolean true cannot become the same
+signature, even inside a mixed object with an identical supplied cdhash. Older tags/bytes and
+old source restrictions remain intact. v11 decoding supports the type independently; the current
+generation profile does not enable integer export until a native sample establishes its wire
+shape. Verified static SSH/helper templates now live in the application catalog. A separate
+explicit source-policy capability allows invented tests to prove admission/rejection and sink
+recovery without turning on that capability in the production profile.
+
+The broad SSH regression exposed a revision-364 parent-readiness bug: an already published
+SSH shell could be selected before its session started. Early dependency selection is now
+restricted to an active local interactive GUI session. SSH again requires a genuinely live
+shell; the existing no-mutation negative regression and paired terminal readiness cases pass.
+
+The new `scripts/macos_ssh_startup_reference.py` prepares a human-only, non-PTY loopback kit,
+reusing existing private-file/provenance, native schema, stream pump and collector-guard code.
+It keeps ambient fork/exec/exit rows only in bounded memory. A random controlled remote marker
+must link through exact exec/fork identities all the way to a launchd-owned per-connection root;
+fork-only intermediate children are supported. Only that root's descendants, including the
+pre-auth sibling, can be retained. Reachability never starts from launchd itself. A separately
+marked client exec must match the private PID control. No PID-only or path-prefix connection
+join is accepted. Only proved records are saved after code/provenance revalidation and collector
+cleanup. Reports contain fixed labels, including cross-stage pipe equivalence classes, parent/
+responsibility/audit/credential relations, public signer templates, runtime flags and CPU slice.
+
+The client uses the existing Remote Login service at 127.0.0.1, disables configuration hooks,
+forwarding, proxies, multiplexing, agents and public-key authentication, and retains host-key
+verification with a kit-local known_hosts file. The human authenticates privately in a second
+terminal window and pastes one marker command. Standard descriptors remain those of that
+window. The collector connection window is 140 seconds and the independent guard stops by
+180 seconds or parent cancellation. No SSH/privacy/service setting changes are part of this
+experiment. No private native command, collector or existing kit was run or read by the agent.
+See the [complete instructions](../design/macos-workstation-feasibility/ssh-startup-reference/PRIVATE-RUN.md).
+
+Validation: all 799 selected SSH/signature/native-contract/network-identity/catalog/deployment/
+terminal tests pass (84 extended exclusions). The four selected extended identity/security/
+fresh-process checks pass, as do all eight paired-terminal/Finder/default-complete public CLI
+and checkpoint/resume contracts. All 883 existing private-reference checks pass. The new kit's
+final 36 invented-input cases pass, including successful/failed collector cleanup, interrupted
+capture, schema/argument canary redaction, fork-only intermediates, pre-auth sibling retention,
+unrelated-connection exclusion, exact token/birth/image/nonce controls, integer-versus-Boolean
+templates and fixed exit dispositions. Marker and guarded collector source pass strict
+syntax-only C compilation; no compiled probe was executed. Whole Ruff, formatting, whitespace
+and behavior-manifest checks pass. Revision-365 surface:
+`536d3a4da1be86aa543b9c5c11e418ebb14ef1af063f0766cb86a2f2c9acf2a7`.
+
+Final prepared code-only kit: `/private/tmp/eforge-ssh-startup-kit-1a39x1ww`. No setup or
+collection has been run. Do not inspect this directory after human handoff, even to check
+whether result files exist. The earlier preparation-only copy is superseded. The next required
+human action is the documented single private non-PTY loopback run, then sharing only its fixed
+JSON. Integer native export and receiver startup remain explicitly gated until that review;
+the global all-process backlog is not marked complete.

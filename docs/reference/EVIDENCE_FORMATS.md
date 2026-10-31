@@ -735,6 +735,13 @@ installed facts reject before the first fork. Existing shells reuse their identi
 window creation/restoration, other app trees and unexpanded script children remain outside this
 bounded startup contract. No new Unified Log app-launch messages are inferred.
 
+The independent v11 decoder also preserves exact signed 64-bit integer entitlement values.
+Canonical signatures distinguish integer 1 from Boolean true, including equality and checkpoint
+encoding. This decoder capability does not qualify generation: the current frozen source policy
+still excludes integers pending a bounded native reference. Apple SSH's public signing template
+contains such an integer. Its client exec remains explicitly gated; receiver helper execs still
+need descriptor qualification despite now having verified static entitlement templates.
+
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
 operators and substitutions require a separate execution plan, and effect-bearing launches

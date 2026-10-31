@@ -338,7 +338,11 @@ def prepared_macos_es_process_publication(
             entitlements = binary.code_signature.entitlements
             policy = source.profile.exec_entitlements
             if entitlements != "absent" and not (
-                policy == "absent_or_bounded_object"
+                policy == "absent_or_bounded_integer_object"
+                or (
+                    policy == "absent_or_bounded_object"
+                    and all(type(value) is not int for _, value in entitlements)
+                )
                 or (
                     bool(entitlements)
                     and (
