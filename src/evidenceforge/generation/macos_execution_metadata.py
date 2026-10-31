@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -525,6 +525,36 @@ class MacosExecutionMetadataProducer:
             raise StateError("Mac exec producer requires its exact installed image placement")
         if observe_descriptors and table is None:
             raise StateError("Mac exec producer requires known inherited descriptors")
+        credentials = None
+        if self.profile.login_setuid_execution == "installed_owner" and image == "/usr/bin/login":
+            before = process.credentials
+            if (
+                type(binary) is not BinaryReleaseIdentity
+                or binary.key.product_id != "apple-macos"
+                or binary.key.artifact_name != "login"
+                or before is None
+                or before.real_uid == 0
+                or before.effective_uid != before.real_uid
+                or before.effective_gid != before.real_gid
+                or before.audit_uid != before.real_uid
+                or before.audit_session_id is None
+            ):
+                raise StateError(
+                    "Mac login setuid exec requires its exact authenticated user input"
+                )
+            installed = self._filesystem.observe_image(
+                process.hostname, image, process.principal, binary=binary, observed_at=at
+            )
+            if (
+                installed.installation.scope != "machine"
+                or installed.metadata.mode != 0o104555
+                or installed.metadata.uid != 0
+                or installed.metadata.gid != 0
+            ):
+                raise StateError(
+                    "Mac login setuid exec requires its provisioned root-owned 04555 file"
+                )
+            credentials = replace(before, effective_uid=installed.metadata.uid)
         descriptors = (
             MacosExecDescriptorObservation.from_modeled_table(table.after_exec(at))
             if observe_descriptors and table is not None
@@ -533,6 +563,7 @@ class MacosExecutionMetadataProducer:
         after = builder.execute_process(
             process,
             image=image,
+            credentials=credentials,
             command_line=shlex.join(arguments),
             executed_at=at,
             arguments=arguments,

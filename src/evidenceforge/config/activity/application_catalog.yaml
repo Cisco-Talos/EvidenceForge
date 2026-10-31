@@ -2957,6 +2957,7 @@ applications:
     platforms:
       macos:
         singleton_per_session: true
+        available_from: 2026-10-15
         image_path: /Applications/iTerm.app/Contents/MacOS/iTerm2
         executable_format: mach_o
         # Verified vendor-signed main image; helper identities remain independent.
@@ -2978,8 +2979,9 @@ applications:
             com.apple.security.personal-information.photos-library: true
             keychain-access-groups: [H7V7XYVQ7D.com.googlecode.iterm2]
         deployment:
-          kind: catalog
-          release_policy: unspecified
+          kind: managed
+          version: 3.7.6
+          build: 3.7.6
           scope: machine
           product_id: iterm2
           architectures:
@@ -2997,6 +2999,57 @@ applications:
     - default
     system_types:
     - workstation
+  # Independently signed helpers are placements of the same vendor release.
+  # The support cache is explicitly pre-existing; no in-window copy is inferred.
+  - id: macos-iterm2-server
+    display_name: iTerm2 session server
+    installed_with: macos-iterm2
+    platforms:
+      macos:
+        available_from: 2026-10-15
+        image_path: /Users/{username}/Library/Application Support/iTerm2/iTermServer-3.7.6
+        executable_format: mach_o
+        code_signature:
+          signing_id: iTermServer
+          team_id: H7V7XYVQ7D
+          entitlements: {}
+        deployment:
+          kind: managed
+          product_id: iterm2
+          version: 3.7.6
+          build: 3.7.6
+          scope: user
+          architectures: [arm64]
+        command_templates:
+        - "'/Users/{username}/Library/Application Support/iTerm2/iTermServer-3.7.6'"
+    categories: [terminal_helper]
+    personas: []
+    system_types: [workstation]
+  - id: macos-iterm2-shell-launcher
+    display_name: iTerm2 shell launcher
+    installed_with: macos-iterm2
+    platforms:
+      macos:
+        available_from: 2026-10-15
+        image_path: /Applications/iTerm.app/Contents/MacOS/ShellLauncher
+        executable_format: mach_o
+        code_signature:
+          signing_id: ShellLauncher
+          team_id: H7V7XYVQ7D
+          entitlements:
+            com.apple.application-identifier: H7V7XYVQ7D.
+        deployment:
+          kind: managed
+          product_id: iterm2
+          version: 3.7.6
+          build: 3.7.6
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - /Applications/iTerm.app/Contents/MacOS/ShellLauncher
+    categories: [terminal_helper]
+    personas: []
+    system_types: [workstation]
   - id: macos-zsh
     display_name: zsh
     platforms:

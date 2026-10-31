@@ -30,6 +30,7 @@ from evidenceforge.config.schemas import (
     ScheduledTaskEntry,
     SystemdScheduleEntry,
     SystemServiceEntry,
+    validate_application_installation_dependencies,
 )
 from evidenceforge.events.content_identity import (
     ApplicationProfileIdentity,
@@ -213,6 +214,7 @@ def _deployment_application_entries(
             for persona in raw_entry.get("personas", [])
         }
         configured = tuple(ApplicationEntry.model_validate(raw_entry) for raw_entry in raw_entries)
+    validate_application_installation_dependencies(configured)
     enabled = tuple(
         sorted(
             (
@@ -853,6 +855,7 @@ def compile_deployment_registry(
     applications, known_personas, application_selection_ordinals = _deployment_application_entries(
         application_entries
     )
+    applications_by_id = {entry.id.casefold(): entry for entry in applications}
     scenario_date = scenario.time_window.start.astimezone(UTC).date()
     compiled_application_descriptors: list[CompiledApplicationDescriptor] = []
     application_descriptor_text_bytes = 0
@@ -1250,24 +1253,43 @@ def compile_deployment_registry(
 
         for application in applications:
             platform_config = application.platforms.get(platform)
+            selection_application = (
+                applications_by_id[application.installed_with.casefold()]
+                if application.installed_with is not None
+                else application
+            )
+            selection_platform = selection_application.platforms.get(platform)
             if (
                 platform_config is None
                 or platform_config.deployment is None
                 or not _platform_release_available(platform_config, scenario_date)
+                or selection_platform is None
+                or selection_platform.deployment is None
+                or not _platform_release_available(selection_platform, scenario_date)
             ):
                 continue
             if application.system_types is not None and system.type not in application.system_types:
+                continue
+            if (
+                selection_application.system_types is not None
+                and system.type not in selection_application.system_types
+            ):
                 continue
             selected_architecture = _selected_application_architecture(
                 platform_config,
                 architecture,
             )
-            if selected_architecture is None:
+            if (
+                selected_architecture is None
+                or _selected_application_architecture(selection_platform, architecture) is None
+            ):
                 continue
             if application_replacement is not None:
-                if application.id.casefold() not in application_replacement:
+                if selection_application.id.casefold() not in application_replacement:
                     continue
-            elif not _prevalence_selects(system.hostname, application, platform_config):
+            elif not _prevalence_selects(
+                system.hostname, selection_application, selection_platform
+            ):
                 continue
 
             deployment = platform_config.deployment
@@ -1289,11 +1311,11 @@ def compile_deployment_registry(
             eligible_users = tuple(
                 user
                 for user in users_by_host.get(system.hostname.casefold(), ())
-                if _persona_allows_application(user, application, known_personas)
-                and application.id.casefold()
+                if _persona_allows_application(user, selection_application, known_personas)
+                and selection_application.id.casefold()
                 in user_replacements.get(
                     user.username.casefold(),
-                    {application.id.casefold()},
+                    {selection_application.id.casefold()},
                 )
             )
             if scope == "user" and not eligible_users:

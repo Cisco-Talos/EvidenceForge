@@ -237,7 +237,7 @@ class MacosProcessAuditBinding:
 
 @dataclass(frozen=True, slots=True)
 class MacosProcessPrivilegeDrop:
-    """One permanent authenticated SSH child credential transition, without exec."""
+    """One permanent authenticated SSH or setuid-login child drop, without exec."""
 
     origin: MacosAuditSession
     before: PosixProcessCredentials
@@ -270,8 +270,14 @@ class MacosProcessPrivilegeDrop:
             )
         ):
             raise ValueError("SSH privilege drop requires explicit principals and integrity")
-        if self.before.real_uid != 0 or self.before.effective_uid != 0:
-            raise ValueError("SSH privilege drop requires a privileged child")
+        if self.before.real_uid not in (0, self.after.real_uid) or self.before.effective_uid != 0:
+            raise ValueError("Privilege drop requires a root or setuid-login child")
+        if self.before.real_uid != 0 and (
+            self.before.real_gid != self.after.real_gid
+            or self.before.effective_gid != self.after.effective_gid
+            or self.before_principal != self.after_principal
+        ):
+            raise ValueError("Login child drop must preserve its real user, groups and principal")
         if (
             self.after.real_uid == 0
             or self.after.real_uid != self.after.effective_uid

@@ -15,6 +15,8 @@ gui_audit_origin: authenticated_local_account
 # its login/shell/command descendants. The app's own startup and entitlement
 # qualification remain separately gated. Old profiles stay unknown.
 terminal_responsibility: terminal_application
+# The file owner/mode is consumed from canonical installed filesystem facts.
+login_setuid_execution: installed_owner
 # Human-reviewed regular Finder test-app relationship, not every GUI/helper class.
 # This selects parent/audit/responsibility only: no inferred exec environment,
 # descriptor backing, controlling terminal, POSIX session creation or native fork.
@@ -147,6 +149,19 @@ code_validation:
     is_platform_binary: true
     validation_category: 1
     cpu_subtype: -2147483646
+  # Reviewed iTerm2 3.7.6 execution properties remain distinct from Apple images.
+  - product_id: iterm2
+    artifact_names: [iTerm2]
+    codesigning_flags: 0x22015311
+    is_platform_binary: false
+    validation_category: 6 # Developer ID
+    cpu_subtype: 0
+  - product_id: iterm2
+    artifact_names: [iTermServer-3.7.6, ShellLauncher]
+    codesigning_flags: 0x22011311
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
   # This invented ad-hoc app is a selected model, not an inventory claim about
   # third-party applications. XNU cs_blobs.h defines SIGNED|ADHOC|VALID and NONE.
   - product_id: eforge-reference

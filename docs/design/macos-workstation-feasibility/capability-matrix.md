@@ -30,6 +30,12 @@ inventory also differs. V11 and canonical signing now preserve scalar-string and
 entitlements, with a separate verified vendor main-image template. Shared startup implementation
 can proceed with explicit app-specific stages; the comparison does not itself enable that producer.
 
+Revision 363 supplies independently signed iTerm2 3.7.6 helper deployments, explicit runtime
+policies, post-fork session/TTY allocation, exact installed-file login setuid execution and a
+separate authenticated login-child privilege drop. These shared canonical prerequisites are
+tested independently; the public aggregate startup path remains gated until its native phase
+coordinator, descriptors and complete-census acceptance are integrated.
+
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
 output selection. The catalog can hold multiple profiles; historical wire decoders remain

@@ -9,7 +9,7 @@ from typing import Protocol
 
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
-from evidenceforge.events.responsibility import ProcessResponsibility
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 
 
 class _ProcessTransitionOccurrence(Protocol):
@@ -19,6 +19,30 @@ class _ProcessTransitionOccurrence(Protocol):
     src_host: object | None
     process: object | None
     lifecycle: object | None
+
+
+def macos_gui_child_responsibility_matches(parent: ProcessIdentity, child: ProcessIdentity) -> bool:
+    """Recognize an explicitly requested GUI app owner for its new child.
+
+    This does not infer ownership at generic forks. The State caller must select
+    the relationship, and the exact live app lifetime remains its authority.
+    """
+    return (
+        parent.responsibility == ProcessResponsibility(None)
+        and parent.execution_ordinal > 0
+        and parent.credentials is not None
+        and parent.credentials.real_uid != 0
+        and parent.credentials.audit_uid == parent.credentials.real_uid
+        and ".app/Contents/MacOS/" in parent.image
+        and parent.hostname == child.hostname
+        and parent.logon_id == child.logon_id
+        and child.responsibility
+        == ProcessResponsibility(
+            ResponsibleProcessReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+        )
+    )
 
 
 def _validate_transition_time(event: _ProcessTransitionOccurrence) -> None:
@@ -232,7 +256,7 @@ def process_credential_identities(
             raise ValueError("Process audit adoption must preserve privileged POSIX credentials")
     elif event.event_type == "process_privilege_drop":
         if (
-            old.real_uid != 0
+            old.real_uid not in (0, new.real_uid)
             or old.effective_uid != 0
             or new.real_uid == 0
             or new.real_uid != new.audit_uid
@@ -243,6 +267,15 @@ def process_credential_identities(
             or new.audit_uid is None
             or new.audit_session_id is None
             or event.timestamp <= before.started_at
+            or (
+                old.real_uid != 0
+                and (
+                    old.origin != new.origin
+                    or old.real_gid != old.effective_gid
+                    or old.real_gid != new.real_gid
+                    or before.principal != after.principal
+                )
+            )
         ):
             raise ValueError("Process privilege drop must retain its authenticated audit origin")
     elif event.event_type == "process_service_drop":
@@ -328,7 +361,10 @@ def process_fork_identities(
         or child.exec_image != parent.exec_image
         or child.exec_script != parent.exec_script
         or child.executable_version != parent.executable_version
-        or child.responsibility != parent.responsibility
+        or (
+            child.responsibility != parent.responsibility
+            and not macos_gui_child_responsibility_matches(parent, child)
+        )
         or child.arguments != parent.arguments
         or (
             child.parentage is not None

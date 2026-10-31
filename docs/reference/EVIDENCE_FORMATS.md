@@ -710,11 +710,20 @@ its app lifetime as the owner of login/shell/command descendants; older or alrea
 ownership remains unknown. Apple Terminal and login have explicit catalog signer/entitlement
 templates from verified Apple-shipped metadata; those templates alone do not qualify their
 startup process transitions or descriptors. iTerm2 has a separately verified vendor main-image
-signing/entitlement template; its helper identities and startup still require their own qualification.
+signing/entitlement template and independently qualified helper templates; native startup
+integration remains separate from these installed facts.
 The installed-file owner supplies login's verified root-owned setuid mode 04555 only for its
 exact machine-installed Apple product/artifact/path. User copies and other images keep their
 own modeled permissions; older frozen policies keep their previous stat. File mode alone
 does not create a credential transition or enable native terminal startup.
+
+The bounded exec metadata producer can now consume that exact provisioned root-owned 04555
+login file to change effective UID while retaining real and audit identity. Its forked child
+has a separate authenticated privilege-drop occurrence before shell/helper execution. A
+post-fork `setsid` can allocate the session's controlling terminal through the same canonical
+device owner and rollback/checkpoint path. These primitives do not yet replace the aggregate
+public terminal startup. iTerm2 3.7.6 has separate main/server/ShellLauncher placements and
+runtime policies; its user support cache is explicitly pre-existing, with no inferred copy.
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
 operators and substitutions require a separate execution plan, and effect-bearing launches

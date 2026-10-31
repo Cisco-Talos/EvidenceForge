@@ -713,6 +713,17 @@ Mac audit-session origin is separate session metadata (`MacosAuditSession`), not
 
 Optional Mac catalog `code_signature` metadata compiles to immutable `MachOCodeSignature` on the existing binary release identity. Signing ID and optional team ID are distinct from bundle identity, publisher and runtime signing flags. Its synthetic CodeDirectory hash uses a separate release/architecture namespace from whole-file content hashes. Only the main executable receives its configured signer; helpers and unknown signatures remain absent. Packed binary registry rows preserve this metadata; rows without it retain their previous representation. Neither signing identity nor a modeled digest asserts trust or notarization. Optional `MachOImageIdentity` separately carries an explicit arm64 build UUID on the binary release. Its deterministic derivation is release-scoped and independent of host/path/seed; it is synthetic metadata, not a measured publisher binary. It is never inferred from a Mac filename, signing identifier or content digest. Deployment interning rejects conflicting UUIDs for one release, and packed rows and canonical network request identities preserve present metadata. Absent metadata retains existing encodings. Apple describes build UUIDs as architecture-specific image identifiers in [TN3178](https://developer.apple.com/documentation/technotes/tn3178-checking-for-and-resolving-build-uuid-problems). The catalog can explicitly select this native image profile with optional `executable_format: mach_o` on a typed arm64 Mac deployment. The compiler supplies the main image UUID once; helpers and unspecified formats remain absent. Signing alone is insufficient because signed scripts also exist. This does not register a native source or claim complete executable metadata.
 
+The paired terminal startup primitives reuse these canonical owners. Installed-file observation
+also resolves an exact exec input before it is loaded, allowing the qualified root-owned 04555
+login file to supply its effective-UID transition without altering real/audit origin. A local
+login child drops that privilege in its own authenticated cohort; it must match the live login
+parent, GUI session, responsibility, group/session and inherited credentials. SSH admission
+keeps its privileged receiver/audit-binding requirements. Explicit post-fork `setsid` can
+allocate a new session-owned TTY through the existing device/counter owner; rollback and
+checkpoints retain the association. iTerm2's independently signed helpers use the frozen
+3.7.6 release and parent application placement, with a pre-existing user support cache.
+These primitives do not yet replace the public aggregate terminal startup producer.
+
 Auth/session callers supply successful logon, failed logon, logoff, service
 logon, machine-account logon, anonymous logon, NTLM validation, or workstation
 lock/unlock intent. `LogonActionBundle`, `FailedLogonActionBundle`,

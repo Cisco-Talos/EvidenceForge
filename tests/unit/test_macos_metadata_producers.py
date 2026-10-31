@@ -146,7 +146,7 @@ def test_reviewed_terminal_runtime_metadata_is_scoped_to_exact_apple_artifacts(
     assert metadata.image.cpu_subtype == subtype
 
 
-def test_terminal_reference_does_not_supply_iterm_signing_or_runtime_policy(
+def test_iterm_uses_its_own_reviewed_runtime_policy(
     modeled: _Fixture,
 ) -> None:
     metadata = modeled.producer.deployed_launch(
@@ -157,7 +157,10 @@ def test_terminal_reference_does_not_supply_iterm_signing_or_runtime_policy(
         kind="user",
     )
     assert metadata.image is not None
-    assert metadata.image_security is None
+    assert metadata.image_security.codesigning_flags == 0x22015311
+    assert metadata.image_security.is_platform_binary is False
+    assert metadata.image_security.validation_category == 6
+    assert metadata.image.cpu_subtype == 0
 
 
 def test_terminal_allocation_and_descriptors_share_birth_rollback_and_exact_retry(
@@ -187,6 +190,54 @@ def test_terminal_allocation_and_descriptors_share_birth_rollback_and_exact_retr
     assert table.native_last_fd == 2
     assert len({item.object_id for item in table.bindings}) == 1
     assert MacosExecDescriptorObservation.from_modeled_table(table).last_fd == 2
+
+
+@pytest.mark.parametrize("allocated", [False, True], ids=["no-tty", "tty"])
+def test_post_fork_setsid_terminal_is_atomic_historical_and_checkpointed(
+    modeled: _Fixture, allocated: bool
+) -> None:
+    state = modeled.state
+    parent = _terminal(modeled)
+    state.materialize_process(parent)
+    builder = state.begin_action_cohort_materialization()
+    birth = modeled.producer.plan_fork(
+        builder, state, parent.identity, at=modeled.start + timedelta(seconds=2)
+    )
+    state.materialize_action_cohort(builder.seal())
+    before = birth.identity
+    at = modeled.start + timedelta(seconds=3)
+    digest = state.materialization_digest()
+    builder = state.begin_action_cohort_materialization()
+    after = builder.change_posix_job_control(
+        before,
+        operation="setsid",
+        changed_at=at,
+        macos_terminal=modeled.producer.profile.terminal if allocated else "absent",
+    )
+    plan = builder.seal()
+    with state.prepared_action_cohort_materialization(plan) as prepared:
+        prepared.certify_composite_commit(prepared.expected_result)
+        prepared.apply_provisional()
+        observed = state.known_macos_terminal(after.job_control.session, at)
+        assert observed != "absent" if allocated else observed == "absent"
+    assert state.materialization_digest() == digest
+    state.materialize_action_cohort(plan)
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    for owner in (state, restored):
+        assert (
+            owner.get_process_identity_at(before.hostname, before.pid, before.started_at) == before
+        )
+        assert owner.get_process_identity_at(before.hostname, before.pid, at) == after
+        observed = owner.known_macos_terminal(after.job_control.session, at)
+        if allocated:
+            assert observed.native_path == "/dev/ttys001"
+            assert observed.metadata.uid == 501 and observed.metadata.gid == 20
+            assert observed.session.started_at == at
+        else:
+            assert observed == "absent"
+        with pytest.raises(StateError, match="exact timed session"):
+            owner.known_macos_terminal(after.job_control.session, before.started_at)
 
 
 def test_staged_terminals_allocate_distinct_slots_and_reuse_only_after_canonical_watermark(

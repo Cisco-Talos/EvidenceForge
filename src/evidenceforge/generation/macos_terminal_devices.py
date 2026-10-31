@@ -39,7 +39,7 @@ def plan_macos_terminal(
     if (
         session is None
         or session.leader_object_id != identity.object_id
-        or session.started_at != identity.started_at
+        or session.started_at < identity.started_at
     ):
         raise StateError("Mac terminal intent requires its exact new session leader")
     if type(intent) is str and intent == "absent":

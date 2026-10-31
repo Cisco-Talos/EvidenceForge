@@ -68,6 +68,12 @@ Application entry fields:
 - Required: `id`, `display_name`, `platforms`, `categories`, `personas`.
 - Optional selection fields: `system_types`, positive `selection_weight`, `compatibility_group`,
   `compatibility_option`, and `singleton_per_session` (optional per-platform override).
+- `installed_with: <application-id>` models an independently signed helper installed with
+  one independent catalog app. It follows that app's host selection/prevalence and user
+  eligibility/overrides while retaining its own path, scope, release and signer. Owners must
+  exist and support the helper's platforms; nested dependencies and cycles are rejected.
+  Use a helper category rather than a user activity category. For iTerm2, this includes an
+  explicitly pre-existing user support cache; it does not imply an in-window file copy.
 - Each new platform requires `image_path` plus a typed `deployment`, and may define `pe_metadata`,
   `command_templates`, scoped `command_parameter_pools`, `children`, and `loaded_modules`.
 - Mac main executables may additionally define `code_signature: {signing_id: test.example.editor,

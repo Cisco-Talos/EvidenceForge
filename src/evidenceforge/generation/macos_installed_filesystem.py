@@ -254,23 +254,45 @@ class MacosInstalledFilesystem:
             raise StateError(
                 "Installed filesystem observation requires its exact loaded owner and time"
             )
-        installation = deployments.installation_for_image(
-            process.hostname, process.image, "macos", principal=process.principal
+        binary = self.deployed_binary(process.hostname, process.image, process.principal)
+        if binary is None or binary.content_id != process.executable_version.content_id:
+            raise StateError("Installed filesystem observation lost its exact loaded release")
+        return self.observe_image(
+            process.hostname,
+            process.image,
+            process.principal,
+            binary=binary,
+            observed_at=observed_at,
         )
-        binary = deployments.resolve_binary(
-            process.hostname, process.image, "macos", principal=process.principal
+
+    def observe_image(
+        self,
+        hostname: str,
+        path: str,
+        principal: str,
+        *,
+        binary: BinaryReleaseIdentity,
+        observed_at: datetime,
+    ) -> MacosInstalledFileObservation:
+        """Observe an exact installed exec input before it becomes a loaded image.
+
+        This uses the same provisioned object as loaded-image observations. It
+        allocates nothing and cannot borrow a reused path or another user's file.
+        """
+        installation = self._deployments.installation_for_image(
+            hostname, path, "macos", principal=principal
         )
         if (
-            installation is None
-            or binary is None
-            or binary.content_id != process.executable_version.content_id
+            type(binary) is not BinaryReleaseIdentity
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+            or self.deployed_binary(hostname, path, principal) != binary
+            or installation is None
         ):
-            raise StateError("Installed filesystem observation lost its exact loaded release")
+            raise StateError("Installed filesystem input requires its exact release and placement")
         record = self._files.get(
-            (installation.installation_id, canonical_native_path(process.image, "macos"))
+            (installation.installation_id, canonical_native_path(path, "macos"))
         )
         if record is None or not record[0].valid_from <= observed_at < record[0].valid_until:
             raise StateError("Installed filesystem has no provisioned file at the observation time")
-        return MacosInstalledFileObservation(
-            installation, binary, process.image, observed_at, record[1]
-        )
+        return MacosInstalledFileObservation(installation, binary, path, observed_at, record[1])

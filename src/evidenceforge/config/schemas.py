@@ -922,6 +922,12 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     compatibility_group: str | None = None
     compatibility_option: str | None = None
     singleton_per_session: bool = False
+    installed_with: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        description="Helper installed with one independent application; inherits its placement eligibility",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1042,12 +1048,39 @@ class ApplicationEntry(BaseModel, extra="forbid"):
         return self
 
 
+def validate_application_installation_dependencies(
+    entries: list[ApplicationEntry] | tuple[ApplicationEntry, ...],
+) -> None:
+    """Require helpers to name a single independent, platform-compatible owner."""
+    by_id = {entry.id.casefold(): entry for entry in entries}
+    for entry in entries:
+        if entry.installed_with is None:
+            continue
+        owner = by_id.get(entry.installed_with.casefold())
+        if (
+            owner is None
+            or owner is entry
+            or owner.installed_with is not None
+            or not set(entry.platforms).issubset(owner.platforms)
+        ):
+            raise ValueError(
+                f"{entry.id}.installed_with requires one independent catalog application "
+                "supporting every helper platform"
+            )
+
+
 class ApplicationCatalogConfig(BaseModel, extra="forbid"):
     """Versioned application catalog normalized before legacy dict projection."""
 
     schema_version: Literal[2]
     default_deployment: LegacyStaticApplicationDeploymentEntry
     applications: list[ApplicationEntry]
+
+    @model_validator(mode="after")
+    def helpers_have_exact_owners(self) -> Self:
+        """Reject dangling, recursive or foreign-platform helper placements at load time."""
+        validate_application_installation_dependencies(self.applications)
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -4277,6 +4310,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         default=None,
         description="Explicit modeled terminal-app ownership of its login/shell/command chain",
     )
+    login_setuid_execution: Literal["installed_owner"] | None = None
     finder_launch_relationships: Literal["launchd_self"] | None = None
     finder_launch_execution: Literal["xpcproxy_app_exec"] | None = None
     finder_launch_images: tuple[str, ...] = Field(default=(), max_length=64)

@@ -2345,6 +2345,7 @@ class ActionCohortProcessActivityPatch:
     descriptor_table: MacosDescriptorTable | None = None
     native_pipe_allocation: tuple[int, int, str] | None = None
     terminal_after: MacosTerminalSession | None = None
+    terminal_policy_json: str | None = None
     policy_refusal: MacosPolicyRefusalAllocation | None = None
 
     def __post_init__(self) -> None:
@@ -3465,6 +3466,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         changed_at: datetime,
         group: PosixGroupIdentity | None = None,
         actor: ProcessIdentity | None = None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None = None,
     ) -> ProcessIdentity:
         """Stage one explicit POSIX membership transition in its own atomic cohort.
 
@@ -3503,18 +3505,33 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
         else:
             raise StateError("Unsupported POSIX membership operation")
+        if macos_terminal is not None and operation != "setsid":
+            raise StateError("Mac terminal allocation requires explicit session creation")
+        terminal_after = (
+            self._manager._plan_macos_terminal_session(
+                replace(normalized, job_control=after),
+                macos_terminal,
+                self._manager._pid_os.get(normalized.hostname, "unknown"),
+                staged=(),
+            )
+            if macos_terminal is not None
+            else MacosTerminalSession(after.session, 0)
+            if operation == "setsid"
+            and normalized.job_control is not None
+            and normalized.job_control.session in self._manager._macos_terminal_sessions
+            else None
+        )
         change = PosixJobControlChange(operation, normalized.job_control, after, at)
         patch = ActionCohortProcessActivityPatch(
             target=normalized,
             activity_time=at,
             job_control_change=change,
             job_control_actor=normalized if actor is None else actor,
-            terminal_after=(
-                MacosTerminalSession(after.session, 0)
-                if operation == "setsid"
-                and normalized.job_control is not None
-                and normalized.job_control.session in self._manager._macos_terminal_sessions
-                else None
+            terminal_after=terminal_after,
+            terminal_policy_json=(
+                macos_terminal.model_dump_json()
+                if type(macos_terminal) is MacosTerminalDeviceProfile
+                else macos_terminal
             ),
             _capability=_ActionCohortCapability(),
         )
@@ -3733,6 +3750,25 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self, target: ProcessIdentity, *, dropped_at: datetime
     ) -> ProcessIdentity:
         """Stage a permanent authenticated child privilege drop without replacing its image."""
+        return self._drop_macos_authenticated_child_privileges(
+            target, dropped_at=dropped_at, session_kind="ssh"
+        )
+
+    def drop_macos_login_child_privileges(
+        self, target: ProcessIdentity, *, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Drop a forked setuid login child's effective UID before its shell/helper exec."""
+        return self._drop_macos_authenticated_child_privileges(
+            target, dropped_at=dropped_at, session_kind="interactive"
+        )
+
+    def _drop_macos_authenticated_child_privileges(
+        self,
+        target: ProcessIdentity,
+        *,
+        dropped_at: datetime,
+        session_kind: Literal["ssh", "interactive"],
+    ) -> ProcessIdentity:
         self._require_open()
         if type(target) is not ProcessIdentity or type(dropped_at) is not datetime:
             raise StateError("SSH privilege drop requires exact process identity and time")
@@ -3742,6 +3778,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         session = self._manager.get_session(normalized.logon_id)
         if (
             session is None
+            or session.session_kind != session_kind
             or session.audit_origin is None
             or normalized.credentials is None
             or session.effective_uid is None
@@ -3792,6 +3829,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         execution_directory: MacosExecutionDirectory | None = None,
         lifecycle_group_id: str = "",
         concurrency_group_id: str = "",
+        responsibility: ProcessResponsibility | None = None,
     ) -> ProcessMaterializationPlan:
         """Stage a POSIX child inheriting the exact current parent image and session."""
 
@@ -3834,11 +3872,22 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 exec_script=parent.exec_script,
                 executable_version=parent.executable_version,
                 execution_directory=execution_directory,
-                responsibility=parent.responsibility,
+                responsibility=(
+                    responsibility if responsibility is not None else parent.responsibility
+                ),
                 lifecycle_group_id=lifecycle_group_id,
                 concurrency_group_id=concurrency_group_id,
             )
 
+            if responsibility is not None and responsibility != parent.responsibility:
+                from evidenceforge.events.process import macos_gui_child_responsibility_matches
+
+                if platform != "macos" or not macos_gui_child_responsibility_matches(
+                    parent, plan.identity
+                ):
+                    raise StateError(
+                        "Fork responsibility must inherit or name its exact GUI app parent"
+                    )
             descriptors = (
                 self._manager.process_descriptors_at(parent, event_time=timestamp)
                 if platform == "macos"
@@ -4936,6 +4985,11 @@ def _action_cohort_semantic_preimage(
                     patch.job_control_change,
                     patch.job_control_actor,
                     *((patch.terminal_after,) if patch.terminal_after is not None else ()),
+                    *(
+                        ("terminal-policy-v1", patch.terminal_policy_json)
+                        if patch.terminal_policy_json is not None
+                        else ()
+                    ),
                 )
                 if patch.job_control_change is not None
                 else (
@@ -11244,7 +11298,7 @@ class StateManager:
         )
         planned = plan_macos_terminal(identity, intent, ordinal=ordinal, occupied=occupied)
         if planned is not None and planned.ordinal:
-            metadata = planned.observe(identity.started_at).metadata
+            metadata = planned.observe(planned.session.started_at).metadata
             existing = (
                 tuple(
                     self._macos_terminal_sessions[session]
@@ -13032,6 +13086,7 @@ class StateManager:
                             "adopting_parent",
                             "native_pipe_allocation",
                             "terminal_after",
+                            "terminal_policy_json",
                         )
                     )
                 ):
@@ -13040,6 +13095,10 @@ class StateManager:
                     )
                 if identity.object_id in process_activity:
                     raise StateError("Action cohort repeats a process activity target")
+                if (
+                    patch.terminal_after is not None or patch.terminal_policy_json is not None
+                ) and patch.job_control_change is None:
+                    raise StateError("Mac terminal allocation requires its session transition")
                 if patch.activity_time < identity.started_at:
                     raise StateError("Action cohort process activity precedes process start")
                 self._validate_activity_before_owning_hard_deadline_locked(
@@ -14260,6 +14319,8 @@ class StateManager:
                 capture_membership(patch.job_control_change.after)
                 if patch.terminal_after is not None:
                     capture_mapping(self._macos_terminal_sessions, patch.terminal_after.session)
+                    capture_mapping(self._macos_terminal_slots, identity.hostname)
+                    capture_mapping(self._macos_terminal_ordinals, identity.hostname)
                 capture_indexed(self._running_processes, (identity.hostname, identity.pid))
             if patch.privilege_drop is not None or patch.service_drop is not None:
                 capture_indexed(self._running_processes, (identity.hostname, identity.pid))
@@ -16038,9 +16099,18 @@ class StateManager:
                 change = patch.job_control_change
                 self._commit_posix_membership(change.before, change.after, change.changed_at)
                 if patch.terminal_after is not None:
-                    self._macos_terminal_sessions[patch.terminal_after.session] = (
-                        patch.terminal_after
-                    )
+                    terminal = patch.terminal_after
+                    self._macos_terminal_sessions[terminal.session] = terminal
+                    if terminal.ordinal:
+                        self._macos_terminal_ordinals[identity.hostname] = terminal.ordinal
+                        self._macos_terminal_slots[identity.hostname] = tuple(
+                            sorted(
+                                (
+                                    *self._macos_terminal_slots.get(identity.hostname, ()),
+                                    (terminal.slot, terminal.session),
+                                )
+                            )
+                        )
                 process.job_control = change.after
                 process.job_control_history = (*process.job_control_history, change)
                 if patch.job_control_actor is not None:
@@ -16448,6 +16518,20 @@ class StateManager:
             and change.before.session in self._macos_terminal_sessions
             else None
         )
+        if patch.terminal_policy_json is not None:
+            if change.operation != "setsid":
+                raise StateError("Mac terminal allocation requires explicit session creation")
+            policy = (
+                "absent"
+                if patch.terminal_policy_json == "absent"
+                else MacosTerminalDeviceProfile.model_validate_json(patch.terminal_policy_json)
+            )
+            expected_terminal = self._plan_macos_terminal_session(
+                replace(target, job_control=change.after),
+                policy,
+                self._pid_os.get(target.hostname, "unknown"),
+                staged=(),
+            )
         if patch.terminal_after != expected_terminal:
             raise StateError("POSIX session change lost its canonical terminal detachment")
         if (
@@ -18278,7 +18362,7 @@ class StateManager:
     def _validate_macos_process_privilege_drop(
         self, target: ProcessIdentity, drop: MacosProcessPrivilegeDrop
     ) -> None:
-        """Bind one permanent drop to its authenticated post-fork receiver child."""
+        """Bind one permanent drop to its exact authenticated SSH or local-login child."""
         if type(target) is not ProcessIdentity or type(drop) is not MacosProcessPrivilegeDrop:
             raise StateError("SSH privilege drop requires exact immutable facts")
         drop.__post_init__()
@@ -18288,11 +18372,8 @@ class StateManager:
             self._pid_os.get(target.hostname) != "macos"
             or session is None
             or session.system != target.hostname
-            or session.session_kind != "ssh"
-            or session.auth_protocol != "ssh"
+            or session.session_kind not in {"ssh", "interactive"}
             or session.audit_origin != drop.origin
-            or session.transport_pid != target.parent_pid
-            or session.transport_pid == target.pid
             or session.effective_uid != drop.after.real_uid
             or session.effective_gid != drop.after.real_gid
             or session.username != drop.after_principal
@@ -18315,12 +18396,42 @@ class StateManager:
             or parent_at_fork is None
             or parent.ecar_object_id != parent_at_fork.object_id
             or parent.logon_id != target.logon_id
-            or parent.audit_binding is None
-            or parent.audit_binding.origin != drop.origin
-            or parent.audit_binding.bound_at > target.started_at
             or parent_at_fork.credentials != drop.before
         ):
-            raise StateError("SSH privilege drop requires the exact authenticated parent at fork")
+            raise StateError(
+                "Process privilege drop lost its authenticated Mac child authority at fork"
+            )
+        if session.session_kind == "ssh":
+            if (
+                session.auth_protocol != "ssh"
+                or session.transport_pid != target.parent_pid
+                or session.transport_pid == target.pid
+                or parent.audit_binding is None
+                or parent.audit_binding.origin != drop.origin
+                or parent.audit_binding.bound_at > target.started_at
+                or drop.before.real_uid != 0
+            ):
+                raise StateError("SSH privilege drop lost its authenticated Mac child authority")
+        elif (
+            session.logon_type != 2
+            or session.username != target.principal
+            or parent_at_fork.image != "/usr/bin/login"
+            or parent_at_fork.execution_ordinal < 1
+            or parent_at_fork.executable_version is None
+            or parent_at_fork.executable_version.identity_kind != "installed_release"
+            or parent_at_fork.responsibility is None
+            or parent_at_fork.responsibility.responsible is None
+            or parent_at_fork.responsibility != target.responsibility
+            or parent_at_fork.job_control != target.job_control
+            or drop.before.real_uid != session.effective_uid
+            or drop.before.effective_uid != 0
+            or drop.before.real_gid != session.effective_gid
+            or drop.before.effective_gid != session.effective_gid
+            or drop.before_principal != drop.after_principal
+        ):
+            raise StateError(
+                "Login privilege drop requires its authenticated setuid parent at fork"
+            )
         if (
             drop.dropped_at <= target.started_at
             or drop.dropped_at < (process.last_activity_time or process.start_time)

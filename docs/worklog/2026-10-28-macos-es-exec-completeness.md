@@ -1269,3 +1269,48 @@ Validation: all 773 selected codec/signature/runtime/source/reviewer/GUI/termina
 in 51.87 seconds, plus all four public Finder/filter/checkpoint/complete-rejection cases in
 40.29 seconds. Whole Ruff, formatting and whitespace checks pass. Revision-362 behavior
 surface is `c5b3d1affa56502143632a23f11ac80a4117bb08e79beffc2635875434ef7d15`.
+
+## October 31, revision 363: paired terminal startup prerequisites
+
+The shared startup implementation now has the required canonical installed and credential
+primitives. iTerm2's frozen release is explicitly 3.7.6 (available October 15, 2026), with
+independently signed main, user-support iTermServer and bundled ShellLauncher images. Their
+observed runtime flag sets and Developer ID validation category are separate from Apple's.
+The support cache is explicitly pre-existing, not a fabricated in-window byte copy. No
+generation code reads installed host binaries or native captures. Helper deployment uses
+optional `installed_with`: a single independent app owns host prevalence/selection and user
+eligibility/overrides; helpers retain their own scope/path/release/signer and helper category.
+Dangling, recursive and cross-platform dependencies fail before placement. Helpers are omitted
+when the owner is excluded; user exclusion removes the user cache without deleting the
+machine-wide app bundle. No Apple metadata is inherited into these helpers.
+
+Explicit post-fork `setsid` can allocate a terminal or declare no controlling terminal. Its
+canonical session/device/inode/slot/counters commit and roll back together; history and
+checkpoint reconstruction preserve the new session's start independently of process birth.
+An explicitly selected GUI-app responsibility at fork names that exact live app rather than
+silently leaving the child self-responsible. Other forks retain existing inheritance; a new
+unrelated responsible lifetime is rejected.
+
+The installed filesystem now supplies an allocation-free observation of an exact exec input
+through the same release/placement/stat owner used for loaded files. The qualified login
+producer consumes the exact machine-installed Apple login, root owner/group and 04555 mode;
+it changes effective UID to the installed owner while preserving real credentials/audit
+origin. Missing/wrong permissions or ownership reject before mutation. A separately owned
+local-login child drop verifies its authenticated GUI session, exact live login parent at
+fork, responsibility, job membership and inherited setuid credentials. It preserves process
+and execution identity. The existing SSH API still requires the SSH session, privileged
+receiver and audit binding; this does not generalize arbitrary setuid operations.
+
+This is prerequisite implementation, not a completed fresh-terminal acceptance claim. The
+public aggregate terminal/login/zsh bootstrap still rejects in-window complete collection.
+Next is the shared retained native phase coordinator with exec-owned descriptor setup, then
+public Terminal/iTerm2 command workloads, exact census reconciliation and recovery checks.
+The approved private review remains consumed; none of this work rereads private evidence or
+requires further collection. No native log or private observed value is committed.
+
+Validation: 420 focused state/credential/TTY/checkpoint/deployment/catalog/fork cases pass
+in 27.10 seconds. They include both terminal prefixes, wrong login file owner/mode/group,
+SSH-versus-local admission separation, parent/child authority, provisional rollback and exact
+history reconstruction. The four public Finder/filter/checkpoint/complete-rejection cases pass
+in 39.70 seconds. Whole Ruff, formatting and whitespace checks pass. Revision-363 surface:
+`574e5c2c0f6449b4b5a0843a2d8c72d190c7f05eaac1410a730cf44e30c501a8`.
