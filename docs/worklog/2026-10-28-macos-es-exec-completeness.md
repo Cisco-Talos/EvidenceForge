@@ -1147,3 +1147,19 @@ in 34.87 seconds, including legacy policy, exact selector isolation and actual e
 reconstruction. The four public CLI/filter/checkpoint/complete-rejection cases pass in 40.48
 seconds. Whole Ruff, formatting, whitespace and behavior checks pass. Revision-361 surface:
 `a9daf970835a30d72b2e7a3de021a63715715f2f31145cb603350b9dbb166fcd`.
+
+### Push authentication resolved
+
+The user identified `DavidJBianco` as the correct repository account. A token-free identity
+and permission check confirms that gh uses that account and it has push access. Git has a
+separate credential-helper chain, including Keychain; an ordinary push still selected the
+other account. A command-scoped helper override successfully pushed `626ad29f` and `f01b3622`:
+
+```sh
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' -c credential.username=DavidJBianco push origin codex/macos-workstation-support
+```
+
+This resets helpers only for that command and uses the already active gh account. No tokens
+were displayed, and no saved authentication settings, accounts, remotes or other projects
+were modified. Until account isolation is configured separately, use the same override after
+confirming that gh's active account is `DavidJBianco`; do not globally switch the other project.
