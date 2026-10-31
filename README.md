@@ -422,7 +422,7 @@ available independently of generation admission.
 
 The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
 and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
-profile. Exec needs explicit null or bounded Boolean/string/string-array entitlements and complete descriptors; exit needs an explicit
+profile. Exec needs explicit null or bounded Boolean/integer/string/string-array entitlements and complete descriptors; exit needs an explicit
 completed result. Qualified literal local-terminal and non-PTY SSH commands share canonical
 fork/exec production, including the exec of a shell receiving a quoted command argument.
 Fresh Apple Terminal and iTerm2 3.7.6 startup now share a native phase owner, including their

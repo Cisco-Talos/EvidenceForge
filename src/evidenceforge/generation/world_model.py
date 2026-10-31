@@ -18,7 +18,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
+from evidenceforge.generation.activity.generator import _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
 from evidenceforge.generation.activity.process_network import (
@@ -2119,12 +2119,6 @@ class WorldPlanner:
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
-        source_os = (
-            self.world_model.hosts[plan.source_system.hostname].os_category
-            if plan.source_system is not None
-            else "windows"
-        )
-        source_port = _ephemeral_port(rng, source_os)
         min_duration = max(
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
@@ -2153,7 +2147,9 @@ class WorldPlanner:
             time=logon_time,
             source_ip=plan.source_ip,
             source_system=plan.source_system,
-            source_port=source_port,
+            # This is automatic intent, not an authored exact port. The SSH
+            # bundle owns collision-aware allocation against canonical leases.
+            source_port=None,
             min_duration=min_duration,
             auth_method=auth_method,
             public_key_type=key_type if auth_method == "publickey" else "",

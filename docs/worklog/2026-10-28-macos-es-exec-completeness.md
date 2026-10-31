@@ -1489,3 +1489,67 @@ file, or pipe it to `pbcopy`. Neither starts a collector/SSH connection or opens
 The tracked instructions now make report recovery explicit. No fresh capture, lock removal,
 kit modification or further private access is needed. The agent inspected repository source
 only and did not read any handed-off kit, private report or local log.
+
+## October 31, revision 366: reviewed native SSH client and collision-aware transport
+
+The human explicitly supplied the safe `SHAREABLE-SSH-REPORT.json` from the completed
+non-PTY loopback kit. That one report was read; authorization did not extend to native
+records, provenance, setup, controlled metadata or any other file in the handed-off kit.
+Collection, lineage, cleanup, continuity and marker controls all pass, with v11 and no ring
+eviction. Every retained exec has an admitted native shape. The public SSH signing template
+matches its exact array/integer object. Client and four SSH helper snapshots establish Apple
+validation category 1, flags `0x26015b11` and arm64e/PTRAUTH ABI. The current source profile now
+admits exact integer values; frozen historical profiles retain their narrower capabilities.
+Code/security facts remain distinct from graph, credentials, arguments and descriptor gates.
+
+Complete public client-to-Linux workloads now pass through both Apple Terminal and iTerm2:
+every expected in-window fork/exec publishes, with no aggregate births. The client retains
+its verified literal arguments, standard TTY vnodes and typed signing object. Full and native-
+only output is byte-identical across different PYTHONHASHSEED values. This reference is a
+controlled re-exec in a previously established foreground group; it does not independently
+qualify a new shell `setpgid` policy. Existing canonical parent/session ownership stays intact.
+
+The longer checkpoint workload exposed an actual shared SSH transport bug: WorldPlanner
+chose a random port and supplied it as an exact requirement, bypassing the bundle's automatic
+collision handling. A baseline connection still held that tuple when a second authored
+connection selected it. WorldPlanner now delegates automatic intent with `source_port=None`;
+the SSH bundle allocates against canonical leases. An authored explicit port retains exact
+semantics. The regression starts overlapping sessions with repeated caller RNG state and
+requires distinct transport ports/UIDs. This owning-layer repair affects all OS variants and
+the behavior manifest records SSH transport, Zeek and Syslog impact as well as native/eCAR.
+
+The complete native client checkpoint/suspend/resume run now reproduces uninterrupted bytes,
+including integer signatures and in-window starts. The shared acceptance test correlates SSH
+endpoint flows with in-window Zeek closes before requiring termination: a background session
+can legitimately remain open after the collection cutoff, with neither a close-time Zeek row
+nor an endpoint termination in the window. At least two observed closed clients must terminate;
+the test does not fabricate post-window closes or exempt process starts from the census.
+
+The receiver is not qualified by client success. Its existing implementation lacks the
+launchd fork/xpcproxy prefix and additional fork-only children shown by the report. Wrapper
+argv disagrees with the old bare-path template; exact sibling order, audit adoption, job and
+responsibility ownership still need classification. Known receiver FD tables and `_sshd`
+authentication-helper exit zero are documented in the adjacent reference. Session helpers
+report exit 255 while the marker/client exit zero; their result must not be inferred from the
+command. Private shell startup descendants are not portable default catalog entries.
+
+A separately tested read-only offline reviewer is prepared at
+`/private/tmp/eforge-ssh-startup-kit-p8f430ou/private_ssh_review.py`. It verifies original code,
+binary, provenance and collection controls, then classifies only exact marker ancestry and
+authentication/closed fork-only siblings into fixed opaque lifetime aliases, public argv
+layouts, credential/audit/job/responsibility relations and exit labels. It excludes unrelated
+shell startup commands. It writes nothing and starts no subprocess, collector, app, probe or
+live installed-image query. All 19 invented-fixture tests pass, including canary redaction,
+read-only behavior and changed-provenance/control/code/native-linkage rejection. Explicit
+permission to run it against the existing completed kit has been requested and is pending.
+No new collection is needed; no private native records have been read or committed.
+
+Final client CLI/filter/checkpoint plus receiver complete-rejection checks: all five extended
+tests pass in 52.26 seconds. WorldPlanner, port retention, offline reviewer/reference and
+behavior-manifest checks: all 131 pass in 3.68 seconds. The broader routine SSH family suite
+passes all 440 selected tests in 41.02 seconds (220 extended exclusions). Whole Ruff,
+formatting and whitespace checks pass. The three existing SSH client/receiver/authored-close
+checkpoint regressions also pass in 73.90 seconds. Revision-366 surface:
+`064dbf9b845add3d0a3e2a69d889cbee0acc73a7584bc69d0b2f8644e1f8dc29`.
+The global all-process backlog remains open; receiver startup, PTY commands, broader app
+helpers and other unsupported producer families retain their independent obligations.

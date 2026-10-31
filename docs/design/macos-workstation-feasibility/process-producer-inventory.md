@@ -30,8 +30,8 @@ export against publication receipts. A complete bundle cannot be accepted after 
 | Parent-chain repair/implicit parents | `actions/process_support/parents.py` | Canonical starts are counted even when a producer suppresses a CREATE row as “pre-existing.” Only the actual start time decides window eligibility. |
 | System/service worker reuse or creation | `actions/process_support/system.py` | Reuse adds no start. New aggregate workers are unresolved and reject complete coverage. |
 | launchd jobs and persistence activation | `actions/macos_launch_item.py` and process/service composite | Registering/loading a job is not a process start. An actual job process is counted and currently lacks a qualified initial exec producer. |
-| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py` | Explicit forks/execs are counted independently. A small receiver startup has 3 native forks but 5 expected execs: the wrapper is still an aggregate birth, and helper/shell exec descriptors remain unknown. Revision 365 supplies verified static helper entitlements without inventing FD tables. A partial phase pass cannot satisfy the whole session census. |
-| Native SSH client | `activity/generator.py:_ensure_macos_ssh_client_process` | Shares the qualified local terminal/command owner. Its verified vendor signature includes a signed integer entitlement. Canonical values, checkpoints and decoder preserve that type; the current generation profile still gates its native export until a reference confirms the wire shape. |
+| SSH receiver fork/exec roles | `actions/macos_ssh_receiver.py` | Explicit forks/execs are counted independently. The current small receiver model has 3 native forks but 5 expected execs: the wrapper is still an aggregate birth, and helper/shell exec descriptors remain unknown. The reviewed reference also reveals xpcproxy and additional fork-only children missing from that simplified model. Revision 365 supplies verified static helper entitlements without inventing FD tables. A partial phase pass cannot satisfy the whole session census. |
+| Native SSH client | `activity/generator.py:_ensure_macos_ssh_client_process` | Shares the qualified local terminal/command owner. Revision 366 admits its reviewed v11 array/integer entitlement object and measured Apple runtime security/slice. Public complete client-to-Linux workloads through both terminals pass exact reconciliation and filtered-output equality. Receiver startup remains separately gated. |
 | Generic SSH receiver compatibility | `actions/ssh_session.py` | Mac receivers delegate to the Mac owner. Linux-only aggregate receiver code does not qualify a Mac helper. |
 | Persistent SMB client materialization | `actions/network_connection.py` | Existing client reuse adds no start. A newly materialized Mac client is counted; a generic aggregate client cannot silently pass complete mode. |
 | Generic network responder preparation | `activity/generator.py` network responder batches | Linux receiver branches remain Linux-specific. Any actual modeled Mac aggregate reached through compatibility paths is still counted. Mac SMB serving remains outside the supported capability set. |
@@ -64,7 +64,8 @@ not a supported extension path.
 | Filter/recovery regression | Finder and paired-terminal public CLI workloads pass complete reconciliation and nonempty checkpoint/resume. SSH receiver/helper workloads remain bounded partial diagnostics until their remaining metadata/startup contracts are qualified. |
 
 The source profile and native reference gates remain separate. Qualified Finder/terminal
-startup does not qualify other application/service activations, SSH helper tables, integer
-entitlement export, PTY helpers or Dock/Spotlight attribution. Unresolved starts remain in the
-denominator. The prepared human-only [SSH reference](ssh-startup-reference/PRIVATE-RUN.md)
-targets one whole non-PTY loopback connection. No new blind assessment panel is required.
+startup does not qualify other application/service activations, SSH helper tables, PTY helpers
+or Dock/Spotlight attribution. Unresolved starts remain in the denominator. The reviewed
+[non-PTY SSH reference](ssh-startup-reference/REFERENCE.md) closes integer export; further
+receiver relationship classification uses that existing capture with explicit permission.
+No new blind assessment panel is required.

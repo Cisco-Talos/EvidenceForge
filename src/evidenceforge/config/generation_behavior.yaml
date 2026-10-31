@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 365
+current_revision: 366
 history_start_revision: 1
-behavior_surface_sha256: 536d3a4da1be86aa543b9c5c11e418ebb14ef1af063f0766cb86a2f2c9acf2a7
+behavior_surface_sha256: 064dbf9b845add3d0a3e2a69d889cbee0acc73a7584bc69d0b2f8644e1f8dc29
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3497,3 +3497,17 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Adds verified Apple SSH signing templates, typed integer entitlement/checkpoint support and strict SSH parent readiness; current native generation retains integer-export and helper-descriptor gates.
+  - revision: 366
+    id: reviewed-native-ssh-client
+    impact: material
+    domains:
+      - executable-signing-identity
+      - native-source-admission
+      - macos-process-runtime
+      - ssh-transport-allocation
+    formats:
+      - macos_endpoint_security
+      - ecar
+      - zeek
+      - syslog
+    summary: Admits reviewed SSH integer entitlements/runtime metadata for complete outbound client ES coverage and delegates automatic SSH source-port selection to its bundle; receiver graph and descriptor gates remain independent.

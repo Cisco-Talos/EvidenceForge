@@ -18,7 +18,9 @@ from tests.support.macos_ssh import macos_ssh_scenario
 def test_default_native_completeness_rejects_unresolved_starts_or_removed_source(
     tmp_path: Path, scenarios_dir: Path, filter_native: bool
 ) -> None:
-    raw = macos_ssh_scenario(scenarios_dir).model_dump(mode="json", exclude_none=True)
+    raw = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(
+        mode="json", exclude_none=True
+    )
     raw.pop("macos_process_coverage")
     raw["time_window"]["duration"] = "15m"
     raw["output"]["logs"].append({"format": "macos_endpoint_security"})

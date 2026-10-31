@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from evidenceforge.utils.time import parse_duration
 from tests.support.macos_smb import macos_smb_scenario
 from tests.support.macos_ssh import macos_ssh_scenario
 from tests.support.output_equivalence import deterministic_bundle_files
@@ -99,6 +100,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     endpoint_forks: bool = False,
     finder: bool = False,
     terminal_id: str | None = None,
+    complete_ssh_client: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -123,6 +125,14 @@ def test_short_generation_checkpoint_suspension_and_resume(
             second_close = dict(scenario_data["storyline"][2])
             second_close.update(id="close-after-resume", time="+2h45m")
             scenario_data["storyline"].append(second_close)
+    if complete_ssh_client:
+        assert ssh_client and not macos_receiver
+        scenario_data["macos_process_coverage"] = "complete"
+        scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
+        scenario_data["baseline_activity"]["traffic_rates"] = {
+            "user_activity": 1,
+            "persona_connections": 1,
+        }
     if smb_server is not None:
         scenario_data = macos_smb_scenario(scenarios_dir, server_platform=smb_server).model_dump(
             mode="json", exclude_none=True
@@ -653,7 +663,40 @@ def test_short_generation_checkpoint_suspension_and_resume(
         }
         assert len(clients) >= 2
         terminated = {row["objectID"] for row in rows if row["action"] == "TERMINATE"}
-        assert clients.keys() <= terminated
+        # Baseline clients can outlive collection. Require termination only for
+        # their transports that close inside the window; no retrospective or
+        # post-window endpoint close is fabricated for the other clients.
+        conn_closes = {}
+        for name, content in resumed_files.items():
+            if not name.endswith("/conn.json"):
+                continue
+            for line in content.splitlines():
+                conn = json.loads(line)
+                if conn["id.resp_p"] != 22 or conn.get("duration") is None:
+                    continue
+                key = tuple(
+                    str(conn[field])
+                    for field in ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p")
+                )
+                ts = conn["ts"]
+                opened = datetime.fromisoformat(ts).timestamp() if type(ts) is str else ts
+                conn_closes[key] = max(conn_closes.get(key, 0), opened + conn["duration"])
+        client_closes = {}
+        for row in rows:
+            if row["object"] != "FLOW" or row.get("actorID") not in clients:
+                continue
+            props = row["properties"]
+            key = tuple(str(props[field]) for field in ("src_ip", "src_port", "dst_ip", "dst_port"))
+            if key in conn_closes:
+                client_closes[row["actorID"]] = conn_closes[key]
+        # Zeek emits these connection rows at close. A connection still open
+        # at collection end need not have a row or an endpoint termination.
+        cutoff = (
+            datetime.fromisoformat(scenario_data["time_window"]["start"])
+            + parse_duration(scenario_data["time_window"]["duration"])
+        ).timestamp()
+        eligible = {oid for oid, close in client_closes.items() if close < cutoff}
+        assert len(eligible) >= 2 and eligible <= terminated
     elif smb_server is not None:
         client_ecar = next(
             content

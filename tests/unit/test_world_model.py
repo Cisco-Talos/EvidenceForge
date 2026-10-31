@@ -836,6 +836,22 @@ def test_world_planner_bootstraps_ssh_session(
     assert connection.close_time < source_terminate_events[0].timestamp
     assert source_terminate_events[0].timestamp <= connection.close_time + timedelta(seconds=2)
 
+    # Repeated caller RNG state must not turn an automatic port candidate into
+    # an exact overlapping tuple. The existing transport remains open here.
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["DB-01"],
+        time=datetime(2024, 1, 15, 10, 16, 0, tzinfo=UTC),
+        rng=random.Random(9),
+        session_kind="ssh",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+        required_until=datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC),
+    )
+    assert second.session.logon_id != session.logon_id
+    assert second.session.source_port != session.source_port
+    assert second.network_uid != result.network_uid
+
     activity_generator.finalize_ssh_session_lifecycles(datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC))
 
     assert state_manager.get_session(session.logon_id) is None

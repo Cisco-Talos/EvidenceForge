@@ -114,11 +114,6 @@ code_validation:
       - ps
       - pwd
       - smd
-      - ssh
-      - sshd
-      - sshd-auth
-      - sshd-keygen-wrapper
-      - sshd-session
       - syspolicyd
       - sw_vers
       - tccd
@@ -140,6 +135,14 @@ code_validation:
     is_platform_binary: true
     validation_category: 1
     cpu_subtype: -2147483646 # ARM64E | PTRAUTH_ABI, distinct from generic app arm64
+  # Human-reviewed macOS 27 non-PTY loopback client and receiver exec snapshots.
+  # This qualifies runtime security/slice, not the unresolved receiver graph/FDs.
+  - product_id: apple-macos
+    artifact_names: [ssh, sshd, sshd-auth, sshd-keygen-wrapper, sshd-session]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
   # Human-reviewed clean Apple Terminal startup on macOS 27. These select only
   # the observed runtime security and slice; missing argv/FD/entitlement and
   # transition facts still prevent qualification of initial app/login starts.

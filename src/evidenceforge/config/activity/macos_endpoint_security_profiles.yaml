@@ -13,7 +13,8 @@ profiles:
     result_type: 0
     auth_result: 0
     clock_profile: macos27-workspace-entry-v1
-    # Paired Terminal/iTerm2 v11 value shapes; app keys stay separately qualified.
-    exec_entitlements: absent_or_bounded_object
+    # Reviewed non-PTY SSH client confirms exact integer values in v11 objects.
+    # Application keys/templates and descriptor inventories remain separate gates.
+    exec_entitlements: absent_or_bounded_integer_object
     # Reviewed v7 boot-parent export; launchd's own assigned ASID is distinct.
     boot_parent_token: default_unattributed_kernel

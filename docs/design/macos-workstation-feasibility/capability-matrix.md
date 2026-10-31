@@ -2,6 +2,15 @@
 
 ## Current generation admission (2026-10-31)
 
+Revision 366 qualifies complete outbound SSH-client ES coverage to a modeled Linux receiver
+from both terminal variants. The private fixed report establishes the public SSH integer
+entitlement shape and runtime flags/architecture. Exact integer types survive checkpoint
+recovery. Automatic SSH source ports now use the canonical bundle's collision-aware allocator;
+authored exact ports retain exact semantics. Native receiver startup remains independently
+gated on its full helper graph, arguments and descriptor production. The existing bounded
+capture can resolve its remaining relationship questions through an approved offline review;
+no further collection is currently required.
+
 Revision 364 qualifies bounded fresh Apple Terminal and iTerm2 3.7.6 startup through one
 retained native phase owner. Terminal produces three real forks and four execs; iTerm2
 produces four forks and six execs, including its server and same-PID ShellLauncher-to-zsh
