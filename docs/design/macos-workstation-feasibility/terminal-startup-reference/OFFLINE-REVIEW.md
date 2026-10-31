@@ -29,6 +29,13 @@ entitlements exactly match the independently verified Apple-shipped templates (`
 It exports neither pipe IDs nor entitlement keys/values and opens no installed binary. Missing
 or malformed inputs remain `NOT_OBSERVED`/`INCONCLUSIVE`; iTerm2 has no inferred vendor template.
 
+Review version 3 adds equivalent pipe-identity grouping for every pipe FD in fixed slots 0-15,
+so a different iTerm2 descriptor layout does not need another comparison just to identify
+shared pipes. Groups contain only labels such as `FD_3` and `FD_7`, never native identities.
+Duplicate/malformed slots fail; pipe slots outside that vocabulary remain inconclusive.
+The capture protocol and private-file scope are unchanged. A fresh paired kit can bundle this
+reader beside the capture helper; see `ITERM2-RUN.md` for the one-session collection/review flow.
+
 Only run it privately with agents closed, unless you explicitly authorize an agent to run
 this exact fixed-output reader against the original kit. Never share the original directory,
 native records, provenance, terminal contents or screenshots.

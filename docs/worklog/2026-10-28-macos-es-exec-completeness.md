@@ -1163,3 +1163,37 @@ This resets helpers only for that command and uses the already active gh account
 were displayed, and no saved authentication settings, accounts, remotes or other projects
 were modified. Until account isolation is configured separately, use the same override after
 confirming that gh's active account is `DavidJBianco`; do not globally switch the other project.
+
+## Paired iTerm2 reference before shared startup implementation
+
+The user requested collecting the equivalent iTerm2 evidence now, then implementing both
+terminals together with shared code where justified. This replaces the proposed sequence of
+finishing Apple Terminal first. Existing Apple Terminal references remain sufficient; no new
+Terminal capture or private-record read is proposed.
+
+The fresh code-only kit `/private/tmp/eforge-terminal-startup-kit-u0gu76nv` bundles the unchanged
+version-2 capture controller, version-3 offline detail reviewer and focused `ITERM2-RUN.md`.
+The human runs setup/capture/review privately with agents closed, controlling from Apple
+Terminal and launching a fresh iTerm2 ordinary login shell from Finder after readiness. Both
+fixed reports are requested together. No setup, collector, probe, app or private/native record
+read was run by the agent. All older used/unused kits remain untouched.
+
+Version 3 reports equivalence groups for pipe FDs in fixed slots 0-15 without native pipe IDs.
+This covers a different iTerm2 FD arrangement in the first review rather than assuming Apple's
+FD 4/5 layout. Duplicate/malformed facts fail; higher pipe slots stay inconclusive. It keeps
+unknown helper roles as OTHER without exporting their paths. Shared canonical fork/exec,
+audit, responsibility, job-control, descriptors and recovery should be reused where evidence
+agrees; app-specific helper stages and signing/launch inputs stay explicit.
+
+iTerm2's [own session-restoration documentation](https://iterm2.com/documentation-restoration.html)
+describes long-lived servers and reattachment. Preserve that feature during the test; use a
+fresh shell rather than a restored job, and do not force it into Terminal's observed topology.
+One marker-authenticated ancestry/responsibility chain is not proof of all sibling helpers or
+all restoration modes. Unrecognized roles/metadata may require later bounded qualification,
+but the equivalent startup collection can proceed now.
+
+All 61 invented-input capture/reviewer tests pass in 0.32 seconds, including both apps' full
+offline provenance/scope validation, a separate intervening helper, arbitrary pipe-slot groups,
+malformed/higher-slot bounds, canary non-disclosure and unchanged files/no native commands.
+Both prepared helpers' isolated help commands pass. Generation behavior remains revision 361;
+no engine, active generation policy, application catalog, release version or evidence gate changed.

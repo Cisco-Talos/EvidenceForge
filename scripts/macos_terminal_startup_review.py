@@ -113,6 +113,13 @@ class EntitlementLayout(capture.Model):
     nested_object_value_types: tuple[ValueType, ...] = ()
 
 
+class PipeTopology(capture.Model):
+    """Equivalence groups of fixed descriptor slots, without native pipe IDs."""
+
+    complete: Check
+    groups: tuple[tuple[Slot, ...], ...] = Field(default=(), max_length=16)
+
+
 class Credentials(capture.Model):
     real_uid: AccountWord
     effective_uid: AccountWord
@@ -182,12 +189,13 @@ class PhaseDetail(capture.Model):
     last_fd_slot: Slot | Literal["HIGHER", "INVALID"]
     last_fd_relative_to_inventory: Literal["SAME", "HIGHER", "LOWER", "INVALID"]
     pipe_fd_4_5: Literal["SAME", "DIFFERENT", "NOT_OBSERVED", "INCONCLUSIVE"]
+    pipes: PipeTopology
     entitlements: EntitlementLayout
     vendor_entitlements: Check = "INCONCLUSIVE"
 
 
 class ReviewReport(capture.Model):
-    review_version: Literal[2] = 2
+    review_version: Literal[3] = 3
     purpose: Literal["TERMINAL_STARTUP_DETAIL_REVIEW"] = "TERMINAL_STARTUP_DETAIL_REVIEW"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -409,6 +417,36 @@ def _pipe_pair(fds: list[dict]) -> str:
     return "SAME" if pair[0]["pipe"]["pipe_id"] == pair[1]["pipe"]["pipe_id"] else "DIFFERENT"
 
 
+def _pipe_topology(fds: list[dict]) -> PipeTopology:
+    """Compare all bounded pipe slots while keeping native identities in memory."""
+    groups: dict[int, list[int]] = {}
+    slots: set[int] = set()
+    for item in fds:
+        fd = item.get("fd")
+        if type(fd) is not int or fd < 0 or fd in slots:
+            return PipeTopology(complete="FAIL")
+        slots.add(fd)
+        if item.get("fdtype") != 6:
+            continue
+        pipe = item.get("pipe")
+        if (
+            type(pipe) is not dict
+            or type(pipe.get("pipe_id")) is not int
+            or not 0 <= pipe["pipe_id"] < 2**64
+        ):
+            return PipeTopology(complete="FAIL")
+        if fd >= 16:
+            return PipeTopology(complete="INCONCLUSIVE")
+        groups.setdefault(pipe["pipe_id"], []).append(fd)
+    return PipeTopology(
+        complete="PASS",
+        groups=tuple(
+            tuple(f"FD_{fd}" for fd in group)
+            for group in sorted(sorted(members) for members in groups.values())
+        ),
+    )
+
+
 def _vendor_entitlements(role: capture.Role, value: object) -> Check:
     expected = (
         APPLE_TERMINAL_VENDOR_ENTITLEMENTS
@@ -545,6 +583,7 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
                 if last > max(numbers)
                 else "LOWER",
                 pipe_fd_4_5=_pipe_pair(fds),
+                pipes=_pipe_topology(fds),
                 entitlements=entitlement_layout(
                     payload.get("entitlements"), present="entitlements" in payload
                 ),
@@ -697,6 +736,7 @@ def prepare(destination: Path | None = None) -> Path:
     for original, name in (
         (Path(__file__), "private_terminal_review.py"),
         (docs / "OFFLINE-REVIEW.md", "OFFLINE-REVIEW.md"),
+        (docs / "ITERM2-RUN.md", "ITERM2-RUN.md"),
     ):
         shutil.copyfile(original, root / name)
         (root / name).chmod(0o600)

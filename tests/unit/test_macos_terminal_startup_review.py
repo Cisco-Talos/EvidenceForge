@@ -178,6 +178,55 @@ def test_entitlement_depth_and_argument_bounds_are_explicit() -> None:
     assert review._argument(_CANARY, "/bin/zsh", _manifest()).kind == "OTHER"
 
 
+def test_iterm2_intermediary_helper_keeps_its_chain_without_exporting_its_private_path() -> None:
+    manifest = _manifest("iterm2")
+    rows = _chain(manifest)
+    app = rows[2]["event"]["exec"]["target"]
+    child = deepcopy(app)
+    child["audit_token"].update(pid=1250, pidversion=11250)
+    child["parent_audit_token"] = deepcopy(app["audit_token"])
+    child["ppid"] = child["original_ppid"] = app["audit_token"]["pid"]
+    fork = _record(11, "fork")
+    fork["process"], fork["event"]["fork"]["child"] = deepcopy(app), deepcopy(child)
+    helper = deepcopy(child)
+    helper["audit_token"]["pidversion"] += 1
+    helper["executable"]["path"] = f"/Users/{_CANARY}/invented-helper"
+    helper["executable"]["stat"]["st_ino"] = 8300
+    execution = deepcopy(rows[4])
+    execution["process"] = child
+    execution["event"]["exec"].update(
+        target=helper,
+        args=[helper["executable"]["path"]],
+        dyld_exec_path=helper["executable"]["path"],
+    )
+    rows[3]["process"] = deepcopy(helper)
+    # Preserve the existing child lifetime while changing its real fork parent/image.
+    for process in (
+        rows[3]["event"]["fork"]["child"],
+        rows[4]["process"],
+        rows[4]["event"]["exec"]["target"],
+    ):
+        process["parent_audit_token"] = deepcopy(helper["audit_token"])
+        process["ppid"] = process["original_ppid"] = 1250
+    for process in (rows[3]["event"]["fork"]["child"], rows[4]["process"]):
+        process["executable"] = deepcopy(helper["executable"])
+    rows[3:3] = [fork, execution]
+    selected = review.capture.select_lineage(rows, len(rows) - 2, manifest.app)
+    assert selected == list(range(len(rows) - 1))
+    phases = review.analyze(_raws(rows), manifest)
+    assert [phase.role for phase in phases] == [
+        "XPCPROXY",
+        "ITERM2",
+        "OTHER",
+        "LOGIN",
+        "ZSH",
+        "MARKER",
+    ]
+    assert phases[3].fork_parent_role == "OTHER"
+    assert phases[4].target.responsibility == "TERMINAL"
+    assert _CANARY not in review.ReviewReport(phases=phases).model_dump_json()
+
+
 @pytest.mark.parametrize("same", [True, False])
 def test_pipe_pair_and_vendor_comparison_return_only_fixed_labels(same: bool) -> None:
     manifest = _manifest()
@@ -207,6 +256,9 @@ def test_pipe_pair_and_vendor_comparison_return_only_fixed_labels(same: bool) ->
     phases = review.analyze(_raws(rows), manifest)
     assert phases[1].vendor_entitlements == phases[2].vendor_entitlements == "PASS"
     assert phases[2].pipe_fd_4_5 == ("SAME" if same else "DIFFERENT")
+    assert phases[2].pipes.complete == "PASS"
+    expected_groups = (("FD_4", "FD_5"),) if same else (("FD_4",), ("FD_5",))
+    assert phases[2].pipes.groups == expected_groups
     report = review.ReviewReport(phases=phases).model_dump_json()
     assert "8675309" not in report and "com.apple.private" not in report and _CANARY not in report
     login["event"]["exec"]["entitlements"]["com.apple.private.endpoint-security.submit.login"] = 1
@@ -229,7 +281,27 @@ def test_incomplete_pipe_pairs_never_acquire_an_identity_relationship(
     assert review._pipe_pair(fds) == expected
 
 
-def _bundle(root: Path) -> tuple[review.capture.Manifest, Path]:
+def test_pipe_topology_compares_other_slots_without_exporting_ids_or_order() -> None:
+    fds = [
+        {"fd": 12, "fdtype": 6, "pipe": {"pipe_id": 867530901}},
+        {"fd": 3, "fdtype": 6, "pipe": {"pipe_id": 867530900}},
+        {"fd": 7, "fdtype": 6, "pipe": {"pipe_id": 867530901}},
+    ]
+    result = review._pipe_topology(fds)
+    assert result.complete == "PASS" and result.groups == (("FD_3",), ("FD_7", "FD_12"))
+    assert review._pipe_topology(list(reversed(fds))) == result
+    assert "8675309" not in result.model_dump_json()
+    assert review._pipe_topology([{"fd": 0, "fdtype": 1}]).groups == ()
+    assert review._pipe_topology(fds + [deepcopy(fds[0])]).complete == "FAIL"
+    assert (
+        review._pipe_topology([{"fd": 3, "fdtype": 6, "pipe": {"pipe_id": True}}]).complete
+        == "FAIL"
+    )
+    high = review._pipe_topology([{"fd": 16, "fdtype": 6, "pipe": {"pipe_id": 867530900}}])
+    assert high.complete == "INCONCLUSIVE" and not high.groups
+
+
+def _bundle(root: Path, terminal: str = "apple") -> tuple[review.capture.Manifest, Path]:
     root.mkdir(mode=0o700)
     for name, source in review._source_paths().items():
         shutil.copyfile(source, root / name)
@@ -237,7 +309,7 @@ def _bundle(root: Path) -> tuple[review.capture.Manifest, Path]:
     for name in ("terminal-marker", "collector-guard"):
         (root / name).write_bytes(b"invented controlled executable")
         (root / name).chmod(0o700)
-    manifest = _manifest().model_copy(
+    manifest = _manifest(terminal).model_copy(
         update={
             "marker": review.capture._image(root / "terminal-marker"),
             "guard_sha256": review.reference._digest(root / "collector-guard"),
@@ -251,7 +323,7 @@ def _bundle(root: Path) -> tuple[review.capture.Manifest, Path]:
     run = root / ("run-" + "a" * 32)
     run.mkdir(mode=0o700)
     summary = review.capture.Report(
-        terminal="apple",
+        terminal=manifest.terminal,
         stage="COMPLETE",
         step="COMPLETE",
         provenance="PASS",
@@ -277,11 +349,13 @@ def _bundle(root: Path) -> tuple[review.capture.Manifest, Path]:
     return manifest, run
 
 
+@pytest.mark.parametrize("terminal", ["apple", "iterm2"])
 def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_app_reads(
     tmp_path: Path,
+    terminal: str,
 ) -> None:
     root = tmp_path / "invented-capture"
-    _, _run = _bundle(root)
+    _, _run = _bundle(root, terminal)
     before = {
         str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in root.rglob("*")
@@ -289,7 +363,9 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
     }
     report = review.review_existing(root)
     assert report.error == "NONE" and report.step == "COMPLETE"
-    assert report.review_version == 2 and report.codec_lineage == "CURRENT"
+    assert report.review_version == 3 and report.codec_lineage == "CURRENT"
+    assert report.terminal == terminal
+    assert report.phases[1].role == ("APPLE_TERMINAL" if terminal == "apple" else "ITERM2")
     assert (
         report.provenance == report.original_collection_controls == report.retained_chain == "PASS"
     )
@@ -360,6 +436,7 @@ def test_prepare_only_copies_code_and_offline_instructions(tmp_path: Path) -> No
     root = review.prepare(tmp_path / "reviewer")
     assert (root / "private_terminal_review.py").is_file()
     assert (root / "OFFLINE-REVIEW.md").is_file()
+    assert (root / "ITERM2-RUN.md").is_file()
     assert not (root / "SETUP.json").exists()
 
 
