@@ -50,6 +50,38 @@ def _validate_transition_time(event: _ProcessTransitionOccurrence) -> None:
         raise ValueError("Process transition requires an aware canonical timestamp")
 
 
+def macos_service_child_responsibility_matches(
+    parent: ProcessIdentity, child: ProcessIdentity
+) -> bool:
+    """Recognize an explicitly selected root service as its child's exact owner.
+
+    An unassigned responsibility exports self for the parent. Selecting that
+    parent lifetime for a child preserves the observed service chain; ordinary
+    forks continue to inherit their existing relationship without inference.
+    """
+    return (
+        parent.principal == "root"
+        and parent.credentials is not None
+        and (
+            parent.credentials.real_uid,
+            parent.credentials.effective_uid,
+            parent.credentials.real_gid,
+            parent.credentials.effective_gid,
+        )
+        == (0, 0, 0, 0)
+        and parent.responsibility == ProcessResponsibility(None)
+        and bool(parent.logon_id)
+        and parent.logon_id == child.logon_id
+        and parent.hostname == child.hostname
+        and child.responsibility
+        == ProcessResponsibility(
+            ResponsibleProcessReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+        )
+    )
+
+
 def macos_gui_exec_relationships_match(
     before: ProcessIdentity, after: ProcessIdentity, session: SessionIdentity | None
 ) -> bool:
@@ -364,6 +396,7 @@ def process_fork_identities(
         or (
             child.responsibility != parent.responsibility
             and not macos_gui_child_responsibility_matches(parent, child)
+            and not macos_service_child_responsibility_matches(parent, child)
         )
         or child.arguments != parent.arguments
         or (
@@ -380,7 +413,21 @@ def process_fork_identities(
         )
         or child.principal != parent.principal
         or child.credentials != parent.credentials
-        or child.logon_id != parent.logon_id
+        or (
+            child.logon_id != parent.logon_id
+            and not (
+                getattr(event.src_host, "os_category", None) == "macos"
+                and parent.pid == 1
+                and parent.image == "/sbin/launchd"
+                and parent.principal == "root"
+                and parent.credentials is not None
+                and parent.credentials.is_unattributed_root
+                and type(plan.session) is SessionIdentity
+                and plan.session.session_kind == "ssh"
+                and plan.session.hostname == child.hostname
+                and plan.session.logon_id == child.logon_id
+            )
+        )
         or child.primary_thread is None
         or child.primary_thread == parent.primary_thread
         or child.primary_thread.process_object_id != child.object_id

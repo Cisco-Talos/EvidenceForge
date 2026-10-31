@@ -1553,3 +1553,60 @@ checkpoint regressions also pass in 73.90 seconds. Revision-366 surface:
 `064dbf9b845add3d0a3e2a69d889cbee0acc73a7584bc69d0b2f8644e1f8dc29`.
 The global all-process backlog remains open; receiver startup, PTY commands, broader app
 helpers and other unsupported producer families retain their independent obligations.
+
+## October 31, revision 367: approved SSH graph and retained receiver primitives
+
+The human approved the prepared version-1 offline reviewer at
+`/private/tmp/eforge-ssh-startup-kit-p8f430ou/private_ssh_review.py` against the completed
+`/private/tmp/eforge-ssh-startup-kit-xxjb4ftc` capture. It ran exactly once. Provenance, original
+controls and core lineage pass. Only fixed aliases/labels were returned; no file changed and
+no collector, application, probe, subprocess or live query started. This consumes that
+permission and does not authorize direct inspection, another reviewer or another capture.
+
+The resolved bounded core has six actual forks and six successful execs before the marker
+replacement. The initial launchd child executes xpcproxy, establishes a new POSIX session,
+then executes basename-only wrapper, daemon and session-worker images in one lifetime.
+The daemon has a short fork-only child; the session worker has an authentication child and
+another short fork-only child. Those short children preserve their exact execution/image
+until exit zero. The authentication child executes sshd-auth, drops to `_sshd` and exits zero.
+After audit adoption the privileged worker forks a user worker; that child drops credentials,
+forks the shell, and the shell establishes its session before exec. The privileged worker
+remains responsible for all descendants. Both surviving session workers finally exit 255,
+whereas the controlled marker exits zero. These observations are not generic exit defaults.
+The complete derived graph and limits are in the adjacent SSH REFERENCE.md; no private
+identifiers, paths, argument text, environment or raw records are copied into the repository.
+Apple's current public launch daemon definition independently confirms the wrapper argv.
+
+The canonical session batch now has `plan_macos_ssh_receiver_fork`. It requires its own exact
+fresh pre-authentication SSH session and live launchd parent, then preserves the parent's
+loaded image, credentials, POSIX membership, argv, environment and current descriptor table.
+Logical SSH session ownership is explicit and separate from unchanged inherited audit origin.
+The process-fork contract accepts that bounded session association only with its exact SSH
+session identity; omitting that authority rejects. The fork bit and table are retained in the
+original integrity-authenticated batch, so rollback restores allocators and session links
+together and checkpoint recovery preserves the actual initial execution. No aggregate wrapper
+can be relabeled by changing image text.
+
+Explicit root-service child responsibility can name that exact live parent lifetime. This is
+an opt-in relationship, like the existing GUI-app relationship; ordinary forks do not acquire
+an inferred new controller. Unknown ownership, a non-root parent, another session or another
+lifetime remains rejected. Both event and State planning apply the same structural rule.
+
+Shared exec file actions now model the reviewed inetd, session-worker and authentication-worker
+tables. The wrapper gets two socket standards and its retained stderr vnode; session exec adds
+a vnode and socket at 3/4; auth exec retains standards, uses socket 3 and allocates pipe 4.
+The canonical allocator, FD table and source observation share one exact exec transaction.
+Unproved inherited standards, a controlling terminal or a wrong pipe policy reject. Existing
+terminal layouts retain their behavior. Invented inputs verify open-object preservation,
+native FD extents, pipe allocation, provisional rollback, checkpoint restoration and negative
+authority cases. No generation code reads native captures or the generator host.
+
+All 137 selected fork/responsibility/descriptor/session-batch-recovery/manifest checks pass
+in 7.89 seconds. Both existing public Terminal/iTerm2 complete/filter cases pass in 15.34
+seconds. Whole Ruff and formatting pass. Revision-367 surface:
+`e6a1edc228ed19ce4ee9fedfa06c7680a70c03f7b689a86160f46d06ed59dfa8`.
+These are integration prerequisites: the default receiver still uses its old incomplete
+startup coordinator and remains gated in complete mode. Next, wire the real initial fork into
+deferred network publication and replace that coordinator with the reviewed stages, then
+verify whole-receiver CLI/filter/checkpoint and census acceptance. No further private review
+or human collection is currently required for this bounded non-PTY integration.

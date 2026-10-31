@@ -1435,6 +1435,112 @@ class MaterializationBatchBuilder:
         self._processes.append(plan)
         return plan
 
+    def plan_macos_ssh_receiver_fork(
+        self,
+        parent: ProcessIdentity,
+        *,
+        session: SessionMaterializationPlan,
+        forked_at: datetime,
+        execution_directory: MacosExecutionDirectory,
+        lifecycle_group_id: str,
+    ) -> ProcessMaterializationPlan:
+        """Reserve a real launchd fork in its new SSH session's atomic State batch.
+
+        Logical session ownership does not change the inherited POSIX/audit
+        credentials, loaded image, job membership or execution ordinal. Later
+        startup phases own setsid, image replacement and authenticated adoption.
+        """
+        self._require_open()
+        if (
+            type(parent) is not ProcessIdentity
+            or type(session) is not SessionMaterializationPlan
+            or self._session is not session
+            or self._processes
+            or type(forked_at) is not datetime
+            or forked_at.utcoffset() is None
+        ):
+            raise StateError("Mac SSH receiver fork requires its exact fresh session batch")
+        manager = self._manager
+        at = ensure_utc(forked_at)
+        if (
+            manager.get_process_identity(parent.hostname, 1) != parent
+            or manager._pid_os.get(parent.hostname) != "macos"
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or parent.principal != "root"
+            or parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or parent.job_control is None
+            or parent.execution_started_at > at
+            or session.identity.hostname != parent.hostname
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.identity.started_at > at
+            or session.audit_origin is None
+            or at >= session.audit_origin.created_at
+            or session._payload.effective_uid != session.audit_origin.audit_uid
+            or session._payload.effective_gid is None
+            or session._payload.network_close_time is None
+            or session._payload.network_close_time <= at
+        ):
+            raise StateError("Mac SSH receiver fork lost its boot parent or pre-auth session")
+        current = manager.process_directory_at(parent, event_time=at)
+        if (
+            type(execution_directory) is not MacosExecutionDirectory
+            or current is None
+            or execution_directory.native_path != current.native_path
+            or execution_directory.metadata != current.metadata
+            or execution_directory.observed_at != at
+        ):
+            raise StateError("Mac SSH receiver fork requires its inherited directory observation")
+        descriptors = manager.process_descriptors_at(parent, event_time=at)
+        plan = self.plan_process(
+            system=parent.hostname,
+            parent_pid=parent.pid,
+            image=parent.image,
+            command_line=parent.command_line,
+            username=parent.principal,
+            integrity_level="System",
+            os_category="macos",
+            credentials=parent.credentials,
+            arguments=parent.arguments,
+            environment=parent.environment,
+            image_security=parent.image_security,
+            exec_image=parent.exec_image,
+            exec_script=parent.exec_script,
+            executable_version=parent.executable_version,
+            execution_directory=execution_directory,
+            responsibility=parent.responsibility,
+            logon_id=session.identity.logon_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent.lifecycle_group_id,
+            start_time=at,
+            parent_activity_time=at,
+            require_session=True,
+            session_plan=session,
+            auth_session_id=session.identity.session_id,
+            auth_logon_type=10,
+        )
+        payload = replace(
+            plan._payload,
+            forked=True,
+            initial_descriptors=descriptors.inherited_at(at) if descriptors is not None else None,
+        )
+        fork = replace(
+            plan,
+            _payload=payload,
+            _integrity_token=_materialization_integrity_token(
+                manager._materialization_secret,
+                "process",
+                plan.expected_version,
+                plan.identity,
+                payload,
+                plan._allocator_patch,
+            ),
+        )
+        self._processes[-1] = fork
+        return fork
+
     def plan_boot_time(self, system: str, boot_time: datetime) -> datetime:
         """Stage one exact host boot-time replacement without changing State."""
 
@@ -3884,13 +3990,17 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
 
             if responsibility is not None and responsibility != parent.responsibility:
-                from evidenceforge.events.process import macos_gui_child_responsibility_matches
+                from evidenceforge.events.process import (
+                    macos_gui_child_responsibility_matches,
+                    macos_service_child_responsibility_matches,
+                )
 
-                if platform != "macos" or not macos_gui_child_responsibility_matches(
-                    parent, plan.identity
+                if platform != "macos" or not (
+                    macos_gui_child_responsibility_matches(parent, plan.identity)
+                    or macos_service_child_responsibility_matches(parent, plan.identity)
                 ):
                     raise StateError(
-                        "Fork responsibility must inherit or name its exact GUI app parent"
+                        "Fork responsibility must inherit or name its exact GUI app/service parent"
                     )
             descriptors = (
                 self._manager.process_descriptors_at(parent, event_time=timestamp)

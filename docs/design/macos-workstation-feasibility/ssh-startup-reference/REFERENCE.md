@@ -55,3 +55,40 @@ No new live collection is needed for the identified classification gaps. Any off
 of the native capture requires separate explicit permission, must return fixed labels only,
 and must start no commands, collectors, applications or live queries. PTY behavior and Unified
 Log were not collected and are not qualified by this report.
+
+## Approved core-graph review
+
+The human approved the prepared version-1 offline reviewer against the existing completed
+capture. It ran once, read only the bounded records and controlled provenance/metadata, and
+returned fixed labels. Provenance, original collection controls and exact core lineage pass.
+No files changed and no command, collector, app, probe or live query started. That permission
+is consumed; it does not authorize another review or direct native-record inspection.
+
+The resolved core has six actual forks and six successful execs before the controlled
+marker's later replacement. Its relationships are:
+
+| Lifetime role | Parent | Executions and observed completion |
+| --- | --- | --- |
+| Per-connection privileged receiver | launchd | Inherited launchd → xpcproxy → wrapper → sshd → sshd-session; final exit 255 |
+| Short sshd child | Privileged receiver in sshd image | Fork only; unchanged execution and loaded image through exit zero |
+| Authentication worker | Privileged receiver in session image | Inherited session → sshd-auth; drops to `_sshd`; exits zero |
+| Short session child | Privileged receiver before audit adoption | Fork only; unchanged execution and loaded image through exit zero |
+| Authenticated user worker | Privileged receiver after audit adoption | Fork only; drops to user credentials; final exit 255 |
+| Login shell | Authenticated user worker | Inherited session → `-zsh`; controlled marker replaces that shell and exits zero |
+
+The receiver begins in launchd's group/session, executes xpcproxy, then establishes its own
+group/session before wrapper exec. xpcproxy uses a per-instance `com.openssh.sshd.` service
+label. Wrapper argv is the basename-only vector `['sshd-keygen-wrapper']`, independently
+matching Apple's current [launch daemon definition](https://github.com/apple-oss-distributions/OpenSSH/blob/main/com.openssh.sshd.plist).
+The wrapper, daemon, session and authentication worker vectors otherwise match their existing
+public catalog profiles. The shell establishes its own group/session after fork and before
+exec, while retaining the remote audit origin and receiver responsibility.
+
+The privileged receiver adopts the authenticated user's audit origin before forking the user
+worker. The user worker drops all four POSIX credential words before forking the shell. The
+receiver remains responsible for every descendant; it is self-responsible. Launchd and its
+initial fork child also export their own identities as the responsibility fallback. No extra
+exec is added for the two short-lived children or the authenticated worker. Exact exit 255 is
+an observation of this controlled connection, not a success default for arbitrary cancellation,
+deadline truncation or unrelated SSH failure. Private shell startup commands remain excluded
+from the portable default workload, not from the simulator's process-start census.

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 366
+current_revision: 367
 history_start_revision: 1
-behavior_surface_sha256: 064dbf9b845add3d0a3e2a69d889cbee0acc73a7584bc69d0b2f8644e1f8dc29
+behavior_surface_sha256: e6a1edc228ed19ce4ee9fedfa06c7680a70c03f7b689a86160f46d06ed59dfa8
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3511,3 +3511,14 @@ changes:
       - zeek
       - syslog
     summary: Admits reviewed SSH integer entitlements/runtime metadata for complete outbound client ES coverage and delegates automatic SSH source-port selection to its bundle; receiver graph and descriptor gates remain independent.
+  - revision: 367
+    id: reviewed-ssh-receiver-primitives
+    impact: material
+    domains:
+      - process-materialization
+      - process-responsibility
+      - macos-exec-descriptors
+    formats:
+      - macos_endpoint_security
+      - ecar
+    summary: Adds authenticated deferred SSH launchd-fork planning, explicit service-child responsibility and transactional inetd/session/auth descriptor layouts; receiver startup integration remains gated.
