@@ -133,13 +133,24 @@ def _file_spec(
         modified = max(modified, floor, key=time_key)
         accessed = max(accessed, born, key=time_key)
     unit = profile.allocation_unit_bytes
+    permissions = next(
+        (
+            rule.permissions
+            for rule in profile.permission_rules
+            if installation.scope == "machine"
+            and rule.product_id == binary.key.product_id
+            and rule.artifact_name == binary.key.artifact_name
+            and rule.native_path == path
+        ),
+        profile.permissions,
+    )
     return MacosInstalledFileSpec(
         installation_id=installation.installation_id,
         native_path=path,
         volume_id=profile.volume_id,
         valid_from=valid_from,
         valid_until=window_end,
-        permissions=profile.permissions,
+        permissions=permissions,
         uid=uid,
         gid=gid,
         accessed=accessed,

@@ -709,6 +709,10 @@ its app lifetime as the owner of login/shell/command descendants; older or alrea
 ownership remains unknown. Apple Terminal and login have explicit catalog signer/entitlement
 templates from verified Apple-shipped metadata; those templates alone do not qualify their
 startup process transitions or descriptors. iTerm2 signing facts remain independently unknown.
+The installed-file owner supplies login's verified root-owned setuid mode 04555 only for its
+exact machine-installed Apple product/artifact/path. User copies and other images keep their
+own modeled permissions; older frozen policies keep their previous stat. File mode alone
+does not create a credential transition or enable native terminal startup.
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
 operators and substitutions require a separate execution plan, and effect-bearing launches

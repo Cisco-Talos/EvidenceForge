@@ -121,6 +121,76 @@ def test_provisioning_shares_binary_size_and_build_time_but_keeps_local_objects_
     assert before.metadata.modified.seconds < before.metadata.born.seconds
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_login_setuid_stat_comes_from_exact_frozen_installed_policy(
+    monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    import evidenceforge.generation.macos_installed_provisioning as production
+
+    data = yaml.safe_load((get_activity_directory() / "macos_installed_files.yaml").read_text())
+    if legacy:
+        data.pop("permission_rules")
+    profile = MacosInstalledFileProfile.model_validate(data)
+    monkeypatch.setattr(production, "load_macos_installed_file_profile", lambda: profile)
+    scenario = _scenario()
+    deployments = _deployments(scenario)
+    filesystem = _compile(scenario, deployments).filesystem
+    login = _process(deployments, scenario, "MAC-01", "/usr/bin/login")
+    stat = filesystem.observe(deployments, login, observed_at=login.started_at).metadata
+    assert stat.mode == (0o100755 if legacy else 0o104555)
+    assert stat.uid == stat.gid == 0
+    # File metadata does not rewrite the observing process's principal.
+    assert login.principal == "alex"
+    for path in ("/bin/zsh", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"):
+        process = _process(deployments, scenario, "MAC-01", path)
+        other = filesystem.observe(deployments, process, observed_at=process.started_at)
+        assert other.metadata.mode == 0o100755
+
+
+@pytest.mark.parametrize("change", ["product", "artifact", "path", "user_copy"])
+def test_login_permission_rule_cannot_spread_to_another_image_or_user_installation(
+    change: str,
+) -> None:
+    scenario = _scenario()
+    deployments = _deployments(scenario)
+    path = "/usr/bin/login"
+    binary = deployments.resolve_binary("MAC-01", path, "macos")
+    installation = deployments.installation_for_image("MAC-01", path, "macos")
+    user_profile = deployments.user_profile_for("MAC-01", "alex", "macos")
+    if change in ("product", "artifact"):
+        key = replace(
+            binary.key,
+            **(
+                {"product_id": "invented-login"}
+                if change == "product"
+                else {"artifact_name": "other-login"}
+            ),
+        )
+        binary = replace(binary, key=key)
+        installation = replace(installation, release_id=binary.release_id)
+    elif change == "path":
+        path = "/usr/local/bin/login"
+        installation = replace(installation, image_paths=(path,))
+    else:
+        installation = replace(
+            installation, scope="user", principal="alex", user_profile_id=user_profile.profile_id
+        )
+    if change == "artifact":
+        with pytest.raises(ValueError, match="no exact artifact"):
+            DeploymentContentRegistry(binary_releases=(binary,), installations=(installation,))
+        return
+    selected = DeploymentContentRegistry(
+        binary_releases=(binary,),
+        user_profiles=(user_profile,) if change == "user_copy" else (),
+        installations=(installation,),
+    )
+    process = _process(selected, scenario, "MAC-01", path)
+    filesystem = _compile(scenario, selected).filesystem
+    stat = filesystem.observe(selected, process, observed_at=process.started_at).metadata
+    assert stat.mode == 0o100755
+    assert stat.uid == (501 if change == "user_copy" else 0)
+
+
 def test_binary_size_survives_seed_changes_and_order_does_not_change_local_stat() -> None:
     scenario = _scenario(two_macs=True)
     deployments = _deployments(scenario)
@@ -285,6 +355,57 @@ def test_older_frozen_inputs_do_not_acquire_new_packaged_stat_policy(tmp_path: P
         {"volume_device": {"min": 3, "max": 2}},
         {"allocation_unit_bytes": 513},
         {"allocation_policy": "compressed"},
+        {
+            "permission_rules": [
+                {
+                    "product_id": "apple-macos",
+                    "artifact_name": "login",
+                    "native_path": "relative/login",
+                    "permissions": 0o4555,
+                }
+            ]
+        },
+        {
+            "permission_rules": [
+                {
+                    "product_id": "apple-macos",
+                    "artifact_name": "login",
+                    "native_path": "/usr/bin/../bin/login",
+                    "permissions": 0o4555,
+                }
+            ]
+        },
+        {
+            "permission_rules": [
+                {
+                    "product_id": "apple-macos",
+                    "artifact_name": "login",
+                    "native_path": "/usr/bin/other",
+                    "permissions": 0o4555,
+                }
+            ]
+        },
+        {
+            "permission_rules": [
+                {
+                    "product_id": "apple-macos",
+                    "artifact_name": "login",
+                    "native_path": "/usr/bin/login",
+                    "permissions": True,
+                }
+            ]
+        },
+        {
+            "permission_rules": [
+                {
+                    "product_id": "apple-macos",
+                    "artifact_name": "login",
+                    "native_path": "/usr/bin/login",
+                    "permissions": 0o4555,
+                }
+            ]
+            * 2
+        },
     ],
 )
 def test_invalid_policy_is_rejected_before_allocating_files(change: dict[str, object]) -> None:
@@ -361,14 +482,16 @@ def test_real_engine_checkpoint_rebuilds_previously_requested_installed_files(
             # Production launch metadata now requests this deterministic owner during initialization.
             assert second._macos_installed_provisioning_ready
             rebuilt = second.macos_installed_provisioning
-        process = _process(first.deployment_registry, scenario, "MAC-01", "/bin/zsh")
-        expected = observed.filesystem.observe(
-            first.deployment_registry, process, observed_at=process.started_at
-        )
-        actual = rebuilt.filesystem.observe(
-            second.deployment_registry, process, observed_at=process.started_at
-        )
-        assert actual == expected
+        for path in ("/bin/zsh", "/usr/bin/login"):
+            process = _process(first.deployment_registry, scenario, "MAC-01", path)
+            expected = observed.filesystem.observe(
+                first.deployment_registry, process, observed_at=process.started_at
+            )
+            actual = rebuilt.filesystem.observe(
+                second.deployment_registry, process, observed_at=process.started_at
+            )
+            assert actual == expected
+            assert actual.metadata.mode == (0o104555 if path == "/usr/bin/login" else 0o100755)
     finally:
         first._close_emitters()
         second._close_emitters()

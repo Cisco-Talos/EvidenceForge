@@ -1118,3 +1118,32 @@ Whole Ruff, formatting, whitespace and behavior checks pass. Revision-360 surfac
 `22c19638c7cb47f75b5f45bb0e79cf1e7667ebd8a07e2e510785bcc8cdff5029`.
 The version-2 code-only reviewer is `/private/tmp/eforge-terminal-startup-kit-0965dwiz`;
 its isolated help command passes. No native capture files are part of this change.
+
+Entitlement milestone is committed as `626ad29f`. Pushing to the existing origin branch failed
+with HTTP 403; a read-only repository-permission check reports pull true and push false for
+the current CLI account. No credentials, remotes or access controls were changed. Publication
+needs restored repository write access (or an explicitly selected writable remote).
+
+## Revision 361: installed login permissions through the canonical file owner
+
+The next independent implementation adds exact permission rules to the frozen installed-file
+profile. The only shipped rule selects machine scope, product `apple-macos`, artifact `login`
+and exact path `/usr/bin/login`, with verified mode 04555. Ownership still comes from the
+canonical root account of that installation's host. Path spelling alone cannot select setuid
+metadata for another product, a user copy or an aliased installation. The deployment registry
+already rejects a path whose basename has no exact artifact; the initial negative test was
+corrected to assert that earlier rejection rather than expecting provisioning to accept it.
+
+Profiles without permission rules retain the previous generic permissions. Duplicate selectors,
+noncanonical paths, artifact/path disagreements and coerced permission values fail schema
+validation before allocation. The existing installed filesystem owns and projects the actual
+stat; there is no emitter rewrite, runtime host filesystem lookup or new credential default.
+Checkpoint reconstruction includes the exact login stat. Login setuid execution, the later
+shell privilege drop and the terminal/descriptor transitions still belong to the next native
+startup producer; this metadata increment does not enable aggregate startup export.
+
+Validation passed 91 installed-file/provisioning, terminal-path and Finder-generation cases
+in 34.87 seconds, including legacy policy, exact selector isolation and actual engine checkpoint
+reconstruction. The four public CLI/filter/checkpoint/complete-rejection cases pass in 40.48
+seconds. Whole Ruff, formatting, whitespace and behavior checks pass. Revision-361 surface:
+`a9daf970835a30d72b2e7a3de021a63715715f2f31145cb603350b9dbb166fcd`.

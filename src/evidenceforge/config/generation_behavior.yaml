@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 360
+current_revision: 361
 history_start_revision: 1
-behavior_surface_sha256: 22c19638c7cb47f75b5f45bb0e79cf1e7667ebd8a07e2e510785bcc8cdff5029
+behavior_surface_sha256: a9daf970835a30d72b2e7a3de021a63715715f2f31145cb603350b9dbb166fcd
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3443,3 +3443,12 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Admits bounded v11 string-array entitlements through immutable signatures, checkpoint values and source policy; adds verified Apple Terminal/login signing templates while preserving legacy restrictions and startup gates.
+  - revision: 361
+    id: exact-macos-installed-image-permissions
+    impact: localized
+    domains:
+      - macos-installed-file-metadata
+      - canonical-file-identity
+    formats:
+      - macos_endpoint_security
+    summary: Supplies verified setuid login file permissions through exact machine-installed product/artifact/path rules, preserving unrelated images, user copies and older frozen provisioning policies.

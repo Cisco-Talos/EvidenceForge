@@ -17,6 +17,7 @@ import math
 import re
 from copy import deepcopy
 from datetime import date
+from pathlib import PurePosixPath
 from string import Formatter
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
@@ -4341,6 +4342,35 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         return values
 
 
+class MacosInstalledPermissionRule(BaseModel, extra="forbid", frozen=True):
+    """Explicit permissions for one exact machine-installed Mac image."""
+
+    product_id: str = Field(strict=True, min_length=1, max_length=256)
+    artifact_name: str = Field(strict=True, min_length=1, max_length=256)
+    native_path: str = Field(strict=True, min_length=1, max_length=4096)
+    permissions: int = Field(strict=True, ge=0, le=0o7777)
+
+    @model_validator(mode="after")
+    def exact_image(self) -> Self:
+        """Reject aliases and ambiguous selectors before any file is provisioned."""
+        path = PurePosixPath(self.native_path)
+        if (
+            any(
+                value != value.strip() or "\0" in value
+                for value in (self.product_id, self.artifact_name, self.native_path)
+            )
+            or not self.native_path.startswith("/")
+            or self.native_path.startswith("//")
+            or path.as_posix() != self.native_path
+            or ".." in path.parts
+            or path.name != self.artifact_name
+        ):
+            raise ValueError(
+                "Mac installed permissions require an exact product, artifact and absolute image path"
+            )
+        return self
+
+
 class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit modeled provisioning policy, not native filesystem calibration."""
 
@@ -4357,6 +4387,7 @@ class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
     allocation_policy: Literal["dense-rounded"]
     allocation_unit_bytes: int = Field(strict=True, gt=0, lt=2**31, multiple_of=512)
     permissions: int = Field(strict=True, ge=0, le=0o7777)
+    permission_rules: tuple[MacosInstalledPermissionRule, ...] = Field(default=(), max_length=128)
     flags: int = Field(strict=True, ge=0, lt=2**32)
     generation: int = Field(strict=True, ge=0, lt=2**32)
 
@@ -4365,6 +4396,12 @@ class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
         """Keep the modeled log-normal median inside its bounded support."""
         if not self.logical_size_bytes.min <= self.size_median_bytes <= self.logical_size_bytes.max:
             raise ValueError("Mac installed size median must lie inside logical_size_bytes")
+        keys = [
+            (rule.product_id, rule.artifact_name, rule.native_path)
+            for rule in self.permission_rules
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Mac installed permission rules must select distinct exact images")
         return self
 
 
