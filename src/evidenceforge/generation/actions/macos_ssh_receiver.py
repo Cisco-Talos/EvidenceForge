@@ -54,7 +54,8 @@ def macos_ssh_command_arguments(descriptor: CompiledApplicationDescriptor) -> tu
     """Decode a bounded direct-exec profile's canonical argv serialization.
 
     These four internal SSH roles execute their catalog command directly, without
-    a shell. Require the existing canonical shell-quoted argv spelling so shell
+    a shell. The wrapper's public basename argv[0] is distinct from its image
+    path. Require the existing canonical shell-quoted argv spelling so shell
     expansion, redirection or a pipeline cannot silently become an argument.
     General authored commands and arbitrary catalog entries do not use this rule.
     """
@@ -77,7 +78,10 @@ def macos_ssh_command_arguments(descriptor: CompiledApplicationDescriptor) -> tu
         raise StateError(
             "Mac SSH role requires a canonical literal argv command template"
         ) from error
-    if arguments[0] != descriptor.image_path:
+    if arguments[0] != descriptor.image_path and not (
+        descriptor.application_id == "macos-sshd-keygen-wrapper"
+        and arguments == (descriptor.executable,)
+    ):
         raise StateError("Mac SSH argv must name its exact compiled executable path")
     return arguments
 
@@ -179,6 +183,13 @@ class MacosSshReceiverStartupRequest:
     authentication_worker: CompiledApplicationDescriptor
     shell: CompiledApplicationDescriptor
     phase_times: tuple[datetime, ...]
+    launcher: CompiledApplicationDescriptor | None = None
+    service_label: str | None = None
+
+    @property
+    def audit_phase(self) -> int:
+        """Locate authenticated adoption in the selected explicit startup graph."""
+        return 13 if self.launcher is not None else 6
 
     def __post_init__(self) -> None:
         if (
@@ -207,8 +218,10 @@ class MacosSshReceiverStartupRequest:
             or self.shell.platform != "macos"
             or self.shell.application_id not in {"macos-zsh", "macos-bash"}
             or self.shell.command_parameter_pools
-            or self.receiver.image != self.wrapper.image_path
-            or self.receiver.command_line != self.wrapper.command_templates[0]
+            or self.receiver.image
+            != ("/sbin/launchd" if self.launcher is not None else self.wrapper.image_path)
+            or self.receiver.command_line
+            != ("/sbin/launchd" if self.launcher is not None else self.wrapper.command_templates[0])
             or self.receiver.execution_ordinal != 0
             or self.receiver.principal != "root"
             or self.receiver.credentials is None
@@ -221,16 +234,31 @@ class MacosSshReceiverStartupRequest:
         times = self.phase_times
         if (
             type(times) is not tuple
-            or len(times) not in {11, 12}
+            or len(times) not in ({19} if self.launcher is not None else {11, 12})
             or any(type(at) is not datetime or at.utcoffset() is None for at in times)
             or times[0] <= self.receiver.started_at
             or any(left >= right for left, right in zip(times, times[1:], strict=False))
         ):
             raise StateError(
-                "Mac receiver startup requires eleven or twelve strictly ordered aware times"
+                "Mac receiver startup requires its selected graph's strictly ordered aware times"
             )
-        if len(times) == 12 and self.receiver.job_control is None:
+        if len(times) in {12, 19} and self.receiver.job_control is None:
             raise StateError("Mac receiver session-owning startup requires known membership")
+        if self.launcher is not None and (
+            type(self.launcher) is not CompiledApplicationDescriptor
+            or self.launcher.application_id != "macos-xpcproxy"
+            or self.launcher.platform != "macos"
+            or self.receiver.parent_pid != 1
+            or type(self.service_label) is not str
+            or not self.service_label.startswith("com.openssh.sshd.")
+            or not len("com.openssh.sshd.") < len(self.service_label) <= 256
+            or "\0" in self.service_label
+        ):
+            raise StateError(
+                "Native SSH startup requires its installed launcher and instance label"
+            )
+        if self.launcher is None and self.service_label is not None:
+            raise StateError("Legacy SSH startup cannot claim a native launcher service label")
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,7 +310,7 @@ class MacosSshReceiverStartup:
             or session.auth_protocol != "ssh"
             or session.transport_pid != receiver.pid
             or session.audit_origin is None
-            or session.audit_origin.created_at != request.phase_times[6]
+            or session.audit_origin.created_at != request.phase_times[request.audit_phase]
             or session.source_ready_time is None
             or session.source_ready_time < request.phase_times[-1]
             or session.network_close_time is None
@@ -344,7 +372,13 @@ class MacosSshReceiverStartup:
                 if cancelled or (capability is not None and not capability.committed):
                     self._pending = None
             raise
-        after = pending.resulting_identity
+        self._accept_phase(pending.resulting_identity)
+        self._phase += 1
+        self._pending = None
+        return self.result
+
+    def _accept_phase(self, after: ProcessIdentity) -> None:
+        """Record the exact role after its retained publication finishes."""
         if self._phase in {0, 1, 6}:
             self._receiver = after
         elif self._phase in {2, 3, 4}:
@@ -353,9 +387,6 @@ class MacosSshReceiverStartup:
             self._postauth = after
         elif self._phase in {9, 10, 11}:
             self._shell = after
-        self._phase += 1
-        self._pending = None
-        return self.result
 
     def _prepare_next(self) -> _PendingStartupPhase:
         request = self._request

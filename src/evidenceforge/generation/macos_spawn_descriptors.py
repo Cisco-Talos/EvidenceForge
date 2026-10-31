@@ -28,6 +28,36 @@ def plan_spawn_descriptors(
     """
     intent.__post_init__()
     at, host = process.execution_started_at, process.hostname
+    if intent.kind == "ssh_shell":
+        raise StateError("Mac SSH shell file actions require the authenticated State session")
+    if intent.kind == "ssh_launcher":
+        if (
+            terminal != "absent"
+            or process.image != "/usr/libexec/xpcproxy"
+            or process.initial_image != "/sbin/launchd"
+            or process.execution_ordinal != 1
+            or process.parent_pid != 1
+            or process.principal != "root"
+            or process.credentials is None
+            or not process.credentials.is_unattributed_root
+            or not process.logon_id
+            or process.job_control is None
+        ):
+            raise StateError("Mac SSH launcher file actions require its boot-parent root exec")
+        return MacosDescriptorTable(
+            host,
+            at,
+            tuple(
+                MacosDescriptorBinding(
+                    fd,
+                    "file",
+                    stable_uuid("macos-ssh-launcher-vnode", host, process.object_id, fd),
+                    False,
+                )
+                for fd in range(3)
+            ),
+            2,
+        ), None
     if (
         inherited is None
         or inherited.hostname != host

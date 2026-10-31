@@ -1610,3 +1610,55 @@ startup coordinator and remains gated in complete mode. Next, wire the real init
 deferred network publication and replace that coordinator with the reviewed stages, then
 verify whole-receiver CLI/filter/checkpoint and census acceptance. No further private review
 or human collection is currently required for this bounded non-PTY integration.
+
+## Revision 368: measured native receiver stages, not yet the production default
+
+`MacosNativeSshReceiverStartup` reuses the original receiver's exact publication, artifact
+retention, retry and pending-phase journal. A separate nineteen-stage topology starts from
+the already committed launchd fork: xpcproxy exec, explicit setsid, wrapper/daemon execs,
+short daemon-child fork, session exec, short-child exit, auth fork/exec/drop, short session-
+child fork/exit, auth exit, audit adoption, user-worker fork/drop, shell fork/setsid/exec.
+There is no exec for any of the three fork-only workers. Declared nominal exit zero applies
+only to the three short startup helpers. Final worker results remain unknown for generic
+session teardown; this code does not extrapolate the captured exit 255 to every close.
+
+The transient request explicitly distinguishes the legacy and nineteen-stage shapes and
+locates their audit boundaries. The existing coordinator's phase acceptance is a small
+overridable method; its exact source-publication algorithm is shared unchanged. The current
+production SSH factory still selects its legacy coordinator. This is intentionally not a
+claim that a whole SSH receiver passes complete mode yet.
+
+The wrapper's catalog argv is now its independently verified basename, separate from its
+absolute image path. The bounded parser permits that exact wrapper case while retaining
+absolute-image binding for other helpers. Historical literal-path wrapper descriptors remain
+decodable for old internal fixtures. Launcher exec explicitly establishes three vnode
+standards under its boot-parent root/first-exec/non-PTY contract, without asserting a complete
+launchd FD table. Other helper file actions still require complete inherited standard handles.
+Initial shell exec validates its exact authenticated user worker, remote audit identity,
+session/transport/readiness bounds, shell argv and absent terminal before observing the
+channel's already reserved pipe objects. It does not allocate another pipe set or silently
+substitute streams for an arbitrary process. External command readiness remains independent
+of that earlier shell-exec observation.
+
+The invented real-engine prototype supplies the initial session/fork State batch and starts
+the new coordinator directly. All six native execs, five subsequent native forks and three
+short native exits are emitted. The independent State census expects six forks and six execs,
+with zero aggregate births: the deliberately external initial fork still lacks its native
+source-publication handoff in this isolated test. The test does not shrink that denominator
+or claim whole-receiver acceptance. Six representative committed-source lost-return cuts
+recover without another State version, PID, exec, native row or pipe allocation.
+
+All 116 selected native/legacy startup, arguments, receiver planning and spawn-layout cases
+pass in 19.95 seconds. The additional 92 manifest, fork, SSH-command-descriptor and POSIX
+membership checks pass in 8.41 seconds. All six selected public SSH-client, Terminal/iTerm2
+filtering and complete-rejection CLI cases pass in 40.66 seconds. Whole Ruff/format and
+whitespace checks pass. Revision-368 surface:
+`394abeb6b9d1bea6c40b6e3b5be675cf246555e7676b49cbc1a9af74539f1f17`.
+
+Next is software integration, with no further native reads: the SSH deferred State/network
+owner must publish the real initial fork through the same atomic source tail and native
+occurrence ingress, then select the new coordinator/current profile. Its timing replay must
+recognize nineteen stages and audit index 13. Restored receiver verification must recognize
+initial launchd/four execs and a root setsid after birth; legacy wrapper/two-exec recovery
+remains supported. Complete CLI/filter/checkpoint and exact six-fork/six-exec reconciliation
+are required before claiming the bounded receiver milestone. Do not mark the global P0 done.

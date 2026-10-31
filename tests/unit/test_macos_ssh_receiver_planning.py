@@ -87,7 +87,7 @@ def test_mac_receiver_preparation_transport_startup_and_close(
     assert fixture.state.materialization_digest() == before
     assert not fixture.state._linux_logind_session_counters
     assert prepared.close_continuation.startup_request.receiver.arguments == (
-        prepared.close_continuation.startup_request.wrapper.image_path,
+        "sshd-keygen-wrapper",
     )
     assert (
         prepared.close_continuation.startup_request.phase_times

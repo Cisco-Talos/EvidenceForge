@@ -20,7 +20,7 @@ from tests.unit.test_macos_ssh_startup import _descriptor, _request
 @pytest.mark.parametrize(
     "application,arguments",
     [
-        ("macos-sshd-keygen-wrapper", ("/usr/libexec/sshd-keygen-wrapper",)),
+        ("macos-sshd-keygen-wrapper", ("sshd-keygen-wrapper",)),
         ("macos-sshd", ("/usr/sbin/sshd", "-i")),
         ("macos-sshd-session", ("/usr/libexec/sshd-session", "-i", "-R")),
         ("macos-sshd-auth", ("/usr/libexec/sshd-auth", "-i", "-R")),

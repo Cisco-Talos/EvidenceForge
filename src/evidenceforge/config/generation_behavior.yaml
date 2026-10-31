@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 367
+current_revision: 368
 history_start_revision: 1
-behavior_surface_sha256: e6a1edc228ed19ce4ee9fedfa06c7680a70c03f7b689a86160f46d06ed59dfa8
+behavior_surface_sha256: 394abeb6b9d1bea6c40b6e3b5be675cf246555e7676b49cbc1a9af74539f1f17
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3522,3 +3522,14 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Adds authenticated deferred SSH launchd-fork planning, explicit service-child responsibility and transactional inetd/session/auth descriptor layouts; receiver startup integration remains gated.
+  - revision: 368
+    id: reviewed-native-ssh-startup-stages
+    impact: material
+    domains:
+      - application-catalog
+      - macos-process-lifecycle
+      - macos-exec-descriptors
+    formats:
+      - macos_endpoint_security
+      - ecar
+    summary: Corrects wrapper basename argv and adds retained measured receiver stages with launcher/shell file actions; the production receiver awaits atomic deferred initial-fork publication.

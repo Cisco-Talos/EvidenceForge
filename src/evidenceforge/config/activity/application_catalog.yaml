@@ -2661,7 +2661,7 @@ applications:
           product_id: apple-macos
           architectures: [arm64]
         command_templates:
-        - /usr/libexec/sshd-keygen-wrapper
+        - sshd-keygen-wrapper
     categories: [macos_transport]
     personas: []
     system_types: [workstation]

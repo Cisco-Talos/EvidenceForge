@@ -4298,13 +4298,17 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 if after.job_control is not None
                 else None
             )
-            descriptors_after, spawn_pipe_counter = plan_spawn_descriptors(
-                after,
-                macos_spawn_io,
-                inherited=descriptors,
-                terminal=terminal,
-                pipe_counter=counter,
-            )
+            if macos_spawn_io.kind == "ssh_shell":
+                macos_spawn_io.__post_init__()
+                descriptors_after = self._manager._macos_ssh_shell_descriptor_table(after)
+            else:
+                descriptors_after, spawn_pipe_counter = plan_spawn_descriptors(
+                    after,
+                    macos_spawn_io,
+                    inherited=descriptors,
+                    terminal=terminal,
+                    pipe_counter=counter,
+                )
         if audit_pid_version is not None:
             self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
         if thread_counter is not None:
@@ -13475,13 +13479,18 @@ class StateManager:
                         if after.job_control is not None
                         else None
                     )
-                    expected_descriptors, counter_change = plan_spawn_descriptors(
-                        after,
-                        execution.spawn_io,
-                        inherited=current_descriptors,
-                        terminal=terminal,
-                        pipe_counter=pipe_counters.get(before.hostname),
-                    )
+                    if execution.spawn_io.kind == "ssh_shell":
+                        execution.spawn_io.__post_init__()
+                        expected_descriptors = self._macos_ssh_shell_descriptor_table(after)
+                        counter_change = None
+                    else:
+                        expected_descriptors, counter_change = plan_spawn_descriptors(
+                            after,
+                            execution.spawn_io,
+                            inherited=current_descriptors,
+                            terminal=terminal,
+                            pipe_counter=pipe_counters.get(before.hostname),
+                        )
                     if counter_change != execution.spawn_pipe_counter:
                         raise StateError("Mac spawn pipe allocation changed its exact counter")
                     if counter_change is not None:
@@ -18116,6 +18125,47 @@ class StateManager:
             ),
             native_last_fd=2,
         )
+
+    def _macos_ssh_shell_descriptor_table(self, after: ProcessIdentity) -> MacosDescriptorTable:
+        """Bind the initial non-PTY login shell to its already reserved channel streams."""
+        at = after.execution_started_at
+        session = self.get_session_at(after.logon_id, at)
+        parent = self.get_process_identity_at(after.hostname, after.parent_pid, at)
+        if (
+            session is None
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.system != after.hostname
+            or session.username != after.principal
+            or session.audit_origin is None
+            or session.audit_origin.created_at >= at
+            or session.source_ready_time is None
+            or at > session.source_ready_time
+            or session.network_close_time is None
+            or at >= session.network_close_time
+            or session.ssh_command_streams is None
+            or session.ssh_command_streams.session_object_id != session.ecar_object_id
+            or session.ssh_command_streams.hostname != after.hostname
+            or parent is None
+            or parent.parent_pid != session.transport_pid
+            or parent.logon_id != after.logon_id
+            or parent.image != "/usr/libexec/sshd-session"
+            or parent.principal != after.principal
+            or after.image not in {"/bin/zsh", "/bin/bash"}
+            or after.arguments != ("-zsh" if after.image == "/bin/zsh" else "-bash",)
+            or after.execution_ordinal != 1
+            or after.initial_image != parent.image
+            or after.credentials is None
+            or after.credentials != parent.credentials
+            or after.credentials.audit_uid != session.audit_origin.audit_uid
+            or after.credentials.audit_session_id != session.audit_origin.audit_session_id
+            or after.job_control is None
+            or self.known_macos_terminal(after.job_control.session, at) != "absent"
+        ):
+            raise StateError("Mac SSH shell descriptors require its exact authenticated worker")
+        # Readiness controls external commands. The startup owner observes the
+        # same reserved objects at the earlier initial-shell exec boundary.
+        return MacosDescriptorTable(after.hostname, at, session.ssh_command_streams.bindings, 2)
 
     def _macos_ssh_command_descriptor_table(
         self, birth: ProcessMaterializationPlan | None, at: datetime

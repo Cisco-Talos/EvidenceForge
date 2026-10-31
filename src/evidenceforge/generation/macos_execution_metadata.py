@@ -551,7 +551,11 @@ class MacosExecutionMetadataProducer:
             != binary
         ):
             raise StateError("Mac exec producer requires its exact installed image placement")
-        if observe_descriptors and table is None:
+        if (
+            observe_descriptors
+            and table is None
+            and not (type(spawn_io) is MacosSpawnIO and spawn_io.kind == "ssh_launcher")
+        ):
             raise StateError("Mac exec producer requires known inherited descriptors")
         credentials = None
         if self.profile.login_setuid_execution == "installed_owner" and image == "/usr/bin/login":
