@@ -72,6 +72,26 @@ Window A drains termination events, stops the collector, and prints the fixed JS
 JSON only. The report deliberately retains `reference_review: REQUIRED` and
 `gate_status: NOT_EVALUATED`; successful acquisition does not automatically qualify generation.
 
+**Do not rerun the collector to recover output.** A completed capture already saved its report.
+The kit permits one capture, and its lock causes a second capture attempt to exit immediately.
+Leave the locks in place. Retrieve the saved report from the directory where capture succeeded.
+
+If the report is too large for scrollback, save its validated fixed JSON to a separate file:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ssh_startup.py report --private-run > SHAREABLE-SSH-REPORT.json
+```
+
+Attach only `SHAREABLE-SSH-REPORT.json` to the chat. This operation starts no collector or SSH
+connection and reads the saved report only. It does not open native capture records or replace
+the original saved report. Alternatively, copy the same fixed JSON directly to the clipboard:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ssh_startup.py report --private-run | /usr/bin/pbcopy
+```
+
+Then paste into the chat. Neither method depends on terminal scrollback.
+
 If you need to print that saved fixed report again:
 
 ```sh

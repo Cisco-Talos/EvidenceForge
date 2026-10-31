@@ -1474,3 +1474,18 @@ reference tests and whole Ruff/format/whitespace checks pass. No generation beha
 Fresh code-only replacement: `/private/tmp/eforge-ssh-startup-kit-xxjb4ftc`. Setup and collection
 remain human-only; neither was run. The interrupted kit is untouched. Do not inspect either
 handed-off kit or remove its locks. The replacement also remains off-limits after handoff.
+
+## October 31: retrieve the successful SSH report without recapture
+
+The human confirmed that the marker was pasted, then clarified that capture is working but
+the report exceeds terminal scrollback. This supersedes the tentative hang interpretation;
+there is no established SSH input/authentication defect to repair. They attempted collection
+again and it exited immediately. Source inspection confirms the single-use `SESSION-LOCK`
+rejects another capture before changing `ACTIVE-RUN`, preserving the completed run/report.
+
+The human can run the existing `report --private-run` operation in the successful kit's
+directory, redirect its validated fixed JSON to `SHAREABLE-SSH-REPORT.json` and attach that
+file, or pipe it to `pbcopy`. Neither starts a collector/SSH connection or opens native records.
+The tracked instructions now make report recovery explicit. No fresh capture, lock removal,
+kit modification or further private access is needed. The agent inspected repository source
+only and did not read any handed-off kit, private report or local log.
