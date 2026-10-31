@@ -19,6 +19,7 @@ from evidenceforge.events.content_identity import (
 )
 from evidenceforge.events.contexts import EmailContext
 from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
+from evidenceforge.generation.activity.application_catalog import application_descriptor
 from evidenceforge.generation.deployment_compiler import (
     _intern_release,
     _release_for_application_artifact,
@@ -131,7 +132,17 @@ def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippab
 
 
 @pytest.mark.parametrize(
-    "value", [{}, {"a": 1}, {"a": "true"}, {"a": None}, {"a": []}, {"\0": True}]
+    "value",
+    [
+        {},
+        {"a": 1},
+        {"a": "true"},
+        {"a": None},
+        {"a": [1]},
+        {"a": [True]},
+        {"a": {"nested": True}},
+        {"\0": True},
+    ],
 )
 def test_catalog_boolean_entitlements_reject_unreviewed_or_coerced_values(value: object) -> None:
     with pytest.raises(ValidationError):
@@ -142,6 +153,82 @@ def test_catalog_boolean_entitlements_reject_unreviewed_or_coerced_values(value:
 def test_canonical_entitlements_cannot_retain_mutable_or_ambiguous_data(value: object) -> None:
     with pytest.raises(ValueError):
         MachOCodeSignature("invented", None, "a" * 40, value)
+
+
+def test_string_array_entitlements_are_immutable_and_use_an_explicit_checkpoint_tag() -> None:
+    app = _application()
+    values = {
+        "invented.allowed": ["example.one", "example.two"],
+        "invented.enabled": True,
+        "invented.empty": [],
+    }
+    entry = MacCodeSignatureEntry(signing_id="test.example.editor", entitlements=values)
+    app.platforms["macos"].code_signature = entry
+    binary = _release(app)
+    signature = binary.code_signature
+    values["invented.allowed"].append("mutated")
+    assert dict(signature.entitlements)["invented.allowed"] == ("example.one", "example.two")
+    assert signature.serialized_values()[3][0] == "boolean-string-array-v1"
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    assert (
+        MachOCodeSignature.from_serialized_values(
+            json.loads(json.dumps(signature.serialized_values()))
+        )
+        == signature
+    )
+    changed = replace(
+        signature,
+        entitlements=(
+            ("invented.allowed", ("example.two", "example.one")),
+            ("invented.enabled", True),
+            ("invented.empty", ()),
+        ),
+    )
+    assert (
+        _network_request(replace(binary, code_signature=changed)).stable_id
+        != _network_request(binary).stable_id
+    )
+
+
+@pytest.mark.parametrize("application_id", ["macos-terminal", "macos-login"])
+def test_vendor_terminal_signatures_compile_without_propagating_to_helpers(
+    application_id: str,
+) -> None:
+    app = ApplicationEntry.model_validate(application_descriptor(application_id))
+    release = _release(app)
+    signature = release.code_signature
+    assert signature is not None and signature.team_id is None
+    assert (
+        signature.signing_id
+        == {
+            "macos-terminal": "com.apple.Terminal",
+            "macos-login": "com.apple.login",
+        }[application_id]
+    )
+    entitlements = dict(signature.entitlements)
+    if application_id == "macos-terminal":
+        assert entitlements["com.apple.private.tcc.allow-prompting"] == ("kTCCServiceAll",)
+        assert all(type(value) is bool for key, value in entitlements.items() if "tcc" not in key)
+    else:
+        assert all(type(value) is bool for value in entitlements.values())
+    assert _unpack_binary_release(_pack_binary_release(release)) == release
+    helper = _release(app, "/invented/helper")
+    assert helper.code_signature is None
+
+
+@pytest.mark.parametrize(
+    "tag,values",
+    [
+        ("boolean-v1", [["invented.array", ["value"]]]),
+        ("boolean-string-array-v1", [["invented.enabled", True]]),
+        ("unqualified", [["invented.array", ["value"]]]),
+    ],
+)
+def test_entitlement_serialization_rejects_downgraded_or_ambiguous_tags(
+    tag: str, values: list
+) -> None:
+    with pytest.raises(ValueError):
+        MachOCodeSignature.from_serialized_values(("invented", None, "a" * 40, (tag, values)))
 
 
 @pytest.mark.parametrize(

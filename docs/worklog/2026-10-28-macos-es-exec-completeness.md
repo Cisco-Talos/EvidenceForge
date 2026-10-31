@@ -1039,3 +1039,82 @@ permission request is to run that reader against the completed original Terminal
 command is `python -I -B private_terminal_review.py review-existing --private-run`, selecting
 that original outer directory at the hidden prompt. No new collection, setup, app/marker
 execution, live query, capture mutation or direct record display is authorized by preparing it.
+
+## Revision 360: approved Terminal review and bounded entitlement arrays
+
+The user explicitly approved the exact version-1 offline reviewer above against the completed
+Terminal kit. It ran once, read only its approved bounded input and returned fixed labels.
+Error NONE, step COMPLETE, provenance, original collection controls and retained chain all
+PASS. No collector, app, probe or live query ran, and no capture file changed. No native record,
+identity, argument value, environment value or entitlement key/value was displayed or copied.
+This approval does not authorize another review or a broader local-log read.
+
+The review closes these relationship/shape questions for this Apple Terminal experiment:
+
+- Terminal's entitlement object has exact Boolean values and arrays containing strings; no
+  nested object value types were observed. The previous flat-Boolean decoder rejected it.
+- Terminal forks the login child with user credentials. Before login exec the child establishes
+  its own POSIX session/group and a controlling terminal. Login then has real UID user,
+  effective UID zero and user groups. Its exact argv classes are basename `login`, `-pf`, user.
+- Login's post-exec inventory is VNODE FDs 0, 1, 2 and PIPE FDs 4, 5, with last-FD bound 5.
+  This report does not establish equality or inequality of those pipe IDs; do not invent it.
+- Login forks the shell while still effective UID zero; the child drops that privilege before
+  shell exec. Zsh argv0 is `-zsh`, its session/group remain login's, and only standard FDs remain.
+- Login, shell and marker retain the exact Terminal responsible execution. The command child
+  inherits the shell group at fork and forms its own group before exec. Xpcproxy/app startup
+  audit and membership changes agree with the already-qualified GUI prefix.
+
+The new shared entitlement type accepts only nonempty objects with exact Boolean or string-array
+values. It bounds keys, array/string lengths, aggregate text and nodes, detaches mutable input,
+and retains immutable canonical values. V11 renders native JSON arrays; scalar strings, numeric
+coercions and nested objects/arrays remain unsupported. Unknown versus explicit absence stays
+distinct. Boolean-only checkpoint encodings retain their previous bytes; a separate explicit
+`boolean-string-array-v1` tag preserves arrays through installed-release and runtime restore.
+The current source profile enables that capability. Old frozen absent-only and Boolean-only
+profiles still enforce their original restrictions, including publication fault recovery.
+
+Separately from the private capture, a read-only static signing check verified the installed
+Terminal and login against Apple's signing anchor and their exact public identifiers. Only
+vendor entitlement definitions with Apple-prefixed keys/service strings, absent-team labels
+and closed file-mode/ownership classes were returned. The sandbox trust-service failure was
+resolved by the same filtered check outside the sandbox; no app or native collector ran.
+Terminal's catalog template contains five Boolean entitlements and the `kTCCServiceAll` string
+array; login has two Boolean entitlements. Login is root-owned/root-group setuid mode 04555;
+Terminal is root-owned/root-group mode 0755. This is static vendor metadata, not a retrospective
+native-capture comparison. Generated hashes/UUIDs remain independently synthetic. iTerm2 gets
+none of these Apple-specific facts. File-mode/credential startup effects are not enabled by
+adding signer metadata.
+
+Review version 2 preserves future review of the original capture by recognizing only the exact
+revision-359 predecessor codec fingerprint in addition to the current decoder. It reports the
+fixed lineage class; arbitrary fingerprints still fail. Capture code, marker/guard, provenance,
+controls, permissions and scope checks are unchanged. Only invented bundles exercise this
+compatibility path before the separately approved real run below.
+
+That prepared version-2 reader also closes the two precise remaining comparisons without a
+new live collection: FD 4/5 pipe identity equality and native entitlement equality against the
+independent static vendor templates. Only fixed relationship/PASS/FAIL labels can leave it.
+Invented inputs test both pipe relationships, missing/malformed inventories, exact Boolean
+types and canary non-disclosure. The user separately approved that exact version-2 reader
+against the same completed original Terminal kit. It ran once and returned error NONE, step
+COMPLETE, qualified predecessor lineage, and provenance/controls/retained-chain PASS. Login's
+FD 4 and 5 are SAME pipe identity. Both Terminal and login vendor-entitlement comparisons PASS.
+No pipe ID, captured entitlement definition or other native value was disclosed. No collector,
+app, command or live query ran, and all capture files remained unchanged. That authorization
+does not extend to future modifications or other captures.
+
+The next development task is the canonical native terminal startup chain, using the qualified
+GUI prefix plus login setuid/session/TTY/pipe transitions and shell credential drop. The full
+in-window terminal/login/initial-shell rejection remains in place. The specific Apple Terminal
+relationship/template questions above are closed; no further Apple Terminal collection is
+currently required. The separate iTerm2 startup reference is still outstanding. This increment
+does not silently treat all GUI apps as qualified.
+
+Validation: 670 focused codec/signature/restore/source/profile/GUI/terminal cases passed in
+48.09 seconds. After the version-2 comparisons were added, all 27 offline-review tests plus
+the four public CLI/filter/checkpoint/complete-rejection cases passed in 40.23 seconds. The
+first CLI run caught an overlong behavior-manifest summary, corrected before final validation.
+Whole Ruff, formatting, whitespace and behavior checks pass. Revision-360 surface digest:
+`22c19638c7cb47f75b5f45bb0e79cf1e7667ebd8a07e2e510785bcc8cdff5029`.
+The version-2 code-only reviewer is `/private/tmp/eforge-terminal-startup-kit-0965dwiz`;
+its isolated help command passes. No native capture files are part of this change.

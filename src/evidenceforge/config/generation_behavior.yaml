@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 359
+current_revision: 360
 history_start_revision: 1
-behavior_surface_sha256: df38fab309196c7e5c1e185298f80ce8934694f386484ef53f6da1153d273b64
+behavior_surface_sha256: 22c19638c7cb47f75b5f45bb0e79cf1e7667ebd8a07e2e510785bcc8cdff5029
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3433,3 +3433,13 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Selects reviewed clean Terminal, login and zsh signing flags and ARM64e slices per artifact, preserving unknown startup facts and independent iTerm2 policy.
+  - revision: 360
+    id: macos-v11-string-array-entitlements
+    impact: localized
+    domains:
+      - macos-code-signature
+      - native-source-admission
+      - checkpoint-serialization
+    formats:
+      - macos_endpoint_security
+    summary: Admits bounded v11 string-array entitlements through immutable signatures, checkpoint values and source policy; adds verified Apple Terminal/login signing templates while preserving legacy restrictions and startup gates.

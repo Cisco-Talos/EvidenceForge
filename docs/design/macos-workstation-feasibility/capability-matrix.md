@@ -16,6 +16,14 @@ startup chain until authenticated GUI adoption. No private numeric value was dis
 Generic apps, in-window GUI/terminal startup and Dock/Spotlight remain separate obligations.
 See the [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 
+October 30, revision 360: the approved offline Terminal review establishes bounded Boolean
+and string-array entitlement exports, setuid login credentials, additional login pipe FDs and
+the login-to-shell credential drop. The v11 codec, canonical signature and checkpoint owners
+now preserve the entitlement shape; verified Apple-shipped signing definitions supply separate
+Terminal/login catalog templates. Older frozen profiles retain their narrower capabilities.
+The native terminal startup producer remains gated pending its actual fork/exec, session,
+controlling-terminal, credential and descriptor transitions. No iTerm2 metadata is inferred.
+
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
 output selection. The catalog can hold multiple profiles; historical wire decoders remain

@@ -178,6 +178,57 @@ def test_entitlement_depth_and_argument_bounds_are_explicit() -> None:
     assert review._argument(_CANARY, "/bin/zsh", _manifest()).kind == "OTHER"
 
 
+@pytest.mark.parametrize("same", [True, False])
+def test_pipe_pair_and_vendor_comparison_return_only_fixed_labels(same: bool) -> None:
+    manifest = _manifest()
+    rows = _chain(manifest)
+    app = next(
+        row
+        for row in rows
+        if row["event_type"] == 9
+        and row["event"]["exec"]["target"]["executable"]["path"] == review.capture.PATHS["apple"]
+    )
+    login = next(
+        row
+        for row in rows
+        if row["event_type"] == 9
+        and row["event"]["exec"]["target"]["executable"]["path"] == "/usr/bin/login"
+    )
+    app["event"]["exec"]["entitlements"] = deepcopy(review.APPLE_TERMINAL_VENDOR_ENTITLEMENTS)
+    login["event"]["exec"].update(
+        entitlements=deepcopy(review.LOGIN_VENDOR_ENTITLEMENTS),
+        fds=[{"fd": fd, "fdtype": 1} for fd in range(3)]
+        + [
+            {"fd": 4, "fdtype": 6, "pipe": {"pipe_id": 867530900}},
+            {"fd": 5, "fdtype": 6, "pipe": {"pipe_id": 867530900 if same else 867530901}},
+        ],
+        last_fd=5,
+    )
+    phases = review.analyze(_raws(rows), manifest)
+    assert phases[1].vendor_entitlements == phases[2].vendor_entitlements == "PASS"
+    assert phases[2].pipe_fd_4_5 == ("SAME" if same else "DIFFERENT")
+    report = review.ReviewReport(phases=phases).model_dump_json()
+    assert "8675309" not in report and "com.apple.private" not in report and _CANARY not in report
+    login["event"]["exec"]["entitlements"]["com.apple.private.endpoint-security.submit.login"] = 1
+    assert review.analyze(_raws(rows), manifest)[2].vendor_entitlements == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "fds,expected",
+    [
+        ([], "NOT_OBSERVED"),
+        ([{"fd": 4, "fdtype": 6, "pipe": {"pipe_id": 1}}], "INCONCLUSIVE"),
+        ([{"fd": fd, "fdtype": 1} for fd in (4, 5)], "INCONCLUSIVE"),
+        ([{"fd": fd, "fdtype": 6, "pipe": {"pipe_id": True}} for fd in (4, 5)], "INCONCLUSIVE"),
+        ([{"fd": fd, "fdtype": 6, "pipe": {"pipe_id": -1}} for fd in (4, 5)], "INCONCLUSIVE"),
+    ],
+)
+def test_incomplete_pipe_pairs_never_acquire_an_identity_relationship(
+    fds: list[dict], expected: str
+) -> None:
+    assert review._pipe_pair(fds) == expected
+
+
 def _bundle(root: Path) -> tuple[review.capture.Manifest, Path]:
     root.mkdir(mode=0o700)
     for name, source in review._source_paths().items():
@@ -238,6 +289,7 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
     }
     report = review.review_existing(root)
     assert report.error == "NONE" and report.step == "COMPLETE"
+    assert report.review_version == 2 and report.codec_lineage == "CURRENT"
     assert (
         report.provenance == report.original_collection_controls == report.retained_chain == "PASS"
     )
@@ -248,6 +300,18 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
         if path.is_file()
     }
     assert _CANARY not in report.model_dump_json()
+
+
+def test_offline_review_preserves_the_exact_qualified_predecessor_codec(tmp_path: Path) -> None:
+    root = tmp_path / "invented-capture"
+    manifest, run = _bundle(root)
+    changed = manifest.model_copy(update={"codec_sha256": review.BOOLEAN_PREDECESSOR_CODEC})
+    for path in (root / "SETUP.json", run / "provenance.json"):
+        path.write_text(changed.model_dump_json())
+    report = review.review_existing(root)
+    assert report.error == "NONE" and report.step == "COMPLETE"
+    assert report.codec_lineage == "QUALIFIED_BOOLEAN_PREDECESSOR"
+    assert report.provenance == report.retained_chain == "PASS"
 
 
 @pytest.mark.parametrize(
@@ -287,6 +351,8 @@ def test_offline_review_rejects_broken_provenance_scope_and_permissions(
         path.write_bytes(b"\n".join(_raws(rows)) + b"\n")
     report = review.review_existing(root)
     assert report.error != "NONE" and not report.phases
+    if mutation == "codec":
+        assert report.codec_lineage == "UNQUALIFIED"
     assert _CANARY not in report.model_dump_json()
 
 

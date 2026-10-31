@@ -43,6 +43,23 @@ def _load_capture() -> ModuleType:
 
 capture = _load_capture()
 reference = capture.reference
+# Exact revision-359 codec source used by the completed version-2 Terminal capture.
+# Only its qualified successor adds Boolean/string-array entitlement decoding.
+BOOLEAN_PREDECESSOR_CODEC = "8317f64282a9d79153565e6c4e21b4489ef4840982b1577bfcfed9b49fdc75f8"
+# Independent reference oracles from verified Apple-shipped static signatures.
+# These are vendor definitions, never copied from the private capture.
+APPLE_TERMINAL_VENDOR_ENTITLEMENTS = {
+    "com.apple.private.CFPasteboard.get-paste-source": True,
+    "com.apple.private.kernel.global-proc-info": True,
+    "com.apple.private.quarantine.control-add": True,
+    "com.apple.private.responsibility.set-to-other": True,
+    "com.apple.private.responsibility.set-to-self": True,
+    "com.apple.private.tcc.allow-prompting": ["kTCCServiceAll"],
+}
+LOGIN_VENDOR_ENTITLEMENTS = {
+    "com.apple.private.endpoint-security.submit.login": True,
+    "com.apple.private.security.clear-library-validation": True,
+}
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type ValueType = Literal["BOOLEAN", "STRING", "INTEGER", "REAL", "NULL", "ARRAY", "OBJECT", "OTHER"]
 type AccountWord = Literal["ZERO", "LOCAL_ACCOUNT", "ZERO_AND_LOCAL_ACCOUNT", "OTHER"]
@@ -164,11 +181,13 @@ class PhaseDetail(capture.Model):
     higher_descriptor_present: Check
     last_fd_slot: Slot | Literal["HIGHER", "INVALID"]
     last_fd_relative_to_inventory: Literal["SAME", "HIGHER", "LOWER", "INVALID"]
+    pipe_fd_4_5: Literal["SAME", "DIFFERENT", "NOT_OBSERVED", "INCONCLUSIVE"]
     entitlements: EntitlementLayout
+    vendor_entitlements: Check = "INCONCLUSIVE"
 
 
 class ReviewReport(capture.Model):
-    review_version: Literal[1] = 1
+    review_version: Literal[2] = 2
     purpose: Literal["TERMINAL_STARTUP_DETAIL_REVIEW"] = "TERMINAL_STARTUP_DETAIL_REVIEW"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -178,6 +197,9 @@ class ReviewReport(capture.Model):
         "INPUT", "LOCATION", "PROVENANCE", "CONTROLS", "RECORDS", "ANALYSIS", "COMPLETE"
     ] = "INPUT"
     provenance: Check = "INCONCLUSIVE"
+    codec_lineage: Literal[
+        "CURRENT", "QUALIFIED_BOOLEAN_PREDECESSOR", "UNQUALIFIED", "NOT_REVIEWED"
+    ] = "NOT_REVIEWED"
     original_collection_controls: Check = "INCONCLUSIVE"
     retained_chain: Check = "INCONCLUSIVE"
     terminal: capture.Terminal | None = None
@@ -370,6 +392,44 @@ def _argument(value: str, image: str, manifest: capture.Manifest) -> Argument:
     return Argument(kind="OTHER")
 
 
+def _pipe_pair(fds: list[dict]) -> str:
+    pair = [item for item in fds if item.get("fd") in (4, 5)]
+    if not pair:
+        return "NOT_OBSERVED"
+    if len(pair) != 2 or {item["fd"] for item in pair} != {4, 5}:
+        return "INCONCLUSIVE"
+    if any(
+        item.get("fdtype") != 6
+        or type(item.get("pipe")) is not dict
+        or type(item["pipe"].get("pipe_id")) is not int
+        or not 0 <= item["pipe"]["pipe_id"] < 2**64
+        for item in pair
+    ):
+        return "INCONCLUSIVE"
+    return "SAME" if pair[0]["pipe"]["pipe_id"] == pair[1]["pipe"]["pipe_id"] else "DIFFERENT"
+
+
+def _vendor_entitlements(role: capture.Role, value: object) -> Check:
+    expected = (
+        APPLE_TERMINAL_VENDOR_ENTITLEMENTS
+        if role == "APPLE_TERMINAL"
+        else LOGIN_VENDOR_ENTITLEMENTS
+        if role == "LOGIN"
+        else None
+    )
+    if expected is None:
+        return "INCONCLUSIVE"
+    return capture._check(
+        type(value) is dict
+        and value == expected
+        and all(
+            type(value[key]) is type(item)
+            and (type(item) is bool or all(type(element) is str for element in value[key]))
+            for key, item in expected.items()
+        )
+    )
+
+
 def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail, ...]:
     """Classify immutable native relationships in memory, without native values."""
     rows = [reference._decode(raw) for raw in raws]
@@ -400,6 +460,7 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
             continue
         before, payload = row["process"], row["event"]["exec"]
         target = payload["target"]
+        role = capture._role(target, manifest.marker)
         forks = [
             item
             for item in rows
@@ -425,7 +486,7 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
         }
         phases.append(
             PhaseDetail(
-                role=capture._role(target, manifest.marker),
+                role=role,
                 before_role=capture._role(before, manifest.marker),
                 before=_facts(before, manifest, anchors),
                 target=_facts(target, manifest, anchors),
@@ -483,9 +544,11 @@ def analyze(raws: list[bytes], manifest: capture.Manifest) -> tuple[PhaseDetail,
                 else "HIGHER"
                 if last > max(numbers)
                 else "LOWER",
+                pipe_fd_4_5=_pipe_pair(fds),
                 entitlements=entitlement_layout(
                     payload.get("entitlements"), present="entitlements" in payload
                 ),
+                vendor_entitlements=_vendor_entitlements(role, payload.get("entitlements")),
             )
         )
     return tuple(phases)
@@ -520,12 +583,20 @@ def review_existing(root: Path) -> ReviewReport:
             name: hashlib.sha256(path.read_bytes()).hexdigest()
             for name, path in _source_paths().items()
         }
+        codec_lineage = (
+            "CURRENT"
+            if manifest.codec_sha256 == reference._codec_digest()
+            else "QUALIFIED_BOOLEAN_PREDECESSOR"
+            if manifest.codec_sha256 == BOOLEAN_PREDECESSOR_CODEC
+            else "UNQUALIFIED"
+        )
+        report = report.model_copy(update={"codec_lineage": codec_lineage})
         if (
             provenance != manifest
             or manifest.code_sha256 != expected
             or manifest.code_sha256
             != {name: reference._digest(root / name) for name in capture.CODE}
-            or manifest.codec_sha256 != reference._codec_digest()
+            or codec_lineage == "UNQUALIFIED"
             or manifest.marker != capture._image(root / "terminal-marker")
             or manifest.guard_sha256 != reference._digest(root / "collector-guard")
         ):

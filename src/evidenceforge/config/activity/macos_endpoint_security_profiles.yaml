@@ -13,6 +13,7 @@ profiles:
     result_type: 0
     auth_result: 0
     clock_profile: macos27-workspace-entry-v1
-    exec_entitlements: absent_or_boolean_object
+    # Reviewed Terminal v11 value shape; actual app keys stay separately qualified.
+    exec_entitlements: absent_boolean_or_string_array_object
     # Reviewed v7 boot-parent export; launchd's own assigned ASID is distinct.
     boot_parent_token: default_unattributed_kernel

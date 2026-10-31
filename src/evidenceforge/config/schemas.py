@@ -844,28 +844,20 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
 
     signing_id: str = Field(min_length=1, max_length=512)
     team_id: str | None = Field(default=None, min_length=1, max_length=128)
-    entitlements: Literal["absent"] | dict[str, bool] | None = Field(
+    entitlements: Literal["absent"] | dict[str, bool | tuple[str, ...]] | None = Field(
         default=None,
-        description="Explicit absence or a bounded Boolean dictionary; null is unknown",
+        description="Explicit absence or a bounded Boolean/string-array object; null is unknown",
     )
 
     @field_validator("entitlements", mode="before")
     @classmethod
-    def exact_boolean_entitlements(cls, value: object) -> object:
-        """Keep absent, unknown and observed Boolean-object representations distinct."""
-        if type(value) is dict and (
-            not 1 <= len(value) <= 128
-            or any(
-                type(key) is not str
-                or not key.strip()
-                or len(key) > 512
-                or "\0" in key
-                or type(item) is not bool
-                for key, item in value.items()
-            )
-        ):
-            raise ValueError("Entitlements require 1-128 exact Boolean entries with bounded keys")
-        return value
+    def exact_entitlements(cls, value: object) -> object:
+        """Keep unknown, absent and observed immutable value types distinct."""
+        from evidenceforge.events.macos_entitlements import freeze_entitlements
+
+        if value is None or (type(value) is str and value == "absent"):
+            return value
+        return dict(freeze_entitlements(value))
 
     @field_validator("signing_id", "team_id")
     @classmethod
@@ -4160,7 +4152,9 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
     result_type: Literal[0]
     auth_result: Literal[0]
     clock_profile: Literal["macos27-workspace-entry-v1"]
-    exec_entitlements: Literal["absent_only", "absent_or_boolean_object"]
+    exec_entitlements: Literal[
+        "absent_only", "absent_or_boolean_object", "absent_boolean_or_string_array_object"
+    ]
     boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
 
     @field_validator(

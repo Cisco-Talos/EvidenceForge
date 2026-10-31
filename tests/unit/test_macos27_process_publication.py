@@ -26,7 +26,11 @@ from tests.unit.test_macos_execution_directory import _directory
 from tests.unit.test_macos_native_sink_publication import _prepare
 
 
-@pytest.mark.parametrize("known_entitlements", [False, True, "boolean"])
+@pytest.mark.parametrize("known_entitlements", [False, True, "boolean", "string_array"])
+@pytest.mark.parametrize(
+    "entitlement_policy",
+    ["absent_only", "absent_or_boolean_object", "absent_boolean_or_string_array_object"],
+)
 @pytest.mark.parametrize("exit_code", [None, 7])
 @pytest.mark.parametrize("failure", [None, "before_write", "after_write"])
 def test_active_profile_exports_only_known_phases_with_all_counter_claims(
@@ -35,7 +39,31 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     known_entitlements: bool | str,
     exit_code: int | None,
     failure: str | None,
+    entitlement_policy: str,
 ) -> None:
+    from evidenceforge.config.schemas import MacosEndpointSecurityProfilesConfig
+    from evidenceforge.generation.activity import macos_endpoint_security_profiles
+
+    original_catalog = macos_endpoint_security_profiles.load_macos_endpoint_security_profiles
+
+    def selected_catalog() -> MacosEndpointSecurityProfilesConfig | None:
+        catalog = original_catalog()
+        return (
+            catalog.model_copy(
+                update={
+                    "profiles": tuple(
+                        profile.model_copy(update={"exec_entitlements": entitlement_policy})
+                        for profile in catalog.profiles
+                    )
+                }
+            )
+            if catalog is not None
+            else None
+        )
+
+    monkeypatch.setattr(
+        macos_endpoint_security_profiles, "load_macos_endpoint_security_profiles", selected_catalog
+    )
     original = runtime_fixture._executable
     if known_entitlements:
 
@@ -47,6 +75,11 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
                     descriptor.code_signature,
                     entitlements=(("invented.enabled", True),)
                     if known_entitlements == "boolean"
+                    else (
+                        ("invented.enabled", True),
+                        ("invented.items", ("example.one", "example.two")),
+                    )
+                    if known_entitlements == "string_array"
                     else "absent",
                 ),
             )
@@ -137,19 +170,35 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     output.close()
     paths = list(tmp_path.rglob("macos_endpoint_security.ndjson"))
     records = [decode_endpoint_security_record(line) for line in paths[0].read_text().splitlines()]
-    expected = [11] + ([9] if known_entitlements else []) + ([15] if exit_code is not None else [])
+    has_exec = (
+        known_entitlements is True
+        or (known_entitlements == "boolean" and entitlement_policy != "absent_only")
+        or (
+            known_entitlements == "string_array"
+            and entitlement_policy == "absent_boolean_or_string_array_object"
+        )
+    )
+    expected = [11] + ([9] if has_exec else []) + ([15] if exit_code is not None else [])
     assert [record.event_type for record in records] == expected
     assert all(record.version == 11 for record in records)
     assert [record.global_seq_num for record in records] == [
         index for index, kind in enumerate((11, 9, 15)) if kind in expected
     ]
-    if known_entitlements:
+    if has_exec:
         execution = next(record for record in records if record.event_type == 9)
-        assert (
-            dict(execution.event.exec.entitlements)
-            if execution.event.exec.entitlements is not None
+        import json
+
+        expected_entitlements = (
+            {"invented.enabled": True}
+            if known_entitlements == "boolean"
+            else {"invented.enabled": True, "invented.items": ["example.one", "example.two"]}
+            if known_entitlements == "string_array"
             else None
-        ) == ({"invented.enabled": True} if known_entitlements == "boolean" else None)
+        )
+        assert (
+            json.loads(execution.to_ndjson())["event"]["exec"]["entitlements"]
+            == expected_entitlements
+        )
         assert execution.event.exec.target.audit_token.pid == after.pid
         assert execution.event.exec.args == (parent.image,)
         assert len(execution.event.exec.fds) == 3

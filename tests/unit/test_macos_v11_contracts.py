@@ -51,6 +51,55 @@ def test_v11_preserves_nonempty_boolean_entitlements_without_coercion() -> None:
     assert dict(record.event.exec.entitlements)["invented.enabled"] is True
 
 
+def test_v11_preserves_reviewed_string_arrays_without_retaining_mutable_values() -> None:
+    fields = _record(11, "exec")
+    values = {
+        "invented.enabled": True,
+        "invented.items": ["example.one", "example.two"],
+        "invented.empty": [],
+    }
+    fields["event"]["exec"]["entitlements"] = values
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert json.loads(record.to_ndjson()) == fields
+    values["invented.items"].append("mutated")
+    assert dict(record.event.exec.entitlements)["invented.items"] == ("example.one", "example.two")
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"invented.array": [1]},
+        {"invented.array": [True]},
+        {"invented.array": [None]},
+        {"invented.array": [["nested"]]},
+        {"invented.array": [{"nested": "text"}]},
+        {"invented.array": ["\0"]},
+        {"invented.array": ["x" * 16385]},
+        {"invented.array": ["x"] * 129},
+        {"invented.array": "scalar"},
+    ],
+)
+def test_v11_does_not_coerce_or_expand_unreviewed_array_shapes(values: object) -> None:
+    fields = _record(11, "exec")
+    fields["event"]["exec"]["entitlements"] = values
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(fields))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {f"invented.{index}": ["x"] * 128 for index in range(32)},
+        {f"invented.{index}": ["x" * 10000] * 16 for index in range(8)},
+    ],
+)
+def test_v11_entitlement_object_enforces_aggregate_node_and_text_bounds(values: dict) -> None:
+    fields = _record(11, "exec")
+    fields["event"]["exec"]["entitlements"] = values
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(fields))
+
+
 @pytest.mark.parametrize("field", ["entitlements", "dyld_exec_path", "script"])
 def test_v11_exec_requires_observed_nullable_and_path_members(field: str) -> None:
     fields = _record(11, "exec")

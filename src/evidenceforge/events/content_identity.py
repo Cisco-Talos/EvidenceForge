@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 from uuid import UUID
 
+from evidenceforge.events.macos_entitlements import FrozenEntitlements, validate_entitlements
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 
@@ -281,7 +282,7 @@ class MachOCodeSignature:
     signing_id: str | None
     team_id: str | None
     cdhash: str
-    entitlements: Literal["absent"] | tuple[tuple[str, bool], ...] | None = None
+    entitlements: Literal["absent"] | FrozenEntitlements | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed signing metadata without filling unknown fields."""
@@ -293,31 +294,21 @@ class MachOCodeSignature:
         object.__setattr__(self, "cdhash", _validate_digest(self.cdhash, "sha1"))
         if self.entitlements is not None and self.entitlements != "absent":
             entries = self.entitlements
-            if (
-                type(entries) is not tuple
-                or not 1 <= len(entries) <= 128
-                or any(
-                    type(entry) is not tuple
-                    or len(entry) != 2
-                    or type(entry[0]) is not str
-                    or not entry[0].strip()
-                    or len(entry[0]) > 512
-                    or "\0" in entry[0]
-                    or type(entry[1]) is not bool
-                    for entry in entries
-                )
-                or len({entry[0] for entry in entries}) != len(entries)
-            ):
-                raise ValueError("Entitlements require immutable distinct bounded Boolean entries")
+            validate_entitlements(entries)
             object.__setattr__(self, "entitlements", tuple(sorted(entries)))
 
     def serialized_values(self) -> tuple[object, ...]:
-        """Preserve old unknown/absent encodings and tag immutable Boolean entries."""
+        """Preserve older encodings and tag the bounded string-array extension."""
         values = (self.signing_id, self.team_id, self.cdhash)
         if self.entitlements is None:
             return values
         encoded = (
-            ("boolean-v1", self.entitlements)
+            (
+                "boolean-string-array-v1"
+                if any(type(value) is tuple for _, value in self.entitlements)
+                else "boolean-v1",
+                self.entitlements,
+            )
             if type(self.entitlements) is tuple
             else self.entitlements
         )
@@ -325,21 +316,30 @@ class MachOCodeSignature:
 
     @classmethod
     def from_serialized_values(cls, values: object) -> MachOCodeSignature:
-        """Restore old absence/unknown records and the explicit Boolean wire extension."""
+        """Restore explicit versioned values without promoting legacy unknown facts."""
         if type(values) not in {list, tuple} or len(values) not in {3, 4}:
             raise ValueError("Malformed serialized Mach-O signature")
         entries = values[3] if len(values) == 4 else None
         if type(entries) in {list, tuple}:
             if (
                 len(entries) != 2
-                or entries[0] != "boolean-v1"
+                or entries[0] not in ("boolean-v1", "boolean-string-array-v1")
                 or type(entries[1]) not in {list, tuple}
             ):
                 raise ValueError("Unknown serialized entitlement representation")
             pairs = entries[1]
             if any(type(pair) not in {list, tuple} or len(pair) != 2 for pair in pairs):
                 raise ValueError("Malformed serialized entitlement entries")
-            entries = tuple(tuple(pair) for pair in pairs)
+            tag = entries[0]
+            has_arrays = any(type(pair[1]) in (list, tuple) for pair in pairs)
+            if (tag == "boolean-v1" and has_arrays) or (
+                tag == "boolean-string-array-v1" and not has_arrays
+            ):
+                raise ValueError("Entitlement representation tag disagrees with its values")
+            entries = tuple(
+                (pair[0], tuple(pair[1]) if type(pair[1]) in (list, tuple) else pair[1])
+                for pair in pairs
+            )
         return cls(values[0], values[1], values[2], entries)
 
     @classmethod
@@ -349,7 +349,7 @@ class MachOCodeSignature:
         *,
         signing_id: str | None,
         team_id: str | None,
-        entitlements: Literal["absent"] | tuple[tuple[str, bool], ...] | None = None,
+        entitlements: Literal["absent"] | FrozenEntitlements | None = None,
     ) -> MachOCodeSignature:
         """Derive synthetic digest-shaped metadata once from the signed release.
 
@@ -360,7 +360,7 @@ class MachOCodeSignature:
         if key.platform != "macos":
             raise ValueError("Mach-O code signatures require a macOS binary release")
         if type(entitlements) is tuple:
-            entitlements = tuple(sorted(entitlements))
+            entitlements = tuple(sorted(validate_entitlements(entitlements)))
         facts = (*key.canonical_key, signing_id, team_id)
         if entitlements is not None:
             facts = (*facts, ("entitlements", entitlements))

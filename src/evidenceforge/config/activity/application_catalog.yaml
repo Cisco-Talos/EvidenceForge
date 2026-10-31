@@ -2924,6 +2924,14 @@ applications:
         code_signature:
           signing_id: com.apple.Terminal
           team_id: null
+          # Verified Apple-shipped macOS 27 signing metadata, not captured log values.
+          entitlements:
+            com.apple.private.CFPasteboard.get-paste-source: true
+            com.apple.private.kernel.global-proc-info: true
+            com.apple.private.quarantine.control-add: true
+            com.apple.private.responsibility.set-to-other: true
+            com.apple.private.responsibility.set-to-self: true
+            com.apple.private.tcc.allow-prompting: [kTCCServiceAll]
         deployment:
           kind: catalog
           release_policy: host_build
@@ -3013,6 +3021,14 @@ applications:
       macos:
         image_path: /usr/bin/login
         executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.login
+          team_id: null
+          # Verified Apple-shipped macOS 27 signing metadata; setuid execution
+          # and startup descriptors still require their canonical producer.
+          entitlements:
+            com.apple.private.endpoint-security.submit.login: true
+            com.apple.private.security.clear-library-validation: true
         deployment:
           kind: catalog
           product_id: apple-macos

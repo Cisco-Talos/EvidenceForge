@@ -691,8 +691,12 @@ inventory, boot clock and counters share existing checkpoint and exact publicati
 A native fork requires an actual authenticated fork and complete signing, validation, audit,
 terminal and file facts. Exec additionally requires exact argv, environment, cwd, Mach-O slice,
 script presence and complete post-exec descriptors. The bounded v11 codec exports null
-`entitlements` when the canonical binary explicitly models absence or a nonempty flat Boolean
-dictionary. Unknown entitlement facts and other value/container shapes do not qualify. The
+`entitlements` when the canonical binary explicitly models absence, or an object whose values
+are exact Booleans or arrays of strings. The macOS 27 Terminal reference establishes the
+string-array shape. Objects are bounded to 128 keys, arrays to 128 strings each, and the whole
+object to 4,096 nodes and 1 MiB of text. Canonical values are immutable and survive checkpoint
+restore. Unknown entitlement facts, scalar strings and nested objects/arrays do not qualify.
+Older frozen profiles retain their absent-only or Boolean-only restrictions. The
 macOS 27 Finder reference confirms the Apple xpcproxy Boolean template and the complete
 boot-parent fork, root launcher exec, GUI credential change and app exec chain.
 Exit requires an explicit canonical completed status or
@@ -702,8 +706,10 @@ become native fork or exec records.
 Qualified local-terminal and non-PTY SSH commands use canonical fork/exec with the same argv,
 image, identity and timestamp in eCAR and ES. The current terminal policy explicitly assigns
 its app lifetime as the owner of login/shell/command descendants; older or already-unknown
-ownership remains unknown. This does not qualify the terminal app's own launch/entitlement
-export. A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
+ownership remains unknown. Apple Terminal and login have explicit catalog signer/entitlement
+templates from verified Apple-shipped metadata; those templates alone do not qualify their
+startup process transitions or descriptors. iTerm2 signing facts remain independently unknown.
+A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
 operators and substitutions require a separate execution plan, and effect-bearing launches
 retain their existing gates. This bounded coverage is not yet the all-process guarantee.
@@ -749,7 +755,7 @@ path supports all three phases; this does not imply native coverage for every or
 Source policy owns windows, missingness and export delay. Atomic publication retains canonical
 identity, lifecycle, artifact leases, counters and frozen native bytes; sink recovery reuses
 those bytes without executing another process or allocating counters again. Historical v6/v9/v10
-decoding does not enable retired generation targets. Nonnull entitlement dictionaries, full-hash
+decoding does not enable retired generation targets. Other entitlement value shapes, full-hash
 extensions, other native ES families, specific Gatekeeper refusal causes and external SIEM ingestion remain outside
 this qualified scope. The human-reviewed macOS 27 controlled process evidence qualifies this
 bounded shape; broader native fidelity remains unclaimed. See the

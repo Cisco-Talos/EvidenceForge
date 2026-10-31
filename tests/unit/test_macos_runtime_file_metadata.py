@@ -106,14 +106,19 @@ def test_atomic_publication_and_checkpoint_retain_all_metadata(executable: bool)
     ) == manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
 
 
-def test_boolean_signature_entitlements_survive_runtime_artifact_head_restore() -> None:
+@pytest.mark.parametrize(
+    "entitlements",
+    [
+        (("invented.enabled", True),),
+        (("invented.array", ("example.one", "example.two")), ("invented.enabled", True)),
+    ],
+)
+def test_signature_entitlements_survive_runtime_artifact_head_restore(entitlements: tuple) -> None:
     manager = _manager()
     descriptor = _executable()
     descriptor = replace(
         descriptor,
-        code_signature=replace(
-            descriptor.code_signature, entitlements=(("invented.enabled", True),)
-        ),
+        code_signature=replace(descriptor.code_signature, entitlements=entitlements),
     )
     _publish(manager, descriptor)
     expected = manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
@@ -124,7 +129,7 @@ def test_boolean_signature_entitlements_survive_runtime_artifact_head_restore() 
     )
     actual = restored.resolve_record("MAC-A", "root", descriptor.native_path, "macos")
     assert actual == expected
-    assert actual.binary.code_signature.entitlements == (("invented.enabled", True),)
+    assert actual.binary.code_signature.entitlements == entitlements
 
 
 def test_metadata_does_not_become_a_content_digest_or_path_identity() -> None:
