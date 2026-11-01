@@ -13,14 +13,19 @@ simulation defaults. No Unified Log is collected.
 
 The machine-wide fork/exec/exit stream stays in bounded local memory. A random marker,
 executable identity, exact ancestry and controlled client prove the connected tree before
-any native rows can be saved. Unrelated connections are excluded. Only the proved tree/client
-can be saved privately after collector cleanup. Arguments, environments and captured paths
+any native rows can be saved. Version 3 selects the proved SSH ancestry, authentication and
+fork-only helper siblings, the controlled command and client before applying retention limits.
+Unrelated connections and personal shell-startup child trees are excluded. Only that bounded
+core can be saved privately after collector cleanup. Arguments, environments and captured paths
 can be sensitive: never share those records or put any kit file in Git.
 
 The shareable report contains only closed-vocabulary labels and opaque lifetime aliases.
 It includes core fork/exec/exit relationships, credential/audit/job-control comparisons,
 terminal equivalence, runtime/code-signing/entitlement comparisons and descriptor slots/types.
 It deliberately keeps `reference_review: REQUIRED` and `gate_status: NOT_EVALUATED`.
+`retained_scope: CONTROLLED_SSH_CORE` describes this reference experiment, not a reduction
+of the simulator's all-process accounting. Any safety limit returns a fixed `limit_scope`
+label; limits remain enforced. The version-2 attempt is single-use and must not be reused.
 
 ## 1. Setup once in a fresh kit
 

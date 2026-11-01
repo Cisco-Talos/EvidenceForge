@@ -78,6 +78,25 @@ type Error = Literal[
     "INTERNAL",
 ]
 type TerminalMode = Literal["NON_PTY", "PTY"]
+type LimitScope = Literal[
+    "NOT_REACHED",
+    "STREAM_BYTES",
+    "ANCESTRY_ROWS",
+    "RETAINED_ROWS",
+    "CORE_LIFETIMES",
+    "CORE_EVENTS",
+    "FIXED_REPORT",
+]
+
+
+class CaptureLimit(reference.PrivateError):
+    """A fixed diagnostic label for a bounded acquisition or analysis refusal."""
+
+    def __init__(self, scope: LimitScope) -> None:
+        super().__init__("LIMIT")
+        self.scope = scope
+
+
 type Life = Literal[
     "BOOT",
     "L0",
@@ -322,7 +341,7 @@ class Exit(reference.Model):
 class Report(reference.Model):
     """The sole shareable output; all strings are closed vocabulary."""
 
-    kit_version: Literal[1, 2] = 2
+    kit_version: Literal[1, 2, 3] = 3
     purpose: Literal["SSH_STARTUP_CHAIN_DIAGNOSTIC"] = "SSH_STARTUP_CHAIN_DIAGNOSTIC"
     collection: Literal["MARKER_AUTHENTICATED_LOOPBACK_CONNECTION_ONLY"] = (
         "MARKER_AUTHENTICATED_LOOPBACK_CONNECTION_ONLY"
@@ -330,6 +349,8 @@ class Report(reference.Model):
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     error: Error = "NONE"
+    limit_scope: LimitScope = "NOT_REACHED"
+    retained_scope: Literal["CONNECTION_TREE", "CONTROLLED_SSH_CORE"] = "CONNECTION_TREE"
     stage: Literal["SETUP_READY", "COLLECTOR_READY", "COMPLETE", "ERROR"] = "ERROR"
     step: Literal["INPUT", "SETUP", "COLLECTOR", "CONNECTION", "ANALYSIS", "COMPLETE"] = "INPUT"
     provenance: Check = "INCONCLUSIVE"
@@ -367,13 +388,15 @@ def _role(process: dict, manifest: Manifest) -> Role:
     )
 
 
-def select_receiver(rows: list[dict], sample: int, manifest: Manifest) -> list[int]:
-    """Authenticate a marker ancestry, then include only that fork-root's descendants."""
+def select_receiver(
+    rows: list[dict], sample: int, manifest: Manifest, *, core_only: bool | None = None
+) -> list[int]:
+    """Prove marker ancestry before selecting a bounded connection tree or SSH core."""
     lineage = {sample}
 
     def walk(process: dict, limit: int) -> bool:
         if len(lineage) > MAX_RETAINED:
-            raise reference.PrivateError("LIMIT")
+            raise CaptureLimit("ANCESTRY_ROWS")
         if _role(process, manifest) == "LAUNCHD" and reference._token(process)[5] == 1:
             return True
         for i in range(limit - 1, -1, -1):
@@ -418,6 +441,8 @@ def select_receiver(rows: list[dict], sample: int, manifest: Manifest) -> list[i
         for i in lineage
     ):
         return []
+    if core_only is True or (core_only is None and manifest.terminal_mode == "PTY"):
+        return _core_receiver_indices(rows, lineage, manifest)
     root = roots[0]
     executions = {reference._identity(rows[root]["event"]["fork"]["child"])}
     selected = {root}
@@ -431,8 +456,63 @@ def select_receiver(rows: list[dict], sample: int, manifest: Manifest) -> list[i
         elif row["event_type"] == 11:
             executions.add(reference._identity(row["event"]["fork"]["child"]))
         if len(selected) > MAX_RETAINED:
-            raise reference.PrivateError("LIMIT")
+            raise CaptureLimit("RETAINED_ROWS")
     return sorted(selected) if sample in selected and set(lineage) <= selected else []
+
+
+def _core_receiver_indices(rows: list[dict], lineage: set[int], manifest: Manifest) -> list[int]:
+    """Retain the proved spine and SSH fork-only/auth siblings, excluding shell startup trees."""
+
+    def life(process: dict) -> tuple[int, int]:
+        return reference._token(process)[5], reference._birth(process)
+
+    core = {life(rows[i]["process"]) for i in lineage}
+    core.update(
+        life(
+            rows[i]["event"]["exec"]["target"]
+            if rows[i]["event_type"] == 9
+            else rows[i]["event"]["fork"]["child"]
+        )
+        for i in lineage
+    )
+    # Only direct SSH helper siblings are candidates. Descendants of a shell's
+    # startup commands never become portable helper defaults.
+    for row in rows:
+        if (
+            row["event_type"] != 11
+            or life(row["process"]) not in core
+            or _role(row["process"], manifest) not in {"SSHD", "SESSION"}
+        ):
+            continue
+        child = row["event"]["fork"]["child"]
+        replacements = [
+            item["event"]["exec"]["target"]
+            for item in rows
+            if item["event_type"] == 9 and life(item["process"]) == life(child)
+        ]
+        if not replacements or all(_role(item, manifest) == "AUTH" for item in replacements):
+            if (
+                reference._token(child, "parent_audit_token")[5::2]
+                != reference._token(row["process"])[5::2]
+            ):
+                raise reference.PrivateError("DATA")
+            core.add(life(child))
+    selected = []
+    for i, row in enumerate(rows):
+        subject = (
+            row["event"]["fork"]["child"]
+            if row["event_type"] == 11
+            else row["event"]["exec"]["target"]
+            if row["event_type"] == 9
+            else row["process"]
+        )
+        if life(row["process"]) in core and life(subject) in core:
+            selected.append(i)
+    if not lineage <= set(selected):
+        return []
+    if len(selected) > MAX_RETAINED:
+        raise CaptureLimit("RETAINED_ROWS")
+    return selected
 
 
 class Tracker:
@@ -460,7 +540,7 @@ class Tracker:
         row = reference._decode(raw)
         self.total += len(raw)
         if self.total > MAX_STREAM:
-            raise reference.PrivateError("LIMIT")
+            raise CaptureLimit("STREAM_BYTES")
         kind, seq, glob = row.get("event_type"), row.get("seq_num"), row.get("global_seq_num")
         if (
             type(kind) is not int
@@ -547,7 +627,7 @@ class Tracker:
         ]
         selected = sorted(set(receiver + client))
         if len(selected) > MAX_RETAINED:
-            raise reference.PrivateError("LIMIT")
+            raise CaptureLimit("RETAINED_ROWS")
         return [self.ring[i][0] for i in selected]
 
 
@@ -666,6 +746,18 @@ def _graph_module() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _classify_core(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[GraphEvent, ...]:
+    """Bridge the prepared classifier's private exception types without emitting their text."""
+    module = _graph_module()
+    try:
+        report = module.classify([reference._decode(raw) for raw in raws], manifest, root)
+    except module.capture.CaptureLimit as error:
+        raise CaptureLimit(error.scope) from None
+    except module.reference.PrivateError as error:
+        raise reference.PrivateError(error.code) from None
+    return tuple(GraphEvent.model_validate(item.model_dump()) for item in report.events)
 
 
 def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, ...]:
@@ -1014,6 +1106,7 @@ def setup() -> Report:
         provenance="PASS",
         terminal_mode=mode,
         pty="REQUESTED" if mode == "PTY" else "NOT_COLLECTED",
+        retained_scope="CONTROLLED_SSH_CORE" if mode == "PTY" else "CONNECTION_TREE",
     )
 
 
@@ -1144,6 +1237,9 @@ def capture() -> Report:
         provenance="PASS",
         terminal_mode=manifest.terminal_mode,
         pty="REQUESTED" if manifest.terminal_mode == "PTY" else "NOT_COLLECTED",
+        retained_scope="CONTROLLED_SSH_CORE"
+        if manifest.terminal_mode == "PTY"
+        else "CONNECTION_TREE",
     )
     step = "COLLECTOR"
     collector = None
@@ -1199,9 +1295,27 @@ def capture() -> Report:
             or control.get("nonce") != manifest.nonce
         ):
             raise reference.PrivateError("DATA")
+        report = report.model_copy(
+            update={
+                "client_control": "PASS",
+                "sequence_continuity": reference._check(tracker.sequence_ok),
+                "marker_exit_zero": reference._check(tracker.marker_exit is True),
+            }
+        )
         raws = tracker.retained()
         if not raws or not tracker.sequence_ok:
             raise reference.PrivateError("DATA")
+        report = report.model_copy(
+            update={
+                "receiver_lineage": "PASS",
+                "wire_profile": reference._wire_profile(raws),
+            }
+        )
+        if any(
+            sum(reference._decode(raw)["event_type"] == kind for raw in raws) > 32
+            for kind in (9, 11, 15)
+        ):
+            raise CaptureLimit("FIXED_REPORT")
         _manifest(root)
         phases = analyze(raws, manifest, root)
         command_phase = next((phase for phase in phases if phase.role == "MARKER"), None)
@@ -1210,12 +1324,7 @@ def capture() -> Report:
         command_fork = command_phase.retained_fork
         core_graph = ()
         if manifest.terminal_mode == "PTY":
-            graph = _graph_module().classify(
-                [reference._decode(raw) for raw in raws], manifest, root
-            )
-            core_graph = tuple(
-                GraphEvent.model_validate(item.model_dump()) for item in graph.events
-            )
+            core_graph = _classify_core(raws, manifest, root)
         report = Report(
             stage="COMPLETE",
             step="COMPLETE",
@@ -1239,6 +1348,7 @@ def capture() -> Report:
             else "NOT_COLLECTED",
             command_fork=command_fork,
             core_graph=core_graph,
+            retained_scope=report.retained_scope,
             forks=analyze_forks(raws, manifest),
             exits=analyze_exits(raws, manifest),
             fork_roles=tuple(
@@ -1266,6 +1376,7 @@ def capture() -> Report:
                 "step": step,
                 "collector_ready": reference._check(tracker.ready),
                 "candidate_ring_evicted": tracker.evicted,
+                "limit_scope": error.scope if isinstance(error, CaptureLimit) else "NOT_REACHED",
             }
         )
         raws = []
@@ -1351,7 +1462,10 @@ def main() -> None:
         subprocess.SubprocessError,
         KeyboardInterrupt,
     ) as error:
-        report = Report(error=_failure(error))
+        report = Report(
+            error=_failure(error),
+            limit_scope=error.scope if isinstance(error, CaptureLimit) else "NOT_REACHED",
+        )
     if operation == "capture" and report.terminal_mode == "PTY":
         print(
             report.model_dump_json(
@@ -1360,6 +1474,8 @@ def main() -> None:
                     "stage",
                     "step",
                     "error",
+                    "limit_scope",
+                    "retained_scope",
                     "terminal_mode",
                     "pty",
                     "command_fork",

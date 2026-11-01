@@ -1773,3 +1773,48 @@ the documented setup/capture/connect once and share only SHAREABLE-SSH-PTY-REPOR
 single-use locks intact; failed attempts require a fresh kit. A further offline native read
 would need separate explicit permission. Next implementation depends on that fixed report;
 PTY generation remains unsupported meanwhile.
+
+## November 1: repair PTY reference selection after the human's LIMIT report
+
+The human supplied only SHAREABLE-SSH-PTY-REPORT.json from the handed-off PTY kit. That
+specific fixed report was read once. It reports version 2, LIMIT during ANALYSIS, no ring
+eviction and passing provenance/collector readiness/cleanup. The other qualification controls
+are inconclusive. It does not identify which bound fired or establish usable PTY evidence.
+No native records, provenance, controls, directory inventories or other private kit files
+were inspected. The old kit remains untouched and single-use.
+
+Code inspection finds that PTY retention still selected the entire connected descendant
+tree before the graph classifier removed personal shell-startup children. An invented
+100-child startup workload reproduces the RETAINED_ROWS failure despite an unchanged,
+small controlled SSH graph. This is a demonstrated kit defect, not proof that the human's
+private shell has that exact workload or that it triggered that particular bound.
+
+Version 3 selects the exact marker ancestry and direct SSH authentication/fork-only helper
+siblings before retention limits, along with the controlled client. The capture and graph
+classifier now share this selector. It preserves the receiver prefix, user worker, shell,
+actual controlled command fork/exec and short helper closures while excluding personal
+startup child trees. Report retained_scope explicitly identifies CONTROLLED_SSH_CORE.
+Unknown images on the proved spine remain OTHER. The simulator's independent process-start
+census and supported generation behavior are unchanged; this reference filter cannot exempt
+any modeled process from complete coverage.
+
+Limits stay bounded and independently reject ancestry rows, retained rows, stream bytes,
+core lifetime count, core event count or fixed-report capacity. The fixed limit_scope field
+identifies the failing class, including in compact output. Endpoint/sequence controls already
+verified before a later analysis failure remain in the saved report. Prepared classifier
+exceptions cross the module boundary as fixed codes; no exception text or observed value is
+exported. Failed analysis still saves no native row file, so this failed attempt cannot be
+salvaged through an offline reviewer and needs a fresh human capture.
+
+All 98 focused SSH kit/reviewer tests pass in 1.01 seconds; all 1,095 private-reference tests
+pass in 2.97 seconds. The large invented startup workload now retains the same exact core
+graph as the quiet control and no startup-canary records. A genuinely oversized helper graph
+still rejects with CORE_LIFETIMES. Cleanup/no-native-disk behavior after LIMIT, fixed enum
+redaction, module-boundary error translation and compact limit output also pass. Whole Ruff,
+format/whitespace and unchanged revision-369 behavior-manifest checks pass. No native command,
+collector, probe, SSH connection or further private read was run by the agent.
+
+Fresh code-only replacement: `/private/tmp/eforge-ssh-pty-kit-2tdf9qps`. Do not inspect it after
+handoff or modify/reuse the original kit. The human can repeat the same documented steps in
+this fresh directory, then share only SHAREABLE-SSH-PTY-REPORT.json. PTY generation remains
+gated pending a successful fixed report; no independent collection or review is authorized.

@@ -370,7 +370,9 @@ def test_client_is_loopback_only_config_free_password_only_and_preserves_stdio()
     assert "ps " not in source and "log stream" not in source
 
 
-@pytest.mark.parametrize("failure", [None, "collector", "interrupted", "analysis", "cleanup"])
+@pytest.mark.parametrize(
+    "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
+)
 def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -424,9 +426,11 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
         "_stop_collector",
         lambda _guard: closed.append("guard") or failure != "cleanup",
     )
-    if failure == "analysis":
+    if failure in {"analysis", "limit"}:
 
         def fail(*_args: object) -> None:
+            if failure == "limit":
+                raise kit.CaptureLimit("CORE_EVENTS")
             raise ValueError(_CANARY)
 
         monkeypatch.setattr(kit, "analyze", fail)
@@ -447,8 +451,10 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
             "interrupted": "INTERRUPTED",
             "analysis": "INTERNAL",
             "cleanup": "COLLECTOR",
+            "limit": "LIMIT",
         }[failure]
     )
+    assert report.limit_scope == ("CORE_EVENTS" if failure == "limit" else "NOT_REACHED")
     assert _CANARY not in next(root.rglob("SHAREABLE-REPORT.json")).read_text()
 
 

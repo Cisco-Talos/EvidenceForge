@@ -180,81 +180,23 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
         and reference._owned(row["event"]["exec"]["target"], manifest.marker)
         and row["event"]["exec"]["args"][1:] == ["--sample", manifest.nonce]
     ]
-    if len(samples) != 1 or not capture.select_receiver(rows, samples[0], manifest):
+    if len(samples) != 1:
         raise reference.PrivateError("DATA")
     sample = samples[0]
     marker = rows[sample]["event"]["exec"]["target"]
-    # Walk the command's actual ancestry. In a PTY workload the command has its
-    # own forked lifetime; the non-PTY control replaces the original shell.
-    spine = {sample}
-    process, limit = rows[sample]["process"], sample
-    while not (capture._role(process, manifest) == "LAUNCHD" and reference._token(process)[5] == 1):
-        previous = next(
-            (
-                i
-                for i in range(limit - 1, -1, -1)
-                if rows[i]["event_type"] in (9, 11)
-                and capture.support._matches_execution(
-                    rows[i]["event"]["exec"]["target"]
-                    if rows[i]["event_type"] == 9
-                    else rows[i]["event"]["fork"]["child"],
-                    process,
-                )
-            ),
-            None,
-        )
-        if previous is None:
-            raise reference.PrivateError("DATA")
-        spine.add(previous)
-        process, limit = rows[previous]["process"], previous
+    indices = capture.select_receiver(rows, sample, manifest, core_only=True)
+    if not indices:
+        raise reference.PrivateError("DATA")
+    selected = [rows[i] for i in indices]
     if not any(
-        rows[i]["event_type"] == 9
-        and capture._role(rows[i]["event"]["exec"]["target"], manifest) in {"ZSH", "BASH"}
-        for i in spine
+        row["event_type"] == 9
+        and capture._role(row["event"]["exec"]["target"], manifest) in {"ZSH", "BASH"}
+        for row in selected
     ):
         raise reference.PrivateError("DATA")
-    boot = process
-    core = {_life(rows[i]["process"]) for i in spine}
-    core.update(
-        _life(
-            rows[i]["event"]["exec"]["target"]
-            if rows[i]["event_type"] == 9
-            else rows[i]["event"]["fork"]["child"]
-        )
-        for i in spine
-    )
-    for row in rows:
-        if (
-            row["event_type"] != 11
-            or _life(row["process"]) not in core
-            or capture._role(row["process"], manifest) not in {"SSHD", "SESSION"}
-        ):
-            continue
-        child = row["event"]["fork"]["child"]
-        replacements = [
-            item["event"]["exec"]["target"]
-            for item in rows
-            if item["event_type"] == 9 and _life(item["process"]) == _life(child)
-        ]
-        if not replacements or all(
-            capture._role(item, manifest) == "AUTH" for item in replacements
-        ):
-            core.add(_life(child))
-    selected = []
-    for row in rows:
-        kind = row["event_type"]
-        subject = (
-            row["event"]["fork"]["child"]
-            if kind == 11
-            else row["event"]["exec"]["target"]
-            if kind == 9
-            else row["process"]
-        )
-        if _life(subject) not in core or _life(row["process"]) not in core:
-            continue
-        # An unknown image on proved ancestry remains OTHER. Classifying that
-        # relationship does not qualify the image or include unrelated children.
-        selected.append(row)
+    if len(selected) > 64:
+        raise capture.CaptureLimit("CORE_EVENTS")
+    boot = selected[0]["process"]
     aliases: dict[tuple[int, int], Life] = {_life(boot): "BOOT"}
     snapshots = []
     for row in selected:
@@ -268,7 +210,7 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
     for process in snapshots:
         if _life(process) not in aliases:
             if len(aliases) > 16:
-                raise reference.PrivateError("LIMIT")
+                raise capture.CaptureLimit("CORE_LIFETIMES")
             aliases[_life(process)] = f"L{len(aliases) - 1}"
     boot_origin = reference._token(boot)[6]
     login_origin = reference._token(marker)[6]

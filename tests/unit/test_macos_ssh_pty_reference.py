@@ -235,7 +235,9 @@ def test_terminal_equivalence_ignores_stat_times_but_requires_exact_identity(cha
     )
 
 
-@pytest.mark.parametrize("failure", [None, "collector", "interrupted", "analysis", "cleanup"])
+@pytest.mark.parametrize(
+    "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
+)
 def test_pty_capture_uses_shared_cleanup_and_validates_graph_in_memory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
 ) -> None:
@@ -265,7 +267,9 @@ def test_connect_rejects_non_terminal_stdio_before_control_or_exec(
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("field", ["terminal_mode", "pty", "command_fork", "core_graph"])
+@pytest.mark.parametrize(
+    "field", ["terminal_mode", "pty", "command_fork", "core_graph", "limit_scope", "retained_scope"]
+)
 def test_new_report_fields_cannot_export_arbitrary_native_text(field: str) -> None:
     with pytest.raises(ValidationError):
         kit.Report.model_validate(
@@ -415,3 +419,119 @@ def test_connect_preserves_window_streams_and_uses_only_the_prepared_client(
     output = capsys.readouterr().out
     assert "PRIVATE_REMOTE_COMMAND:" in output and "; exit" in output
     assert "NO PROMPT" not in output
+
+
+def _with_startup_branches(*, helper_siblings: bool = False) -> list[dict]:
+    rows = _pty_chain()
+    role = "SESSION" if helper_siblings else "ZSH"
+    at = next(
+        i
+        for i, row in enumerate(rows)
+        if row["event_type"] == 9
+        and kit._role(row["event"]["exec"]["target"], _pty_manifest()) == role
+    )
+    parent = rows[at]["event"]["exec"]["target"]
+    extras = []
+    for index in range(15 if helper_siblings else 100):
+        child = deepcopy(parent)
+        child["audit_token"].update(pid=7000 + index, pidversion=9000 + index)
+        child["parent_audit_token"] = deepcopy(parent["audit_token"])
+        child["ppid"] = child["original_ppid"] = parent["audit_token"]["pid"]
+        fork = deepcopy(rows[1])
+        fork["process"], fork["event"]["fork"]["child"] = deepcopy(parent), deepcopy(child)
+        extras.append(fork)
+        if not helper_siblings:
+            executed = deepcopy(child)
+            executed["audit_token"]["pidversion"] += 1
+            executed["executable"]["path"] = "/private/STARTUP_NOISE_CANARY"
+            executed["executable"]["stat"]["st_ino"] = 55000 + index
+            execution = deepcopy(rows[0])
+            execution["process"] = child
+            execution["event"]["exec"].update(
+                target=deepcopy(executed),
+                args=["/private/STARTUP_NOISE_CANARY"],
+                env=["PRIVATE=STARTUP_NOISE_CANARY"],
+            )
+            extras.append(execution)
+            child = executed
+        ended = deepcopy(rows[-1])
+        ended["process"] = deepcopy(child)
+        extras.append(ended)
+    rows[at + 1 : at + 1] = extras
+    sequences: dict[int, int] = {}
+    for i, row in enumerate(rows):
+        kind = row["event_type"]
+        row["seq_num"] = sequences.get(kind, 0)
+        sequences[kind] = row["seq_num"] + 1
+        row["global_seq_num"] = i + 1
+    return rows
+
+
+def test_pty_core_selection_precedes_limits_and_excludes_large_shell_startup_trees() -> None:
+    rows, manifest = _with_startup_branches(), _pty_manifest()
+    tracker = kit.Tracker(manifest)
+    tracker.collecting = True
+    for row in rows:
+        tracker.accept(json.dumps(row).encode())
+    assert not tracker.evicted and tracker.sequence_ok
+    sample = next(
+        i
+        for i, row in enumerate(rows)
+        if row["event_type"] == 9
+        and kit._role(row["event"]["exec"]["target"], manifest) == "MARKER"
+    )
+    with pytest.raises(kit.CaptureLimit) as old_tree_limit:
+        kit.select_receiver(rows, sample, manifest, core_only=False)
+    assert old_tree_limit.value.scope == "RETAINED_ROWS"
+    retained = tracker.retained()
+    assert len(retained) == len(_pty_chain()) < kit.MAX_RETAINED
+    assert b"STARTUP_NOISE_CANARY" not in b"".join(retained)
+    graph = kit._classify_core(retained, manifest, Path("/private/tmp") / _CANARY)
+    baseline = kit._classify_core(
+        [json.dumps(row).encode() for row in _pty_chain()], manifest, Path("/private/tmp") / _CANARY
+    )
+    assert graph == baseline
+    assert any(event.kind == "FORK" and event.before.role == "SESSION" for event in graph)
+
+
+def test_true_helper_graph_overflow_still_rejects_with_a_fixed_limit_label() -> None:
+    raws = [json.dumps(row).encode() for row in _with_startup_branches(helper_siblings=True)]
+    with pytest.raises(kit.CaptureLimit) as limit:
+        kit._classify_core(raws, _pty_manifest(), Path("/private/tmp") / _CANARY)
+    assert limit.value.scope == "CORE_LIFETIMES"
+    assert kit._failure(limit.value) == "LIMIT"
+
+
+def test_classifier_private_errors_cross_prepared_module_boundary_as_fixed_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = kit._graph_module()
+
+    def fail(*_args: object) -> None:
+        raise module.reference.PrivateError("DATA")
+
+    monkeypatch.setattr(module, "classify", fail)
+    monkeypatch.setattr(kit, "_graph_module", lambda: module)
+    with pytest.raises(kit.reference.PrivateError) as error:
+        kit._classify_core([], _pty_manifest(), Path("/private/tmp") / _CANARY)
+    assert kit._failure(error.value) == "DATA"
+
+
+def test_compact_failure_status_identifies_the_limit_without_records(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        kit,
+        "capture",
+        lambda: kit.Report(
+            terminal_mode="PTY",
+            error="LIMIT",
+            limit_scope="CORE_EVENTS",
+            retained_scope="CONTROLLED_SSH_CORE",
+        ),
+    )
+    monkeypatch.setattr(kit.sys, "argv", ["private_ssh_startup.py", "capture", "--private-run"])
+    kit.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output["error"] == "LIMIT" and output["limit_scope"] == "CORE_EVENTS"
+    assert output["retained_scope"] == "CONTROLLED_SSH_CORE" and "core_graph" not in output
