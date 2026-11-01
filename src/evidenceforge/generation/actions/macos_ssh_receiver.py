@@ -192,6 +192,7 @@ class MacosSshReceiverStartupRequest:
     phase_times: tuple[datetime, ...]
     launcher: CompiledApplicationDescriptor | None = None
     service_label: str | None = None
+    pty: bool = False
 
     @property
     def audit_phase(self) -> int:
@@ -199,6 +200,8 @@ class MacosSshReceiverStartupRequest:
         return 13 if self.launcher is not None else 6
 
     def __post_init__(self) -> None:
+        if type(self.pty) is not bool or (self.pty and self.launcher is None):
+            raise StateError("SSH PTY startup requires its explicit native graph")
         if (
             type(self.receiver) is not ProcessIdentity
             or type(self.service_account) is not MacAccount

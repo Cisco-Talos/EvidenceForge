@@ -4367,6 +4367,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
     ssh_receiver_startup: Literal["launchd_non_pty_v11"] | None = None
     ssh_receiver_service_label: Literal["com.openssh.sshd"] | None = None
+    ssh_pty_execution: Literal["zsh_foreground_v11"] | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
@@ -4400,6 +4401,8 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
             raise ValueError(
                 "Native SSH startup and service-label policy must be selected together"
             )
+        if self.ssh_pty_execution is not None and self.ssh_receiver_startup is None:
+            raise ValueError("SSH PTY execution requires the qualified native receiver startup")
         terminals = [entry.application_id for entry in self.terminal_startups]
         if len(terminals) != len(set(terminals)):
             raise ValueError("Terminal startup policies must have distinct application IDs")

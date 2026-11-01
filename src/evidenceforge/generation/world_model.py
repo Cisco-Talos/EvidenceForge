@@ -31,6 +31,7 @@ from evidenceforge.generation.activity.ssh_identity import (
 )
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -1297,7 +1298,18 @@ class WorldPlanner:
         ids_alerts: list[IdsAlertPlan] | None = None,
         rdp_transport_time: datetime | None = None,
         _prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
+        ssh_pty: bool = False,
     ) -> SessionBootstrapResult:
+        if type(ssh_pty) is not bool:
+            raise StateError("SSH PTY bootstrap intent requires an exact boolean")
+        if ssh_pty:
+            if session_kind != "ssh" or _get_os_category(target_system.os) != "macos":
+                raise StateError(
+                    "SSH PTY bootstrap requires its explicit qualified Mac SSH session"
+                )
+            # The bounded producer owns a fresh receiver/shell; it cannot reuse
+            # an existing non-PTY or unclassified session by username alone.
+            allow_existing = False
         if _prepared_rdp_bootstrap is not None:
             self._validate_prepared_rdp_session_bootstrap(
                 _prepared_rdp_bootstrap,
@@ -1468,6 +1480,7 @@ class WorldPlanner:
                 required_until=required_until,
                 session_end_plan=session_end_plan,
                 ids_alerts=ids_alerts,
+                **({"pty": True} if ssh_pty else {}),
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -2118,6 +2131,7 @@ class WorldPlanner:
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        pty: bool = False,
     ) -> SessionBootstrapResult:
         min_duration = max(
             30.0,
@@ -2158,6 +2172,7 @@ class WorldPlanner:
             defer_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
+            **({"pty": True} if pty else {}),
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:

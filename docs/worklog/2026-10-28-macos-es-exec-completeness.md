@@ -1818,3 +1818,68 @@ Fresh code-only replacement: `/private/tmp/eforge-ssh-pty-kit-2tdf9qps`. Do not 
 handoff or modify/reuse the original kit. The human can repeat the same documented steps in
 this fresh directory, then share only SHAREABLE-SSH-PTY-REPORT.json. PTY generation remains
 gated pending a successful fixed report; no independent collection or review is authorized.
+
+## Revision 370: reviewed PTY shell and foreground command integration
+
+The human supplied SHAREABLE-SSH-PTY-REPORT.json from the fresh version-3 kit. Only that
+fixed report was read. It establishes COMPLETE/NONE, passing provenance/collector/cleanup/
+bounded/sequence/client/lineage/marker controls, no ring eviction or limit, v11 shapes for
+all execs, an observed PTY and a genuine command fork. The receiver prefix matches the six-
+fork/six-exec non-PTY startup. The initial zsh has its own POSIX session/group and controlling
+terminal before exec, with three vnode standards. A command child inherits shell membership
+at fork, then has its own group before exec while staying in the shell's session and terminal.
+Root-receiver responsibility and remote audit identity persist. The marker and explicit shell
+exit are zero in this test; surviving worker exits are 255. These are controlled outcomes,
+not generic success defaults. The bounded reviewed facts and limits are in
+[PTY-REFERENCE.md](../design/macos-workstation-feasibility/ssh-startup-reference/PTY-REFERENCE.md).
+No native record, provenance, control file or other private kit path was inspected or copied.
+
+Authored `ssh_session.pty: true` now flows through the typed handler, WorldPlanner, SSH intent
+and existing exact deferred receiver owner. The Boolean is strict; omission preserves the
+non-PTY path and its historical stable IDs. Explicit PTY requests require a qualified Mac
+receiver, native startup policy and installed initial zsh. WorldPlanner does not reuse an
+unclassified/non-PTY session for this fresh-start contract. Source Mac SSH clients retain
+the explicit `-tt` argument. Other OS types keep their prior SSH behavior and reject this new
+explicit Mac PTY intent. No new top-level configuration block or emitter launch path exists.
+
+The shared nineteen-stage receiver coordinator selects terminal allocation at the shell's
+setsid boundary instead of explicit terminal absence. Authenticated State file actions bind
+its three vnode standards to that exact session-owned terminal; no non-PTY channel pipes are
+reserved or substituted. Parent/receiver ancestry, audit origin, user credentials, shell argv,
+directory, native image, terminal ownership and source timing retain their existing validation.
+All earlier helper stages and short-helper results are shared unchanged.
+
+`MacosPtyCommandStartup` reuses the existing retained Mac phase publication/recovery algorithm
+for three canonical cohorts: fork, setpgid, exec. The original inherited fork image/membership
+is preserved, the group transition has its own eCAR modification, and exec preserves the
+new group and the shell's terminal/session/standard open objects. It uses the existing activity-
+owned pending-startup map and checkpoint guard, not a new queue. Literal installed metadata,
+qualified parent/session and empty effects are checked before the first fork; unsupported
+effects, shell syntax, alternate/nested owners and unknown policy reject actionably. The
+normal process lifecycle owner receives the completed command and supplies only already
+qualified natural outcomes. No shell builtin gets an invented process.
+
+The durable Mac SSH auth tag `macos-v3-pty` preserves the mode through close-continuation
+recovery. Historical v1/v2 rows retain their previous meanings. Restored native graph checks
+verify that PTY mode agrees with the actual terminal and absent channel pipes; a changed tag
+cannot relabel a non-PTY shell. Generic final worker outcomes remain unknown, and no SSH
+Unified Log family or generic shell-teardown success was added.
+
+Measurable acceptance: receiver startup plus one foreground query reconciles exactly seven
+forks/seven execs with zero aggregate births. Native fork inherits shell PGID, both exec
+snapshots retain the command's own PGID, and SID/TTY/audit/responsibility remain shared correctly.
+The same canonical behavior works with eCAR alone under explicit partial collection. All nine
+public client/receiver CLI/filter/checkpoint cases pass in 139.36 seconds, including both
+terminal apps and complete PTY resume byte equality. All nine before-commit/lost-return/source-
+release cuts across fork/group/exec recover without duplicate starts; their finite extended
+matrix passes in 11.82 seconds. All 649 selected routine SSH/Finder/world/schema/manifest checks
+pass in 109.60 seconds (209 extended exclusions). The additional eCAR-only PTY check passes in
+2.31 seconds. Whole Ruff/format/whitespace and behavior-manifest checks pass. Revision-370 surface:
+`4691d8a7c94f40bd9f01bdb34c5c6d2cab208c8ee6c8cc9ee8d0f7365fb3d0ef`.
+
+This closes bounded initial-zsh PTY startup and literal foreground command execution. The
+global all-process P0 stays open: launchd job activation, other GUI apps/helper trees and
+Dock/Spotlight, existing-app windows/restoration and additional execution plans still require
+their own producers/qualification. No further collection or private-log read was needed to
+implement this PTY milestone. Next in the agreed order is launchd service/job activation;
+its native initial fork/exec facts need a separate controlled reference before admission.

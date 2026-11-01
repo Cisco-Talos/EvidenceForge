@@ -41,6 +41,7 @@ from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
 from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import (
@@ -61,6 +62,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedProcessEffectActor,
 )
 from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
+from evidenceforge.generation.actions.macos_pty_command import MacosPtyCommandStartup
 from evidenceforge.generation.actions.posix_process import (
     process_exec_occurrence,
     process_exit_occurrence,
@@ -427,7 +429,7 @@ class ProcessExecutionService:
                 or retained.request.effect_plan != request.effect_plan
                 or retained.request.prepared_effects != request.prepared_effects
             ):
-                raise StateError("Pending Finder startup changed its original execution request")
+                raise StateError("Pending Mac startup changed its original execution request")
             return self._continue_finder(request.stable_id, retained)
         admission = self._prepare_execution(request)
         actor = self._resolve_actor(request, admission)
@@ -440,6 +442,22 @@ class ProcessExecutionService:
         self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
         if request.macos_launch_kind == "finder":
             retained = self._prepare_finder(request, admission, launch)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
+        parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
+        session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and session is not None
+            and session.session_kind == "ssh"
+            and parent is not None
+            and parent.job_control is not None
+            and type(
+                self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
+            )
+            is MacosTerminalObservation
+        ):
+            retained = self._prepare_pty_command(request, admission, launch, parent)
             self.finder_startups[request.stable_id] = retained
             return self._continue_finder(request.stable_id, retained)
         root = self._prepare_root(request, admission, launch)
@@ -549,6 +567,73 @@ class ProcessExecutionService:
             app=binary,
             arguments=request.arguments,
             service_label=label,
+            times=times,
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
+
+    def _prepare_pty_command(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        parent: ProcessIdentity,
+    ) -> RetainedFinderLaunch:
+        """Admit the measured literal foreground command before its first canonical fork."""
+        provider = self.identity.macos_execution_metadata
+        if (
+            provider is None
+            or provider.profile.ssh_pty_execution != "zsh_foreground_v11"
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or request.requested_endpoint_effects
+            or request.new_posix_session
+            or request.exec_script is not None
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+            or len(self.finder_startups) >= 128
+        ):
+            raise StateError(
+                "SSH PTY commands require the qualified literal installed-command policy without effects"
+            )
+        arguments = (
+            request.arguments
+            if request.arguments is not None
+            else literal_shell_child_arguments(launch.actor.image, launch.actor.command_line)
+        )
+        binary = self.dispatcher.resolve_process_binary_identity(
+            parent.hostname, parent.principal, launch.actor.image, "macos"
+        )
+        session = self.state_manager.get_session_identity(parent.logon_id)
+        if not arguments or arguments[0] != launch.actor.image or session is None:
+            raise StateError("SSH PTY command requires literal argv and its exact owning session")
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.shell_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="shell_command",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        forked_at = ensure_utc(launch.time)
+        times = forked_at, forked_at + gap / 2, forked_at + gap
+        if request.source_visible_by is not None and times[-1] >= request.source_visible_by:
+            raise StateError("SSH PTY command cannot meet its requested source readiness deadline")
+        startup = MacosPtyCommandStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            session=session,
+            app=binary,
+            arguments=arguments,
             times=times,
             lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
             concurrency_group_id=request.concurrency_group_id,

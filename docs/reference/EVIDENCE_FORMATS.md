@@ -749,7 +749,18 @@ POSIX sessions, responsibility and each exec's socket/vnode/pipe table belong to
 State/action owners. The initial fork uses the same atomic deferred transport/source journal.
 Complete Mac-to-Mac CLI workloads through both terminals reconcile every in-window start;
 native-only output and checkpoint/resume preserve identical bytes. Generic worker teardown
-results remain unknown. This qualifies neither PTY startup nor additional SSH helper families.
+results remain unknown. Additional SSH helper families remain separately qualified.
+
+Revision 370 adds explicit `ssh_session.pty: true` for the qualified initial zsh login shell.
+The shared receiver owner allocates its session-owned terminal before shell exec and binds
+three standard vnodes to it. A literal installed foreground command uses the existing retained
+phase journal for fork, a separate setpgid transition and exec. The fork inherits the shell's
+group; exec preserves the child's new group while retaining the shell's POSIX session,
+terminal, audit origin, responsibility and standard open objects. One query adds exactly one
+fork and exec to the six/six receiver startup. Complete workloads through both terminal apps,
+filtered output, interrupted source recovery and PTY checkpoint/resume pass. Explicit PTY
+mode survives checkpoint recovery independently of historical non-PTY tags. Effects, pipelines,
+redirections, alternate login shells and background job execution remain outside this bound.
 
 A shell invocation such as `/bin/zsh -c 'id; groups'` can supply its literal argv and
 own exec; it does not automatically generate the commands inside that argument. Unquoted shell
@@ -792,8 +803,8 @@ and `/bin/bash` command parents are admitted by the frozen `nested_command_shell
 only when their existing audit, responsibility, image, terminal and descriptor facts pass the
 same gates. Shell command strings, scripts and flags do not inherit that qualification. Local GUI audit origins
 and the qualified Finder/terminal responsibility relationships are modeled; other GUI paths
-retain their independent gates. PTY command generation
-is unavailable. The controlled, fully specified v11 process
+retain their independent gates. The qualified PTY zsh/foreground-command path above uses its
+own measured transitions. The controlled, fully specified v11 process
 path supports all three phases; this does not imply native coverage for every ordinary command.
 
 Source policy owns windows, missingness and export delay. Atomic publication retains canonical

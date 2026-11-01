@@ -101,6 +101,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     finder: bool = False,
     terminal_id: str | None = None,
     complete_native_ssh: bool = False,
+    ssh_pty: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -133,6 +134,46 @@ def test_short_generation_checkpoint_suspension_and_resume(
             "user_activity": 1,
             "persona_connections": 1,
         }
+    if ssh_pty:
+        assert ssh_client and macos_receiver and complete_native_ssh
+        for entry in scenario_data["storyline"]:
+            for event in entry["events"]:
+                if event["type"] == "ssh_session":
+                    event["pty"] = True
+        scenario_data["storyline"].extend(
+            [
+                {
+                    "id": "pty-query-before-checkpoint",
+                    "time": "+55m",
+                    "actor": "test_user",
+                    "system": "SSH-TEST",
+                    "activity": "PTY query before checkpoint",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": "/usr/bin/id",
+                            "command_line": "/usr/bin/id",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+                {
+                    "id": "pty-query-after-checkpoint",
+                    "time": "+2h10m",
+                    "actor": "test_user",
+                    "system": "SSH-TEST",
+                    "activity": "PTY query after checkpoint",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": "/usr/bin/sw_vers",
+                            "command_line": "/usr/bin/sw_vers",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+            ]
+        )
     if smb_server is not None:
         scenario_data = macos_smb_scenario(scenarios_dir, server_platform=smb_server).model_dump(
             mode="json", exclude_none=True
@@ -431,7 +472,12 @@ def test_short_generation_checkpoint_suspension_and_resume(
         recovery = store.recover(read_only=True)
         head = loads(store.read_head(recovery, "activity-generator"))
         assert any(
-            any(isinstance(member, list) and member and member[0] == "macos-v2" for member in row)
+            any(
+                isinstance(member, list)
+                and member
+                and member[0] == ("macos-v3-pty" if ssh_pty else "macos-v2")
+                for member in row
+            )
             for row in head["ssh_lifecycles"]
         ), "The checkpoint must retain an active Mac receiver close continuation"
         if authored_close:

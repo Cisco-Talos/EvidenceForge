@@ -1008,7 +1008,7 @@ def _ssh_auth_row(value: object) -> list[object]:
             *times,
         ]
     return [
-        "macos-v2" if value.owns_posix_session else "macos-v1",
+        "macos-v3-pty" if value.pty else "macos-v2" if value.owns_posix_session else "macos-v1",
         receiver.responder_pid,
         receiver.session_id,
         times,
@@ -1027,7 +1027,7 @@ def _decode_ssh_auth(value: object) -> object:
 
     if type(value) is not list:
         raise CheckpointCorruptionError("SSH checkpoint authentication profile is malformed")
-    macos = len(value) == 6 and value[0] in ("macos-v1", "macos-v2")
+    macos = len(value) == 6 and value[0] in ("macos-v1", "macos-v2", "macos-v3-pty")
     if macos:
         pid, session_id = value[1:3]
         if type(value[3]) is not list or len(value[3]) != 4:
@@ -1056,7 +1056,11 @@ def _decode_ssh_auth(value: object) -> object:
         )
         if macos:
             return _SshMacAuthState(
-                receiver, value[4], value[5], owns_posix_session=value[0] == "macos-v2"
+                receiver,
+                value[4],
+                value[5],
+                owns_posix_session=value[0] != "macos-v1",
+                pty=value[0] == "macos-v3-pty",
             )
         return _SshLinuxAuthState(receiver, seed)
     except (TypeError, ValueError) as error:

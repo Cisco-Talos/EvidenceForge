@@ -132,6 +132,8 @@ class MacosNativeSshReceiverStartup(MacosSshReceiverStartup):
                     "auth_exec": "ssh_auth",
                     "shell_exec": "ssh_shell",
                 }.get(action)
+                if action == "shell_exec" and request.pty:
+                    layout = "ssh_pty_shell"
                 after = provider.plan_exec(
                     builder,
                     state,
@@ -165,7 +167,12 @@ class MacosNativeSshReceiverStartup(MacosSshReceiverStartup):
                 key = f"process-exec:{after.execution_id}"
             elif action == "setsid":
                 after = builder.change_posix_job_control(
-                    before, operation="setsid", changed_at=at, macos_terminal="absent"
+                    before,
+                    operation="setsid",
+                    changed_at=at,
+                    macos_terminal=provider.profile.terminal
+                    if role == "shell" and request.pty
+                    else "absent",
                 )
                 event = process_job_control_occurrence(
                     host=self._host,

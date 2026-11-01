@@ -1185,7 +1185,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `orig_bytes`, `resp_bytes`, `conn_state`, `ids_alerts` |
 | `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, platform-eligible Windows or Samba audit, eCAR | `operation` plus its share/client location shape | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, `client_access`, `auth_protocol`, `smb_principal`, external `client`, `ids_alerts` |
-| `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
+| `ssh_session` | canonical SSH connection (Zeek conn) + platform receiver evidence + EDR/eCAR | | `source_ip`, `ids_alerts`, `pty` (qualified Mac receiver) |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
@@ -2008,6 +2008,18 @@ native audit of all processes.
 The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Explicit `process.outcome: policy_refused` adds the bounded kernel app-policy refusal described below. Other Unified Log families remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
 
 The internal `process_fork` and `process_exec` canonical occurrences are not authored event types. Existing `process` authoring remains unchanged; bundles must own any image replacement, and native-source support must not be inferred from the eCAR exec extension.
+
+Set `pty: true` on a Mac receiver's `ssh_session` to request the qualified initial zsh login
+PTY; omission preserves the existing non-PTY behavior. The source-side modeled Mac client
+uses `ssh -tt`. A later literal `process` event on the receiver uses that shell's terminal,
+forks, enters its own foreground process group and execs while staying in the shell's POSIX
+session. Use `supplementary: none` for this bounded command path. Installed executable
+metadata must be complete. Effects, pipelines, redirections, background jobs and commands
+inside shell strings require separate execution plans; unsupported requests reject before
+allocating their command child. Alternate SSH login shells and SCP/SFTP helpers are not
+qualified by this PTY reference. Explicit PTY intent on other receiver OS types rejects.
+Known command results remain separate from generic session-teardown outcomes. The same
+canonical startup supports complete native coverage, output filtering and checkpoint/resume.
 
 The engine-only `process_audit_bind`, `process_privilege_drop` and `process_service_drop` observations are likewise unavailable in authored `events`. Existing UID/GID, identity and session semantics supply their facts; they introduce no Mac configuration block. The SSH bundle owns these internal transitions; their eCAR extensions do not admit additional native Endpoint Security event families.
 

@@ -25,6 +25,7 @@ class MacosSpawnIO:
         "ssh_auth",
         "ssh_launcher",
         "ssh_shell",
+        "ssh_pty_shell",
     ]
     first_pipe_id: int | None = None
 
@@ -39,6 +40,7 @@ class MacosSpawnIO:
             "ssh_auth",
             "ssh_launcher",
             "ssh_shell",
+            "ssh_pty_shell",
         }:
             raise ValueError("Mac spawn I/O requires a supported explicit file-action layout")
         if self.kind in {"login_pipes", "server_channels", "ssh_auth"}:

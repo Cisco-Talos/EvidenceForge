@@ -4298,9 +4298,11 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 if after.job_control is not None
                 else None
             )
-            if macos_spawn_io.kind == "ssh_shell":
+            if macos_spawn_io.kind in {"ssh_shell", "ssh_pty_shell"}:
                 macos_spawn_io.__post_init__()
-                descriptors_after = self._manager._macos_ssh_shell_descriptor_table(after)
+                descriptors_after = self._manager._macos_ssh_shell_descriptor_table(
+                    after, pty=macos_spawn_io.kind == "ssh_pty_shell"
+                )
             else:
                 descriptors_after, spawn_pipe_counter = plan_spawn_descriptors(
                     after,
@@ -13479,9 +13481,11 @@ class StateManager:
                         if after.job_control is not None
                         else None
                     )
-                    if execution.spawn_io.kind == "ssh_shell":
+                    if execution.spawn_io.kind in {"ssh_shell", "ssh_pty_shell"}:
                         execution.spawn_io.__post_init__()
-                        expected_descriptors = self._macos_ssh_shell_descriptor_table(after)
+                        expected_descriptors = self._macos_ssh_shell_descriptor_table(
+                            after, pty=execution.spawn_io.kind == "ssh_pty_shell"
+                        )
                         counter_change = None
                     else:
                         expected_descriptors, counter_change = plan_spawn_descriptors(
@@ -18126,8 +18130,12 @@ class StateManager:
             native_last_fd=2,
         )
 
-    def _macos_ssh_shell_descriptor_table(self, after: ProcessIdentity) -> MacosDescriptorTable:
-        """Bind the initial non-PTY login shell to its already reserved channel streams."""
+    def _macos_ssh_shell_descriptor_table(
+        self, after: ProcessIdentity, *, pty: bool = False
+    ) -> MacosDescriptorTable:
+        """Bind the initial shell to its authenticated pipes or exact session-owned PTY."""
+        if type(pty) is not bool:
+            raise StateError("SSH shell terminal mode requires an exact boolean")
         at = after.execution_started_at
         session = self.get_session_at(after.logon_id, at)
         parent = self.get_process_identity_at(after.hostname, after.parent_pid, at)
@@ -18143,9 +18151,6 @@ class StateManager:
             or at > session.source_ready_time
             or session.network_close_time is None
             or at >= session.network_close_time
-            or session.ssh_command_streams is None
-            or session.ssh_command_streams.session_object_id != session.ecar_object_id
-            or session.ssh_command_streams.hostname != after.hostname
             or parent is None
             or parent.parent_pid != session.transport_pid
             or parent.logon_id != after.logon_id
@@ -18160,9 +18165,33 @@ class StateManager:
             or after.credentials.audit_uid != session.audit_origin.audit_uid
             or after.credentials.audit_session_id != session.audit_origin.audit_session_id
             or after.job_control is None
-            or self.known_macos_terminal(after.job_control.session, at) != "absent"
         ):
             raise StateError("Mac SSH shell descriptors require its exact authenticated worker")
+        terminal = self.known_macos_terminal(after.job_control.session, at)
+        if pty:
+            if (
+                type(terminal) is not MacosTerminalObservation
+                or terminal.session != after.job_control.session
+                or session.ssh_command_streams is not None
+                or after.image != "/bin/zsh"
+            ):
+                raise StateError("Mac SSH PTY shell requires its exact terminal and qualified zsh")
+            object_id = stable_uuid(
+                "macos-ssh-pty-open", after.object_id, terminal.metadata.canonical_json()
+            )
+            return MacosDescriptorTable(
+                after.hostname,
+                at,
+                tuple(MacosDescriptorBinding(fd, "file", object_id, False) for fd in range(3)),
+                2,
+            )
+        if (
+            terminal != "absent"
+            or session.ssh_command_streams is None
+            or session.ssh_command_streams.session_object_id != session.ecar_object_id
+            or session.ssh_command_streams.hostname != after.hostname
+        ):
+            raise StateError("Mac SSH non-PTY shell requires its exact channel streams")
         # Readiness controls external commands. The startup owner observes the
         # same reserved objects at the earlier initial-shell exec boundary.
         return MacosDescriptorTable(after.hostname, at, session.ssh_command_streams.bindings, 2)

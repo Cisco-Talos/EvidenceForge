@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 369
+current_revision: 370
 history_start_revision: 1
-behavior_surface_sha256: 68e68f530c95b248893b66f8b14e0fb8615b0043e412e77095a8cd8231fa0bef
+behavior_surface_sha256: 4691d8a7c94f40bd9f01bdb34c5c6d2cab208c8ee6c8cc9ee8d0f7365fb3d0ef
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3547,3 +3547,16 @@ changes:
       - zeek
       - syslog
     summary: Integrates the reviewed non-PTY launchd fork with atomic deferred source ingress, selects nineteen-stage receiver startup and preserves legacy frozen-profile and checkpoint graph verification.
+  - revision: 370
+    id: native-ssh-pty-shell-and-foreground-commands
+    impact: material
+    domains:
+      - macos-process-lifecycle
+      - ssh-session-intent
+      - ssh-checkpoint-recovery
+    formats:
+      - macos_endpoint_security
+      - ecar
+      - zsh_history
+      - zeek
+    summary: Adds explicit qualified Mac SSH PTY intent, shared receiver terminal allocation and retained fork/setpgid/exec for literal foreground commands; preserves non-PTY profiles and unknown teardown results.

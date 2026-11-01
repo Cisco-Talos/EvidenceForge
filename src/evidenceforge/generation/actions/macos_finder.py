@@ -56,6 +56,8 @@ class MacosFinderStartup:
     runtime content and command effects need their own retention contract.
     """
 
+    publication_source: str = "finder"
+
     def __init__(
         self,
         *,
@@ -305,7 +307,9 @@ class MacosFinderStartup:
             dispatcher.bind_action_cohort_projection(carrier, state_plan=plan)
             for carrier in carriers
         )
-        effects = ExecutionEffectPlan(ActionAnchor("process_execution", root, source="finder"), ())
+        effects = ExecutionEffectPlan(
+            ActionAnchor("process_execution", root, source=self.publication_source), ()
+        )
         return dispatcher.prepare_action_cohort_batch(
             root,
             plan,

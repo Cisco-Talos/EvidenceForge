@@ -431,8 +431,10 @@ workloads pass complete fork/exec reconciliation through the public CLI. Non-PTY
 also have a qualified launchd/xpcproxy/helper/shell chain: six real forks, six execs and three
 known short-helper exits. Complete Mac-to-Mac SSH workloads pass through both terminals,
 including output filtering and checkpoint recovery. Generic session teardown retains unknown
-exit results. Existing shells reuse their identities. Inner commands are not automatically
-expanded. Other GUI apps, restored jobs/new windows in an existing app, SSH PTY startup, complex command
+exit results. Explicit SSH `pty: true` now qualifies initial zsh startup and literal installed
+foreground commands, with one terminal and distinct command process groups. Existing shells
+reuse their identities. Inner commands are not automatically expanded. Other GUI apps,
+restored jobs/new windows in an existing app, complex command
 plans and unknown binary metadata still limit broader complete process coverage.
 Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
 and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).

@@ -17,18 +17,38 @@ from tests.support.macos_ssh import macos_ssh_scenario
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("macos_receiver", [False, True])
+@pytest.mark.parametrize("macos_receiver,pty", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
 def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
     tmp_path: Path,
     scenarios_dir: Path,
     terminal_id: str,
     macos_receiver: bool,
+    pty: bool,
 ) -> None:
     raw = macos_ssh_scenario(scenarios_dir, macos_receiver=macos_receiver).model_dump(
         mode="json", exclude_none=True
     )
     raw["time_window"]["duration"] = "15m"
+    if pty:
+        raw["storyline"][1]["events"][0]["pty"] = True
+        raw["storyline"].append(
+            {
+                "id": "pty-query",
+                "time": "+12m",
+                "actor": "test_user",
+                "system": "SSH-TEST",
+                "activity": "Run one literal query from the remote PTY shell",
+                "events": [
+                    {
+                        "type": "process",
+                        "process_name": "/usr/bin/id",
+                        "command_line": "/usr/bin/id",
+                        "supplementary": "none",
+                    }
+                ],
+            }
+        )
     raw["macos_process_coverage"] = "complete"
     raw["baseline_activity"]["traffic_rates"] = {"user_activity": 1, "persona_connections": 1}
     raw["environment"]["deployment_overrides"] = [
@@ -84,6 +104,8 @@ def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
             if record.event_type == 9 and record.event.exec.target.executable.path == "/usr/bin/ssh"
         ]
         assert clients
+        if pty:
+            assert any("-tt" in record.event.exec.args for record in clients)
         for record in clients:
             wire = json.loads(record.to_ndjson())
             payload = wire["event"]["exec"]
@@ -125,6 +147,20 @@ def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
                 and row["event"]["exec"]["target"]["ppid"] == 1
             ]
             assert workers
+            if pty:
+                queries = [
+                    row["event"]["exec"]
+                    for row in receiver_rows
+                    if row["event_type"] == 9
+                    and row["event"]["exec"]["target"]["executable"]["path"] == "/usr/bin/id"
+                ]
+                assert queries
+                for query in queries:
+                    process = query["target"]
+                    assert process["group_id"] == process["audit_token"]["pid"]
+                    assert process["session_id"] == process["ppid"]
+                    assert process["tty"] is not None
+                    assert query["fds"] == [{"fd": fd, "fdtype": 1} for fd in range(3)]
             for worker in workers:
                 forks = [
                     row
@@ -144,11 +180,12 @@ def test_complete_ssh_client_cli_matches_native_metadata_and_filtered_bytes(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("macos_receiver", [False, True])
+@pytest.mark.parametrize("macos_receiver,pty", [(False, False), (True, False), (True, True)])
 def test_complete_ssh_client_checkpoint_resume_preserves_integer_signatures_and_execs(
     tmp_path: Path,
     scenarios_dir: Path,
     macos_receiver: bool,
+    pty: bool,
 ) -> None:
     from tests.integration.test_checkpoint_smoke import (
         test_short_generation_checkpoint_suspension_and_resume as checkpoint_gate,
@@ -165,4 +202,5 @@ def test_complete_ssh_client_checkpoint_resume_preserves_integer_signatures_and_
         macos_receiver,
         False,
         complete_native_ssh=True,
+        ssh_pty=pty,
     )

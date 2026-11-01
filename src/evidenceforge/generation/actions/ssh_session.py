@@ -68,6 +68,7 @@ from evidenceforge.events.lifecycle import (
     ProcessLifecycleSnapshot,
     SessionEndPlan,
 )
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.base import (
@@ -714,6 +715,15 @@ class SshSessionRequest:
     session_end_plan: SessionEndPlan | None = None
     ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
+    pty: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.pty) is not bool:
+            raise TypeError("SSH PTY intent requires an exact boolean")
+        if self.pty and _get_os_category(self.target_system.os) != "macos":
+            raise StateError(
+                "Explicit SSH PTY generation currently requires a qualified Mac receiver"
+            )
 
     @property
     def bundle_owns_close(self) -> bool:
@@ -744,6 +754,7 @@ class SshSessionRequest:
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
+            f"{':pty' if self.pty else ''}"
         )
         return f"ssh-session-{seed:016x}"
 
@@ -762,6 +773,7 @@ class SshSessionRequest:
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.emit_session_close}:{self.defer_session_close}:"
             f"{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
+            f"{':pty' if self.pty else ''}"
         )
         return f"ssh-session-exec-{seed:016x}"
 
@@ -873,12 +885,18 @@ class _SshMacAuthState:
     initial_receiver_image: str
     receiver_image: str
     owns_posix_session: bool = False
+    pty: bool = False
 
     def __post_init__(self) -> None:
         if type(self.receiver) is not SshReceiverAuthentication:
             raise TypeError("Mac SSH close requires exact receiver authentication facts")
         if type(self.owns_posix_session) is not bool:
             raise TypeError("Mac SSH session ownership requires an exact boolean")
+        if type(self.pty) is not bool or (
+            self.pty
+            and (not self.owns_posix_session or self.initial_receiver_image != "/sbin/launchd")
+        ):
+            raise TypeError("Mac SSH PTY ownership requires its explicit POSIX session")
         for image in (self.initial_receiver_image, self.receiver_image):
             if (
                 type(image) is not str
@@ -2206,6 +2224,7 @@ class _SshReceiverStartupBinding:
                 != plan.auth_state.receiver.authenticated_at
                 or request.phase_times[-1] > plan.auth_state.receiver.ready_at
                 or (len(request.phase_times) in {12, 19}) != plan.auth_state.owns_posix_session
+                or request.pty != plan.auth_state.pty
             ):
                 raise StateError("Mac SSH retained startup crossed its exact close facts")
             request.__post_init__()
@@ -2357,6 +2376,22 @@ class _SshReceiverStartupBinding:
             ):
                 raise StateError("Restored Mac SSH startup lost its exact POSIX session ownership")
             if native_graph:
+                terminal = state.known_macos_terminal(
+                    shell_group.session, first_shell_exec.execution_started_at
+                )
+                if (
+                    plan.auth_state.pty
+                    and (
+                        type(terminal) is not MacosTerminalObservation
+                        or session.ssh_command_streams is not None
+                        or first_shell_exec.image != "/bin/zsh"
+                    )
+                    or not plan.auth_state.pty
+                    and (terminal != "absent" or session.ssh_command_streams is None)
+                ):
+                    raise StateError(
+                        "Restored native SSH startup changed its PTY/channel ownership"
+                    )
                 running = state.get_process(session.system, root.pid)
                 history = {item.execution_ordinal: item for item in running.prior_executions}
                 launcher, wrapper = history.get(1), history.get(2)
@@ -2855,6 +2890,7 @@ class _SshCloseContinuation:
             defer_session_close=True,
             source=plan.source_tag,
             session_end_plan=plan.authoritative_end_plan,
+            pty=plan.auth_state.pty if type(plan.auth_state) is _SshMacAuthState else False,
         )
         return SshSessionActionBundle(request=request, executor=executor)
 
@@ -3061,6 +3097,7 @@ class SshSessionExecutor(Protocol):
         process_image: str,
         source_port: int,
         required_until: datetime | None = None,
+        pty: bool = False,
     ) -> tuple[int, str] | None:
         """Return the modeled source-side SSH client for any supported endpoint OS."""
         ...
@@ -3458,6 +3495,7 @@ class SshSessionActionBundle:
             time=request.time,
             process_image="",
             source_port=state.source_port,
+            **({"pty": True} if request.pty else {}),
             required_until=state.close_time
             if _get_os_category(source.os) in {"linux", "macos"}
             else None,
@@ -4286,6 +4324,10 @@ class SshSessionActionBundle:
             and executor.dispatcher.macos_es_ingress is not None
             and executor.dispatcher.macos_es_ingress.enabled
         )
+        if request.pty and (
+            not native_receiver or provider.profile.ssh_pty_execution != "zsh_foreground_v11"
+        ):
+            raise StateError("SSH PTY startup requires the qualified native zsh foreground profile")
         environment = None
         phase_times: tuple[datetime, ...] = ()
         if macos:
@@ -4300,6 +4342,10 @@ class SshSessionActionBundle:
                 deployment=executor.dispatcher.deployment_registry,
                 native=native_receiver,
             )
+            if request.pty and environment.shell.image_path != "/bin/zsh":
+                raise StateError(
+                    "SSH PTY startup currently qualifies the installed zsh login shell"
+                )
             phase_times = plan_macos_ssh_startup_times(
                 connection_time=connection_time,
                 authenticated_at=accepted_time,
@@ -4341,6 +4387,7 @@ class SshSessionActionBundle:
             if (
                 provider is not None
                 and provider.profile.ssh_command_descriptors == "standard_pipes"
+                and not request.pty
             ):
                 session_plan = batch_builder.enrich_macos_ssh_command_streams(
                     session_plan, first_pipe_id=provider.profile.first_pipe_id
@@ -4462,6 +4509,7 @@ class SshSessionActionBundle:
                 initial_receiver_image=receiver_plan.identity.image,
                 receiver_image=environment.session_worker.image_path,
                 owns_posix_session=True,
+                pty=request.pty,
             )
             startup_request = MacosSshReceiverStartupRequest(
                 receiver=receiver_plan.identity,
@@ -4473,6 +4521,7 @@ class SshSessionActionBundle:
                 shell=environment.shell,
                 phase_times=phase_times,
                 launcher=environment.launcher,
+                pty=request.pty,
                 service_label=(
                     f"{provider.profile.ssh_receiver_service_label}."
                     f"{stable_uuid('macos-ssh-service-instance', execution_id).upper()}"
@@ -4815,6 +4864,7 @@ class SshSessionActionBundle:
                     if _get_os_category(source_system.os) in {"linux", "macos"}
                     else None
                 ),
+                **({"pty": True} if request.pty else {}),
             )
             if client is not None:
                 source_pid, source_process_image = client

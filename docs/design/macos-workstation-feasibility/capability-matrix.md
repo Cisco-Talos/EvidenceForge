@@ -1,6 +1,15 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-10-31)
+## Current generation admission (2026-11-01)
+
+November 1, revision 370: the human's successful v3 PTY fixed report establishes the shared
+receiver prefix plus controlling-terminal shell startup and genuine foreground command fork,
+setpgid and exec. Explicit `ssh_session.pty: true` selects the qualified initial zsh and
+literal installed command path. Terminal/iTerm2 full/native-only and exact PTY checkpoint
+tests pass; interrupted phases retain the same process and native rows. Omitted PTY intent
+preserves non-PTY behavior. The [PTY reference](ssh-startup-reference/PTY-REFERENCE.md) records
+the evidence and limits. Pipelines, effects, alternate shells, background jobs and additional
+helper families remain distinct. No new local-log read or capture was needed for implementation.
 
 Revision 369 qualifies bounded non-PTY SSH receiver startup: six actual forks, six successful
 execs and three known short-helper exits. The approved fixed-output offline review resolves

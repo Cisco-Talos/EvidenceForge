@@ -28,7 +28,7 @@ def plan_spawn_descriptors(
     """
     intent.__post_init__()
     at, host = process.execution_started_at, process.hostname
-    if intent.kind == "ssh_shell":
+    if intent.kind in {"ssh_shell", "ssh_pty_shell"}:
         raise StateError("Mac SSH shell file actions require the authenticated State session")
     if intent.kind == "ssh_launcher":
         if (

@@ -18929,6 +18929,7 @@ class ActivityGenerator:
         process_image: str,
         source_port: int,
         required_until: datetime | None = None,
+        pty: bool = False,
     ) -> tuple[int, str] | None:
         """Materialize the source-side SSH client before opening its transport."""
 
@@ -18941,6 +18942,7 @@ class ActivityGenerator:
                 process_image=process_image,
                 source_port=source_port,
                 required_until=required_until,
+                pty=pty,
             )
         if _get_os_category(source_system.os) == "linux":
             return self.ensure_linux_ssh_client_process(
@@ -18985,6 +18987,7 @@ class ActivityGenerator:
         process_image: str,
         source_port: int,
         required_until: datetime | None = None,
+        pty: bool = False,
     ) -> tuple[int, str] | None:
         """Bind an interactive Mac client to the shared SSH transport owner.
 
@@ -19027,6 +19030,8 @@ class ActivityGenerator:
             .replace("{ssh_target}", shlex.quote(target))
         )
         arguments = catalog_direct_exec_arguments(image, command)
+        if pty:
+            arguments = (arguments[0], "-tt", *arguments[1:])
         command = shlex.join(arguments)
         gap = self._freeze_profile_activity_gap(
             "macos.ssh_client_before_transport",
@@ -24878,6 +24883,7 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
+        pty: bool = False,
     ) -> str:
         """Generate an SSH session through the SSH action-bundle adapter.
 
@@ -24914,6 +24920,7 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,
+            pty=pty,
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
 
@@ -24942,6 +24949,7 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
+        pty: bool = False,
     ) -> tuple[str, str]:
         """Execute the canonical SSH bundle and return transport and session IDs."""
 
@@ -24969,6 +24977,7 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,
+            pty=pty,
         )
         return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
 

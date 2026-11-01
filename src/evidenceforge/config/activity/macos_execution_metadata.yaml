@@ -50,6 +50,8 @@ ssh_command_descriptors: standard_pipes
 # Reviewed bounded non-PTY receiver graph; old frozen profiles keep the legacy path.
 ssh_receiver_startup: launchd_non_pty_v11
 ssh_receiver_service_label: com.openssh.sshd
+# Reviewed macOS 27 PTY shell and direct foreground child, distinct from channel pipes.
+ssh_pty_execution: zsh_foreground_v11
 # Explicit nominal completed results for these exact invocations only. This is a
 # synthetic workload choice, not a success default, failure-rate measurement or
 # result inferred from exec admission. Only the natural completion owner uses it.

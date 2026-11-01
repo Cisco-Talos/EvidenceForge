@@ -3350,6 +3350,19 @@ class ScenarioValidator:
 
             for spec_idx, spec in enumerate(event.events):
                 event_type = spec.type
+                if (
+                    event_type == "ssh_session"
+                    and getattr(spec, "pty", False)
+                    and os_cat != "macos"
+                ):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"storyline.{idx}.events.{spec_idx}.pty",
+                            message=f"[{event.id}] Explicit SSH PTY generation requires a qualified Mac receiver",
+                            suggestion="Use pty: true on a macOS 27 arm64 workstation SSH receiver.",
+                        )
+                    )
                 if os_cat == "macos":
                     limitation: str | None = None
                     if event_type == "logon" and getattr(spec, "logon_type", None) == 10:

@@ -261,6 +261,7 @@ def handle_ssh_session(
             required_until=session_required_until,
             session_end_plan=session_end_plan,
             ids_alerts=authored_ids_alerts,
+            **({"ssh_pty": True} if spec.pty else {}),
         )
     else:
         source_ip = spec.source_ip or system.ip
@@ -280,6 +281,7 @@ def handle_ssh_session(
             emit_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=authored_ids_alerts,
+            **({"pty": True} if spec.pty else {}),
         )
         result = SimpleNamespace(network_uid=uid)
     if getattr(result, "session", None) is not None:

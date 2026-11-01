@@ -1308,6 +1308,9 @@ class SshSessionEventSpec(_IdsAttachableEventSpec):
 
     type: Literal["ssh_session"] = "ssh_session"
     source_ip: str | None = None
+    pty: bool = Field(
+        default=False, strict=True, description="Request the qualified Mac SSH login PTY"
+    )
 
 
 class RdpSessionEventSpec(_IdsAttachableEventSpec):
