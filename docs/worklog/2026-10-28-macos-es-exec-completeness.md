@@ -1717,3 +1717,59 @@ PTY startup/commands, other GUI application/helper trees and Dock/Spotlight rela
 existing-app new windows/restoration and launchd job activation remain separate producer
 obligations. Native SSH Unified Log messages were not collected or added. No blind assessment
 loop or further collection was required for this milestone.
+
+## November 1: prepare the interactive SSH / PTY reference
+
+The user approved the next sequence: PTY SSH first, then launchd job activation, broader GUI
+apps/helpers/Dock/Spotlight and existing-app windows/execution plans. Collection must precede
+qualification. Existing own-process PTY descriptor comparisons do not establish the native
+receiver/helper/shell/command graph. No new live operation or private-log access is authorized
+for the agent by this preparation request.
+
+The existing SSH reference now has a code-only `prepare --pty` variant. Its owner-only
+EXPERIMENT.json selects PTY once; setup freezes the mode and its digest in provenance.
+Modification, removal, invalid content and symlinks reject rather than changing experiment
+type silently. Old non-PTY selection remains the default. The controlled client requests
+`-tt`, preserves the actual window streams and retains the existing loopback/config bypass,
+no-agent/no-forward/no-proxy/no-multiplexing and isolated host-key verification restrictions.
+PTY connect requires real terminal standard streams. The human pastes one harmless marker
+command followed by `; exit`, deliberately creating a command child instead of replacing the
+login shell. No shell configuration, service, account or privacy settings are changed.
+
+The tracker, bounded memory-only ambient ring, exact marker/client proof and root traversal,
+guard hard stop, source controls and cleanup are reused. Only the proved tree/client may
+reach private disk after successful cleanup. A version-2 fixed report adds actual command
+fork evidence and before/target terminal presence. Stable terminal identity is compared only
+locally, excluding changing stat timestamps, and exported as closed equivalence classes.
+The shared graph classifier now traces either a shell-replacing control or a genuine command
+child back to launchd. Its fixed opaque lifetime/group/session/parent/responsibility and exit
+labels are included in the PTY report during the human's capture analysis. This avoids a
+planned second offline read merely to resolve the original helper topology. Unknown images
+on proved ancestry stay OTHER; unrelated startup children are not promoted into the core.
+Classification is not native generation admission. No raw identifiers, paths, argument text,
+environment values, terminal devices or stat values enter the shareable schema.
+
+PTY capture prints only a short fixed completion status; the full validated report remains
+available through `report --private-run` and file redirection. Report recovery opens only
+the saved fixed JSON, not native records, and never reruns collection. Existing timeout
+errors now retain the TIMEOUT label instead of being collapsed to INTERNAL. Complete
+human instructions are in
+[PTY-PRIVATE-RUN.md](../design/macos-workstation-feasibility/ssh-startup-reference/PTY-PRIVATE-RUN.md).
+
+All 1,087 selected private-reference tests pass in 2.72 seconds, including 34 new PTY checks
+and paired setup selection. The final focused 90 SSH capture/reviewer checks pass in 0.54
+seconds after completion-status hardening. Tests prohibit native operations and use invented
+records or mocked setup/collector/exec calls. They cover real child versus same-PID replacement,
+terminal and foreground-group relationships, source/provenance/mode tampering, dangling
+symlinks, prepared-code graph loading, fixed schema redaction, cleanup after interruption and
+analysis/cleanup failures, preserved stdio, compact output and report-only recovery. Whole
+Ruff, formatting, whitespace and the unchanged revision-369 behavior manifest pass. No engine
+generation behavior or evidence gate changed; no new C probe was introduced or executed.
+
+Fresh code-only human handoff: `/private/tmp/eforge-ssh-pty-kit-spnfsbgm`. Setup, collection and
+SSH connection have not been run. Do not inspect this directory after handoff, including for
+result existence, or touch any previous handed-off kit. The human should close agents, run
+the documented setup/capture/connect once and share only SHAREABLE-SSH-PTY-REPORT.json. Leave
+single-use locks intact; failed attempts require a fresh kit. A further offline native read
+would need separate explicit permission. Next implementation depends on that fixed report;
+PTY generation remains unsupported meanwhile.

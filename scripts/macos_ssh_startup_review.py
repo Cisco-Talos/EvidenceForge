@@ -33,71 +33,15 @@ def _load_capture() -> ModuleType:
 
 capture = _load_capture()
 reference = capture.reference
-type Life = Literal[
-    "BOOT",
-    "L0",
-    "L1",
-    "L2",
-    "L3",
-    "L4",
-    "L5",
-    "L6",
-    "L7",
-    "L8",
-    "L9",
-    "L10",
-    "L11",
-    "L12",
-    "L13",
-    "L14",
-    "L15",
-    "NONE",
-    "OTHER",
-]
+type Life = capture.Life
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
-type ArgumentLayout = Literal[
-    "XPCPROXY_SSH_LABEL",
-    "XPCPROXY_SSH_INSTANCE",
-    "WRAPPER_PATH_ONLY",
-    "WRAPPER_BASENAME_ONLY",
-    "WRAPPER_PATH_INETD",
-    "WRAPPER_BASENAME_INETD",
-    "CATALOG_MATCH",
-    "LOGIN_SHELL",
-    "OTHER",
-]
-
-
-class Snapshot(reference.Model):
-    """Opaque local aliases express relationships; no native identifier is exported."""
-
-    life: Life
-    role: capture.Role
-    credentials: tuple[capture.WordClass, capture.WordClass, capture.WordClass, capture.WordClass]
-    audit_user: capture.WordClass
-    audit_session: Literal["BOOT_ORIGIN", "LOGIN_ORIGIN", "OTHER"]
-    group: Life
-    session: Life
-    parent: Life
-    responsible: Life
-    responsible_token: Literal["EXACT", "SAME_PID_VERSION_OTHER_WORDS", "UNSET", "OTHER"]
-
-
-class Event(reference.Model):
-    """Order and exact lifetime aliases for the bounded SSH core only."""
-
-    kind: Literal["FORK", "EXEC", "EXIT"]
-    before: Snapshot
-    after: Snapshot | None = None
-    arguments: ArgumentLayout | None = None
-    fork_only_closed: Check | None = None
-    exit_outcome: (
-        Literal["ZERO", "EXIT_ONE", "EXIT_255", "OTHER_EXIT_CODE", "SIGNALLED", "OTHER"] | None
-    ) = None
+type ArgumentLayout = capture.ArgumentLayout
+Snapshot = capture.GraphSnapshot
+Event = capture.GraphEvent
 
 
 class Report(reference.Model):
-    review_version: Literal[1] = 1
+    review_version: Literal[1, 2] = 2
     purpose: Literal["SSH_CORE_GRAPH_OFFLINE_REVIEW"] = "SSH_CORE_GRAPH_OFFLINE_REVIEW"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -153,6 +97,7 @@ def _verified(root: Path, expected: dict[str, str]) -> tuple[object, list[dict]]
         or manifest.marker.sha256 != reference._digest(root / "ssh-marker")
         or manifest.codec_sha256 != reference._codec_digest()
         or set(manifest.images) != set(capture.PATHS)
+        or (manifest.terminal_mode, manifest.experiment_sha256) != capture._experiment(root)
     ):
         raise reference.PrivateError("BUILD")
     controls = (
@@ -219,6 +164,8 @@ def _argument_layout(
         return next((label for candidate, label in choices if args == candidate), "OTHER")
     if role in {"ZSH", "BASH"} and args == ["-zsh" if role == "ZSH" else "-bash"]:
         return "LOGIN_SHELL"
+    if role == "MARKER" and capture._arguments(role, payload, manifest, root) == "PASS":
+        return "CONTROLLED_MARKER"
     return (
         "CATALOG_MATCH" if capture._arguments(role, payload, manifest, root) == "PASS" else "OTHER"
     )
@@ -237,17 +184,10 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
         raise reference.PrivateError("DATA")
     sample = samples[0]
     marker = rows[sample]["event"]["exec"]["target"]
-    shells = [
-        i
-        for i, row in enumerate(rows[:sample])
-        if row["event_type"] == 9
-        and _life(row["event"]["exec"]["target"]) == _life(marker)
-        and capture._role(row["event"]["exec"]["target"], manifest) in {"ZSH", "BASH"}
-    ]
-    if len(shells) != 1:
-        raise reference.PrivateError("DATA")
-    spine = {shells[0]}
-    process, limit = rows[shells[0]]["process"], shells[0]
+    # Walk the command's actual ancestry. In a PTY workload the command has its
+    # own forked lifetime; the non-PTY control replaces the original shell.
+    spine = {sample}
+    process, limit = rows[sample]["process"], sample
     while not (capture._role(process, manifest) == "LAUNCHD" and reference._token(process)[5] == 1):
         previous = next(
             (
@@ -267,6 +207,12 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
             raise reference.PrivateError("DATA")
         spine.add(previous)
         process, limit = rows[previous]["process"], previous
+    if not any(
+        rows[i]["event_type"] == 9
+        and capture._role(rows[i]["event"]["exec"]["target"], manifest) in {"ZSH", "BASH"}
+        for i in spine
+    ):
+        raise reference.PrivateError("DATA")
     boot = process
     core = {_life(rows[i]["process"]) for i in spine}
     core.update(
@@ -294,7 +240,6 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
             capture._role(item, manifest) == "AUTH" for item in replacements
         ):
             core.add(_life(child))
-    allowed = {"LAUNCHD", "XPCPROXY", "WRAPPER", "SSHD", "SESSION", "AUTH", "ZSH", "BASH", "MARKER"}
     selected = []
     for row in rows:
         kind = row["event_type"]
@@ -307,11 +252,8 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
         )
         if _life(subject) not in core or _life(row["process"]) not in core:
             continue
-        if (
-            capture._role(row["process"], manifest) not in allowed
-            or capture._role(subject, manifest) not in allowed
-        ):
-            raise reference.PrivateError("DATA")
+        # An unknown image on proved ancestry remains OTHER. Classifying that
+        # relationship does not qualify the image or include unrelated children.
         selected.append(row)
     aliases: dict[tuple[int, int], Life] = {_life(boot): "BOOT"}
     snapshots = []
@@ -369,6 +311,7 @@ def classify(rows: list[dict], manifest: object, root: Path) -> Report:
             parent=parent,
             responsible=responsible,
             responsible_token=match,
+            terminal=capture.terminal_relation(process, marker),
         )
 
     events = []

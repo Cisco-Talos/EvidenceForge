@@ -303,10 +303,11 @@ def test_prepare_copies_code_only_and_extends_the_reviewed_hard_stop(tmp_path: P
     assert not (root / "SETUP.json").exists()
 
 
+@pytest.mark.parametrize("pty", [False, True])
 def test_setup_and_provenance_use_mocked_native_commands_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pty: bool
 ) -> None:
-    root = kit.prepare(tmp_path / "fresh")
+    root = kit.prepare(tmp_path / "fresh", pty=pty)
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
     monkeypatch.setattr(
@@ -332,7 +333,9 @@ def test_setup_and_provenance_use_mocked_native_commands_only(
             Path(args[-1]).write_bytes(b"invented executable")
 
     monkeypatch.setattr(kit.reference, "_command", command)
-    assert kit.setup().stage == "SETUP_READY"
+    report = kit.setup()
+    assert report.stage == "SETUP_READY"
+    assert report.terminal_mode == ("PTY" if pty else "NON_PTY")
     assert commands == ["/usr/bin/clang", "/usr/bin/clang", "/usr/bin/codesign"]
     assert kit._manifest(root).username == _CANARY
     (root / "ssh_marker.c").write_bytes(b"changed code")

@@ -77,6 +77,41 @@ type Error = Literal[
     "INTERRUPTED",
     "INTERNAL",
 ]
+type TerminalMode = Literal["NON_PTY", "PTY"]
+type Life = Literal[
+    "BOOT",
+    "L0",
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "L6",
+    "L7",
+    "L8",
+    "L9",
+    "L10",
+    "L11",
+    "L12",
+    "L13",
+    "L14",
+    "L15",
+    "NONE",
+    "OTHER",
+]
+type ArgumentLayout = Literal[
+    "XPCPROXY_SSH_LABEL",
+    "XPCPROXY_SSH_INSTANCE",
+    "WRAPPER_PATH_ONLY",
+    "WRAPPER_BASENAME_ONLY",
+    "WRAPPER_PATH_INETD",
+    "WRAPPER_BASENAME_INETD",
+    "CATALOG_MATCH",
+    "LOGIN_SHELL",
+    "CONTROLLED_MARKER",
+    "OTHER",
+]
+type TerminalRelation = Literal["COMMAND_TTY", "ABSENT", "OTHER", "UNKNOWN"]
 PATHS: dict[Role, str] = {
     "LAUNCHD": "/sbin/launchd",
     "XPCPROXY": "/usr/libexec/xpcproxy",
@@ -119,6 +154,7 @@ CODE = (
     "reference_support.py",
     "ssh_marker.c",
     "collector_guard.c",
+    "ssh_graph_support.py",
 )
 MAX_ROWS, MAX_BYTES, MAX_STREAM, MAX_RETAINED = 2048, 32 * 1_048_576, 128 * 1_048_576, 96
 
@@ -138,6 +174,43 @@ class Manifest(reference.Model):
     home: str = Field(min_length=1, max_length=4096)
     uid: int = Field(ge=1, lt=2**32 - 1)
     gid: int = Field(ge=0, lt=2**32)
+    terminal_mode: TerminalMode = "NON_PTY"
+    experiment_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class Experiment(reference.Model):
+    """Code-only selection frozen by setup; it contains no observed data."""
+
+    terminal_mode: Literal["PTY"] = "PTY"
+
+
+class GraphSnapshot(reference.Model):
+    """Opaque aliases and fixed classes, never native identifiers or terminal paths."""
+
+    life: Life
+    role: Role
+    credentials: tuple[WordClass, WordClass, WordClass, WordClass]
+    audit_user: WordClass
+    audit_session: Literal["BOOT_ORIGIN", "LOGIN_ORIGIN", "OTHER"]
+    group: Life
+    session: Life
+    parent: Life
+    responsible: Life
+    responsible_token: Literal["EXACT", "SAME_PID_VERSION_OTHER_WORDS", "UNSET", "OTHER"]
+    terminal: TerminalRelation = "UNKNOWN"
+
+
+class GraphEvent(reference.Model):
+    """Bounded topology, including the controlled command's genuine fork and exec."""
+
+    kind: Literal["FORK", "EXEC", "EXIT"]
+    before: GraphSnapshot
+    after: GraphSnapshot | None = None
+    arguments: ArgumentLayout | None = None
+    fork_only_closed: Check | None = None
+    exit_outcome: (
+        Literal["ZERO", "EXIT_ONE", "EXIT_255", "OTHER_EXIT_CODE", "SIGNALLED", "OTHER"] | None
+    ) = None
 
 
 class Descriptor(reference.Model):
@@ -216,6 +289,8 @@ class Phase(reference.Model):
     descriptor_inventory_complete: Check
     last_fd_matches_maximum: Check
     terminal: Literal["PRESENT", "ABSENT", "UNKNOWN"]
+    before_terminal: Literal["PRESENT", "ABSENT", "UNKNOWN"] = "UNKNOWN"
+    terminal_matches_command: TerminalRelation = "UNKNOWN"
     cwd: Literal["ROOT", "HOME", "KIT", "OTHER", "UNKNOWN"]
     script_absent: Check
     dyld_matches_target: Check
@@ -247,7 +322,7 @@ class Exit(reference.Model):
 class Report(reference.Model):
     """The sole shareable output; all strings are closed vocabulary."""
 
-    kit_version: Literal[1] = 1
+    kit_version: Literal[1, 2] = 2
     purpose: Literal["SSH_STARTUP_CHAIN_DIAGNOSTIC"] = "SSH_STARTUP_CHAIN_DIAGNOSTIC"
     collection: Literal["MARKER_AUTHENTICATED_LOOPBACK_CONNECTION_ONLY"] = (
         "MARKER_AUTHENTICATED_LOOPBACK_CONNECTION_ONLY"
@@ -272,7 +347,10 @@ class Report(reference.Model):
     forks: tuple[Fork, ...] = Field(default=(), max_length=32)
     exits: tuple[Exit, ...] = Field(default=(), max_length=32)
     unified_log: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
-    pty: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+    terminal_mode: TerminalMode = "NON_PTY"
+    pty: Literal["NOT_COLLECTED", "REQUESTED", "OBSERVED", "NOT_OBSERVED"] = "NOT_COLLECTED"
+    command_fork: Check = "INCONCLUSIVE"
+    core_graph: tuple[GraphEvent, ...] = Field(default=(), max_length=64)
 
 
 def _role(process: dict, manifest: Manifest) -> Role:
@@ -523,7 +601,7 @@ def _arguments(role: Role, payload: dict, manifest: Manifest, root: Path) -> Che
     if role == "SSH_CLIENT":
         return reference._check(payload.get("args") == _client_arguments(root, manifest))
     expected = {
-        "WRAPPER": [PATHS["WRAPPER"]],
+        "WRAPPER": ["sshd-keygen-wrapper"],
         "SSHD": [PATHS["SSHD"], "-i"],
         "SESSION": [PATHS["SESSION"], "-i", "-R"],
         "AUTH": [PATHS["AUTH"], "-i", "-R"],
@@ -552,9 +630,56 @@ def _environment(value: object) -> tuple[bytes, ...]:
     return tuple(item.encode() for item in value)
 
 
+def _tty_key(process: dict) -> tuple[str, int, int, int] | None:
+    """Compare stable terminal identity locally, excluding changing stat timestamps."""
+    tty = process.get("tty")
+    if type(tty) is not dict or tty.get("path_truncated") is not False:
+        return None
+    metadata = tty.get("stat")
+    if (
+        type(tty.get("path")) is not str
+        or type(metadata) is not dict
+        or any(type(metadata.get(key)) is not int for key in ("st_dev", "st_ino", "st_rdev"))
+    ):
+        return None
+    return tty["path"], metadata["st_dev"], metadata["st_ino"], metadata["st_rdev"]
+
+
+def terminal_relation(process: dict, command: dict) -> TerminalRelation:
+    """Return fixed terminal-equivalence labels, never a device path or identifier."""
+    if "tty" in process and process["tty"] is None:
+        return "ABSENT"
+    value, controlled = _tty_key(process), _tty_key(command)
+    if value is None or controlled is None:
+        return "UNKNOWN"
+    return "COMMAND_TTY" if value == controlled else "OTHER"
+
+
+def _graph_module() -> ModuleType:
+    path = Path(__file__).resolve().with_name("ssh_graph_support.py")
+    if not path.exists():
+        path = Path(__file__).resolve().with_name("macos_ssh_startup_review.py")
+    spec = importlib.util.spec_from_file_location("_eforge_ssh_graph_support", path)
+    if spec is None or spec.loader is None:
+        raise reference.PrivateError("BUILD")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, ...]:
     """Classify all needed exec facts together without exporting native values."""
     rows = [reference._decode(raw) for raw in raws]
+    command = next(
+        (
+            row["event"]["exec"]["target"]
+            for row in rows
+            if row["event_type"] == 9
+            and _role(row["event"]["exec"]["target"], manifest) == "MARKER"
+        ),
+        {},
+    )
     phases = []
     environments: dict[tuple[int, int, int], tuple[bytes, ...]] = {}
     pipes: dict[int, str] = {}
@@ -683,6 +808,12 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
                 else "ABSENT"
                 if target["tty"] is None
                 else "PRESENT",
+                before_terminal="UNKNOWN"
+                if "tty" not in before
+                else "ABSENT"
+                if before["tty"] is None
+                else "PRESENT",
+                terminal_matches_command=terminal_relation(target, command),
                 cwd="ROOT"
                 if path == "/"
                 else "HOME"
@@ -776,15 +907,21 @@ def analyze_exits(raws: list[bytes], manifest: Manifest) -> tuple[Exit, ...]:
     return tuple(result)
 
 
-def prepare(destination: Path | None = None) -> Path:
+def prepare(destination: Path | None = None, *, pty: bool = False) -> Path:
     """AGENT SAFE: copy reviewed code only, with no commands or native reads."""
     source = Path(__file__).resolve()
+    if type(pty) is not bool:
+        raise reference.PrivateError("INPUT")
     parent = (destination.parent if destination else Path("/private/tmp")).resolve(strict=True)
     reference._outside_git(parent)
     root = (
         parent / destination.name
         if destination
-        else Path(tempfile.mkdtemp(prefix="eforge-ssh-startup-kit-", dir=parent))
+        else Path(
+            tempfile.mkdtemp(
+                prefix="eforge-ssh-pty-kit-" if pty else "eforge-ssh-startup-kit-", dir=parent
+            )
+        )
     )
     if destination:
         root.mkdir(mode=0o700)
@@ -796,7 +933,11 @@ def prepare(destination: Path | None = None) -> Path:
         (Path(reference.__file__), CODE[2]),
         (docs / "ssh-startup-reference/ssh_marker.c", CODE[3]),
         (docs / "gui-launch-reference/collector_guard.c", CODE[4]),
-        (docs / "ssh-startup-reference/PRIVATE-RUN.md", "PRIVATE-RUN.md"),
+        (source.with_name("macos_ssh_startup_review.py"), CODE[5]),
+        (
+            docs / "ssh-startup-reference" / ("PTY-PRIVATE-RUN.md" if pty else "PRIVATE-RUN.md"),
+            "PRIVATE-RUN.md",
+        ),
     ):
         shutil.copyfile(original, root / name)
         (root / name).chmod(0o600)
@@ -809,6 +950,8 @@ def prepare(destination: Path | None = None) -> Path:
             "alarm(55);", "alarm(180);"
         )
     )
+    if pty:
+        reference._write(root / "EXPERIMENT.json", Experiment().model_dump_json().encode())
     return root
 
 
@@ -847,6 +990,7 @@ def setup() -> Report:
         ["/usr/bin/codesign", "--force", "--sign", "-", str(root / "ssh-marker")], root
     )
     account = pwd.getpwuid(os.getuid())
+    mode, experiment_digest = _experiment(root)
     manifest = Manifest(
         os_version=version,
         os_build=build,
@@ -860,9 +1004,27 @@ def setup() -> Report:
         home=account.pw_dir,
         uid=account.pw_uid,
         gid=account.pw_gid,
+        terminal_mode=mode,
+        experiment_sha256=experiment_digest,
     )
     reference._write(root / "SETUP.json", manifest.model_dump_json().encode())
-    return Report(stage="SETUP_READY", step="COMPLETE", provenance="PASS")
+    return Report(
+        stage="SETUP_READY",
+        step="COMPLETE",
+        provenance="PASS",
+        terminal_mode=mode,
+        pty="REQUESTED" if mode == "PTY" else "NOT_COLLECTED",
+    )
+
+
+def _experiment(root: Path) -> tuple[TerminalMode, str | None]:
+    path = root / "EXPERIMENT.json"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return "NON_PTY", None
+    experiment = Experiment.model_validate_json(reference._read(path))
+    return experiment.terminal_mode, reference._digest(path)
 
 
 def _manifest(root: Path) -> Manifest:
@@ -877,6 +1039,7 @@ def _manifest(root: Path) -> Manifest:
             for role, image in manifest.images.items()
         )
         or set(manifest.images) != set(PATHS)
+        or (manifest.terminal_mode, manifest.experiment_sha256) != _experiment(root)
     ):
         raise reference.PrivateError("BUILD")
     return manifest
@@ -887,7 +1050,7 @@ def _client_arguments(root: Path, manifest: Manifest) -> list[str]:
         "/usr/bin/ssh",
         "-F",
         "/dev/null",
-        "-T",
+        "-tt" if manifest.terminal_mode == "PTY" else "-T",
         "-o",
         "IdentityAgent=none",
         "-o",
@@ -931,20 +1094,38 @@ def connect() -> None:
     """HUMAN ONLY: replace this helper with the controlled client, preserving stdio."""
     root = _root()
     manifest = _manifest(root)
+    if manifest.terminal_mode == "PTY" and not all(os.isatty(fd) for fd in range(3)):
+        raise reference.PrivateError("INPUT")
     reference._read(root / "COLLECTOR-READY")
     reference._write(
         root / "CLIENT-CONTROL.json",
         json.dumps({"pid": os.getpid(), "nonce": manifest.nonce}).encode(),
     )
-    remote = shlex.join(["exec", str(root / "ssh-marker"), "--sample", manifest.nonce])
+    remote = _remote_command(root, manifest)
     print(
-        "After SSH authentication there may be NO PROMPT. Paste the command below "
-        "and press Enter; do not wait for a prompt.\n"
-        "PRIVATE_REMOTE_COMMAND:\n" + remote,
+        (
+            "After SSH authentication, paste the command below at the remote prompt "
+            "and press Enter. It runs one controlled child, then exits the remote shell.\n"
+            if manifest.terminal_mode == "PTY"
+            else "After SSH authentication there may be NO PROMPT. Paste the command below "
+            "and press Enter; do not wait for a prompt.\n"
+        )
+        + "PRIVATE_REMOTE_COMMAND:\n"
+        + remote,
         flush=True,
     )
     args = _client_arguments(root, manifest)
     os.execve(args[0], args, dict(os.environ) | {"EFORGE_SSH_REFERENCE_TOKEN": manifest.nonce})
+
+
+def _remote_command(root: Path, manifest: Manifest) -> str:
+    arguments = [str(root / "ssh-marker"), "--sample", manifest.nonce]
+    # A following shell builtin prevents replacing the interactive shell with the command.
+    return (
+        shlex.join(arguments) + "; exit"
+        if manifest.terminal_mode == "PTY"
+        else shlex.join(["exec", *arguments])
+    )
 
 
 def capture() -> Report:
@@ -959,7 +1140,11 @@ def capture() -> Report:
     reference._write(root / "ACTIVE-RUN", (run.name + "\n").encode())
     reference._write(run / "provenance.json", manifest.model_dump_json().encode())
     tracker = Tracker(manifest)
-    report = Report(provenance="PASS")
+    report = Report(
+        provenance="PASS",
+        terminal_mode=manifest.terminal_mode,
+        pty="REQUESTED" if manifest.terminal_mode == "PTY" else "NOT_COLLECTED",
+    )
     step = "COLLECTOR"
     collector = None
     pump = None
@@ -987,9 +1172,11 @@ def capture() -> Report:
         step = "CONNECTION"
         reference._write(root / "COLLECTOR-READY", b"READY\n")
         print(
-            Report(stage="COLLECTOR_READY", collector_ready="PASS").model_dump_json(
-                include={"purpose", "stage", "error"}
-            ),
+            Report(
+                stage="COLLECTOR_READY",
+                collector_ready="PASS",
+                terminal_mode=manifest.terminal_mode,
+            ).model_dump_json(include={"purpose", "stage", "error", "terminal_mode"}),
             flush=True,
         )
         deadline = time.monotonic() + 140
@@ -1016,6 +1203,19 @@ def capture() -> Report:
         if not raws or not tracker.sequence_ok:
             raise reference.PrivateError("DATA")
         _manifest(root)
+        phases = analyze(raws, manifest, root)
+        command_phase = next((phase for phase in phases if phase.role == "MARKER"), None)
+        if command_phase is None:
+            raise reference.PrivateError("DATA")
+        command_fork = command_phase.retained_fork
+        core_graph = ()
+        if manifest.terminal_mode == "PTY":
+            graph = _graph_module().classify(
+                [reference._decode(raw) for raw in raws], manifest, root
+            )
+            core_graph = tuple(
+                GraphEvent.model_validate(item.model_dump()) for item in graph.events
+            )
         report = Report(
             stage="COMPLETE",
             step="COMPLETE",
@@ -1028,7 +1228,17 @@ def capture() -> Report:
             marker_exit_zero=reference._check(tracker.marker_exit is True),
             candidate_ring_evicted=tracker.evicted,
             wire_profile=reference._wire_profile(raws),
-            phases=analyze(raws, manifest, root),
+            phases=phases,
+            terminal_mode=manifest.terminal_mode,
+            pty=(
+                "OBSERVED"
+                if command_phase.terminal_matches_command == "COMMAND_TTY"
+                else "NOT_OBSERVED"
+            )
+            if manifest.terminal_mode == "PTY"
+            else "NOT_COLLECTED",
+            command_fork=command_fork,
+            core_graph=core_graph,
             forks=analyze_forks(raws, manifest),
             exits=analyze_exits(raws, manifest),
             fork_roles=tuple(
@@ -1085,6 +1295,7 @@ def _failure(error: BaseException) -> Error:
         "ROOT_USER",
         "BUILD",
         "COLLECTOR",
+        "TIMEOUT",
         "LIMIT",
         "DATA",
     }:
@@ -1100,6 +1311,7 @@ def _failure(error: BaseException) -> Error:
 
 def main() -> None:
     """Keep malformed input and every native failure inside the fixed report schema."""
+    operation: str | None = None
     try:
         parser = reference.QuietParser(description=__doc__)
         parser.add_argument(
@@ -1107,13 +1319,15 @@ def main() -> None:
         )
         parser.add_argument("--destination", type=Path)
         parser.add_argument("--private-run", action="store_true")
+        parser.add_argument("--pty", action="store_true")
         args = parser.parse_args()
+        operation = args.operation
         if args.operation == "prepare":
             if args.private_run:
                 raise reference.PrivateError("INPUT")
-            print(prepare(args.destination))
+            print(prepare(args.destination, pty=args.pty))
             return
-        if not args.private_run or args.destination is not None:
+        if not args.private_run or args.destination is not None or args.pty:
             raise reference.PrivateError("INPUT")
         if args.operation == "connect":
             connect()
@@ -1138,7 +1352,24 @@ def main() -> None:
         KeyboardInterrupt,
     ) as error:
         report = Report(error=_failure(error))
-    print(report.model_dump_json(indent=2), flush=True)
+    if operation == "capture" and report.terminal_mode == "PTY":
+        print(
+            report.model_dump_json(
+                include={
+                    "purpose",
+                    "stage",
+                    "step",
+                    "error",
+                    "terminal_mode",
+                    "pty",
+                    "command_fork",
+                    "collector_cleanup",
+                }
+            ),
+            flush=True,
+        )
+    else:
+        print(report.model_dump_json(indent=2), flush=True)
 
 
 if __name__ == "__main__":
