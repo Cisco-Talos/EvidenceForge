@@ -1883,3 +1883,74 @@ Dock/Spotlight, existing-app windows/restoration and additional execution plans 
 their own producers/qualification. No further collection or private-log read was needed to
 implement this PTY milestone. Next in the agreed order is launchd service/job activation;
 its native initial fork/exec facts need a separate controlled reference before admission.
+
+## November 1: prepare the system launchd activation reference
+
+The user approved proceeding from PTY to launchd job activation. The new
+`scripts/macos_launchd_reference.py` prepares a separate human-only kit. No live
+collector, job, native probe or private-record review was run by the agent. No old
+handed-off kit was inspected, including for existence or directory contents.
+
+The experiment registers one uniquely named **system-domain/root** job using a
+temporary root-owned plist, then explicitly kickstarts and boots out that exact
+service. Apple's `/usr/bin/true` is the only permitted payload; its controlled
+nonce arguments do not alter its immediate zero-return behavior. The fixed C
+guard accepts only run/cleanup plus a 32-character lowercase hex nonce, builds
+its own plist and starts only fixed `/bin/launchctl` commands. There is no arbitrary
+program/path/plist input, persistent installation, enable/disable, entire-domain
+bootout or inspection of other jobs. The program's standards are `/dev/null`,
+directory is root, and RunAtLoad/KeepAlive are false. Registration and activation
+are separate controls. Primary Apple command/source references and the public
+installed manpages support the proposal; documentation does not qualify native
+fork/exec relationships.
+
+The root guard has independent bounded command waits and cleanup after EOF,
+INT/TERM/HUP/deadline. It ignores SIGPIPE so loss of Python's output reader cannot
+skip removal. A failed bootout never establishes absence. Its exact-content,
+root-owned scratch lease is retained on removal failure; human-only cleanup can
+retry that same label without launching the payload or collecting. SIGKILL,
+machine failure and native-command failure cannot guarantee cleanup. The plist
+is outside startup directories and the payload is neither persistent nor kept
+alive. The existing 55-second eslogger guard owns the bounded collector.
+
+Collector readiness uses the existing harmless normal-user marker. Ambient
+fork/exec/exit input remains in a bounded memory ring; exact nonce argv/environment,
+public executable identity, a unique execution spine back to verified launchd
+PID 1, one zero exit, sequence integrity and no eviction are required before
+retention. Siblings/descendants are not walked. Both job and collector cleanup
+must pass before any native row file is written. Environment changes are measured
+separately from nonce authentication instead of discarding an otherwise proved
+reference. Tampered code, guards, codec, installed images or setup controls reject.
+
+The fixed report includes the entire retained graph, opaque lifetime aliases,
+first-fork launchd/child security and image preservation, parent-token form,
+audit origin, credentials, responsibility comparisons, PID-version transitions,
+group/session, terminal/descriptors, native slice, signing/entitlement classes,
+public argument layout, controlled/public environment comparisons and exit.
+The shared SSH metadata analyzer now accepts explicit role/argument classifiers;
+existing SSH defaults are unchanged. No SSH path labels are used in the shareable
+launchd report. Unknown forms stay OTHER/INCONCLUSIVE, and gate_status remains
+NOT_EVALUATED. This is not native generation admission or a claim about other
+launchd domains, triggers, restart policy, GUI mechanisms or Unified Log messages.
+
+Validation: all 1,151 final selected private-reference checks pass in 3.27 seconds,
+including all 56 launchd checks (focused run: 0.50 seconds).
+Invented fixtures cover direct/proxy startup, unrelated launchd children, exact
+token/birth/exit linkage, duplicate records/environment, loss, eviction and bounds,
+readiness, source/setup tampering, prepared-code imports, parser redaction,
+single-use locks, compact capture output, report-only recovery and cleanup after
+interruption/analysis/stream failures. A compiled C simulation substitutes every
+OS-facing API: success, registration/activation failure, EOF cancellation, command
+timeout, failed removal/lease recovery, altered leases, partial writes, non-root
+and malformed input all run without host filesystem, signal, process or job APIs.
+Clang syntax-only, whole Ruff/format and unchanged revision-370 manifest checks
+pass. No generated/native files are added to the repository.
+
+Fresh code-only handoff: `/private/tmp/eforge-launchd-kit-4g2591rk`. Setup and live
+collection have not run. Do not inspect this directory after handoff or reuse
+an older kit. Human instructions are in
+[PRIVATE-RUN.md](../design/macos-workstation-feasibility/launchd-reference/PRIVATE-RUN.md).
+The human closes agents, runs setup then automatic one-window capture once, and
+shares only SHAREABLE-LAUNCHD-REPORT.json. Future native reads need separate
+explicit permission. The next implementation step depends on that fixed report;
+system launchd activation remains gated meanwhile.

@@ -22,6 +22,7 @@ import tempfile
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
@@ -760,7 +761,14 @@ def _classify_core(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[G
     return tuple(GraphEvent.model_validate(item.model_dump()) for item in report.events)
 
 
-def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, ...]:
+def analyze(
+    raws: list[bytes],
+    manifest: Manifest,
+    root: Path,
+    *,
+    role_of: Callable[[dict, Manifest], Role] = _role,
+    arguments_of: Callable[[Role, dict, Manifest, Path], Check] = _arguments,
+) -> tuple[Phase, ...]:
     """Classify all needed exec facts together without exporting native values."""
     rows = [reference._decode(raw) for raw in raws]
     command = next(
@@ -768,7 +776,7 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
             row["event"]["exec"]["target"]
             for row in rows
             if row["event_type"] == 9
-            and _role(row["event"]["exec"]["target"], manifest) == "MARKER"
+            and role_of(row["event"]["exec"]["target"], manifest) == "MARKER"
         ),
         {},
     )
@@ -780,7 +788,7 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
             continue
         payload, before = row["event"]["exec"], row["process"]
         target = payload["target"]
-        role = _role(target, manifest)
+        role = role_of(target, manifest)
         old, new, parent = (
             reference._token(before),
             reference._token(target),
@@ -840,7 +848,7 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
         phases.append(
             Phase(
                 role=role,
-                before_role=_role(before, manifest),
+                before_role=role_of(before, manifest),
                 native_shape=shape,
                 shape_excluding_entitlements=reference._shape_without_entitlements(row),
                 retained_fork="PASS"
@@ -853,7 +861,7 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
                 same_lifetime=reference._check(
                     old[5] == new[5] and reference._birth(before) == reference._birth(target)
                 ),
-                parent_role=_role(parent_process, manifest)
+                parent_role=role_of(parent_process, manifest)
                 if parent_process is not None
                 else "OTHER",
                 credentials=tuple(_word(new[i], manifest, group=i in (2, 4)) for i in (1, 2, 3, 4)),
@@ -891,7 +899,7 @@ def analyze(raws: list[bytes], manifest: Manifest, root: Path) -> tuple[Phase, .
                 if template is None
                 else reference._check(template_matches),
                 entitlement_types=types,
-                arguments_match_template=_arguments(role, payload, manifest, root),
+                arguments_match_template=arguments_of(role, payload, manifest, root),
                 descriptors=descriptors,
                 descriptor_inventory_complete=complete,
                 last_fd_matches_maximum=maximum,
