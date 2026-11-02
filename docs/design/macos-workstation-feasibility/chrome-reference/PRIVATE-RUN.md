@@ -5,27 +5,21 @@ local fetch, and a manual quit. It gathers the main, renderer, GPU and network
 helper relationships needed by the fixed workstation workload. It is **not** a
 blind assessment, an ordinary browsing sample or automatic generation admission.
 
-**Use a fresh version-4 kit.** Version 1 had malformed inline signing arguments;
-version 2 corrected the arguments and XML parsing but also required strict
-distribution validation for app bundles. The approved diagnostic found ordinary
-Chrome signature validation passing while strict validation failed on resources.
-Version 3 requires ordinary signature validation **and** the existing vendor
-requirement for Chrome app bundles, with strict verification retained for
-standalone crashpad/xpcproxy tools. It still binds metadata to the exact hashed
-executable, rejects failed verification and exports only fixed failure labels.
-The manifest pins `app_signature_policy: STANDARD_WITH_VENDOR_REQUIREMENT`;
-the report also states `strict_distribution_conformance: NOT_EVALUATED`. This is a process reference;
-it does not establish strict distribution or Gatekeeper conformance. Do not alter
-or re-sign Chrome or overwrite earlier kits.
+**Use the fresh version-6 kit.** App bundles require ordinary signature validation
+and the explicit vendor requirement; standalone crashpad/xpcproxy retain strict
+checks. The manifest pins this policy and the report leaves strict distribution
+conformance NOT_EVALUATED. This is a process reference, not strict distribution or
+Gatekeeper acceptance. Do not alter/re-sign the installed apps or overwrite old kits.
 
-Version 4 also accepts Apple's embedded-entitlements container: its eight-byte
-network-order magic/total-length header must match exactly before decoding the
-contained plist. Bare XML/binary plists still work. Unknown prefixes, incorrect
-lengths, DER output and non-dictionary values remain explicit failures; no unknown
-output is silently replaced with an empty object. The final fixed report adds
-`installed_metadata_formats`, containing only public format labels per component.
-This support is based on Apple's published format, not an unapproved inspection
-of the local xpcproxy output.
+Signature metadata and entitlement extraction use separate commands. Verbose
+codesign display can put a human-readable entitlement dump on stdout; its stdout
+is ignored. Only the dedicated `--entitlements - --xml` command's output reaches
+the plist decoder. The decoder also accepts Apple's length-checked embedded plist
+container. Unknown prefixes, DER, incorrect lengths, malformed/trailing content
+and non-dictionary values still fail. It never searches past diagnostic text for
+XML or replaces unrecognized output with {}. The fixed report lists only public
+format names under `installed_metadata_formats`. Detailed repair history is in
+the branch worklog; no raw command output is needed to use this kit.
 
 Agents may prepare this code-only kit and test invented records. By default the
 human runs setup, capture and report privately after closing agents. **An agent
@@ -53,16 +47,17 @@ requirement. A fresh prepared code-only copy supports:
 /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_chrome.py diagnose-code --private-run
 ```
 
-This runs exactly six fixed, read-only `codesign` commands against only the
+This runs exactly seven fixed, read-only `codesign` commands against only the
 standard Chrome app bundle and its main executable. It reports basic bundle
 verification, strict verification, strict verification with the Google signer
 requirement, that requirement on the main executable, a **separate diagnostic**
-that validates executable code without its resources, and XML metadata parsing.
+that validates executable code without its resources, and separate signature
+metadata and XML entitlement extraction.
 The last comparison does not change or bypass the capture admission checks.
 Apple documents executable-only verification in its
 [Apple Silicon release notes](https://developer.apple.com/documentation/macos-release-notes/macos-big-sur-11_0_1-universal-apps-release-notes).
 Each command has a 15-second timeout, so a stalled run can take approximately
-90 seconds. No sudo, `spctl`, online notarization request, re-signing, permission
+105 seconds. No sudo, `spctl`, online notarization request, re-signing, permission
 change or app execution is requested.
 
 It compares main-executable hashes privately before/after and reports only

@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
+from xml.parsers.expat import ExpatError
 
 from pydantic import Field
 
@@ -75,6 +76,11 @@ type EntitlementEncoding = Literal[
     "BINARY_PLIST",
     "EMBEDDED_XML_PLIST",
     "EMBEDDED_BINARY_PLIST",
+    "XML_DICT_FRAGMENT",
+    "EMBEDDED_XML_DICT_FRAGMENT",
+    "DER_ENTITLEMENTS",
+    "OTHER_TEXT",
+    "OTHER_BINARY",
     "NOT_RECORDED",
 ]
 type CodeCheck = Literal[
@@ -83,6 +89,7 @@ type CodeCheck = Literal[
     "FILE_HASH",
     "SIGNATURE_VERIFY",
     "SIGNATURE_METADATA",
+    "ENTITLEMENTS_EXTRACT",
     "ENTITLEMENTS_DECODE",
     "METADATA_FIELDS",
     "CODE_RECHECK",
@@ -286,7 +293,7 @@ class Image(reference.Model):
 
 
 class Manifest(reference.Model):
-    kit_version: Literal[4] = 4
+    kit_version: Literal[6] = 6
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -431,7 +438,7 @@ class Phase(reference.Model):
 
 
 class Report(reference.Model):
-    kit_version: Literal[4] = 4
+    kit_version: Literal[6] = 6
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -463,6 +470,7 @@ class Report(reference.Model):
     installed_code_item: CodeItem = "NONE"
     installed_code_check: CodeCheck = "NONE"
     installed_code_failure: CodeFailure = "NONE"
+    installed_code_output_form: EntitlementEncoding = "NOT_RECORDED"
     installed_metadata_formats: tuple[MetadataFormat, ...] = Field(default=(), max_length=6)
     provenance: Check = "INCONCLUSIVE"
     catalog_release: Literal["EXACT_155_0_8059_80", "OTHER", "NOT_CHECKED"] = "NOT_CHECKED"
@@ -512,7 +520,7 @@ class CodeCommandResult(reference.Model):
 
 
 class CodeDiagnosticReport(reference.Model):
-    review_version: Literal[1] = 1
+    review_version: Literal[2] = 2
     purpose: Literal["CHROME_SIGNING_DIAGNOSTIC"] = "CHROME_SIGNING_DIAGNOSTIC"
     mode: Literal["READ_ONLY_INSTALLED_CODE"] = "READ_ONLY_INSTALLED_CODE"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -525,6 +533,7 @@ class CodeDiagnosticReport(reference.Model):
     main_leaf_strict_google: CodeCommandResult = Field(default_factory=CodeCommandResult)
     main_leaf_code_google: CodeCommandResult = Field(default_factory=CodeCommandResult)
     metadata: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    signature_metadata: CodeCommandResult = Field(default_factory=CodeCommandResult)
     signing_identifier_template: Check = "INCONCLUSIVE"
     team_identifier_template: Check = "INCONCLUSIVE"
     metadata_executable_binding: Check = "INCONCLUSIVE"
@@ -551,24 +560,36 @@ class DiagnosticError(reference.PrivateError):
 class InstalledCodeError(DiagnosticError):
     """Fixed code/check/reason labels; never command text, stderr, paths or values."""
 
-    def __init__(self, code: Error, item: CodeItem, check: CodeCheck, reason: CodeFailure) -> None:
+    def __init__(
+        self,
+        code: Error,
+        item: CodeItem,
+        check: CodeCheck,
+        reason: CodeFailure,
+        output_form: EntitlementEncoding = "NOT_RECORDED",
+    ) -> None:
         super().__init__(code, "INSTALLED_CODE")
         self.item, self.check, self.reason = item, check, reason
+        self.output_form = output_form
 
     def labels(self) -> dict[str, str]:
         return {
             "installed_code_item": self.item,
             "installed_code_check": self.check,
             "installed_code_failure": self.reason,
+            "installed_code_output_form": self.output_form,
         }
 
 
 class EntitlementOutputError(ValueError):
     """A fixed parser failure label; no native bytes or parser exception text."""
 
-    def __init__(self, reason: CodeFailure) -> None:
+    def __init__(
+        self, reason: CodeFailure, output_form: EntitlementEncoding = "NOT_RECORDED"
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.output_form = output_form
 
 
 def decode_entitlement_output(raw: bytes) -> dict:
@@ -593,20 +614,48 @@ def decode_entitlement_output(raw: bytes) -> dict:
         raw = raw[8:]
     try:
         value = plistlib.loads(raw)
-    except (ValueError, TypeError, plistlib.InvalidFileException, OverflowError) as error:
-        raise EntitlementOutputError("ENTITLEMENT_OUTPUT_NOT_PLIST") from error
+    except (
+        ValueError,
+        TypeError,
+        plistlib.InvalidFileException,
+        OverflowError,
+        ExpatError,
+    ) as error:
+        raise EntitlementOutputError(
+            "ENTITLEMENT_OUTPUT_NOT_PLIST", _entitlement_encoding(raw)
+        ) from error
     if type(value) is not dict:
         raise EntitlementOutputError("ENTITLEMENT_VALUE_NOT_OBJECT")
     return value
 
 
+def _dict_fragment(raw: bytes) -> bool:
+    return re.match(rb"<dict(?:\s|/|>)", raw.lstrip()) is not None
+
+
 def _entitlement_encoding(raw: bytes) -> EntitlementEncoding:
-    """Call only after successful decoding; return a fixed format name, no bytes."""
+    """Return only a fixed structural format name; never expose prefix bytes."""
     if not raw.strip():
         return "EMPTY"
     if raw.startswith(b"\xfa\xde\x71\x71"):
-        return "EMBEDDED_BINARY_PLIST" if raw[8:].startswith(b"bplist00") else "EMBEDDED_XML_PLIST"
-    return "BINARY_PLIST" if raw.startswith(b"bplist00") else "XML_PLIST"
+        return (
+            "EMBEDDED_BINARY_PLIST"
+            if raw[8:].startswith(b"bplist00")
+            else ("EMBEDDED_XML_DICT_FRAGMENT" if _dict_fragment(raw[8:]) else "EMBEDDED_XML_PLIST")
+        )
+    if raw.startswith(b"\xfa\xde\x71\x72"):
+        return "DER_ENTITLEMENTS"
+    if raw.startswith(b"bplist00"):
+        return "BINARY_PLIST"
+    if _dict_fragment(raw):
+        return "XML_DICT_FRAGMENT"
+    if raw.lstrip().startswith((b"<?xml", b"<plist")):
+        return "XML_PLIST"
+    try:
+        raw.decode("utf-8")
+    except UnicodeError:
+        return "OTHER_BINARY"
+    return "OTHER_TEXT"
 
 
 def _metadata_formats(manifest: Manifest) -> tuple[MetadataFormat, ...]:
@@ -622,7 +671,7 @@ def _checked[T](item: CodeItem, check: CodeCheck, operation: Callable[[], T]) ->
     except reference.PrivateError as error:
         raise InstalledCodeError(error.code, item, check, "POLICY_REJECTED") from error
     except EntitlementOutputError as error:
-        raise InstalledCodeError("BUILD", item, check, error.reason) from error
+        raise InstalledCodeError("BUILD", item, check, error.reason, error.output_form) from error
     except subprocess.TimeoutExpired as error:
         raise InstalledCodeError("BUILD", item, check, "COMMAND_TIMEOUT") from error
     except subprocess.CalledProcessError as error:
@@ -736,7 +785,13 @@ def _verification_command(
 
 
 def _metadata_command(target: Path) -> list[str]:
-    return ["/usr/bin/codesign", "-d", "--verbose=4", "--entitlements", "-", "--xml", str(target)]
+    # Verbose display can write a human-readable DER dump to stdout. Only its
+    # stderr metadata is consumed; never combine it with entitlement extraction.
+    return ["/usr/bin/codesign", "-d", "--verbose=4", str(target)]
+
+
+def _entitlements_command(target: Path) -> list[str]:
+    return ["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", str(target)]
 
 
 def _diagnostic_failure(raw: bytes | str | None) -> CodeCommandResult:
@@ -787,7 +842,7 @@ def _diagnostic_command(
 
 
 def diagnose_code() -> CodeDiagnosticReport:
-    """Explicit approval or HUMAN ONLY: six fixed code queries; no captures or writes.
+    """Explicit approval or HUMAN ONLY: seven fixed code queries; no captures or writes.
 
     This is diagnostic, not an admission override. It reads no old kit files,
     profiles or native logs, runs no build/probe/collector/app and writes nothing.
@@ -813,11 +868,13 @@ def diagnose_code() -> CodeDiagnosticReport:
         ("main_leaf_code_google", _verification_command("MAIN", path, ignore_resources=True)),
     ):
         values[name] = _diagnostic_command(command)[0]
-    metadata_status, metadata = _diagnostic_command(_metadata_command(APP))
+    signature_status, signature = _diagnostic_command(_metadata_command(APP))
+    values["signature_metadata"] = signature_status
+    metadata_status, metadata = _diagnostic_command(_entitlements_command(APP))
     values["metadata"] = metadata_status
-    if metadata is not None:
+    if signature is not None:
         fields: dict[str, bytes] = {}
-        for line in metadata.stderr.splitlines():
+        for line in signature.stderr.splitlines():
             key, separator, value = line.partition(b"=")
             if separator and key in {b"Identifier", b"TeamIdentifier", b"Executable"}:
                 fields[key.decode("ascii")] = value
@@ -832,6 +889,7 @@ def diagnose_code() -> CodeDiagnosticReport:
                 fields.get("Executable") == os.fsencode(path)
             ),
         )
+    if metadata is not None:
         try:
             entitlements = decode_entitlement_output(metadata.stdout)
             values["entitlements_representation"] = (
@@ -888,10 +946,15 @@ def _installed(kind: ImageKind, path: Path) -> Image:
         "SIGNATURE_METADATA",
         lambda: _code_output(_metadata_command(target)),
     )
+    entitlement_result = _checked(
+        kind,
+        "ENTITLEMENTS_EXTRACT",
+        lambda: _code_output(_entitlements_command(target)),
+    )
     entitlements = _checked(
         kind,
         "ENTITLEMENTS_DECODE",
-        lambda: decode_entitlement_output(result.stdout),
+        lambda: decode_entitlement_output(entitlement_result.stdout),
     )
 
     def metadata_image() -> Image:
@@ -915,7 +978,7 @@ def _installed(kind: ImageKind, path: Path) -> Image:
             if metadata.get("TeamIdentifier") in (None, "not set")
             else metadata["TeamIdentifier"],
             entitlements=entitlements,
-            entitlement_encoding=_entitlement_encoding(result.stdout),
+            entitlement_encoding=_entitlement_encoding(entitlement_result.stdout),
         )
 
     value = _checked(kind, "METADATA_FIELDS", metadata_image)

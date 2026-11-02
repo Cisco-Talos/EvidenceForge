@@ -694,8 +694,9 @@ def test_vendor_metadata_query_verifies_code_without_opening_profiles(
     assert commands[0][0:3] == ["/usr/bin/codesign", "--verify", "-R"]
     assert commands[0][3].startswith("=anchor apple generic")
     assert "--strict" not in commands[0] and "--ignore-resources" not in commands[0]
-    assert commands[1][commands[1].index("--entitlements") + 1] == "-"
-    assert "--xml" in commands[1]
+    assert "--entitlements" not in commands[1]
+    assert commands[2][commands[2].index("--entitlements") + 1] == "-"
+    assert "--xml" in commands[2] and "--verbose=4" not in commands[2]
     assert all(command[-1] == str(Path(expected.path).parents[2]) for command in commands)
 
 
@@ -759,7 +760,7 @@ def test_installed_code_failures_export_only_closed_labels(
     assert report["installed_code_item"] == "MAIN"
     assert report["installed_code_check"] == "SIGNATURE_VERIFY"
     assert report["installed_code_failure"] == expected
-    assert report["kit_version"] == 4
+    assert report["kit_version"] == 6
     assert CANARY not in raw
 
 
@@ -795,6 +796,7 @@ def test_requirement_failure_stops_before_entitlement_queries_or_build(
         "installed_code_item": "MAIN",
         "installed_code_check": "SIGNATURE_VERIFY",
         "installed_code_failure": "COMMAND_EXIT",
+        "installed_code_output_form": "NOT_RECORDED",
     }
     assert len(commands) == 1 and CANARY not in str(exc.value)
 
@@ -842,7 +844,7 @@ def test_signing_diagnostic_classifies_only_allowlisted_messages(
     assert CANARY not in result.model_dump_json()
 
 
-def test_static_diagnostic_issues_only_six_fixed_queries_and_writes_nothing(
+def test_static_diagnostic_issues_only_seven_fixed_queries_and_writes_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -860,7 +862,9 @@ def test_static_diagnostic_issues_only_six_fixed_queries_and_writes_nothing(
         commands.append(args)
         if "-d" in args:
             return SimpleNamespace(
-                stdout=plistlib.dumps({CANARY: CANARY}),
+                stdout=b"[Dict]\n" + CANARY.encode()
+                if "--verbose=4" in args
+                else plistlib.dumps({CANARY: CANARY}),
                 stderr=f"Executable={expected.path}\nIdentifier=com.google.Chrome\nTeamIdentifier=EQHXZ8M8AV\nPRIVATE={CANARY}\n".encode(),
             )
         if "--strict" in args and args[-1] == str(kit.APP):
@@ -887,7 +891,7 @@ def test_static_diagnostic_issues_only_six_fixed_queries_and_writes_nothing(
         == "PASS"
     )
     assert report.entitlements_representation == "XML_OBJECT"
-    assert len(commands) == 6 and all(command[0] == "/usr/bin/codesign" for command in commands)
+    assert len(commands) == 7 and all(command[0] == "/usr/bin/codesign" for command in commands)
     assert all(command[-1] in {str(kit.APP), expected.path} for command in commands)
     assert commands[0] == ["/usr/bin/codesign", "--verify", str(kit.APP)]
     assert commands[1] == ["/usr/bin/codesign", "--verify", "--strict", str(kit.APP)]
@@ -1077,6 +1081,7 @@ def test_entitlement_framing_failure_reaches_fixed_setup_error_labels(
     report = json.loads(output)
     assert report["installed_code_failure"] == "ENTITLEMENT_OUTPUT_NOT_PLIST"
     assert report["installed_code_item"] == "XPCPROXY" and CANARY not in output
+    assert report["installed_code_output_form"] == "OTHER_TEXT"
 
 
 def test_full_setup_invented_inventory_handles_all_six_code_images_and_xpcproxy_container(
@@ -1133,8 +1138,14 @@ def test_full_setup_invented_inventory_handles_all_six_code_images_and_xpcproxy_
         raw = plistlib.dumps(image.entitlements)
         if image.kind == "XPCPROXY":
             raw = struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw
+        if "--verbose=4" in args:
+            stdout = (
+                b"[Dict]\n" + CANARY.encode() + b"\n" + (raw if "--entitlements" in args else b"")
+            )
+        else:
+            stdout = raw if "--entitlements" in args else b""
         return SimpleNamespace(
-            stdout=raw if "-d" in args else b"",
+            stdout=stdout,
             stderr=f"Executable={path}\nIdentifier={image.signing_id}\nTeamIdentifier={image.team_id or 'not set'}\n".encode(),
         )
 
@@ -1161,6 +1172,27 @@ def test_full_setup_invented_inventory_handles_all_six_code_images_and_xpcproxy_
         }
         for image in _manifest().images
     ]
-    assert len(commands) == 12 and CANARY not in rendered
+    assert len(commands) == 18 and CANARY not in rendered
+    assert not any("--verbose=4" in command and "--entitlements" in command for command in commands)
     assert not (tmp_path / "SESSION-LOCK").exists()
     assert not tuple(tmp_path.glob("run-*"))
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_dictionary_fragment_is_classified_without_bypassing_plist_detection(framed: bool) -> None:
+    raw = b"<dict><key>com.apple.private.xpc.is.xpcproxy</key><true/></dict>"
+    if framed:
+        raw = struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw
+    with pytest.raises(kit.EntitlementOutputError):
+        kit.decode_entitlement_output(raw)
+    assert kit._entitlement_encoding(raw) == (
+        "EMBEDDED_XML_DICT_FRAGMENT" if framed else "XML_DICT_FRAGMENT"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw", [b"<dict><", b"<dict></dict>PRIVATE", b"<dictionary></dictionary>", b"<dict></dict>\0"]
+)
+def test_fragment_support_does_not_accept_trailing_or_malformed_native_output(raw: bytes) -> None:
+    with pytest.raises(kit.EntitlementOutputError):
+        kit.decode_entitlement_output(raw)

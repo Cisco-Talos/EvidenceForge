@@ -2394,3 +2394,55 @@ pending. It authorizes no browser/probe/collector launch or log/profile/old-kit
 read. Do not inspect a handed-off kit or run setup without that permission.
 This is intended to let the agent verify setup before another human capture
 attempt; capture itself remains human-only and has not run.
+
+## November 2: verify actual setup and separate verbose metadata from XML extraction
+
+The human authorized **setup only; no capture**. The agent continued that setup
+task within its existing platform/six-executable metadata/control-compilation
+scope, using fresh isolated code copies after parser corrections. No capture,
+browser/probe/collector execution, native-log/profile read or old-kit inspection
+was performed. This setup authorization is distinct from the earlier one-shot
+Chrome signing diagnostic; routine corrections/retries did not add resources or
+authorize collection.
+
+The v4 setup returned XPCPROXY / ENTITLEMENTS_DECODE / OUTPUT_NOT_PLIST; a v5
+structural report identified OTHER_TEXT. Header and dictionary-fragment support
+did not establish the local cause. Fixed-output comparisons of only the same
+installed xpcproxy metadata then reproduced the problem: entitlements-only
+`codesign -d --entitlements - --xml` returns parseable XML; adding --verbose=4
+adds a human-readable bracketed dictionary before the XML, making the combined
+stdout invalid as a plist. Verbose metadata-only display also emits that bracketed
+form. The helper returned only public format/parseability labels. No native
+strings, keys, values, paths, hashes, stdout/stderr or diagnostic JSON are committed.
+
+Version 6 fixes the acquisition owner. Verbose signing metadata and XML entitlement
+extraction are separate commands against the same code object, with the existing
+signature check and before/after image binding retained. Verbose stdout is ignored;
+only metadata stderr is parsed for identity, and only the clean dedicated XML
+stdout is decoded. No scanning around diagnostic text, prefix stripping of unknown
+text, or permissive fallback to {} is used. Unneeded bare-dictionary admission
+from the intermediate experiment was removed; structural diagnostics remain fixed
+labels. The optional code diagnostic now reports its separate seventh query
+explicitly. Native generation/source profiles and behavior revision 373 are unchanged.
+
+**Actual host setup succeeded** in `/private/tmp/eforge-chrome-kit-fdw97zzl`:
+SETUP_READY, error NONE, platform/provenance PASS. Main, renderer, GPU and xpcproxy
+metadata use XML_PLIST; generic helper and crashpad have EMPTY entitlement output.
+Those are representation labels only. The installed build comparison is OTHER;
+its version remains private and exact frozen-catalog parity is not established.
+Controls were compiled/signed and hashed but never executed. Do not rerun setup
+or inspect this kit after handoff. It is already built for the human's private
+capture, which remains outside the current authorization.
+
+Regression fixtures now reproduce mixed verbose DER text plus XML and require
+separate queries across the full six-executable setup. They deny all native calls
+and installed-code reads by default and assert that private canaries never reach
+fixed output. The actual success is setup acceptance, not Chrome native process
+generation or the full-workload P0 acceptance milestone.
+
+All 416 selected kit regressions pass, including 107 Chrome checks. Whole
+Ruff/format/diff and behavior checks pass. The built v6 kit is the handoff;
+its code/controls must remain unchanged for capture. The human should skip setup,
+close agents/ordinary Chrome, disconnect external networking and run only the
+documented private capture, then share only its fixed report. No further native
+command ran after successful setup, and no collection is authorized here.
