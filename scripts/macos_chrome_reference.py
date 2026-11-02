@@ -6,7 +6,8 @@
 The agent-safe entry point copies code only. Human setup reads installed code,
 not profiles. Human capture streams ambient ES into bounded memory and retains
 only a nonce-authenticated browser's exact launch ancestry and descendants.
-An agent may run diagnose-code only with explicit approval for that fixed read.
+An agent may run diagnose-code or code-only setup only with explicit approval
+for those installed-code reads/builds. This never authorizes collection.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import plistlib
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -67,6 +69,14 @@ type Role = Literal[
 ]
 type ImageKind = Literal["MAIN", "RENDERER", "GPU", "HELPER", "CRASHPAD", "XPCPROXY"]
 type CodeItem = ImageKind | Literal["APP_INFO", "NONE"]
+type EntitlementEncoding = Literal[
+    "EMPTY",
+    "XML_PLIST",
+    "BINARY_PLIST",
+    "EMBEDDED_XML_PLIST",
+    "EMBEDDED_BINARY_PLIST",
+    "NOT_RECORDED",
+]
 type CodeCheck = Literal[
     "READ_INFO",
     "VALIDATE_INFO",
@@ -86,6 +96,10 @@ type CodeFailure = Literal[
     "COMMAND_TIMEOUT",
     "POLICY_REJECTED",
     "INVALID_METADATA",
+    "ENTITLEMENT_BLOB_LENGTH",
+    "ENTITLEMENT_DER_OUTPUT",
+    "ENTITLEMENT_OUTPUT_NOT_PLIST",
+    "ENTITLEMENT_VALUE_NOT_OBJECT",
     "IO",
     "NONE",
 ]
@@ -254,6 +268,11 @@ FD_SLOTS = tuple(f"FD{index}" for index in range(64))
 type FDSlot = Literal[*FD_SLOTS, "OTHER"]
 
 
+class MetadataFormat(reference.Model):
+    item: ImageKind
+    encoding: EntitlementEncoding
+
+
 class Image(reference.Model):
     """Private installed-code snapshot, never serialized into the shareable report."""
 
@@ -263,10 +282,11 @@ class Image(reference.Model):
     signing_id: str = Field(min_length=1, max_length=256)
     team_id: str | None = Field(max_length=256)
     entitlements: dict[str, bool | int | str | list[str]] = Field(max_length=128)
+    entitlement_encoding: EntitlementEncoding = "NOT_RECORDED"
 
 
 class Manifest(reference.Model):
-    kit_version: Literal[3] = 3
+    kit_version: Literal[4] = 4
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -411,7 +431,7 @@ class Phase(reference.Model):
 
 
 class Report(reference.Model):
-    kit_version: Literal[3] = 3
+    kit_version: Literal[4] = 4
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -443,6 +463,7 @@ class Report(reference.Model):
     installed_code_item: CodeItem = "NONE"
     installed_code_check: CodeCheck = "NONE"
     installed_code_failure: CodeFailure = "NONE"
+    installed_metadata_formats: tuple[MetadataFormat, ...] = Field(default=(), max_length=6)
     provenance: Check = "INCONCLUSIVE"
     catalog_release: Literal["EXACT_155_0_8059_80", "OTHER", "NOT_CHECKED"] = "NOT_CHECKED"
     collector_ready: Check = "INCONCLUSIVE"
@@ -542,11 +563,66 @@ class InstalledCodeError(DiagnosticError):
         }
 
 
+class EntitlementOutputError(ValueError):
+    """A fixed parser failure label; no native bytes or parser exception text."""
+
+    def __init__(self, reason: CodeFailure) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def decode_entitlement_output(raw: bytes) -> dict:
+    """Decode a bounded bare plist or exact Apple embedded-entitlements blob.
+
+    Apple's CSMAGIC_EMBEDDED_ENTITLEMENTS is 0xfade7171. Blob magic and total
+    length are network-order uint32 values; the declared extent includes the
+    eight-byte header. Unknown prefixes and DER are never treated as empty.
+    """
+    if len(raw) > MAX_LINE:
+        raise reference.PrivateError("LIMIT")
+    if not raw.strip():
+        return {}
+    if raw.startswith((b"\xfa\xde\x71\x71", b"\xfa\xde\x71\x72")):
+        if len(raw) < 8:
+            raise EntitlementOutputError("ENTITLEMENT_BLOB_LENGTH")
+        magic, extent = struct.unpack(">II", raw[:8])
+        if extent != len(raw) or extent <= 8:
+            raise EntitlementOutputError("ENTITLEMENT_BLOB_LENGTH")
+        if magic == 0xFADE7172:
+            raise EntitlementOutputError("ENTITLEMENT_DER_OUTPUT")
+        raw = raw[8:]
+    try:
+        value = plistlib.loads(raw)
+    except (ValueError, TypeError, plistlib.InvalidFileException, OverflowError) as error:
+        raise EntitlementOutputError("ENTITLEMENT_OUTPUT_NOT_PLIST") from error
+    if type(value) is not dict:
+        raise EntitlementOutputError("ENTITLEMENT_VALUE_NOT_OBJECT")
+    return value
+
+
+def _entitlement_encoding(raw: bytes) -> EntitlementEncoding:
+    """Call only after successful decoding; return a fixed format name, no bytes."""
+    if not raw.strip():
+        return "EMPTY"
+    if raw.startswith(b"\xfa\xde\x71\x71"):
+        return "EMBEDDED_BINARY_PLIST" if raw[8:].startswith(b"bplist00") else "EMBEDDED_XML_PLIST"
+    return "BINARY_PLIST" if raw.startswith(b"bplist00") else "XML_PLIST"
+
+
+def _metadata_formats(manifest: Manifest) -> tuple[MetadataFormat, ...]:
+    return tuple(
+        MetadataFormat(item=image.kind, encoding=image.entitlement_encoding)
+        for image in manifest.images
+    )
+
+
 def _checked[T](item: CodeItem, check: CodeCheck, operation: Callable[[], T]) -> T:
     try:
         return operation()
     except reference.PrivateError as error:
         raise InstalledCodeError(error.code, item, check, "POLICY_REJECTED") from error
+    except EntitlementOutputError as error:
+        raise InstalledCodeError("BUILD", item, check, error.reason) from error
     except subprocess.TimeoutExpired as error:
         raise InstalledCodeError("BUILD", item, check, "COMMAND_TIMEOUT") from error
     except subprocess.CalledProcessError as error:
@@ -757,7 +833,7 @@ def diagnose_code() -> CodeDiagnosticReport:
             ),
         )
         try:
-            entitlements = plistlib.loads(metadata.stdout) if metadata.stdout.strip() else {}
+            entitlements = decode_entitlement_output(metadata.stdout)
             values["entitlements_representation"] = (
                 "EMPTY"
                 if not metadata.stdout.strip()
@@ -815,7 +891,7 @@ def _installed(kind: ImageKind, path: Path) -> Image:
     entitlements = _checked(
         kind,
         "ENTITLEMENTS_DECODE",
-        lambda: plistlib.loads(result.stdout) if result.stdout.strip() else {},
+        lambda: decode_entitlement_output(result.stdout),
     )
 
     def metadata_image() -> Image:
@@ -839,6 +915,7 @@ def _installed(kind: ImageKind, path: Path) -> Image:
             if metadata.get("TeamIdentifier") in (None, "not set")
             else metadata["TeamIdentifier"],
             entitlements=entitlements,
+            entitlement_encoding=_entitlement_encoding(result.stdout),
         )
 
     value = _checked(kind, "METADATA_FIELDS", metadata_image)
@@ -901,7 +978,7 @@ def installed_images() -> tuple[str, tuple[Image, ...]]:
 
 
 def setup() -> Report:
-    """HUMAN ONLY: compile readiness/guard and snapshot code; launch nothing."""
+    """Human or explicitly approved code-only setup; compile controls, launch nothing."""
     root = _root()
     version, build = reference._preflight()
     reference._write(root / "SETUP-LOCK", b"SETUP\n")
@@ -956,6 +1033,7 @@ def setup() -> Report:
         target_platform="PASS",
         provenance="PASS",
         catalog_release=_release(manifest),
+        installed_metadata_formats=_metadata_formats(manifest),
     )
 
 
@@ -1725,7 +1803,11 @@ def capture() -> Report:
     pump: reference.Pump | None = None
     tracker: Tracker | None = None
     report = Report(
-        target_platform="PASS", provenance="PASS", catalog_release=_release(manifest), step="SERVER"
+        target_platform="PASS",
+        provenance="PASS",
+        catalog_release=_release(manifest),
+        step="SERVER",
+        installed_metadata_formats=_metadata_formats(manifest),
     )
     cleaned = server_cleaned = False
     try:

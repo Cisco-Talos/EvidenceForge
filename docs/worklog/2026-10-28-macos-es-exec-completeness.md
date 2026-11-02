@@ -2355,3 +2355,42 @@ surface digest are unchanged. Prepared fresh code-only v3 handoff:
 browser or collector ran in that new kit. Do not inspect it after handoff without
 separate permission. The next human step is setup there, then the already
 documented private capture only after SETUP_READY/error NONE.
+
+## November 2: handle framed entitlement output and verify setup before another handoff
+
+The human's v3 setup reaches XPCPROXY / ENTITLEMENTS_DECODE / INVALID_METADATA.
+By execution order, the five Chrome executables completed their code/signature/
+metadata checks; xpcproxy verification and metadata extraction also completed
+before plist parsing failed. This is still setup, with no collector or browser
+started. No old kit, installed executable, native output or local log was read
+by the agent while investigating this new report. Earlier diagnostic permission
+was not reused.
+
+The old parser accepts bare plists only. Apple's published XNU cs_blobs.h and
+Security blob.h define an embedded-entitlements container: magic 0xfade7171 plus
+network-order total length, including the eight-byte header. Version 4 supports
+bare XML/binary plists and that exact container, validates its full extent, then
+requires a dictionary. DER containers, damaged lengths, unknown prefixes, arbitrary
+text prefixes and non-object values fail with fixed reason labels. It neither
+scans for a later XML document nor replaces an unrecognized value with {}. The
+existing signature checks, vendor requirements and file identity/change checks
+are intact. Installed metadata formats are exported only as fixed names for each
+declared component; no keys, values, lengths, hashes or observed paths are added.
+The actual local xpcproxy encoding is still unobserved by the agent; framing is
+a source-grounded hypothesis, not a finding from the user's private stdout.
+
+Synthetic tests now exercise all six installed-code checks through the real
+setup orchestration with fake native commands and a framed xpcproxy object, plus
+XML/binary, truncation/extent, unsupported DER, unknown prefixes, wrong object
+types and private canaries. All 410 selected kit tests pass, including 101 Chrome
+checks. Whole Ruff/format/diff and behavior checks pass. Revision 373 is unchanged;
+there is no production generation/profile or native-source admission change.
+
+Fresh code-only v4: `/private/tmp/eforge-chrome-kit-x02_rnsp`. The human has been
+asked to authorize only its setup: fixed platform/installed-code reads, compiling
+and signing controls without executing them, and writing private setup metadata
+outside Git, with only fixed JSON/format labels returned. That permission is
+pending. It authorizes no browser/probe/collector launch or log/profile/old-kit
+read. Do not inspect a handed-off kit or run setup without that permission.
+This is intended to let the agent verify setup before another human capture
+attempt; capture itself remains human-only and has not run.

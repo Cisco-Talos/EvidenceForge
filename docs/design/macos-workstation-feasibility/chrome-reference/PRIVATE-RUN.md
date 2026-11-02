@@ -5,7 +5,7 @@ local fetch, and a manual quit. It gathers the main, renderer, GPU and network
 helper relationships needed by the fixed workstation workload. It is **not** a
 blind assessment, an ordinary browsing sample or automatic generation admission.
 
-**Use a fresh version-3 kit.** Version 1 had malformed inline signing arguments;
+**Use a fresh version-4 kit.** Version 1 had malformed inline signing arguments;
 version 2 corrected the arguments and XML parsing but also required strict
 distribution validation for app bundles. The approved diagnostic found ordinary
 Chrome signature validation passing while strict validation failed on resources.
@@ -18,8 +18,23 @@ the report also states `strict_distribution_conformance: NOT_EVALUATED`. This is
 it does not establish strict distribution or Gatekeeper conformance. Do not alter
 or re-sign Chrome or overwrite earlier kits.
 
-Agents may prepare this code-only kit and test invented records. **Only the human
-runs setup, capture and report**, privately after closing agents. No existing
+Version 4 also accepts Apple's embedded-entitlements container: its eight-byte
+network-order magic/total-length header must match exactly before decoding the
+contained plist. Bare XML/binary plists still work. Unknown prefixes, incorrect
+lengths, DER output and non-dictionary values remain explicit failures; no unknown
+output is silently replaced with an empty object. The final fixed report adds
+`installed_metadata_formats`, containing only public format labels per component.
+This support is based on Apple's published format, not an unapproved inspection
+of the local xpcproxy output.
+
+Agents may prepare this code-only kit and test invented records. By default the
+human runs setup, capture and report privately after closing agents. **An agent
+may run setup in a fresh code-only kit only with explicit approval for its fixed
+installed-code checks and control compilation.** Setup reads the six declared
+installed executables/signatures, compiles/signs the marker and collector guard,
+and writes private setup metadata; it executes neither compiled control. This
+exception authorizes no capture, browser/probe launch, or private log/profile read.
+No existing
 capture, personal browser profile, historical logs or installed Chrome metadata
 were read while preparing it. Do not run this inside a Git checkout or synced
 folder. Keep the kit and its parent directories on trusted local storage.

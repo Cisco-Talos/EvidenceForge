@@ -6,6 +6,7 @@
 import errno
 import io
 import json
+import struct
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ CANARY = "INVENTED_PRIVATE_CHROME_CANARY"
 PROFILE = f"/private/tmp/{CANARY}/profile"
 HOME = f"/private/tmp/{CANARY}/home"
 URL = f"http://127.0.0.1:12345/{CANARY}/"
+_INSTALLED_IMAGES = kit.installed_images
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +70,7 @@ def _manifest() -> kit.Manifest:
                 entitlements={"com.apple.security.cs.allow-jit": True}
                 if kind in {"RENDERER", "GPU"}
                 else {},
+                entitlement_encoding="XML_PLIST",
             )
         )
     return kit.Manifest(
@@ -756,7 +759,7 @@ def test_installed_code_failures_export_only_closed_labels(
     assert report["installed_code_item"] == "MAIN"
     assert report["installed_code_check"] == "SIGNATURE_VERIFY"
     assert report["installed_code_failure"] == expected
-    assert report["kit_version"] == 3
+    assert report["kit_version"] == 4
     assert CANARY not in raw
 
 
@@ -981,3 +984,183 @@ def test_process_reference_uses_standard_app_validation_and_keeps_vendor_require
     report = kit.Report()
     assert report.app_signature_policy == "STANDARD_WITH_VENDOR_REQUIREMENT"
     assert report.strict_distribution_conformance == "NOT_EVALUATED"
+
+
+@pytest.mark.parametrize("framed", [False, True])
+@pytest.mark.parametrize("binary", [False, True])
+def test_entitlement_decoder_accepts_bare_and_length_bound_apple_plists(
+    framed: bool, binary: bool
+) -> None:
+    import plistlib
+
+    values = {"com.apple.private.xpc.is.xpcproxy": True, CANARY: CANARY}
+    raw = plistlib.dumps(values, fmt=plistlib.FMT_BINARY if binary else plistlib.FMT_XML)
+    if framed:
+        raw = struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw
+    assert kit.decode_entitlement_output(raw) == values
+
+
+@pytest.mark.parametrize(
+    "raw,reason",
+    [
+        (b"\xfa\xde\x71\x71", "ENTITLEMENT_BLOB_LENGTH"),
+        (struct.pack(">II", 0xFADE7171, 7), "ENTITLEMENT_BLOB_LENGTH"),
+        (struct.pack(">II", 0xFADE7171, 8), "ENTITLEMENT_BLOB_LENGTH"),
+        (struct.pack(">II", 0xFADE7171, 10) + b"x", "ENTITLEMENT_BLOB_LENGTH"),
+        (struct.pack(">II", 0xFADE7172, 9) + b"x", "ENTITLEMENT_DER_OUTPUT"),
+        (CANARY.encode(), "ENTITLEMENT_OUTPUT_NOT_PLIST"),
+        (
+            struct.pack(">II", 0xFADE7171, len(CANARY) + 8) + CANARY.encode(),
+            "ENTITLEMENT_OUTPUT_NOT_PLIST",
+        ),
+    ],
+)
+def test_entitlement_decoder_rejects_unsupported_or_damaged_framing_without_values(
+    raw: bytes, reason: str
+) -> None:
+    with pytest.raises(kit.EntitlementOutputError) as exc:
+        kit.decode_entitlement_output(raw)
+    assert exc.value.reason == reason and CANARY not in str(exc.value)
+
+
+def test_entitlement_decoder_rejects_non_objects_and_does_not_scan_for_xml() -> None:
+    import plistlib
+
+    with pytest.raises(kit.EntitlementOutputError, match="ENTITLEMENT_VALUE_NOT_OBJECT"):
+        kit.decode_entitlement_output(plistlib.dumps([CANARY]))
+    raw = plistlib.dumps({CANARY: CANARY})
+    with pytest.raises(kit.EntitlementOutputError, match="ENTITLEMENT_OUTPUT_NOT_PLIST"):
+        kit.decode_entitlement_output(CANARY.encode() + raw)
+    with pytest.raises(kit.EntitlementOutputError, match="ENTITLEMENT_BLOB_LENGTH"):
+        kit.decode_entitlement_output(struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw + b"extra")
+    assert kit.decode_entitlement_output(b" \n\t") == {}
+
+
+def test_setup_metadata_decoder_accepts_xpcproxy_blob_without_changing_entitlements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plistlib
+
+    image = _manifest().images[-1]
+    expected = {"com.apple.private.xpc.is.xpcproxy": True, CANARY: CANARY}
+    image = image.model_copy(
+        update={"entitlements": expected, "entitlement_encoding": "EMBEDDED_XML_PLIST"}
+    )
+    raw = plistlib.dumps(expected)
+    wrapped = struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw
+    monkeypatch.setattr(kit.support, "_installed_image", lambda _path: image.image)
+    monkeypatch.setattr(
+        kit,
+        "_code_output",
+        lambda args: SimpleNamespace(
+            stdout=wrapped if "-d" in args else b"",
+            stderr=f"Executable={image.path}\nIdentifier={image.signing_id}\nTeamIdentifier=not set\n".encode(),
+        ),
+    )
+    assert kit._installed("XPCPROXY", Path(image.path)) == image
+
+
+def test_entitlement_framing_failure_reaches_fixed_setup_error_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def setup() -> None:
+        kit._checked(
+            "XPCPROXY",
+            "ENTITLEMENTS_DECODE",
+            lambda: kit.decode_entitlement_output(CANARY.encode()),
+        )
+
+    monkeypatch.setattr(kit, "setup", setup)
+    assert kit.main(["setup", "--private-run"]) == 2
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["installed_code_failure"] == "ENTITLEMENT_OUTPUT_NOT_PLIST"
+    assert report["installed_code_item"] == "XPCPROXY" and CANARY not in output
+
+
+def test_full_setup_invented_inventory_handles_all_six_code_images_and_xpcproxy_container(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import plistlib
+
+    app = tmp_path / f"{CANARY}.app"
+    (app / "Contents").mkdir(parents=True)
+    info = app / "Contents/Info.plist"
+    info.write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": "com.google.Chrome",
+                "CFBundleShortVersionString": "155.0.8059.80",
+            }
+        )
+    )
+    info.chmod(0o600)
+    for name in kit.CODE:
+        (tmp_path / name).write_bytes(b"invented code")
+        (tmp_path / name).chmod(0o600)
+    monkeypatch.setattr(kit, "APP", app)
+    monkeypatch.setattr(kit, "_root", lambda: tmp_path)
+    monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", CANARY))
+    monkeypatch.setattr(kit.reference, "_codec_digest", lambda: "a" * 64)
+    monkeypatch.setattr(kit, "installed_images", _INSTALLED_IMAGES)
+    base = (
+        app / "Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers"
+    )
+    paths = [
+        app / "Contents/MacOS/Google Chrome",
+        *(
+            base / f"{name}.app/Contents/MacOS" / name
+            for name in (
+                "Google Chrome Helper (Renderer)",
+                "Google Chrome Helper (GPU)",
+                "Google Chrome Helper",
+            )
+        ),
+        base / "chrome_crashpad_handler",
+        Path("/usr/libexec/xpcproxy"),
+    ]
+    policies = {path: image for path, image in zip(paths, _manifest().images, strict=True)}
+    monkeypatch.setattr(kit.support, "_installed_image", lambda path: policies[path].image)
+    commands: list[list[str]] = []
+
+    def output(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        path = next(path for path in paths if args[-1] in {str(path), str(path.parents[2])})
+        image = policies[path]
+        raw = plistlib.dumps(image.entitlements)
+        if image.kind == "XPCPROXY":
+            raw = struct.pack(">II", 0xFADE7171, len(raw) + 8) + raw
+        return SimpleNamespace(
+            stdout=raw if "-d" in args else b"",
+            stderr=f"Executable={path}\nIdentifier={image.signing_id}\nTeamIdentifier={image.team_id or 'not set'}\n".encode(),
+        )
+
+    def compile_control(args: list[str], _root: Path) -> None:
+        assert args[0] in {"/usr/bin/clang", "/usr/bin/codesign"}
+        if args[0] == "/usr/bin/clang":
+            target = Path(args[-1])
+            assert target.parent == tmp_path and target.name in {"ready-marker", "collector-guard"}
+            target.write_bytes(b"invented compiled control; never executed")
+            target.chmod(0o700)
+        else:
+            assert args[-1] == str(tmp_path / "ready-marker")
+
+    monkeypatch.setattr(kit, "_code_output", output)
+    monkeypatch.setattr(kit.reference, "_command", compile_control)
+    assert kit.main(["setup", "--private-run"]) == 0
+    rendered = capsys.readouterr().out
+    report = json.loads(rendered)
+    assert report["stage"] == "SETUP_READY" and report["error"] == "NONE"
+    assert report["installed_metadata_formats"] == [
+        {
+            "item": image.kind,
+            "encoding": "EMBEDDED_XML_PLIST" if image.kind == "XPCPROXY" else "XML_PLIST",
+        }
+        for image in _manifest().images
+    ]
+    assert len(commands) == 12 and CANARY not in rendered
+    assert not (tmp_path / "SESSION-LOCK").exists()
+    assert not tuple(tmp_path.glob("run-*"))
