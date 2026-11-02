@@ -85,6 +85,12 @@ local content. It should classify those remaining facts without exposing paths,
 environment values, browsing history, account data or native records. No such
 collection or private-log read was performed for this measurement.
 
+A [human-only Chrome kit](../../docs/design/macos-workstation-feasibility/chrome-reference/PRIVATE-RUN.md)
+now prepares this experiment with a disposable profile, supplied loopback-only
+page/server and one fixed-label report for the main/helper graph. No Chrome
+collection has run. It uses LaunchServices with explicit test arguments; a
+successful result would not alone qualify the scenario's direct Finder launch.
+
 Public Chromium sources are useful inputs, not evidence of the frozen catalog
 release's runtime state: the [signing documentation](https://chromium.googlesource.com/chromium/src/+/main/chrome/installer/mac/signing/README.md)
 distinguishes official Chrome and development signing; the

@@ -2180,3 +2180,62 @@ The user has been asked only whether Chrome is already installed (Yes/No), to
 design a bounded fresh-profile reference. No capture, installed-app query, private
 kit read or native-log read ran. Previously consumed permissions were not reused.
 See REPORT.md and RESULTS.json for the reviewable outcome and exact limits.
+
+## November 2: prepare the single Chrome workload reference
+
+The user confirmed that Chrome is already installed. This is availability only,
+not permission to inspect the app, run a collector or read prior private kits.
+Workload milestone `23e3078f` is committed and pushed. Its unchanged full source
+still rejects at Chrome; the previously measured diagnostic subset is unchanged.
+
+`scripts/macos_chrome_reference.py` prepares a fresh code-only kit. Human-only
+setup snapshots fixed installed code/signature metadata, compiles the unchanged
+readiness marker and 55-second collector guard, and launches nothing. It verifies
+Google's signing requirement for Chrome code and Apple's for xpcproxy. Human
+capture requires attestations that ordinary Chrome is closed and the external
+network disconnected, then uses LaunchServices `open -n -a` with a new explicit
+test profile. The supplied server serves only an invented local WebGL/fetch page
+from memory on 127.0.0.1. It logs no requests and serves no disk files. There is
+no headless/debugging mode, sandbox bypass, installed-app modification, personal
+profile read, historical-log query, process enumeration or bundle-wide quit.
+
+The existing bounded reader/guard and image/security/entitlement comparison
+helpers are reused. Ambient ES stays in a bounded in-memory ring. A matching
+installed main file object/signature plus exact controlled arguments and unique
+profile/URL proves the root. Exact xpcproxy/fork ancestry and controlled execution
+or parent-token linkage prove descendants before private retention. Path or PID
+alone cannot admit rows. Changed native path spellings are classified separately;
+unrelated Chrome instances and duplicate profile overrides fail admission.
+Missing forks are counted explicitly, not synthesized. The user quits only the
+test browser manually; interruption, timeout, collector/launch failure and cleanup
+are tested with fake processes/server/clock. Verification of installed code runs
+after collectors/server stop, not inside the collector watchdog's deadline.
+
+The outer kit's SHAREABLE-CHROME-REPORT.json exports only closed labels, public
+allowlisted entitlement/switch names, fixed FD slots and sequential execution/pipe
+aliases. It covers native shapes, signing/security/slice, parent/responsibility,
+audit/job-control transitions, argv roles, FD inventory and pipe relationships,
+environment comparisons, entitlements and known public template membership in
+one report. Unknown names and all observed values stay hidden. Short stdout
+avoids another scrollback problem; the human shares only the fixed detail file.
+Native records/provenance/profile remain private, outside Git. A 4 MiB report
+overflow explicitly returns LIMIT without pretending a truncated graph is full.
+
+This does not qualify direct Finder/Dock/Spotlight launches, app reuse, arbitrary
+helper graphs or exact catalog-release behavior when the private installed build
+differs. It starts no new admission/assessment loop. The next development step is
+to apply the report to Chrome's owning canonical launch/helper plans, then rerun
+the fixed workload and its outstanding baseline/filter/recovery acceptance.
+No live Chrome query, app/probe launch, native collector or private-log/kit read
+ran during preparation; tests use invented inputs only. No production generation
+surface or behavior revision changed. Detailed human instructions and public
+Chromium design inputs are under `chrome-reference/PRIVATE-RUN.md`.
+
+All 359 selected Chrome/common GUI/launcher/terminal kit tests pass, including
+50 Chrome tests with invented inputs and fake lifecycle operations. Whole
+Ruff/format (1,414 files), diff and generation-behavior checks pass. Revision 373
+and its digest remain unchanged. Prepared fresh code-only handoff:
+`/private/tmp/eforge-chrome-kit-qfs15vnt`. Once handed to the human this directory
+must not be opened, listed or queried by an agent without separate permission.
+The next authorized agent action is to read the human-selected fixed shareable
+report, not to inspect native records or silently start this experiment.
