@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 372
+current_revision: 373
 history_start_revision: 1
-behavior_surface_sha256: e7ba17d89d83d5b3a0c06709988c8e321e11484d1acff9fb2506441a4f674ac9
+behavior_surface_sha256: 1112d76da93cf383cef734e563f7e3790a021e49d59a8a03ebb52704b0c40a72
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3580,3 +3580,15 @@ changes:
       - authored-warmup-ordering
     formats: []
     summary: Adds bounded native root job startup, frozen loaded environment, retained recovery and authenticated binding of its published process; executes authored warmup prerequisites before collection and preserves legacy partial job profiles.
+  - revision: 373
+    id: macos-workstation-acceptance-process-starts
+    impact: material
+    domains:
+      - macos-baseline-process-admission
+      - macos-authored-baseline-ordering
+      - ground-truth-collection-window
+      - authored-logoff-noop
+      - macos-process-collection-window
+      - launchd-system-job-targets
+    formats: []
+    summary: Restores final-pass Mac starts and terminal reuse, orders authored owners, admits OS-inventory jobs and aligns ground-truth visibility/precision with collection; rejects displaced post-window starts and records no-session logoffs as no-ops.

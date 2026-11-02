@@ -72,8 +72,8 @@ ran once, offline, without commands, probes, collectors, writes or live queries.
 Those permissions are consumed.
 
 Generation selects the bounded producer explicitly with write-stage
-`launch_profile: root_xpcproxy_v11`. The current execution policy admits only
-`/usr/bin/true`, root/system domain, explicit activation and RunAtLoad false.
+`launch_profile: root_xpcproxy_v11`. The current execution policy admits
+`/usr/bin/true` and `/usr/bin/sw_vers`, root/system domain, explicit activation and RunAtLoad false.
 Its clean PATH/LANG/LC_ALL environment is frozen into the modeled file definition
 before publication; loaded state retains it independently of file replacement
 or removal. The private authentication nonce is not modeled. The producer adds
@@ -81,6 +81,12 @@ the three observed public launchd assignments and uses the existing phase
 journal for fork/xpcproxy exec, setsid and target exec. The service authority
 binds that already published process and group, without replaying a birth.
 Explicit known exit and unload retain the existing lifecycle owners.
+
+The native capture observed true, not sw_vers. OS-inventory activation reuses the
+same selected root launch mechanism and sw_vers's existing independent installed
+image/entitlement/runtime policy. It does not borrow true's security flags or
+claim a new measured target reference. This is an explicit synthetic profile
+extension exercised by the workstation acceptance workload.
 
 The invented complete CLI workload has two job starts, two forks and four execs,
 plus explicit zero exits. Its provisioning caller is explicitly pre-existing

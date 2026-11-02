@@ -82,6 +82,8 @@ without turning `TODO.md` back into a high-conflict work journal.
   avoid inventing execs for builtins, app reuse or failed launch attempts. See the
   [implementation contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md)
   and [effort worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+  Drive remaining repairs with the fixed [two-Mac workstation workload](scenarios/macos-workstation-acceptance/README.md)
+  and its coverage report; individual producer tests do not close this milestone.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native

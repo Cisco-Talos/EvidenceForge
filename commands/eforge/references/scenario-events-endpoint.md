@@ -120,7 +120,7 @@ Fields: `type`, `operation`, `label`, `caller_ref`, `path`, `program`, `argument
 Experimental arm64 Mac root/system-domain persistence stages. Use `operation: write|bootstrap|activate|exit|unload|remove`, `label`, and `caller_ref` referencing an earlier root process on that host. File stages require `path` under `/Library/LaunchDaemons/` ending in `.plist`; write additionally requires `program`, `arguments`, and `size_bytes`. Optional write fields are increasing `version` (default 1) and retained `run_at_load` (default false). Only activate accepts `process_ref`; only exit accepts `exit_code` (0–255). Other stages use the retained loaded definition. Explicit unload is required by the bounded profile. See [Mac endpoint guidance](evidence-endpoint-macos.md) for collection boundaries and the distinction between file removal and job unload.
 
 Write-stage `launch_profile: root_xpcproxy_v11` selects the bounded native root/system
-preset: installed `/usr/bin/true`, argv[0] equal to its program, RunAtLoad false and explicit
+preset: installed `/usr/bin/true` or `/usr/bin/sw_vers`, argv[0] equal to its program, RunAtLoad false and explicit
 activation. The engine freezes its configured clean environment into the file/loaded definition;
 each activation emits a real launchd fork, xpcproxy exec and target exec with a separate setsid.
 Known exit results are explicit. Other images/triggers and definitions without the preset do

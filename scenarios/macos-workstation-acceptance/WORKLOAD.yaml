@@ -1,0 +1,52 @@
+schema_version: 1
+source: source/scenario.yaml
+purpose: Fixed workstation capability measurement, not a blind authenticity assessment
+duration: 30m
+seed: 373
+acceptance:
+  policy: complete
+  require_all_authored_processes: true
+  require_independent_census: true
+  require_background_processes: true
+  require_chrome_helpers: true
+  preserve_source_scope: true
+common_steps:
+  - close-warmup-mac-apple
+  - close-warmup-mac-iterm
+  - login-mac-apple
+  - login-mac-iterm
+  - logout-mac-apple
+  - logout-mac-iterm
+cases:
+  - name: apple-terminal
+    description: Fresh Apple Terminal chain and ordinary local commands
+    steps: [apple-id, apple-list]
+    required_images: [/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal, /usr/bin/login, /bin/zsh, /usr/bin/id, /bin/ls]
+  - name: iterm-terminal
+    description: Fresh iTerm2 chain and ordinary local commands
+    steps: [iterm-version, iterm-uname]
+    required_images: [/Applications/iTerm.app/Contents/MacOS/iTerm2, /usr/bin/login, /bin/zsh, /usr/bin/sw_vers, /usr/bin/uname]
+  - name: nonpty-ssh
+    description: Apple Terminal client, Mac non-PTY receiver, remote command and close
+    steps: [ssh-nonpty-open, ssh-nonpty-query, ssh-nonpty-close]
+    required_images: [/usr/bin/ssh, /usr/libexec/sshd-keygen-wrapper, /usr/sbin/sshd, /usr/libexec/sshd-session, /bin/zsh, /usr/bin/id]
+  - name: pty-ssh
+    description: iTerm2 client, Mac PTY receiver, remote command and close
+    steps: [ssh-pty-open, ssh-pty-query, ssh-pty-close]
+    required_images: [/usr/bin/ssh, /usr/libexec/sshd-keygen-wrapper, /usr/sbin/sshd, /usr/libexec/sshd-session, /bin/zsh, /usr/bin/sw_vers]
+  - name: chrome
+    description: Fresh real catalog Chrome, renderer, GPU, network helper and browsing
+    steps: [chrome-main, chrome-renderer, chrome-gpu, chrome-network, chrome-browse]
+    required_images:
+      - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+      - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+      - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU)
+      - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+  - name: system-job
+    description: Two in-window OS-inventory job activations and explicit exits
+    steps: [setup-provisioner, setup-job-file, setup-job-registration, inventory-first, inventory-first-exit, inventory-second, inventory-second-exit, inventory-unload]
+    required_images: [/usr/libexec/xpcproxy, /usr/bin/sw_vers]
+  - name: baseline
+    description: Unsuppressed ordinary background activity; zero process starts is a gap
+    steps: []
+    required_images: []

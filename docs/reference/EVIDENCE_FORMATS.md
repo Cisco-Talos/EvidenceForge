@@ -736,7 +736,7 @@ window creation/restoration, other app trees and unexpanded script children rema
 bounded startup contract. No new Unified Log app-launch messages are inferred.
 
 System-domain jobs may select `launch_profile: root_xpcproxy_v11` when writing their
-modeled definition. The bounded root `/usr/bin/true` preset publishes one launchd fork,
+modeled definition. The bounded root preset (`/usr/bin/true` or modeled `/usr/bin/sw_vers`) publishes one launchd fork,
 xpcproxy exec, setsid and target exec. Root credentials, assigned boot audit origin,
 self responsibility, root cwd and three non-TTY vnode standards are canonical facts.
 Loaded state retains the clean environment plus observed public launchd assignments

@@ -77,10 +77,13 @@ def _setup(
 
 
 @pytest.mark.parametrize("native", [False, True], ids=["filtered", "complete-native"])
+@pytest.mark.parametrize(
+    "program,flags", [("/usr/bin/true", 0x26011B11), ("/usr/bin/sw_vers", 0x24000001)]
+)
 def test_native_system_job_keeps_real_fork_two_execs_and_loaded_lifecycle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native: bool, program: str, flags: int
 ) -> None:
-    engine, bundle, request = _setup(tmp_path, monkeypatch, native=native)
+    engine, bundle, request = _setup(tmp_path, monkeypatch, native=native, program=program)
     try:
         # The loaded definition is authoritative after its modeled file is removed.
         bundle.execute(request("remove", 62))
@@ -89,7 +92,7 @@ def test_native_system_job_keeps_real_fork_two_execs_and_loaded_lifecycle(
         )
         first = bundle.execute(request("activate", 63)).process
         assert first.execution_ordinal == 2 and first.initial_image == "/sbin/launchd"
-        assert first.arguments == ("/usr/bin/true",) and first.logon_id == ""
+        assert first.arguments == (program,) and first.logon_id == ""
         assert first.job_control.pgid == first.job_control.session.sid == first.pid
         assert first.credentials.is_unattributed_root and first.credentials.audit_session_id > 0
         assert first.environment == (
@@ -132,11 +135,42 @@ def test_native_system_job_keeps_real_fork_two_execs_and_loaded_lifecycle(
         assert target.process.group_id == target.process.session_id == first.pid
         assert target.process.audit_token.asid == fork.process.audit_token.asid
         assert target.event.exec.target.responsible_audit_token == exit_row.process.audit_token
-        assert target.event.exec.target.codesigning_flags == 0x26011B11
+        assert target.event.exec.target.codesigning_flags == flags
         assert [fd.fdtype for fd in target.event.exec.fds] == [1, 1, 1]
         assert target.event.exec.last_fd == 2 and exit_row.event.exit.stat == 0
     else:
         assert not rows
+
+
+def test_optional_mac_start_displaced_after_collection_allocates_no_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.models.scenario import User
+
+    engine, _bundle, _request = _setup(tmp_path, monkeypatch)
+    try:
+        generator = engine.activity_generator
+        service = generator._process_execution_service()
+        monkeypatch.setattr(
+            type(service.scheduling),
+            "_space_interactive_shell_child_launch",
+            lambda _self, **_kwargs: engine.end_time + timedelta(seconds=1),
+        )
+        before = engine.state_manager.macos_process_census_snapshot()
+        pid = generator.generate_process(
+            User(username="root", full_name="Root", email="root@example.test"),
+            engine.scenario.environment.systems[0],
+            engine.end_time - timedelta(seconds=1),
+            "",
+            "/usr/bin/sw_vers",
+            "/usr/bin/sw_vers",
+            parent_pid=1,
+            require_exact_parent=True,
+        )
+        assert pid == 0
+        assert engine.state_manager.macos_process_census_snapshot() == before
+    finally:
+        engine._close_emitters()
 
 
 def test_unqualified_job_image_rejects_before_startup_or_census_mutation(

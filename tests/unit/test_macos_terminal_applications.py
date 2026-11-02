@@ -34,6 +34,41 @@ def _engine(tmp_path: Path, terminal_id: str, *, native: bool = True) -> Generat
     return engine
 
 
+@pytest.mark.parametrize(
+    "terminal_id,counts", [("macos-terminal", (3, 4)), ("macos-iterm2", (4, 6))]
+)
+def test_baseline_terminal_catalog_activity_uses_native_startup_then_existing_shell(
+    tmp_path: Path, terminal_id: str, counts: tuple[int, int]
+) -> None:
+    engine = _engine(tmp_path, terminal_id)
+    try:
+        engine._initialize()
+        generator, state = engine.activity_generator, engine.state_manager
+        user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
+        generator.execute_baseline_activity(
+            user, system, at + timedelta(seconds=10), "process_code"
+        )
+        session = state.get_session(logon)
+        shell = state.get_process_identity(system.hostname, session.session_shell_pid)
+        assert shell is not None and shell.image == "/bin/zsh"
+        before = state.macos_process_census_snapshot()
+        generator.execute_baseline_activity(user, system, at + timedelta(minutes=1), "process_code")
+        assert state.get_session(logon).session_shell_pid == shell.pid
+        assert state.macos_process_census_snapshot() == before
+        engine._finalize_macos_process_coverage()
+        host = next(
+            h
+            for h in engine.dispatcher.macos_es_ingress.coverage.hosts
+            if h.hostname == system.hostname
+        )
+        assert host.process_census.complete and host.process_census.aggregate_births == 0
+        assert (host.process_census.published_forks, host.process_census.published_execs) == counts
+    finally:
+        engine._close_emitters()
+
+
 @pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
 @pytest.mark.parametrize("native", [False, True], ids=["filtered", "native"])
 @pytest.mark.parametrize("preexisting", [False, True], ids=["in-window", "preexisting"])

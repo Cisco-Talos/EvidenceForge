@@ -87,7 +87,7 @@ The bounded authored policy interface is `process` with `outcome: denied`, an ab
 
 ## Explicit system launch-item stages
 For native ES startup, select write-stage `launch_profile: root_xpcproxy_v11`, installed
-`/usr/bin/true` and RunAtLoad false. This explicit root/system preset freezes its configured
+`/usr/bin/true` or `/usr/bin/sw_vers` and RunAtLoad false. This explicit root/system preset freezes its configured
 clean environment into the loaded definition and publishes launchd fork, xpcproxy exec,
 setsid and target exec through the shared phase owner. Known exit is explicit. Other images,
 domains and triggers retain their gates. The complete example is

@@ -129,6 +129,14 @@ requirements.txt
 sample_data/
 
 # Current-profile synthetic acceptance source and derived review reports.
+!scenarios/macos-workstation-acceptance/
+scenarios/macos-workstation-acceptance/*
+!scenarios/macos-workstation-acceptance/draft.json
+!scenarios/macos-workstation-acceptance/source/
+!scenarios/macos-workstation-acceptance/WORKLOAD.yaml
+!scenarios/macos-workstation-acceptance/README.md
+!scenarios/macos-workstation-acceptance/REPORT.md
+!scenarios/macos-workstation-acceptance/RESULTS.json
 !scenarios/macos27-native-assessment/
 scenarios/macos27-native-assessment/*
 !scenarios/macos27-native-assessment/draft.json

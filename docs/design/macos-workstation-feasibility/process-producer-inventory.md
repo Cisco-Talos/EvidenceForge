@@ -64,6 +64,7 @@ not a supported extension path.
 | Collection policy | Disabled source, removed process capability, loss and shortened windows reject during preflight, even with no process events. Partial collection requires an explicit partial policy. |
 | Filter/recovery regression | Finder, paired-terminal and qualified non-PTY/PTY SSH client/receiver public CLI workloads pass complete reconciliation and nonempty checkpoint/resume. Initial receiver-fork and foreground command phase faults recover without duplicate State starts or native rows. |
 | Native system job | Two explicit true activations after plist removal reconcile two forks/four execs with no aggregate starts. Binding and each startup phase recover from publication faults. Public CLI output filtering and checkpoint/resume preserve native bytes and the loaded group/environment. The provisioning caller starts explicitly before collection. |
+| Fixed workstation workload | Terminal, iTerm2, both SSH modes and OS-inventory jobs combine into 29 forks/34 execs with exact identities. The full Chrome/helper source remains blocked. Primary background sampling is unexercised; supplementary seeds retain quiet and positive results. See the [coverage report](../../../scenarios/macos-workstation-acceptance/REPORT.md). |
 
 The source profile and native reference gates remain separate. Qualified Finder/terminal
 startup does not qualify other application/service activations, additional PTY helper families

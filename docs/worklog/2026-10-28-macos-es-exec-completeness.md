@@ -2099,3 +2099,84 @@ mechanisms/apps/helper trees, existing-app windows/restoration, additional job
 images/domains/triggers and complex execution plans remain separate producer and
 qualification work. No extra collection is needed for this preset; the next
 native GUI extension needs its own controlled reference before admission.
+
+## November 2: fixed workstation workload replaces component-led qualification
+
+The user challenged the practical breadth and approved a fixed thirty-minute
+two-Mac acceptance scenario: fresh Apple Terminal/iTerm2, ordinary commands,
+non-PTY and PTY Mac-to-Mac SSH, real catalog Chrome plus renderer/GPU/network
+helpers and browsing, useful background inventory jobs and baseline activity.
+The new managed Schema 3 artifact is under
+`scenarios/macos-workstation-acceptance/` (draft.json plus source/); its CLI-created
+UUID is retained and no release is published. WORKLOAD.yaml independently records
+case membership/required roles; the measurement runner uses the ordinary public
+CLI. Industry/organization context reuses the invented development-lab archetype
+from the existing example, with no packs or local inventory.
+
+The unchanged full source rejects at Chrome's missing Finder bundle policy. No
+reference-app substitution, target-start warmup relocation or process-family
+suppression was used. Pre-collection job registration/provisioning is explicit
+fixture state from the original workload; its startup is not claimed qualified.
+All terminal/command/SSH/browser/helper/job target starts remain in collection.
+Four warnings are retained: three setup steps outside collection and no firewall
+sensor in the endpoint/SPAN lab. The initial low-intensity seed scheduled no user
+timestamps. Intensity was raised to medium during workload construction to
+exercise baseline, retaining seed/window/target activities. Seed 373 remains
+quiet; supplementary seeds 374 and 375 are both retained, not cherry-picked.
+
+Concrete repairs from observed failures:
+
+- Root jobs reuse the qualified launch mechanism and existing independent
+  sw_vers image metadata for OS inventory, rather than stopping at true. The
+  reference observed true; this extension does not claim captured sw_vers flags.
+- Mac final-pass process families admit starts through their existing natural
+  lifetime owners; they no longer disappear for lacking an in-window close bound.
+  Optional starts displaced after collection reject before requested-process
+  materialization. Other unbounded OS/family gates remain intact.
+- Mac-containing user-activity passes execute due authored owners before the
+  scheduled background action, retaining future authored transitions until due.
+- Baseline catalog Terminal/iTerm2 activity uses shared native startup/reuse.
+  Previously it created an aggregate app before the later shell request, which
+  then rejected as an unqualified existing-app window. Tests prove one native
+  chain and no extra starts on ordinary reuse for both brands.
+- Ground truth excludes actual pre/post-collection occurrences from expected
+  visibility, preserves subsecond timestamps and marks no-matching-session
+  logoffs as no-ops. Native aggregate diagnostics respect their independent
+  census window. No evaluator threshold or source renderer was weakened.
+
+The report records actual overlapping case counts: Apple Terminal 5 forks/6
+execs, iTerm2 6/8, non-PTY SSH 11/12, PTY SSH 12/14 and two inventory jobs 2/4.
+The combined diagnostic excluding Chrome has **29 forks/34 execs**, exact
+independent fingerprints, zero aggregate starts, 12 known exits and 75 native
+rows. eCAR process phase counts agree. It explicitly uses partial policy and is
+not the full-workload acceptance target. Seed 375's supplemental baseline has
+5 forks/7 execs with exact reconciliation; primary seed 373 and seed 374 have
+zero in-window background starts and remain reported as unexercised.
+
+The first deterministic combined evaluation failed visibility/pivot/timing due
+to setup and no-op logout expectations. Correcting those truth records yields
+all hard gates passed, overall **89.5282**, 100% format conformance, 100% field
+agreement and 100% intent reconciliation. No blind panel or assessment loop ran.
+Native-only filtering preserves nonempty byte-identical native output. The
+complete combined bundle was copied to the ignored persistent local path
+`runs/macos-workstation-acceptance/2026-11-02/supported-combined/`; evaluation of
+the copied bundle verifies its manifest and again passes all hard gates at
+89.5282. Raw generated rows are not committed.
+
+All **329 selected routine checks pass**, with one pre-existing skip, and all
+**15 selected public terminal/SSH/job CLI and recovery regressions pass**.
+Whole Ruff/format/diff and behavior-manifest checks pass. Behavior revision 373
+is material: baseline admission/order, native terminal selection and job target,
+plus truthful collection/no-op visibility. Final surface:
+`1112d76da93cf383cef734e563f7e3790a021e49d59a8a03ebb52704b0c40a72`.
+Frozen primary source SHA-256:
+`632fe6d932b6749049d3c8f8d1d559092c7ceb07994a1afd5d619725c769470d`.
+
+Full acceptance remains BLOCKED: Chrome/main/helper metadata and launch plans,
+primary exercised baseline, and full-workload filtering/recovery remain open.
+Public Chromium signing/entitlement templates were researched as leads; they
+do not establish the frozen catalog release's runtime FD/security/helper facts.
+The user has been asked only whether Chrome is already installed (Yes/No), to
+design a bounded fresh-profile reference. No capture, installed-app query, private
+kit read or native-log read ran. Previously consumed permissions were not reused.
+See REPORT.md and RESULTS.json for the reviewable outcome and exact limits.

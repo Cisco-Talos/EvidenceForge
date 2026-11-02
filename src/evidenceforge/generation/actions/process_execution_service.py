@@ -1114,6 +1114,19 @@ class ProcessExecutionService:
                     if spaced_time != time:
                         time = spaced_time
 
+        collection_end = getattr(self.dispatcher, "output_end_time", None)
+        if (
+            not request.from_storyline
+            and request.source_visible_by is None
+            and _get_os_category(request.system.os) == "macos"
+            and collection_end is not None
+            and time >= collection_end
+        ):
+            # Generic baseline starts can be displaced by shell/application
+            # pacing. An eligible request anchor cannot authorize a new start
+            # after collection; no birth/exec has been materialized here.
+            return 0
+
         return ProcessLaunchPlan(
             actor,
             time,

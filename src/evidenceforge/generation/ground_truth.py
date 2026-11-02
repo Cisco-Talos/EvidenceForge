@@ -113,6 +113,7 @@ class GroundTruthGenerator:
     ):
         self.macos_native_coverage = macos_native_coverage
         self.scenario = scenario
+        self._collection_start, self._collection_end = resolve_time_window(scenario.time_window)
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
@@ -160,6 +161,12 @@ class GroundTruthGenerator:
                     and event.emitted
                     and event.system == host.hostname
                     and event.attributes.native_process_model == "aggregate_birth"
+                    and (
+                        host.process_census is None
+                        or host.process_census.window_start
+                        <= event.time
+                        < host.process_census.window_end
+                    )
                 ]
                 if not births:
                     hosts.append(host)
@@ -453,14 +460,18 @@ class GroundTruthGenerator:
     def _build_event_record(self, event: dict, *, section: str) -> dict:
         ts = event["time"]
         ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
-        ts = ts.astimezone(UTC).replace(microsecond=0)
+        skipped_reason = event.get("skipped_reason")
+        if skipped_reason is None and not self._collection_start <= ts < self._collection_end:
+            skipped_reason = "outside_collection_window"
+        # Preserve the canonical occurrence at subsecond collection boundaries.
+        ts = ts.astimezone(UTC)
         attributes = {
             key: _serialize_attr_value(value)
             for key, value in event.items()
             if key not in _EVENT_BASE_KEYS
         }
         if event.get("type") in ("spillage", "adversarial_payload"):
-            if event.get("skipped_reason"):
+            if skipped_reason:
                 for field in ("value", "value_sha256", "rendered_value", "rendered_sha256"):
                     attributes.pop(field, None)
             else:
@@ -478,17 +489,17 @@ class GroundTruthGenerator:
             "system": event["system"],
             "activity": event.get("activity", ""),
             "ground_truth_section": section,
-            "emitted": not bool(event.get("skipped_reason")),
+            "emitted": not bool(skipped_reason),
             "attributes": attributes,
         }
-        if event.get("skipped_reason"):
-            record["skipped_reason"] = event["skipped_reason"]
+        if skipped_reason:
+            record["skipped_reason"] = skipped_reason
         if section == "red_herring" and event.get("explanation"):
             record["explanation"] = event["explanation"]
         return record
 
     def _collection_window(self) -> dict[str, str | None]:
-        start, end = resolve_time_window(self.scenario.time_window)
+        start, end = self._collection_start, self._collection_end
         start = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
         end = (
             end.replace(tzinfo=UTC)

@@ -4224,7 +4224,9 @@ class BaselineMixin:
             concurrency_group_id=lifecycle_group_id,
         )
 
-    def _execute_authored_events_for_hour(self, current_hour: datetime) -> None:
+    def _execute_authored_events_for_hour(
+        self, current_hour: datetime, *, through: datetime | None = None
+    ) -> None:
         """Execute same-hour storyline and red-herring entries in nominal time order."""
 
         hour_key = int(current_hour.timestamp())
@@ -4240,6 +4242,8 @@ class BaselineMixin:
         scheduled.sort(key=lambda item: (item[0], item[1] == "red_herring"))
 
         for event_time, event_kind, event_idx in scheduled:
+            if through is not None and event_time > through:
+                break
             if event_kind == "storyline":
                 executed = self._storyline_executed
                 execute = self._execute_single_storyline_event
@@ -4298,6 +4302,10 @@ class BaselineMixin:
                 local_weekday=local_weekday,
                 is_weekend=is_weekend,
                 planned_logoffs=planned_logoffs,
+                interleave_authored=emit_storylines
+                and any(
+                    _get_os_category(s.os) == "macos" for s in self.scenario.environment.systems
+                ),
             )
 
         with BaselineMixin._baseline_profile_span(self, "baseline.smb"):
@@ -4340,9 +4348,11 @@ class BaselineMixin:
         local_weekday: int,
         is_weekend: bool,
         planned_logoffs: dict[tuple[str, str], float],
+        interleave_authored: bool = False,
     ) -> None:
         """Generate the per-user portion of one baseline hour."""
 
+        scheduled: list[tuple[datetime, User]] = []
         for user in enabled_users:
             persona = self._get_user_persona(user)
             user_offsets = self._user_time_offsets.get(user.username)
@@ -4387,7 +4397,21 @@ class BaselineMixin:
                 )
 
                 for event_time in event_times:
-                    self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
+                    if interleave_authored:
+                        scheduled.append((event_time, user))
+                    else:
+                        self._generate_user_activity(
+                            user, event_time, current_hour, planned_logoffs
+                        )
+
+        # A Mac's authored GUI/SSH owner must exist before background activity
+        # at the same simulated time. Leave future logoffs/execs pending until
+        # their own timestamp; the normal end-of-pass call drains the remainder.
+        for event_time, user in sorted(scheduled, key=lambda item: item[0]):
+            if event_time >= self._baseline_pass_end(current_hour):
+                continue
+            self._execute_authored_events_for_hour(current_hour, through=event_time)
+            self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
 
     def _baseline_pass_end(self, current_hour: datetime) -> datetime:
         """Return the exclusive end of this full warm-up or bounded output pass."""
@@ -8529,12 +8553,15 @@ class BaselineMixin:
                     current_hour=current_hour,
                     start=planned_time,
                 )
-                if close_bound is None:
+                start_only = _get_os_category(system.os) == "macos" and activity_type.startswith(
+                    "process_"
+                )
+                if close_bound is None and not start_only:
                     continue
                 if self._baseline_pass_admits(
                     current_hour,
                     start=planned_time,
-                    end=planned_time + timedelta(seconds=close_bound),
+                    end=None if start_only else planned_time + timedelta(seconds=close_bound),
                 ):
                     terminal_activity_plans.append((activity_type, jitter))
             activities = [activity_type for activity_type, _jitter in terminal_activity_plans]
@@ -8638,14 +8665,21 @@ class BaselineMixin:
                     current_hour=current_hour,
                     start=t,
                 )
-                if close_bound is None:
+                # Mac process owners already retain natural lifetimes beyond
+                # collection. Admit their start, rather than requiring a
+                # fictitious completed lifetime inside the final pass.
+                start_only = _get_os_category(system.os) == "macos" and activity_type.startswith(
+                    "process_"
+                )
+                if close_bound is None and not start_only:
                     continue
             else:
                 close_bound = 60.000001
+                start_only = False
             if current_hour is not None and not self._baseline_pass_admits(
                 current_hour,
                 start=t,
-                end=t + timedelta(seconds=close_bound),
+                end=None if start_only else t + timedelta(seconds=close_bound),
             ):
                 continue
             self.state_manager.set_current_time(t)

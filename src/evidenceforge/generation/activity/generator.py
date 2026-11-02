@@ -29028,6 +29028,27 @@ class ActivityGenerator:
                 if result:
                     process_name, command_line = result
 
+                    if (
+                        os_category == "macos"
+                        and deployment_registry is not None
+                        and selected_assignment is not None
+                        and "macos_terminal" in selected_assignment.eligible_categories
+                        and self.macos_execution_metadata is not None
+                        and self.macos_execution_metadata.profile.terminal_startups
+                    ):
+                        # Opening/using the selected terminal owns its login and
+                        # initial shell. Do not create an aggregate app first:
+                        # later commands would mistake it for an unsupported
+                        # new window in an already running unqualified app.
+                        self.ensure_macos_session_shell(
+                            user,
+                            system,
+                            logon_id,
+                            time,
+                            terminal_application_id=selected_assignment.application_id,
+                        )
+                        return
+
                     singleton_key: tuple[str, str, str, str] | None = None
                     if singleton_per_session:
                         normalized_image = process_name.replace("/", "\\").lower()

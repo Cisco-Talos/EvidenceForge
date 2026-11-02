@@ -41,7 +41,8 @@ def test_same_hour_authored_events_execute_chronologically_with_storyline_ties_f
         ("red_herring", event_idx)
     )
 
-    baseline._execute_authored_events_for_hour(current_hour)
+    baseline._execute_authored_events_for_hour(current_hour, through=early_red_herring)
+    assert calls == [("red_herring", 21)]
     baseline._execute_authored_events_for_hour(current_hour)
 
     assert calls == [

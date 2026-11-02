@@ -210,6 +210,8 @@ def handle_logoff(
                 logon_id,
                 from_storyline=True,
             )
+        else:
+            context.malicious_event["skipped_reason"] = "no_matching_session"
 
     return context.malicious_event
 

@@ -437,7 +437,7 @@ reuse their identities. Inner commands are not automatically expanded. Other GUI
 restored jobs/new windows in an existing app, complex command
 plans and unknown binary metadata still limit broader complete process coverage.
 Explicit system jobs can select write-stage `launch_profile: root_xpcproxy_v11` for the
-reviewed root `/usr/bin/true` preset. Each activation adds one launchd fork and two execs
+reviewed root launch mechanism, with `/usr/bin/true` or the existing modeled `/usr/bin/sw_vers` image. Each activation adds one launchd fork and two execs
 (xpcproxy, then target), with a separate POSIX session and frozen loaded environment.
 See the [native system-job example](scenarios/macos-persistence-example/README.md).
 Other images, triggers and user LaunchAgents retain their gates.
