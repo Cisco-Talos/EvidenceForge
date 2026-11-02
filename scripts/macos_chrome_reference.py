@@ -6,6 +6,7 @@
 The agent-safe entry point copies code only. Human setup reads installed code,
 not profiles. Human capture streams ambient ES into bounded memory and retains
 only a nonce-authenticated browser's exact launch ancestry and descendants.
+An agent may run diagnose-code only with explicit approval for that fixed read.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from types import ModuleType
 from typing import Literal
 
 from pydantic import Field
+
+from evidenceforge.events.macos_entitlements import freeze_entitlements
 
 
 def _support() -> ModuleType:
@@ -462,6 +465,53 @@ class Report(reference.Model):
     detail_report: Literal["SHAREABLE-CHROME-REPORT.json"] = "SHAREABLE-CHROME-REPORT.json"
 
 
+class CodeCommandResult(reference.Model):
+    """Fixed interpretation only, never command output or exception text."""
+
+    outcome: Literal["PASS", "FAIL", "TIMEOUT", "IO", "LIMIT", "NOT_RUN"] = "NOT_RUN"
+    failure: Literal[
+        "NONE",
+        "REQUIREMENT_REJECTED",
+        "REQUIREMENT_SYNTAX",
+        "RESOURCE_SEAL",
+        "UNSIGNED",
+        "BUNDLE_FORMAT",
+        "STRICT_EXECUTABLE",
+        "SIGNATURE_INVALID",
+        "COMMAND_USAGE",
+        "OTHER",
+    ] = "NONE"
+
+
+class CodeDiagnosticReport(reference.Model):
+    review_version: Literal[1] = 1
+    purpose: Literal["CHROME_SIGNING_DIAGNOSTIC"] = "CHROME_SIGNING_DIAGNOSTIC"
+    mode: Literal["READ_ONLY_INSTALLED_CODE"] = "READ_ONLY_INSTALLED_CODE"
+    reference_review: Literal["REQUIRED"] = "REQUIRED"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    error: Error = "NONE"
+    main_file_unchanged: Check = "INCONCLUSIVE"
+    bundle_basic: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    bundle_strict: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    bundle_strict_google: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    main_leaf_strict_google: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    main_leaf_code_google: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    metadata: CodeCommandResult = Field(default_factory=CodeCommandResult)
+    signing_identifier_template: Check = "INCONCLUSIVE"
+    team_identifier_template: Check = "INCONCLUSIVE"
+    metadata_executable_binding: Check = "INCONCLUSIVE"
+    entitlements_xml: Check = "INCONCLUSIVE"
+    entitlements_representation: Literal["XML_OBJECT", "EMPTY", "OTHER", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    entitlements_flat_types: Check = "INCONCLUSIVE"
+    native_logs: Literal["NOT_OPENED"] = "NOT_OPENED"
+    browser_profiles: Literal["NOT_OPENED"] = "NOT_OPENED"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    apps: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
+    helper_files: Literal["NOT_WRITTEN"] = "NOT_WRITTEN"
+
+
 class DiagnosticError(reference.PrivateError):
     """A closed step label, never exception text."""
 
@@ -577,35 +627,171 @@ def _code_output(args: list[str]) -> subprocess.CompletedProcess[bytes]:
     return result
 
 
+def _verification_command(
+    kind: ImageKind,
+    target: Path,
+    *,
+    strict: bool = True,
+    requirement: bool = True,
+    ignore_resources: bool = False,
+) -> list[str]:
+    args = ["/usr/bin/codesign", "--verify"]
+    if strict:
+        args.append("--strict")
+    if ignore_resources:
+        args.append("--ignore-resources")
+    if requirement:
+        args.extend(
+            [
+                "-R",
+                '=anchor apple and identifier "com.apple.xpc.proxy"'
+                if kind == "XPCPROXY"
+                else '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
+            ]
+        )
+    return [*args, str(target)]
+
+
+def _metadata_command(target: Path) -> list[str]:
+    return ["/usr/bin/codesign", "-d", "--verbose=4", "--entitlements", "-", "--xml", str(target)]
+
+
+def _diagnostic_failure(raw: bytes | str | None) -> CodeCommandResult:
+    """Recognize public tool messages in memory; never export unrecognized text."""
+    if type(raw) is not bytes or len(raw) > MAX_LINE:
+        return CodeCommandResult(outcome="FAIL", failure="OTHER")
+    data = raw.lower()
+    # These labels describe tool messages, not independent root-cause findings.
+    phrases = (
+        (b"failed to satisfy", "REQUIREMENT_REJECTED"),
+        (b"requirement syntax", "REQUIREMENT_SYNTAX"),
+        (b"invalid or corrupted code requirements", "REQUIREMENT_SYNTAX"),
+        (b"a sealed resource is missing or invalid", "RESOURCE_SEAL"),
+        (b"sealed resource directory", "RESOURCE_SEAL"),
+        (b"cannot find sealed resources", "RESOURCE_SEAL"),
+        (b"unsealed contents", "RESOURCE_SEAL"),
+        (b"resource fork, finder information", "RESOURCE_SEAL"),
+        (b"code object is not signed", "UNSIGNED"),
+        (b"bundle format", "BUNDLE_FORMAT"),
+        (b"main executable failed strict validation", "STRICT_EXECUTABLE"),
+        (b"invalid signature", "SIGNATURE_INVALID"),
+        (b"code or signature modified", "SIGNATURE_INVALID"),
+        (b"usage: codesign", "COMMAND_USAGE"),
+        (b"unrecognized option", "COMMAND_USAGE"),
+        (b"unknown option", "COMMAND_USAGE"),
+    )
+    label = next((label for phrase, label in phrases if phrase in data), "OTHER")
+    return CodeCommandResult(outcome="FAIL", failure=label)
+
+
+def _diagnostic_command(
+    args: list[str],
+) -> tuple[CodeCommandResult, subprocess.CompletedProcess[bytes] | None]:
+    try:
+        return CodeCommandResult(outcome="PASS"), _code_output(args)
+    except subprocess.CalledProcessError as error:
+        if any(
+            type(value) is bytes and len(value) > MAX_LINE for value in (error.stdout, error.stderr)
+        ):
+            return CodeCommandResult(outcome="LIMIT"), None
+        return _diagnostic_failure(error.stderr), None
+    except subprocess.TimeoutExpired:
+        return CodeCommandResult(outcome="TIMEOUT"), None
+    except OSError:
+        return CodeCommandResult(outcome="IO"), None
+    except reference.PrivateError:
+        return CodeCommandResult(outcome="LIMIT"), None
+
+
+def diagnose_code() -> CodeDiagnosticReport:
+    """Explicit approval or HUMAN ONLY: six fixed code queries; no captures or writes.
+
+    This is diagnostic, not an admission override. It reads no old kit files,
+    profiles or native logs, runs no build/probe/collector/app and writes nothing.
+    Agents may run only after explicit approval for this installed-code check.
+    """
+    _root()  # Require a prepared outside-Git copy, without reading a setup or run.
+    if os.getuid() == 0 or os.getuid() != os.geteuid():
+        return CodeDiagnosticReport(error="ROOT_USER")
+    if sys.platform != "darwin":
+        return CodeDiagnosticReport(error="PLATFORM")
+    path = APP / "Contents/MacOS/Google Chrome"
+    image = None
+    try:
+        image = support._installed_image(path)
+    except (OSError, ValueError):
+        pass  # The independent command results remain useful; no error text escapes.
+    values = {}
+    for name, command in (
+        ("bundle_basic", _verification_command("MAIN", APP, strict=False, requirement=False)),
+        ("bundle_strict", _verification_command("MAIN", APP, requirement=False)),
+        ("bundle_strict_google", _verification_command("MAIN", APP)),
+        ("main_leaf_strict_google", _verification_command("MAIN", path)),
+        ("main_leaf_code_google", _verification_command("MAIN", path, ignore_resources=True)),
+    ):
+        values[name] = _diagnostic_command(command)[0]
+    metadata_status, metadata = _diagnostic_command(_metadata_command(APP))
+    values["metadata"] = metadata_status
+    if metadata is not None:
+        fields: dict[str, bytes] = {}
+        for line in metadata.stderr.splitlines():
+            key, separator, value = line.partition(b"=")
+            if separator and key in {b"Identifier", b"TeamIdentifier", b"Executable"}:
+                fields[key.decode("ascii")] = value
+        values.update(
+            signing_identifier_template=reference._check(
+                fields.get("Identifier") == b"com.google.Chrome"
+            ),
+            team_identifier_template=reference._check(
+                fields.get("TeamIdentifier") == b"EQHXZ8M8AV"
+            ),
+            metadata_executable_binding=reference._check(
+                fields.get("Executable") == os.fsencode(path)
+            ),
+        )
+        try:
+            entitlements = plistlib.loads(metadata.stdout) if metadata.stdout.strip() else {}
+            values["entitlements_representation"] = (
+                "EMPTY"
+                if not metadata.stdout.strip()
+                else (
+                    "XML_OBJECT"
+                    if type(entitlements) is dict
+                    and metadata.stdout.lstrip().startswith((b"<?xml", b"<plist"))
+                    else "OTHER"
+                )
+            )
+            values["entitlements_xml"] = (
+                "INCONCLUSIVE"
+                if not metadata.stdout.strip()
+                else reference._check(values["entitlements_representation"] == "XML_OBJECT")
+            )
+            try:
+                freeze_entitlements(entitlements)
+                values["entitlements_flat_types"] = "PASS"
+            except ValueError:
+                values["entitlements_flat_types"] = "FAIL"
+        except (ValueError, TypeError, plistlib.InvalidFileException):
+            values["entitlements_xml"] = "FAIL"
+            values["entitlements_representation"] = "OTHER"
+    try:
+        values["main_file_unchanged"] = reference._check(
+            image is not None and image == support._installed_image(path)
+        )
+    except (OSError, ValueError):
+        values["main_file_unchanged"] = "FAIL"
+    return CodeDiagnosticReport(**values)
+
+
 def _installed(kind: ImageKind, path: Path) -> Image:
     image = _checked(kind, "FILE_HASH", lambda: support._installed_image(path))
     # Chromium signs app bundles as bundles, and standalone tools as executables.
     target = _signing_target(kind, path)
-    verification = ["/usr/bin/codesign", "--verify", "--strict"]
-    if kind != "XPCPROXY":
-        verification.extend(
-            [
-                "-R",
-                '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
-            ]
-        )
-    else:
-        verification.extend(["-R", '=anchor apple and identifier "com.apple.xpc.proxy"'])
-    _checked(kind, "SIGNATURE_VERIFY", lambda: _code_output([*verification, str(target)]))
+    _checked(kind, "SIGNATURE_VERIFY", lambda: _code_output(_verification_command(kind, target)))
     result = _checked(
         kind,
         "SIGNATURE_METADATA",
-        lambda: _code_output(
-            [
-                "/usr/bin/codesign",
-                "-d",
-                "--verbose=4",
-                "--entitlements",
-                "-",
-                "--xml",
-                str(target),
-            ]
-        ),
+        lambda: _code_output(_metadata_command(target)),
     )
     entitlements = _checked(
         kind,
@@ -1763,7 +1949,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     preparing = commands.add_parser("prepare")
     preparing.add_argument("--destination", type=Path)
-    for name in ("setup", "capture", "report"):
+    for name in ("setup", "capture", "report", "diagnose-code"):
         stage = commands.add_parser(name)
         stage.add_argument("--private-run", action="store_true", required=True)
         if name == "capture":
@@ -1778,6 +1964,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "prepare":
             print(prepare(args.destination))
             return 0
+        if args.command == "diagnose-code":
+            result = diagnose_code()
+            print(result.model_dump_json(indent=2), flush=True)
+            return 0 if result.error == "NONE" else 2
         report = (
             setup()
             if args.command == "setup"

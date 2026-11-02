@@ -2273,3 +2273,43 @@ diff and behavior-manifest checks pass; generation revision 373 is unchanged.
 Fresh code-only version-2 handoff: `/private/tmp/eforge-chrome-kit-isc7tieu`.
 Do not inspect it after handoff without separate permission. Human should run
 setup there first and stop on failure; no capture is needed to verify this fix.
+
+## November 2: isolate the remaining Chrome signature-check failure
+
+The human's v2 fixed report identifies MAIN / SIGNATURE_VERIFY / COMMAND_EXIT.
+The previous malformed inline requirement is corrected, but this combined check
+still cannot distinguish whole-bundle integrity, strict validation and signer
+requirements. It is not evidence that Chrome's executable is modified or that
+the expected Google identity differs. No native collector has started in setup.
+
+A separate `diagnose-code --private-run` command performs six fixed, read-only
+codesign queries against only the standard installed Chrome app and main leaf:
+basic bundle, strict bundle, strict Google requirement on bundle/leaf, a separately
+labeled leaf-code-only comparison and XML metadata. Each query has a fifteen-second
+timeout. It compares file hashes before/after privately and exports only equality,
+public-template comparisons, XML/flat-type labels and allowlisted tool-message
+classes. Unknown text, paths, identifiers, certificate names, hashes and stderr
+remain hidden. A completed diagnostic is not successful signature validation or
+generation admission; all original setup admission checks remain unchanged.
+
+The code-only comparison uses Apple's documented --ignore-resources flag only in
+this explicit diagnostic. It does not change capture verification, sign or modify
+code, disable Gatekeeper, request online notarization, open a browser/profile,
+read a native log, build/run a probe, start a server/collector or write helper files.
+Existing prepared kits are untouched. The new source reuses the same verification
+and metadata argument builders as setup, so diagnosis tests the actual command
+construction. Regression tests deny installed-code access by default and inject
+all static metadata/tool failures, including private canaries and a bundle-resource
+failure alongside a passing code-only result.
+
+Prepared fresh code-only diagnostic: `/private/tmp/eforge-chrome-kit-4xemu5yv`.
+The human has been asked whether the agent may run exactly this fixed-output
+installed-code diagnostic. Permission is pending; no installed-code query or
+private-kit/log read was run during its preparation. The human-only setup/capture
+boundary remains intact. Do not inspect any handed-off kit without separate
+permission. This adds no new collection or assessment loop and changes no
+production generation surface or behavior revision.
+
+All 389 selected kit regressions pass, including 80 Chrome-specific checks.
+Whole Ruff/format/diff and behavior checks pass. Production revision 373 and
+its surface digest are unchanged; there is no generated-data acceptance claim.

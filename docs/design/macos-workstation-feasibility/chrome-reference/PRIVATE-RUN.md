@@ -17,6 +17,46 @@ capture, personal browser profile, historical logs or installed Chrome metadata
 were read while preparing it. Do not run this inside a Git checkout or synced
 folder. Keep the kit and its parent directories on trusted local storage.
 
+One separate exception is available for `diagnose-code`: an agent may run it
+**only after explicit permission for that bounded installed-code check**. It is
+read-only and does not run setup, compile a probe or retry collection.
+
+## Diagnose a signing-check failure without another setup attempt
+
+If setup fails at MAIN / SIGNATURE_VERIFY / COMMAND_EXIT, the original combined
+check does not distinguish signature/resource validity from the explicit signer
+requirement. A fresh prepared code-only copy supports:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_chrome.py diagnose-code --private-run
+```
+
+This runs exactly six fixed, read-only `codesign` commands against only the
+standard Chrome app bundle and its main executable. It reports basic bundle
+verification, strict verification, strict verification with the Google signer
+requirement, that requirement on the main executable, a **separate diagnostic**
+that validates executable code without its resources, and XML metadata parsing.
+The last comparison does not change or bypass the capture admission checks.
+Apple documents executable-only verification in its
+[Apple Silicon release notes](https://developer.apple.com/documentation/macos-release-notes/macos-big-sur-11_0_1-universal-apps-release-notes).
+Each command has a 15-second timeout, so a stalled run can take approximately
+90 seconds. No sudo, `spctl`, online notarization request, re-signing, permission
+change or app execution is requested.
+
+It compares main-executable hashes privately before/after and reports only
+whether they agree. Signer, identifier and executable-binding values are compared
+with fixed public templates and are never exported. Known public error phrases
+map to closed labels; arbitrary command output, private paths, certificate names,
+hashes and unknown messages stay hidden. A diagnostic `error: NONE` means it ran,
+not that its independent checks passed. A message class is a tool observation,
+not an independent root-cause conclusion.
+
+It reads no prior kit file, setup manifest, native record, browser profile or log,
+writes no helper files, and starts no collector, server, probe or browser. Normal
+macOS tool/security-service activity may still occur. Human may run it privately
+and share only its fixed JSON, or explicitly authorize the agent to run this
+specific command and receive only that JSON.
+
 ## Privacy and exact scope
 
 - Setup reads installed code, signed-bundle resources and Info.plist/signature metadata in

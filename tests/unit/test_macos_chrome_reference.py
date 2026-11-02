@@ -31,6 +31,7 @@ def no_live_operations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
     monkeypatch.setattr(kit, "LocalServer", forbidden)
     monkeypatch.setattr(kit, "installed_images", forbidden)
+    monkeypatch.setattr(kit.support, "_installed_image", forbidden)
 
 
 def _manifest() -> kit.Manifest:
@@ -810,3 +811,132 @@ def test_bundle_signature_metadata_must_bind_the_hashed_executable(
     with pytest.raises(kit.InstalledCodeError) as exc:
         kit._installed("MAIN", Path(image.path))
     assert exc.value.check == "METADATA_FIELDS" and exc.value.reason == "INVALID_METADATA"
+
+
+@pytest.mark.parametrize(
+    "message,label",
+    [
+        (
+            b"test-requirement: code failed to satisfy specified code requirement(s)",
+            "REQUIREMENT_REJECTED",
+        ),
+        (b"a sealed resource is missing or invalid", "RESOURCE_SEAL"),
+        (b"code object is not signed at all", "UNSIGNED"),
+        (b"bundle format unrecognized", "BUNDLE_FORMAT"),
+        (b"main executable failed strict validation", "STRICT_EXECUTABLE"),
+        (b"requirement syntax error", "REQUIREMENT_SYNTAX"),
+        (b"invalid signature", "SIGNATURE_INVALID"),
+        (b"usage: codesign", "COMMAND_USAGE"),
+        (CANARY.encode(), "OTHER"),
+    ],
+)
+def test_signing_diagnostic_classifies_only_allowlisted_messages(
+    message: bytes, label: str
+) -> None:
+    result = kit._diagnostic_failure(CANARY.encode() + b": " + message)
+    assert result.outcome == "FAIL" and result.failure == label
+    assert CANARY not in result.model_dump_json()
+
+
+def test_static_diagnostic_issues_only_six_fixed_queries_and_writes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plistlib
+
+    expected = _manifest().images[0]
+    monkeypatch.setattr(kit, "_root", lambda: tmp_path)
+    monkeypatch.setattr(kit.os, "getuid", lambda: 501)
+    monkeypatch.setattr(kit.os, "geteuid", lambda: 501)
+    monkeypatch.setattr(kit.sys, "platform", "darwin")
+    monkeypatch.setattr(kit.support, "_installed_image", lambda _path: expected.image)
+    commands: list[list[str]] = []
+
+    def output(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if "-d" in args:
+            return SimpleNamespace(
+                stdout=plistlib.dumps({CANARY: CANARY}),
+                stderr=f"Executable={expected.path}\nIdentifier=com.google.Chrome\nTeamIdentifier=EQHXZ8M8AV\nPRIVATE={CANARY}\n".encode(),
+            )
+        if "--strict" in args and args[-1] == str(kit.APP):
+            raise kit.subprocess.CalledProcessError(
+                1, args, stderr=b"a sealed resource is missing or invalid\n" + CANARY.encode()
+            )
+        return SimpleNamespace(stdout=CANARY.encode(), stderr=CANARY.encode())
+
+    monkeypatch.setattr(kit, "_code_output", output)
+    report = kit.diagnose_code()
+    assert report.error == "NONE"
+    assert report.bundle_basic.outcome == report.main_leaf_strict_google.outcome == "PASS"
+    assert report.bundle_strict.failure == report.bundle_strict_google.failure == "RESOURCE_SEAL"
+    assert (
+        report.team_identifier_template
+        == report.signing_identifier_template
+        == report.metadata_executable_binding
+        == "PASS"
+    )
+    assert (
+        report.entitlements_flat_types
+        == report.entitlements_xml
+        == report.main_file_unchanged
+        == "PASS"
+    )
+    assert report.entitlements_representation == "XML_OBJECT"
+    assert len(commands) == 6 and all(command[0] == "/usr/bin/codesign" for command in commands)
+    assert all(command[-1] in {str(kit.APP), expected.path} for command in commands)
+    assert commands[0] == ["/usr/bin/codesign", "--verify", str(kit.APP)]
+    assert commands[1] == ["/usr/bin/codesign", "--verify", "--strict", str(kit.APP)]
+    assert "--ignore-resources" in commands[4] and commands[4][-1] == expected.path
+    assert all("--check-notarization" not in command for command in commands)
+    assert all("--sign" not in command for command in commands)
+    assert not tuple(tmp_path.iterdir()) and CANARY not in report.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "failure,outcome",
+    [
+        ("exit", "FAIL"),
+        ("timeout", "TIMEOUT"),
+        ("io", "IO"),
+        ("limit", "LIMIT"),
+    ],
+)
+def test_static_command_failures_do_not_expose_exception_output(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    outcome: str,
+) -> None:
+    def fail(_args: list[str]) -> None:
+        if failure == "exit":
+            raise kit.subprocess.CalledProcessError(
+                1, [CANARY], output=CANARY.encode(), stderr=CANARY.encode()
+            )
+        if failure == "timeout":
+            raise kit.subprocess.TimeoutExpired(
+                [CANARY], 15, output=CANARY.encode(), stderr=CANARY.encode()
+            )
+        if failure == "io":
+            raise OSError(CANARY)
+        raise kit.reference.PrivateError("LIMIT")
+
+    monkeypatch.setattr(kit, "_code_output", fail)
+    result, metadata = kit._diagnostic_command(["/usr/bin/codesign"])
+    assert result.outcome == outcome and metadata is None
+    assert CANARY not in result.model_dump_json()
+
+
+def test_static_diagnostic_requires_explicit_run_flag_and_prints_only_fixed_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(kit, "diagnose_code", lambda: kit.CodeDiagnosticReport())
+    assert kit.main(["diagnose-code"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"] == "INPUT"
+    assert kit.main(["diagnose-code", "--private-run"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["purpose"] == "CHROME_SIGNING_DIAGNOSTIC"
+    assert result["native_logs"] == result["browser_profiles"] == "NOT_OPENED"
+    assert result["apps"] == "NOT_LAUNCHED" and result["helper_files"] == "NOT_WRITTEN"
+    with pytest.raises(ValidationError):
+        kit.CodeCommandResult(outcome="FAIL", failure=CANARY)
