@@ -87,7 +87,7 @@ def _manifest() -> kit.Manifest:
     )
 
 
-def _chain() -> list[dict]:
+def _chain(*, gpu_image: str = "GPU") -> list[dict]:
     manifest = _manifest()
     rows: list[dict] = []
     boot = _process(11, 1, 0)
@@ -140,7 +140,7 @@ def _chain() -> list[dict]:
     )
     for pid, kind, args in (
         (1300, "RENDERER", ["--type=renderer", "--renderer-client-id=7"]),
-        (1301, "GPU", ["--type=gpu-process", "--gpu-preferences=" + CANARY]),
+        (1301, gpu_image, ["--type=gpu-process", "--gpu-preferences=" + CANARY]),
         (1302, "HELPER", ["--type=utility", "--utility-sub-type=network.mojom.NetworkService"]),
     ):
         target = execute(fork(main, pid), kind, args)
@@ -195,6 +195,52 @@ def test_complete_owned_graph_is_retained_only_after_nonce_browser_exec() -> Non
     assert "EQHXZ8M8AV" not in rendered
     assert '"ROOT"' in rendered
     assert '"installed_signature_agreement":"PASS"' in rendered
+
+
+def test_gpu_using_generic_helper_keeps_its_actual_image_signature_and_entitlements() -> None:
+    tracker = _track(_chain(gpu_image="HELPER"))
+    report = kit._analyzed_report(kit.Report(), tracker.records, _manifest(), PROFILE, URL, HOME)
+    gpu = next(
+        phase for phase in report.phases if phase.kind == "EXEC" and phase.after.role == "GPU"
+    )
+    assert report.gpu_exec == "PASS"
+    assert gpu.after.signing_identifier == "CHROME_HELPER"
+    assert gpu.after.installed_image_agreement == gpu.after.installed_signature_agreement == "PASS"
+    assert gpu.entitlements.matches_installed_code == "PASS"
+    assert gpu.entitlements.known_booleans == ()
+    assert report.phases[8].before.role == "GPU"
+    assert CANARY not in report.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "role"),
+    [
+        (["--type=renderer"], "RENDERER"),
+        (["--type=gpu-process"], "GPU"),
+        (["--type=gpu-process", "--type=renderer"], "OTHER"),
+        (["--type=gpu-process", "--type=gpu-process"], "OTHER"),
+        (["--type=utility", "--utility-sub-type=network.mojom.NetworkService"], "NETWORK"),
+        (
+            [
+                "--type=utility",
+                "--utility-sub-type=network.mojom.NetworkService",
+                "--utility-sub-type=storage.mojom.StorageService",
+            ],
+            "OTHER_UTILITY",
+        ),
+        ([f"--type={CANARY}"], "OTHER"),
+        ([], "OTHER"),
+    ],
+)
+def test_generic_helper_role_requires_a_unique_operational_type(
+    arguments: list[str], role: str
+) -> None:
+    row = _chain()[10]
+    payload = row["event"]["exec"]
+    payload["args"] = [payload["args"][0], *arguments]
+    assert kit._role(payload["target"], _manifest(), payload) == role
+    payload["target"]["executable"]["stat"]["st_ino"] += 100
+    assert kit._role(payload["target"], _manifest(), payload) == "OTHER"
 
 
 @pytest.mark.parametrize(
@@ -660,9 +706,25 @@ def test_invalid_helper_replacement_does_not_authenticate_another_execution(word
     if word == "birth":
         target["start_time"] = "2026-01-01T00:00:00Z"
     else:
-        target["audit_token"][word] += 1
+        target["audit_token"][word] += 1 if word == "pid" else -1
     tracker = _track(rows)
     assert len(tracker.records) == 4
+
+
+@pytest.mark.parametrize("version", [20000, 1])
+def test_exec_global_version_gap_or_wrap_preserves_owned_helper_and_exit(version: int) -> None:
+    rows = _chain()[:6]
+    for process in (rows[4]["event"]["exec"]["target"], rows[5]["process"]):
+        process["audit_token"]["pidversion"] = version
+        process["responsible_audit_token"]["pidversion"] = version
+    tracker = _track(rows)
+    assert tracker.records == _raws(rows)
+    phase = kit.analyze(tracker.records, _manifest(), PROFILE, URL, HOME)[4]
+    assert phase.exec_identity_transition == "PASS"
+    # Same PID and changed version do not admit an unrelated before execution.
+    rows[4]["process"]["audit_token"]["pidversion"] += 90
+    rows[4]["event"]["exec"]["target"]["parent_audit_token"]["pidversion"] += 90
+    assert len(_track(rows).records) == 4
 
 
 def test_native_phase_and_lifetime_counts_do_not_conflate_two_execs_with_two_births() -> None:
@@ -760,7 +822,7 @@ def test_installed_code_failures_export_only_closed_labels(
     assert report["installed_code_item"] == "MAIN"
     assert report["installed_code_check"] == "SIGNATURE_VERIFY"
     assert report["installed_code_failure"] == expected
-    assert report["kit_version"] == 6
+    assert report["kit_version"] == 7
     assert CANARY not in raw
 
 

@@ -2446,3 +2446,76 @@ its code/controls must remain unchanged for capture. The human should skip setup
 close agents/ordinary Chrome, disconnect external networking and run only the
 documented private capture, then share only its fixed report. No further native
 command ran after successful setup, and no collection is authorized here.
+
+## November 2: Chrome fixed report, generic GPU role and global identity versions
+
+The human supplied only the outer kit's exact `SHAREABLE-CHROME-REPORT.json` in
+`/private/tmp/eforge-chrome-kit-fdw97zzl`. The agent read that named fixed file,
+validated it against the closed report schema and inspected only its labels.
+No other file in that kit was listed/opened. No native row, setup/provenance,
+profile or installed-code query was read/run; no collector/app/probe was started.
+This permission does not authorize an offline native-record review.
+
+The collection controls passed, all 43 retained native shapes passed, and the
+fixed graph has 15 forks, 14 execs and 14 exits. Renderer/network/main evidence
+is present. The reported GPU failure is a classifier defect: one retained exec
+has the GPU argument label and verified generic-helper file/signature/entitlement
+identity. Version 7 recognizes a generic helper's unique renderer/GPU/utility
+role without substituting the dedicated GPU image or its JIT entitlements.
+Duplicate/conflicting type switches stay unqualified; unknown file objects cannot
+acquire a known helper role from arguments alone. Existing v6 captures remain
+readable and unchanged; future capture manifests/reports default to v7.
+
+The report also distinguishes two fork-without-exec lifetimes. One intermediary
+forks the Crashpad child and exits; its fork-only lifetime is legitimate, not a
+missing exec to synthesize. The other child has no retained exec or exit. Its
+ending is unresolved: collection stops after the main exit and the shareable
+report cannot establish whether a record was filtered out or the child survived
+collection. A strict main exec transition check also fails, despite a retained
+native exec; that alone does not identify the differing identity component.
+
+Primary-source research found a second reference-kit defect: XNU kern_exec.c
+allocates identity versions from the global nextpidversion counter (and ensures
+that exec changes the prior version). Concurrent process activity can consume
+intervening values; wraparound can occur. Exact +1 was an invalid collector and
+diagnostic assumption. The Chrome kit now requires preserved PID/birth and a
+changed version while retaining the existing exact before execution/image or
+kernel parent-token ownership proof. It still rejects unchanged versions,
+different lifetimes and unproven parents. This fixes reference acquisition; it
+does not recover already discarded records or prove the unresolved child's cause.
+
+References: Apple's
+[kern_exec.c](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exec.c)
+and [kern_fork.c](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_fork.c).
+Only the Chrome reference owner changed here, not production generation.
+
+`scripts/macos_chrome_review.py` prepares one comprehensive offline reviewer.
+It authenticates the original code hashes, controlled binaries, setup/provenance,
+collection controls, native shapes, retained selection and original fixed report.
+It compares each exec's PID/birth/version separately, corrects generic GPU roles,
+classifies only predeclared public system/Chromium paths and role switches, checks
+seatbelt/Mojo arguments against retained descriptors without exporting numbers,
+compares known environment key/value templates and main/helper environment
+relationships, and lists fork-only/unfinished lifetimes with opaque aliases.
+A public path comparison is explicitly not independent code/signature admission.
+Unknown names/values stay hidden. Review writes nothing, opens no browser profile
+or installed code, and starts no commands, collectors, probes or live queries.
+
+A trusted code-only v6 copy was prepared from the repository before the fixes;
+no handed-off kit was used to construct it. The reviewer pins that original code
+for exact v6 report/selection verification while its added comparisons are
+separate. Fresh prepared reviewer: `/private/tmp/eforge-chrome-kit-lpxff5he`.
+It has not been run on the human's capture. Separate local-log permission is
+required to run it against `/private/tmp/eforge-chrome-kit-fdw97zzl`; no new
+collection is needed for this review. Previously prepared intermediate reviewers
+are superseded by this path.
+
+All 499 selected Chrome/GUI/launch-chain/terminal checks pass, including 32 offline
+review cases using invented records, read-only file checks, native-operation
+prohibitions, private canaries and tamper rejection. An additional invented-data
+smoke check exercised the standalone reviewer with the actual frozen v6 code,
+confirmed exact original-report agreement, corrected the generic GPU label and
+left its synthetic fixture unchanged. No private report or native record is
+committed. Production behavior revision 373 is unchanged. The full fixed
+workstation acceptance remains blocked on the Chrome canonical producer work;
+these reference fixes do not close P0 or claim generated Chrome acceptance.

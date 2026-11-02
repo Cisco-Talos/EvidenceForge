@@ -5,7 +5,8 @@ local fetch, and a manual quit. It gathers the main, renderer, GPU and network
 helper relationships needed by the fixed workstation workload. It is **not** a
 blind assessment, an ordinary browsing sample or automatic generation admission.
 
-**Use the fresh version-6 kit.** App bundles require ordinary signature validation
+**Use the fresh version-7 kit for any future collection.** Existing version-6
+captures remain useful and must not be overwritten. App bundles require ordinary signature validation
 and the explicit vendor requirement; standalone crashpad/xpcproxy retain strict
 checks. The manifest pins this policy and the report leaves strict distribution
 conformance NOT_EVALUATED. This is a process reference, not strict distribution or
@@ -118,6 +119,66 @@ Another release remains useful, but is not evidence of exact catalog parity.
 LaunchServices arguments are needed to select a disposable profile, so this does
 not by itself qualify a direct Finder double-click, Dock, Spotlight, app reuse or
 session restoration. Terminal/iTerm2/SSH/launchd references remain separate.
+
+## Interpret roles and lifecycle counts
+
+A GPU process can use the generic Chrome Helper executable. Version 7 determines
+that helper's operational role from a unique `--type` switch while retaining its
+actual file/signature/entitlement identity. A generic helper running GPU work does
+not acquire the dedicated GPU bundle's JIT entitlement or file identity.
+
+An exec preserves its process lifetime but changes its identity version. Versions
+come from XNU's global `nextpidversion` counter; concurrent activity can consume
+intervening values. Version 7 requires the same PID and birth plus a changed
+version, alongside the existing exact execution/image or parent-token ownership
+checks. An increment other than one is not itself evidence of an unrelated exec.
+See Apple's [exec implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exec.c)
+and [fork implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_fork.c).
+
+`fork_lifetimes_without_exec` is a count, not an automatic collection defect.
+An intermediary can fork a child and then exit without executing another image.
+That intermediary needs a fork and exit, not an invented exec.
+`started_lifetimes_without_exit` means no matching exit was retained: the report
+alone cannot distinguish a live child at the collection boundary from omitted
+evidence. Capture currently stops after observing the main exit; it does not
+establish that every helper has exited.
+
+## Optional offline review of an existing capture
+
+`scripts/macos_chrome_review.py` prepares a separate code-only reviewer. It can
+pin a trusted code-only copy matching the original capture revision, so reviewing
+v6 does not change that capture, its code or its saved report. The reviewer
+authenticates setup, source hashes, control identities, provenance, the original
+fixed report, native shapes and exact retained graph before returning any result.
+The original collection controls must have passed. It makes no live queries and
+starts no commands, apps, server, collector or probe; it writes nothing and does
+not open the Chrome profile or installed app.
+
+The review returns only closed labels and opaque aliases for:
+
+- Original and corrected GPU recognition, with physical image identity retained.
+- Separate PID, birth and identity-version comparisons on every retained exec.
+- Predeclared public system/Chromium path and process/utility-type comparisons.
+  A public path match alone never qualifies an unknown executable's code or signature.
+- Whether seatbelt/Mojo descriptor arguments match retained descriptors, including
+  descriptor slots above 63, without revealing observed descriptor numbers.
+- Known-image security/entitlement and environment comparisons against the main
+  exec, including duplicate detection and predeclared public key/value templates.
+  Unknown environment names and values remain hidden.
+- Fork-only or unfinished lifetimes, their controlled children and observed endings.
+
+Unknown names/values remain hidden. The reviewer cannot recover rows discarded
+by the original filter or events occurring after collection ended. A successful
+offline review is not automatic generation admission or proof of complete capture.
+
+Review requires the human's separate permission before an agent reads local logs.
+Once permission is given for the prepared reviewer and selected source kit:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B /private/tmp/PREPARED-REVIEWER/private_chrome_review.py review-existing --private-run --source-kit /private/tmp/SELECTED-CAPTURE
+```
+
+Only the fixed JSON result may be shared. No setup or new collection is needed.
 
 ## 1. Setup (normal user, no sudo)
 

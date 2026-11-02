@@ -293,7 +293,7 @@ class Image(reference.Model):
 
 
 class Manifest(reference.Model):
-    kit_version: Literal[6] = 6
+    kit_version: Literal[6, 7] = 7
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -438,7 +438,7 @@ class Phase(reference.Model):
 
 
 class Report(reference.Model):
-    kit_version: Literal[6] = 6
+    kit_version: Literal[6, 7] = 7
     app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
         "STANDARD_WITH_VENDOR_REQUIREMENT"
     )
@@ -1145,13 +1145,40 @@ def _role(process: dict, manifest: Manifest, payload: dict | None = None) -> Rol
     if image.kind != "HELPER":
         return image.kind
     arguments = payload.get("args", []) if payload else []
-    if "--type=utility" in arguments:
+    if type(arguments) is not list or any(type(arg) is not str for arg in arguments):
+        return "OTHER"
+    types = [arg for arg in arguments[1:] if arg.startswith("--type=") or arg == "--type"]
+    if len(types) != 1:
+        return "OTHER"
+    if types[0] == "--type=gpu-process":
+        return "GPU"
+    if types[0] == "--type=renderer":
+        return "RENDERER"
+    if types[0] == "--type=utility":
+        subtypes = [
+            arg
+            for arg in arguments[1:]
+            if arg.startswith("--utility-sub-type=") or arg == "--utility-sub-type"
+        ]
         return (
             "NETWORK"
-            if "--utility-sub-type=network.mojom.NetworkService" in arguments
+            if subtypes == ["--utility-sub-type=network.mojom.NetworkService"]
             else ("OTHER_UTILITY")
         )
     return "OTHER"
+
+
+def _exec_identity_agrees(before: dict, target: dict) -> bool:
+    """Match one lifetime across exec without assuming adjacent identity versions.
+
+    XNU kern_exec.c allocates from the global nextpidversion counter. Concurrent
+    process activity can consume intervening values; wraparound is possible too.
+    Ownership still requires the exact before execution/image or parent token.
+    """
+    bt, tt = reference._token(before), reference._token(target)
+    return (
+        bt[5] == tt[5] and bt[7] != tt[7] and reference._birth(before) == reference._birth(target)
+    )
 
 
 def _same(left: dict, right: dict) -> bool:
@@ -1274,12 +1301,7 @@ class Tracker:
             self.known_order[reference._identity(child)] = row["global_seq_num"]
         elif kind == 9:
             target = row["event"]["exec"]["target"]
-            before_token, target_token = reference._token(process), reference._token(target)
-            if not (
-                before_token[5] == target_token[5]
-                and target_token[7] == before_token[7] + 1
-                and reference._birth(process) == reference._birth(target)
-            ):
+            if not _exec_identity_agrees(process, target):
                 return False
             # A missing fork is diagnosed; parent proof may admit a known vendor helper.
             parent = reference._token(target, "parent_audit_token")
@@ -1678,11 +1700,7 @@ def analyze(
                     reference._token(before, "parent_audit_token")
                     == reference._token(target, "parent_audit_token")
                 ),
-                exec_identity_transition=reference._check(
-                    bt[5] == tt[5]
-                    and tt[7] == bt[7] + 1
-                    and reference._birth(before) == reference._birth(target)
-                ),
+                exec_identity_transition=reference._check(_exec_identity_agrees(before, target)),
                 arguments=classify_arguments(payload, profile, url),
                 descriptors=fd_values,
                 fd_inventory_well_formed=fd_ok,
