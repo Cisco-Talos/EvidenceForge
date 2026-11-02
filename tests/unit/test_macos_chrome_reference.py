@@ -688,8 +688,9 @@ def test_vendor_metadata_query_verifies_code_without_opening_profiles(
     monkeypatch.setattr(kit, "_code_output", output)
     actual = kit._installed(expected.kind, Path(expected.path))
     assert actual == expected
-    assert commands[0][0:3] == ["/usr/bin/codesign", "--verify", "--strict"]
-    assert commands[0][4].startswith("=anchor apple generic")
+    assert commands[0][0:3] == ["/usr/bin/codesign", "--verify", "-R"]
+    assert commands[0][3].startswith("=anchor apple generic")
+    assert "--strict" not in commands[0] and "--ignore-resources" not in commands[0]
     assert commands[1][commands[1].index("--entitlements") + 1] == "-"
     assert "--xml" in commands[1]
     assert all(command[-1] == str(Path(expected.path).parents[2]) for command in commands)
@@ -755,7 +756,7 @@ def test_installed_code_failures_export_only_closed_labels(
     assert report["installed_code_item"] == "MAIN"
     assert report["installed_code_check"] == "SIGNATURE_VERIFY"
     assert report["installed_code_failure"] == expected
-    assert report["kit_version"] == 2
+    assert report["kit_version"] == 3
     assert CANARY not in raw
 
 
@@ -940,3 +941,43 @@ def test_static_diagnostic_requires_explicit_run_flag_and_prints_only_fixed_sche
     assert result["apps"] == "NOT_LAUNCHED" and result["helper_files"] == "NOT_WRITTEN"
     with pytest.raises(ValidationError):
         kit.CodeCommandResult(outcome="FAIL", failure=CANARY)
+
+
+@pytest.mark.parametrize("kind", ["MAIN", "RENDERER", "GPU", "HELPER", "CRASHPAD", "XPCPROXY"])
+def test_process_reference_uses_standard_app_validation_and_keeps_vendor_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: kit.ImageKind,
+) -> None:
+    import plistlib
+
+    expected = next(image for image in _manifest().images if image.kind == kind)
+    monkeypatch.setattr(kit.support, "_installed_image", lambda _path: expected.image)
+    commands: list[list[str]] = []
+
+    def output(args: list[str]) -> SimpleNamespace:
+        commands.append(args)
+        if "--verify" in args:
+            assert "-R" in args and args[args.index("-R") + 1].startswith("=anchor apple")
+            assert "--ignore-resources" not in args
+            if kind not in {"CRASHPAD", "XPCPROXY"} and "--strict" in args:
+                raise kit.subprocess.CalledProcessError(
+                    1, args, stderr=b"a sealed resource is missing or invalid"
+                )
+        return SimpleNamespace(
+            stdout=plistlib.dumps(expected.entitlements) if "-d" in args else b"",
+            stderr=f"Executable={expected.path}\nIdentifier={expected.signing_id}\nTeamIdentifier={expected.team_id or 'not set'}\n".encode(),
+        )
+
+    monkeypatch.setattr(kit, "_code_output", output)
+    assert kit._installed(kind, Path(expected.path)) == expected
+    assert ("--strict" in commands[0]) == (kind in {"CRASHPAD", "XPCPROXY"})
+    if kind != "XPCPROXY":
+        assert (
+            'certificate leaf[subject.OU] = "EQHXZ8M8AV"'
+            in commands[0][commands[0].index("-R") + 1]
+        )
+    else:
+        assert 'identifier "com.apple.xpc.proxy"' in commands[0][commands[0].index("-R") + 1]
+    report = kit.Report()
+    assert report.app_signature_policy == "STANDARD_WITH_VENDOR_REQUIREMENT"
+    assert report.strict_distribution_conformance == "NOT_EVALUATED"

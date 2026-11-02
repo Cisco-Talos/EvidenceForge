@@ -2313,3 +2313,45 @@ production generation surface or behavior revision.
 All 389 selected kit regressions pass, including 80 Chrome-specific checks.
 Whole Ruff/format/diff and behavior checks pass. Production revision 373 and
 its surface digest are unchanged; there is no generated-data acceptance claim.
+
+## November 2: approved signing diagnostic and process-reference validation scope
+
+The human explicitly approved running the prepared `diagnose-code --private-run`
+from `/private/tmp/eforge-chrome-kit-4xemu5yv` with project Python. It ran once as
+the ordinary user outside the execution sandbox, without sudo. That specific
+permission is consumed. No other installed-code query, kit read or diagnostic
+rerun is authorized by it. No native logs or browser profiles were opened; no
+browser, probe, server or collector started and the helper wrote no files.
+
+The fixed report says ordinary bundle verification PASS, all strict comparisons
+FAIL/RESOURCE_SEAL (including the code-only diagnostic), main file unchanged PASS,
+and metadata/expected identifier/Google team/executable binding/XML/flat types
+PASS. It does not independently prove why strict resources fail, or that the
+Google requirement passes without strict mode. No raw stderr, paths, signer
+values, hashes, entitlement object or diagnostic JSON is committed.
+
+Version 3 corrects the tool's overly broad admission scope for a process reference:
+app bundles require ordinary signature validation plus the unchanged explicit
+Google vendor requirement. Main/helper code is still descriptor-bound and hashed
+before/after, signed-bundle metadata must bind that executable, and a failed
+ordinary verification or vendor requirement still refuses setup. Standalone
+crashpad/xpcproxy retain strict checks and their existing Google/Apple constraints.
+The ignore-resources switch remains diagnostic-only and is never used for setup.
+The manifest/report declare the standard app signature policy and expressly
+leave strict distribution conformance NOT_EVALUATED. No Chrome bundle, system
+setting, generation admission gate or native generation profile is modified.
+
+This is a scope correction for gathering ES process facts, not a claim of strict
+distribution/Gatekeeper acceptance or a repair of the installed app. The revised
+full installed-code checks have not run on this host; those remain the human-only
+setup command in a fresh kit. Synthetic regressions exercise all six image kinds,
+retain vendor constraints, reject verification errors and prove resource-ignore
+never appears in admission commands. Old prepared kits remain untouched.
+
+All 395 selected kit regressions pass, including 86 Chrome-specific checks.
+Whole Ruff/format/diff and behavior checks pass; generation revision 373 and its
+surface digest are unchanged. Prepared fresh code-only v3 handoff:
+`/private/tmp/eforge-chrome-kit-yrjg1s1l`. No setup, installed-code query, probe,
+browser or collector ran in that new kit. Do not inspect it after handoff without
+separate permission. The next human step is setup there, then the already
+documented private capture only after SETUP_READY/error NONE.

@@ -266,7 +266,10 @@ class Image(reference.Model):
 
 
 class Manifest(reference.Model):
-    kit_version: Literal[2] = 2
+    kit_version: Literal[3] = 3
+    app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
+        "STANDARD_WITH_VENDOR_REQUIREMENT"
+    )
     os_version: str = Field(max_length=128)
     os_build: str = Field(max_length=128)
     uid: int = Field(gt=0, lt=2**32)
@@ -408,7 +411,11 @@ class Phase(reference.Model):
 
 
 class Report(reference.Model):
-    kit_version: Literal[2] = 2
+    kit_version: Literal[3] = 3
+    app_signature_policy: Literal["STANDARD_WITH_VENDOR_REQUIREMENT"] = (
+        "STANDARD_WITH_VENDOR_REQUIREMENT"
+    )
+    strict_distribution_conformance: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     purpose: Literal["CHROME_MAIN_AND_HELPER_DIAGNOSTIC"] = "CHROME_MAIN_AND_HELPER_DIAGNOSTIC"
     collection: Literal["NONCE_PROFILE_AUTHENTICATED_PROCESS_GRAPH"] = (
         "NONCE_PROFILE_AUTHENTICATED_PROCESS_GRAPH"
@@ -787,7 +794,19 @@ def _installed(kind: ImageKind, path: Path) -> Image:
     image = _checked(kind, "FILE_HASH", lambda: support._installed_image(path))
     # Chromium signs app bundles as bundles, and standalone tools as executables.
     target = _signing_target(kind, path)
-    _checked(kind, "SIGNATURE_VERIFY", lambda: _code_output(_verification_command(kind, target)))
+    # A process reference requires valid signed code and the vendor requirement.
+    # Extra strict app-distribution checks are separate diagnostic observations.
+    _checked(
+        kind,
+        "SIGNATURE_VERIFY",
+        lambda: _code_output(
+            _verification_command(
+                kind,
+                target,
+                strict=kind in {"CRASHPAD", "XPCPROXY"},
+            )
+        ),
+    )
     result = _checked(
         kind,
         "SIGNATURE_METADATA",

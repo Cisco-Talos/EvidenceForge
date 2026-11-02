@@ -5,11 +5,18 @@ local fetch, and a manual quit. It gathers the main, renderer, GPU and network
 helper relationships needed by the fixed workstation workload. It is **not** a
 blind assessment, an ordinary browsing sample or automatic generation admission.
 
-**Use a fresh version-2 kit.** Version 1 passed inline signing requirements as
-filenames and did not explicitly select XML entitlement output. Version 2 fixes
-both, verifies app code through its containing signed bundle, binds the returned
-metadata to the hashed executable, and returns only fixed diagnostic labels for
-any installed-code failure. Do not overwrite or retry the partially set-up v1 kit.
+**Use a fresh version-3 kit.** Version 1 had malformed inline signing arguments;
+version 2 corrected the arguments and XML parsing but also required strict
+distribution validation for app bundles. The approved diagnostic found ordinary
+Chrome signature validation passing while strict validation failed on resources.
+Version 3 requires ordinary signature validation **and** the existing vendor
+requirement for Chrome app bundles, with strict verification retained for
+standalone crashpad/xpcproxy tools. It still binds metadata to the exact hashed
+executable, rejects failed verification and exports only fixed failure labels.
+The manifest pins `app_signature_policy: STANDARD_WITH_VENDOR_REQUIREMENT`;
+the report also states `strict_distribution_conformance: NOT_EVALUATED`. This is a process reference;
+it does not establish strict distribution or Gatekeeper conformance. Do not alter
+or re-sign Chrome or overwrite earlier kits.
 
 Agents may prepare this code-only kit and test invented records. **Only the human
 runs setup, capture and report**, privately after closing agents. No existing
@@ -116,7 +123,7 @@ Expected: `stage: SETUP_READY`, `error: NONE`, `provenance: PASS`. Setup starts 
 apps or collectors. `APP_MISSING` means the standard installed location is absent;
 do not move Chrome or paste a private path. A build or metadata error reports a
 fixed label, never native command output. Stop on any error and share only that
-fixed JSON; the version-2 fields `installed_code_item`, `installed_code_check`
+fixed JSON; the fields `installed_code_item`, `installed_code_check`
 and `installed_code_failure` identify the failed stage without exporting paths,
 command text or stderr. Do not run capture after failed setup. Do not repair a partial kit by
 overwriting private files: use a new code-only kit.
