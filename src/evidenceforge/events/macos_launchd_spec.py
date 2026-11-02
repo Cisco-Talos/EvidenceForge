@@ -6,7 +6,15 @@
 from hashlib import sha256
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def validate_launchd_label(label: str) -> str:
@@ -35,6 +43,56 @@ class LaunchdSystemJobSpec(BaseModel):
     arguments: tuple[str, ...] = Field(min_length=1, description="Exact argv, including argv[0]")
     principal: str = Field(description="Resolved execution principal, distinct from plist owner")
     run_at_load: bool = False
+    launch_profile: Literal["root_xpcproxy_v11"] | None = None
+    launch_environment: tuple[str, ...] | None = None
+
+    @model_validator(mode="after")
+    def native_preset_inputs(self) -> "LaunchdSystemJobSpec":
+        """Keep this reference scoped to explicit root activation."""
+        if self.launch_profile is not None and (self.principal != "root" or self.run_at_load):
+            raise ValueError(
+                "Native system-job preset requires root and explicit activation without RunAtLoad"
+            )
+        if self.launch_environment is not None and self.launch_profile is None:
+            raise ValueError("Native launch environment requires an explicit launch profile")
+        return self
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_definition(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Keep the exact old file/content identity when no native preset is selected."""
+        result = handler(self)
+        if self.launch_profile is None:
+            result.pop("launch_profile", None)
+        if self.launch_environment is None:
+            result.pop("launch_environment", None)
+        return result
+
+    @field_validator("launch_environment")
+    @classmethod
+    def literal_environment(cls, values: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Keep loaded file assignments exact, distinct and NUL-free."""
+        if values is None:
+            return None
+        keys = [value.split("=", 1)[0] for value in values]
+        if (
+            not values
+            or len(set(keys)) != len(keys)
+            or any(
+                "=" not in value
+                or not key
+                or "\0" in value
+                or "{" in value
+                or "}" in value
+                or key in {"XPC_FLAGS", "XPC_SERVICE_NAME", "OSLogRateLimit"}
+                for key, value in zip(keys, values, strict=True)
+            )
+        ):
+            raise ValueError(
+                "Native launchd environment requires distinct literal nonreserved assignments"
+            )
+        return values
 
     @field_validator("label")
     @classmethod

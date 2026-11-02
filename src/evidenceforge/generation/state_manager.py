@@ -6965,6 +6965,21 @@ class StateManager:
         return _PreparedMaterializationBatchContext(self, plan)
 
     @contextmanager
+    def current_process_guard(self, identity: ProcessIdentity) -> Iterator[None]:
+        """Hold the State lane while an existing exact process acquires service ownership."""
+        epoch = self._reject_mutation_during_action_cohort_claim("current_process_guard")
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "current_process_guard", admitted_at=epoch
+            )
+            if self.get_process_identity(identity.hostname, identity.pid) != identity:
+                raise StateError("Service binding requires the exact current process execution")
+            process = self.get_process(identity.hostname, identity.pid)
+            if process is None or process.end_time is not None:
+                raise StateError("Service binding requires a live process")
+            yield
+
+    @contextmanager
     def materialization_guard(self, plan: _MaterializationPlan | int) -> Iterator[None]:
         """Hold the state-start lane after authenticating one opaque plan.
 

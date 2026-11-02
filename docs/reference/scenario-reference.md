@@ -30,8 +30,9 @@ complete launcher/session coverage. Existing processes gain no retrospective exe
 an in-window exec in an existing process still counts.
 
 The supported target remains macOS 27 arm64. Ordinary literal local/non-PTY commands have a
-qualified fork/exec path. Initial terminal, launchd/helper and xpcproxy activations still have
-gates; complete requests containing those unresolved starts reject. See the
+qualified fork/exec path. Fresh Apple Terminal/iTerm2, bounded SSH and the explicit root
+system-job preset also have qualified producers. Other app/helper activations and unsupported
+job definitions retain gates; complete requests containing unresolved starts reject. See the
 [producer inventory and acceptance matrix](../design/macos-workstation-feasibility/process-producer-inventory.md).
 
 ## Naming metadata
@@ -1190,7 +1191,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
 | `group_member_added` | 4728/4732/4756 (on DC) | `group_name`, `member_name` | `scope` (global/local/universal) |
-| `macos_launch_item` | eCAR file/process stages; registration unobserved | `operation`, `label`, `caller_ref` | Stage-specific `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `process_ref`, `exit_code` |
+| `macos_launch_item` | eCAR file/process stages; selected native job fork/exec; registration unobserved | `operation`, `label`, `caller_ref` | Stage-specific `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `launch_profile`, `process_ref`, `exit_code` |
 | `service_installed` | 4697, eCAR SERVICE/CREATE | `service_name`, `service_file_name` | `service_account`, `source_ip` (modeled remote-administration source) |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
@@ -2040,9 +2041,10 @@ This typed event supports explicit root-owned stages on modeled macOS 27 arm64 w
 | `path` | Required only for write/bootstrap/remove; canonical `/Library/LaunchDaemons/*.plist` path. |
 | `program`, `arguments`, `size_bytes` | Required only for write: executable path, exact argument vector and positive modeled file size. |
 | `version`, `run_at_load` | Write-only definition metadata. Version defaults to 1 and increases on replacement. RunAtLoad does not implicitly activate the job. |
+| `launch_profile` | Write-only optional `root_xpcproxy_v11`. Qualifies explicit root `/usr/bin/true` activation with RunAtLoad false; its execution policy freezes a clean environment into the definition. |
 | `process_ref` | Activate-only reference for the resulting process. |
 | `exit_code` | Optional normal completed exit status, 0–255; exit only. |
-A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. GUI agents, automatic activation/respawn, and native launchd/ES serialization are outside this profile. An executable example is in `scenarios/macos-persistence-example/scenario.yaml`.
+A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. The selected native preset adds one launchd fork, xpcproxy exec, setsid and target exec per activation, preserving root credentials, boot audit origin, self responsibility and three non-TTY vnode standards. Its loaded definition retains the frozen environment after file removal/replacement. An example is in `scenarios/macos-persistence-example/native-system-job.yaml`; its provisioning caller starts explicitly during warm-up, outside collection. Authored warm-up entries execute before collection and have no retrospective evidence. Definitions without the preset retain the partial aggregate workflow in `scenarios/macos-persistence-example/scenario.yaml`. GUI agents, other target images, automatic activation/respawn and native launchd Unified Log messages remain outside this preset.
 
 Experimental `output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
 v11 fork/exec/known-exit profile. Complete canonical facts are required; missing entitlements,

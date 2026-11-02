@@ -1294,6 +1294,14 @@ The internal `macos_workspace_request` occurrence separates session intent from 
 
 ### Authored Mac system-job ownership
 The experimental `macos_launch_item` coordinator composes explicit root/system-domain file and lifecycle stages through existing owners. The shared runtime content registry owns definitions and placement removal; the service registry owns loaded snapshots; process/group transactions own activation, exit and unload. File stages use the finite `macos_launch_item_file` effect owner with exact occurrence cardinality and normal audit reconciliation, not an audit exemption. Registration and dormant unload create no fabricated source occurrence. An exact running caller is required even when State retains an exited identity for historical correlation.
+The explicit `root_xpcproxy_v11` preset freezes its clean environment into the file and loaded
+definition. `MacosSystemJobStartup` reuses the existing retained Mac phase journal for a root
+launchd fork/xpcproxy exec, setsid and installed true exec. The service authority binds the already
+published current process/group under State-to-registry lock order; it cannot redispatch a birth.
+Pending phases block checkpoint capture. Hydration validates the post-fork group creation time
+against the current execution, while legacy aggregate definitions retain their original contract.
+Authored entries inside warm-up execute in their indexed pass before collection, with ordinary
+pre-window source suppression; collection does not invent retrospective starts.
 ES collector connections bind exact modeled executions. The active catalog selects macOS 27 arm64 v11 fork/exec/known-exit generation; retired targets fail validation independently of output. The canonical boot collector, client inventory, counters and clock remain checkpoint owners. Exact process publication freezes native bytes before State/lifecycle/artifact commit. Unsupported phases retain authenticated nonexported counter positions, with no fabricated native rows. Exec requires explicit binary entitlement absence and complete descriptors; exit requires a canonical completed outcome. Known sibling forks remain available. Shell/helper descriptor inventories, PTY command generation and GUI responsible-process relationships remain explicit limitations. Sink retries reuse the retained native projection and canonical receipt. Historical wire decoding remains separate from active source admission.
 
 The frozen Mac execution policy can select `ssh_command_descriptors: standard_pipes`.

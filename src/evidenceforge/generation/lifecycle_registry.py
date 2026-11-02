@@ -31,6 +31,7 @@ from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
     RuntimeServiceDeploymentIdentity,
 )
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
@@ -7535,6 +7536,7 @@ class LifecycleServicePublicationRequest:
     staged_process_bindings: tuple[LifecycleServiceStagedProcessBindingMember, ...] = ()
 
     process_group: PosixGroupIdentity | None = None
+    active_process: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete, duplicated, or cross-service publication inputs."""
@@ -7550,19 +7552,51 @@ class LifecycleServicePublicationRequest:
         if self.identity.launchd_job is not None and len(self.process_bindings) > 1:
             raise ValueError("Loaded launchd job publication admits only one process binding")
         group = self.process_group
+        active = self.active_process
+        definition = self.identity.launchd_job
+        if active is not None and (
+            type(active) is not ProcessIdentity
+            or definition is None
+            or definition.launch_profile != "root_xpcproxy_v11"
+            or active.image != definition.program
+            or active.arguments != definition.arguments
+            or active.parent_pid != 1
+            or active.initial_image != "/sbin/launchd"
+            or group is None
+            or active.job_control != group
+            or self.staged_process_bindings
+            or len(self.process_bindings) != 1
+            or self.process_bindings[0].process_object_id != active.object_id
+            or self.process_bindings[0].bound_at < active.execution_started_at
+            or active.execution_ordinal != 2
+            or active.hostname != self.identity.hostname
+            or active.principal != "root"
+            or active.logon_id
+            or active.credentials is None
+            or not active.credentials.is_unattributed_root
+            or active.pid != group.pgid
+            or active.pid != group.session.sid
+            or active.object_id != group.leader_object_id
+            or active.started_at > group.started_at
+            or group.started_at > active.execution_started_at
+        ):
+            raise ValueError("Active launchd binding requires its exact native root job leader")
         if group is not None:
             if (
                 type(group) is not PosixGroupIdentity
                 or self.identity.launchd_job is None
                 or group.session.hostname != self.identity.hostname
-                or len(self.staged_process_bindings) != 1
+                or (active is None and len(self.staged_process_bindings) != 1)
                 or len(self.process_bindings) != 1
                 or self.process_bindings[0].process_object_id != group.leader_object_id
-                or self.staged_process_bindings[0].process_start.identity.object_id
-                != group.leader_object_id
-                or self.staged_process_bindings[0].process_start.identity.pid != group.pgid
-                or self.staged_process_bindings[0].process_start.identity.started_at
-                != group.started_at
+                or active is None
+                and (
+                    self.staged_process_bindings[0].process_start.identity.object_id
+                    != group.leader_object_id
+                    or self.staged_process_bindings[0].process_start.identity.pid != group.pgid
+                    or self.staged_process_bindings[0].process_start.identity.started_at
+                    != group.started_at
+                )
             ):
                 raise ValueError("Service group requires an exact staged launchd group leader")
         binding_ids = [binding.binding_id for binding in self.process_bindings]
@@ -8540,6 +8574,18 @@ class PreparedLifecycleServicePublication:
         if self._committed:
             raise StateError("Prepared lifecycle service publication is already committed")
         self._result = self._registry._commit_claimed_service_publication(self._token)
+        self._committed = True
+        return self._result
+
+    def _commit_active_process_no_fail(
+        self, process: ProcessIdentity
+    ) -> LifecycleServicePublicationReceipt:
+        """Authority-only commit while the exact existing State process lane is held."""
+        if not self._active or self._committed or self._token.request.active_process != process:
+            raise StateError("Active service publication lost its exact process capability")
+        self._result = self._registry._commit_claimed_service_publication(
+            self._token, active_process=process
+        )
         self._committed = True
         return self._result
 
@@ -14275,6 +14321,21 @@ class LifecycleRegistry:
     ) -> _PreparedServiceCommitPlan:
         request = token.request
         identity = request.identity
+        if request.active_process is not None:
+            active = request.active_process
+            partition = self._partitions[self._partition_id(active.hostname)]
+            current = partition.get_process(active.object_id)
+            if (
+                current is None
+                or current.closed_at is not None
+                or current.close_barrier is not None
+                or current.identity.pid != active.pid
+                or current.identity.started_at != active.started_at
+                or current.current_view.image != active.image
+                or current.current_view.execution_ordinal != active.execution_ordinal
+                or current.current_view.token.principal != active.principal
+            ):
+                raise StateError("Active service binding lost its exact lifecycle execution")
         staged_processes = {
             member.process_start.identity.object_id: member.process_start.identity
             for member in request.staged_process_bindings
@@ -14626,6 +14687,8 @@ class LifecycleRegistry:
     def _commit_claimed_service_publication(
         self,
         token: LifecycleServiceAdmissionToken,
+        *,
+        active_process: ProcessIdentity | None = None,
     ) -> LifecycleServicePublicationReceipt:
         """Commit one claimed service token under sorted locks and consume it once."""
 
@@ -14633,6 +14696,11 @@ class LifecycleRegistry:
             raise StateError(
                 "Staged service process publication requires a combined lifecycle start ticket"
             )
+        if (
+            token.request.active_process is not None
+            and token.request.active_process != active_process
+        ):
+            raise StateError("Active launchd publication requires its State/lifecycle authority")
 
         with self._gate.mutation():
             with self._closed_transport_preparation_lock:

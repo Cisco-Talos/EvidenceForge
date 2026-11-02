@@ -8423,6 +8423,47 @@ class GeneratorLifecycleAuthority:
             # Exact-object tamper cleanup releases its retained canonical preimage.
             pass
 
+    def publish_existing_process_service(
+        self, identity: ProcessIdentity, token: LifecycleServiceAdmissionToken
+    ) -> LifecycleServicePublicationReceipt:
+        """Bind a fully published native job without replaying its process start.
+
+        The existing service token/capability owns this publication. State's
+        current-process guard establishes State-to-registry lock order; ordinary
+        service commits cannot consume an active-process group request.
+        """
+        try:
+            if (
+                not self._registry.authenticates_service_admission_token(token)
+                or token.request.active_process != identity
+            ):
+                raise StateError("Active service publication requires its exact process request")
+            with self._registry.claimed_service_publication(token) as capability:
+                with self._state_manager.current_process_guard(identity):
+                    prior = self._registry.get_service_instance(token.request.identity.object_id)
+                    if prior is None:
+                        raise StateError("Native job activation lost its loaded service")
+                    if (
+                        prior.process_group is not None
+                        and prior.process_group != identity.job_control
+                        and self._state_manager.get_posix_group_members(
+                            prior.process_group, limit=1
+                        )
+                    ):
+                        raise StateError("Native job cannot replace a group with live members")
+                    hook = self._materialization_precommit_hook
+                    if hook is not None:
+                        hook()
+                    if (
+                        self._state_manager.get_process_identity(identity.hostname, identity.pid)
+                        != identity
+                    ):
+                        raise StateError("Native job changed before service binding")
+                    return capability._commit_active_process_no_fail(identity)
+        except BaseException:
+            self._discard_service_admission(token)
+            raise
+
     def materialize_process_service_composite(
         self,
         plan: ProcessMaterializationPlan,

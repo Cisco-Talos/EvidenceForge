@@ -149,3 +149,31 @@ def test_authored_entries_execute_in_their_generation_pass_before_lifecycle_clea
         engine.start_time + timedelta(seconds=offset)
         for offset in [0, 1800, 3599, 3600, 3600, 6240, 7200, 8040]
     ]
+
+
+@pytest.mark.parametrize("os_name", ["Windows 10", "Ubuntu 24.04"])
+def test_authored_warmup_runs_before_collection_and_is_not_replayed_in_tail(
+    os_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = load_yaml(Path(__file__).parents[1] / "fixtures/scenarios/minimal.yaml")
+    document["time_window"] = {"start": "2024-01-15T10:00:00Z", "duration": "1m", "warmup": "1h"}
+    document["environment"]["systems"][0]["os"] = os_name
+    document["output"]["logs"] = [{"format": "ecar"}]
+    document["baseline_activity"]["intensity"] = "low"
+    document["storyline"] = [
+        {
+            "id": label,
+            "time": when,
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": label,
+            "events": [{"type": "failed_logon"}],
+        }
+        for label, when in (("preexisting", "2024-01-15T09:59:00Z"), ("collected", "+30s"))
+    ]
+    engine = GenerationEngine(Scenario.model_validate(document), tmp_path / "output")
+    calls: list[int] = []
+    monkeypatch.setattr(engine, "_execute_single_storyline_event", calls.append)
+    engine.generate()
+    assert calls == [0, 1]
+    assert engine._storyline_executed == {0, 1}

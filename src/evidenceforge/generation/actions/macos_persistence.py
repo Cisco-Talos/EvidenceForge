@@ -7,8 +7,10 @@ A stage is a modeled completed operation. Registration, activation, process exit
 unload and file removal remain distinct; none implies native policy evidence.
 """
 
+import math
+import random
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from evidenceforge.events.base import OccurrenceBuilder
@@ -35,6 +37,7 @@ from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectAuditCohortEntry,
     ExecutionEffectPlan,
 )
+from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
 from evidenceforge.generation.actions.macos_launch_item import (
     MacosSystemJobGroupUnloadPlan,
     macos_system_job_bootstrap_plan,
@@ -42,8 +45,10 @@ from evidenceforge.generation.actions.macos_launch_item import (
     macos_system_job_deployment_identity,
     macos_system_job_launch_plan,
     macos_system_job_leader_exit_completion_plan,
+    macos_system_job_running_activation_plan,
     macos_system_job_unload_completion_plan,
 )
+from evidenceforge.generation.actions.macos_system_job import MacosSystemJobStartup
 from evidenceforge.generation.actions.posix_process import process_exit_occurrence
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -60,7 +65,7 @@ from evidenceforge.generation.runtime_content import (
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +173,7 @@ class MacosPersistenceActionBundle:
         deployments: DeploymentContentRegistry,
         content: RuntimeContentIdentityManager,
         metadata_provider: MacosExecutionMetadataProducer | None = None,
+        native_startups: dict[str, MacosFinderStartup] | None = None,
     ) -> None:
         self.state = state
         self.lifecycle = lifecycle
@@ -176,12 +182,16 @@ class MacosPersistenceActionBundle:
         self.deployments = deployments
         self.content = content
         self.metadata_provider = metadata_provider
+        self.native_startups = native_startups
         self.services = LifecycleProductionAdapter(lifecycle)
         authority.bind_source_timing_planner(dispatcher.source_timing_planner)
 
     def execute(self, request: MacosPersistenceRequest) -> MacosPersistenceResult:
         """Complete one stage; successful file/process sources use canonical owners."""
         caller = request.caller
+        startup_key = f"launchd:{request.action_id}"
+        if self.native_startups and startup_key not in self.native_startups:
+            raise StateError("Finish the pending Mac startup before another launch-item stage")
         credentials = caller.credentials
         if (
             request.host.os_category != "macos"
@@ -208,6 +218,8 @@ class MacosPersistenceActionBundle:
         if job is None or job.identity.launchd_job is None:
             raise StateError("Launch-item operation requires its currently loaded system job")
         if request.operation == "activate":
+            if job.identity.launchd_job.launch_profile is not None:
+                return self._activate_native(request, job.identity.object_id)
             binary = self.dispatcher.resolve_process_binary_identity(
                 host.hostname,
                 job.identity.launchd_job.principal,
@@ -390,6 +402,76 @@ class MacosPersistenceActionBundle:
                 timing.cancel()
         return MacosPersistenceResult(terminated=tuple(terminated))
 
+    def _activate_native(
+        self, request: MacosPersistenceRequest, service_object_id: str
+    ) -> MacosPersistenceResult:
+        provider, journal = self.metadata_provider, self.native_startups
+        if provider is None or journal is None:
+            raise StateError(
+                "Native launchd activation requires the retained process owner and metadata policy"
+            )
+        key = f"launchd:{request.action_id}"
+        startup = journal.get(key)
+        if startup is None:
+            job = self.lifecycle.get_service_instance(service_object_id)
+            assert job is not None and job.identity.launchd_job is not None
+            bindings, more = self.lifecycle.service_process_binding_page(
+                service_object_id=service_object_id, limit=1
+            )
+            if more is not None or bindings:
+                raise StateError("Loaded launchd job already has an active process binding")
+            parent = self.state.get_process_identity(request.host.hostname, 1)
+            if parent is None:
+                raise StateError("Native system job lost its boot parent")
+            definition = job.identity.launchd_job
+            launcher = self.dispatcher.resolve_process_binary_identity(
+                request.host.hostname, "root", "/usr/libexec/xpcproxy", "macos"
+            )
+            binary = self.dispatcher.resolve_process_binary_identity(
+                request.host.hostname, "root", definition.program, "macos"
+            )
+            timing = provider.profile.system_job_phase_timing
+            if timing is None:
+                raise StateError("Native system job requires its explicit phase timing policy")
+            rng = random.Random(_stable_seed(f"macos-system-job-phases:{request.action_id}"))
+            times = [request.timestamp]
+            for _ in range(3):
+                delay = min(
+                    timing.maximum,
+                    max(timing.minimum, rng.lognormvariate(math.log(timing.median), timing.sigma)),
+                )
+                times.append(times[-1] + timedelta(seconds=delay))
+            startup = MacosSystemJobStartup(
+                state=self.state,
+                dispatcher=self.dispatcher,
+                metadata=provider,
+                host=request.host,
+                parent=parent,
+                launcher=launcher,
+                app=binary,
+                definition=definition,
+                times=tuple(times),
+            )
+            startup.request = request
+            journal[key] = startup
+        elif type(startup) is not MacosSystemJobStartup or startup.request != request:
+            raise StateError("Native system job retry changed its retained request")
+        while not startup.complete:
+            startup.advance()
+        process = startup.process
+        assert process is not None
+        if startup.binding_plan is None:
+            startup.binding_plan = macos_system_job_running_activation_plan(
+                lifecycle_registry=self.lifecycle,
+                service_object_id=service_object_id,
+                process=process,
+                action_id=request.action_id,
+            )
+        token = self.services.prepare_service_publication(startup.binding_plan)
+        self.authority.publish_existing_process_service(process, token)
+        del journal[key]
+        return MacosPersistenceResult(process=process)
+
     def _bootstrap(self, request: MacosPersistenceRequest) -> None:
         if request.path is None:
             raise StateError("Launch-item bootstrap requires its retained plist path")
@@ -449,6 +531,18 @@ class MacosPersistenceActionBundle:
             ):
                 raise StateError("Launch-item write requires exact definition and size")
             action = "modify" if current is not None else "create"
+            definition = request.definition
+            if definition.launch_profile is not None and definition.launch_environment is None:
+                if (
+                    self.metadata_provider is None
+                    or definition.launch_profile
+                    != self.metadata_provider.profile.system_job_startup
+                ):
+                    raise StateError("Native job write requires its selected execution preset")
+                definition = LaunchdSystemJobSpec.model_validate(
+                    definition.model_dump()
+                    | {"launch_environment": self.metadata_provider.profile.system_job_environment}
+                )
             token = self.content.prepare_effect_publication(
                 root_action_id=request.action_id,
                 stable_source_id=stable_uuid(
@@ -464,7 +558,7 @@ class MacosPersistenceActionBundle:
                 owner_kind="system",
                 authored_size_bytes=request.size_bytes,
                 authored_mime_type="application/xml",
-                launchd_job=request.definition,
+                launchd_job=definition,
                 content_version=request.version,
                 artifact_version=request.version,
             )

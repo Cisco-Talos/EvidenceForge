@@ -735,6 +735,15 @@ installed facts reject before the first fork. Existing shells reuse their identi
 window creation/restoration, other app trees and unexpanded script children remain outside this
 bounded startup contract. No new Unified Log app-launch messages are inferred.
 
+System-domain jobs may select `launch_profile: root_xpcproxy_v11` when writing their
+modeled definition. The bounded root `/usr/bin/true` preset publishes one launchd fork,
+xpcproxy exec, setsid and target exec. Root credentials, assigned boot audit origin,
+self responsibility, root cwd and three non-TTY vnode standards are canonical facts.
+Loaded state retains the clean environment plus observed public launchd assignments
+after file removal or replacement; explicit known exit and unload remain separate stages.
+Registration does not emit a native row. Other images/domains/triggers and launchd Unified
+Log messages remain outside this preset. See the [reference and limits](../design/macos-workstation-feasibility/launchd-reference/REFERENCE.md).
+
 The v11 decoder and current generation profile preserve exact signed 64-bit integer entitlement values.
 Canonical signatures distinguish integer 1 from Boolean true, including equality and checkpoint
 encoding. The reviewed non-PTY SSH reference confirms native integer export against the exact

@@ -4368,6 +4368,10 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     ssh_receiver_startup: Literal["launchd_non_pty_v11"] | None = None
     ssh_receiver_service_label: Literal["com.openssh.sshd"] | None = None
     ssh_pty_execution: Literal["zsh_foreground_v11"] | None = None
+    system_job_startup: Literal["root_xpcproxy_v11"] | None = None
+    system_job_images: tuple[str, ...] = Field(default=(), max_length=64)
+    system_job_environment: tuple[str, ...] = ()
+    system_job_phase_timing: ShortCommandTiming | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
@@ -4397,6 +4401,14 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         selectors = [
             (rule.product_id, name) for rule in self.code_validation for name in rule.artifact_names
         ]
+        if self.system_job_startup is None and (
+            self.system_job_images or self.system_job_environment
+        ):
+            raise ValueError("System-job inputs require the qualified native startup policy")
+        if len(set(self.system_job_images)) != len(self.system_job_images) or any(
+            not image.startswith("/") or "\0" in image for image in self.system_job_images
+        ):
+            raise ValueError("System-job images must be distinct literal absolute paths")
         if (self.ssh_receiver_startup is None) != (self.ssh_receiver_service_label is None):
             raise ValueError(
                 "Native SSH startup and service-label policy must be selected together"
@@ -4421,7 +4433,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
             raise ValueError("Mac command completion policies must have distinct argument vectors")
         return self
 
-    @field_validator("user_environment", "root_environment")
+    @field_validator("user_environment", "root_environment", "system_job_environment")
     @classmethod
     def explicit_environment(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         """Reject malformed assignments and unknown interpolation fields."""

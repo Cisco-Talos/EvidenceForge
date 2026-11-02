@@ -52,6 +52,12 @@ ssh_receiver_startup: launchd_non_pty_v11
 ssh_receiver_service_label: com.openssh.sshd
 # Reviewed macOS 27 PTY shell and direct foreground child, distinct from channel pipes.
 ssh_pty_execution: zsh_foreground_v11
+# Explicit loaded-job preset: root cwd, null standards, clean declared environment.
+# Launcher/target XPC fields come from the reviewed system activation boundary.
+system_job_startup: root_xpcproxy_v11
+system_job_images: [/usr/bin/true]
+system_job_environment: ["PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"]
+system_job_phase_timing: {minimum: 0.001, median: 0.002, maximum: 0.02, sigma: 0.5} # nominal, not measured
 # Explicit nominal completed results for these exact invocations only. This is a
 # synthetic workload choice, not a success default, failure-rate measurement or
 # result inferred from exec admission. Only the natural completion owner uses it.

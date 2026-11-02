@@ -2026,3 +2026,76 @@ definition after plist removal, and cover complete/filtered/checkpoint/fault
 workloads. Unsupported user domains, triggers, privilege drops and arbitrary
 helper graphs retain their gates. No native record, raw report or private
 provenance is committed, and no new collection ran during this work.
+
+## November 2: admit the bounded native root system-job producer
+
+The human explicitly approved the version-2 offline reviewer at
+`/private/tmp/eforge-launchd-kit-7jtlfrbd/private_launchd_review.py` against the
+existing `/private/tmp/eforge-launchd-kit-4g2591rk` capture. It ran once and returned
+PASS for the added OSLogRateLimit/64 comparison and complete environment
+classification. No unknown name/value remains. Each review permission is consumed;
+neither handed-off kit may be opened again without separate permission. The review
+started no commands, probes, jobs, collectors or live queries and wrote no files.
+No new collection ran and no raw records, report or provenance are committed.
+
+Write-only `launch_profile: root_xpcproxy_v11` selects the bounded native root
+system-job producer. The execution policy allowlists installed `/usr/bin/true`
+with RunAtLoad false and explicit activation. Clean PATH/LANG/LC_ALL inputs
+are frozen into the canonical modeled file before publication, then retained by
+the loaded definition after file edits/removal. The producer adds the observed
+public OSLogRateLimit=64, XPC_FLAGS=1 and exact XPC_SERVICE_NAME. Xpcproxy has only
+XPC_FLAGS=0x0. No private nonce or observed environment is copied into generation.
+Legacy definition serialization/content seeds and partial aggregate behavior are
+preserved when no preset is selected.
+
+`MacosSystemJobStartup` reuses the existing retained Mac phase journal:
+launchd fork plus xpcproxy exec, separate setsid, then true exec. Each exec uses
+its reviewed installed security/slice/entitlement policy. Root credentials,
+assigned boot audit origin and self responsibility persist; the target has its
+own group/session, root cwd and three non-TTY vnode standards. Scoped lognormal
+phase timing is nominal synthetic timing, not a private-duration measurement.
+Preflight rejects unqualified inputs before process allocation/census mutation.
+
+The existing service admission token/capability binds that already published
+process. The authority holds State before registry mutation, checks current
+execution/group and live old-group members, then consumes the ordinary capability.
+Ordinary registry commit cannot consume this request. There is no new queue or
+proof registry and no replay of a birth. Failed phases or lost binding returns
+retain the same startup for exact retry, block other launch-item stages and block
+checkpoint capture while unfinished. Success clears the journal. Explicit
+exit/unload retain the existing group owners.
+
+Checkpoint hydration validates the native preset's post-fork setsid group time
+against its current execution instead of requiring it to equal process birth;
+legacy group validation stays exact. The public acceptance workload uses an
+explicitly pre-window provisioning caller, whose unqualified startup is outside
+the measured collection. Authored warm-up entries now execute in their indexed
+warm-up pass before collection through ordinary pre-window source suppression.
+Previously they were deferred until the post-collection tail, making a declared
+pre-existing caller unavailable. Windows/Linux ordering tests cover this generic
+scheduler correction. The outside-collection validation warning stays visible;
+no census exemption or fake start was added.
+
+Measurable acceptance: the two native job activations reconcile two forks/four
+execs and zero aggregate starts, with explicit known zero exits. Public full and
+native-only CLI runs under different Python hash seeds preserve native bytes.
+Fresh-process checkpoint suspend/verify/resume retains an active job's loaded
+definition, environment and post-fork group, then exits, reactivates after removal
+and unloads with byte-identical deterministic bundle content. That recovery test
+deliberately stretches the explicit lifetime across hourly checkpoints to test
+ownership; it is not a true-duration realism sample. The example uses short
+explicit target completion instead.
+
+All 252 selected routine lifecycle/metadata/persistence/Finder/manifest/scheduler
+checks and 391 shared State/ground-truth checks pass. The nine slow first-fork,
+setsid and target-exec fault cuts pass; binding before-commit/lost-return recovery,
+checkpoint transient guards, frozen environment after policy changes, unsupported
+image rejection before allocation, legacy byte identity and eCAR-only filtering
+also pass. Whole Ruff/format, diff and behavior-manifest checks pass. Revision 372 surface:
+`e7ba17d89d83d5b3a0c06709988c8e321e11484d1acff9fb2506441a4f674ac9`.
+
+This closes the bounded root system-job milestone, not the global P0. Other GUI
+mechanisms/apps/helper trees, existing-app windows/restoration, additional job
+images/domains/triggers and complex execution plans remain separate producer and
+qualification work. No extra collection is needed for this preset; the next
+native GUI extension needs its own controlled reference before admission.

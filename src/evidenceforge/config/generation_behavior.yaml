@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 371
+current_revision: 372
 history_start_revision: 1
-behavior_surface_sha256: 1f131085b35be3b6fc506ae24fb44b64df24315dd5a2382acfd3386103b6a2f5
+behavior_surface_sha256: e7ba17d89d83d5b3a0c06709988c8e321e11484d1acff9fb2506441a4f674ac9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3570,3 +3570,13 @@ changes:
       - macos_endpoint_security
       - ecar
     summary: Adds the reviewed Apple true image, ARM64E runtime security and a bounded bare-command lifecycle with explicit zero completion; system launchd activation remains separately gated.
+  - revision: 372
+    id: native-root-launchd-job-activation
+    impact: material
+    domains:
+      - macos-process-lifecycle
+      - launchd-service-ownership
+      - checkpoint-recovery
+      - authored-warmup-ordering
+    formats: []
+    summary: Adds bounded native root job startup, frozen loaded environment, retained recovery and authenticated binding of its published process; executes authored warmup prerequisites before collection and preserves legacy partial job profiles.

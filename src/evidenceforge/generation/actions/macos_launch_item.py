@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
-from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
@@ -432,6 +432,64 @@ def macos_system_job_activation_plan(
         staged_process_bindings=(
             lifecycle_authority.service_staged_process_binding_member(process_plan, binding),
         ),
+    )
+
+
+def macos_system_job_running_activation_plan(
+    *,
+    lifecycle_registry: LifecycleRegistry,
+    service_object_id: str,
+    process: ProcessIdentity,
+    action_id: str,
+) -> ServiceLifecyclePublicationPlan:
+    """Bind an already published native job without replaying its canonical birth."""
+    owner = lifecycle_registry.get_service_instance(service_object_id)
+    if (
+        owner is None
+        or owner.identity.launchd_job is None
+        or owner.closed_at is not None
+        or owner.close_barrier is not None
+    ):
+        raise StateError("Native job binding requires its exact live loaded definition")
+    definition = owner.identity.launchd_job
+    if (
+        definition.launch_profile != "root_xpcproxy_v11"
+        or not action_id
+        or process.hostname != owner.identity.hostname
+        or process.image != definition.program
+        or process.arguments != definition.arguments
+        or process.command_line != shlex.join(definition.arguments)
+        or process.parent_pid != 1
+        or process.initial_image != "/sbin/launchd"
+        or process.execution_ordinal != 2
+        or process.started_at < owner.identity.started_at
+        or process.job_control is None
+    ):
+        raise StateError("Native job process must match its exact loaded root definition")
+    start = lifecycle_registry.transition(
+        stable_uuid("macos-launchd-registration-start", service_object_id)
+    )
+    if start is None or start.subject != owner.identity.ref or start.kind != "started":
+        raise StateError("Native job binding lost its authenticated registration")
+    binding = ServiceProcessBindingIdentity(
+        binding_id=stable_uuid(
+            "macos-launchd-process-binding", service_object_id, process.object_id
+        ),
+        service_object_id=service_object_id,
+        process_object_id=process.object_id,
+        bound_at=process.execution_started_at,
+        role="launchd_job",
+        action_id=action_id,
+    )
+    return ServiceLifecyclePublicationPlan(
+        logical_identity=owner.logical_identity,
+        instance_identity=owner.identity,
+        action_id=start.action_id,
+        transition_id=start.transition_id,
+        transition_ordinal=start.transition_ordinal,
+        process_bindings=(binding,),
+        process_group=process.job_control,
+        active_process=process,
     )
 
 

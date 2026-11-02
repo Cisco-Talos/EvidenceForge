@@ -564,6 +564,7 @@ class AdversarialPayloadGroundTruthEvent(GroundTruthEventBase):
 class MacosLaunchItemAttributes(GroundTruthAttributesBase):
     """Completed system-job stage; registration does not imply execution."""
 
+    native_process_model: Literal["launchd_exec"] | None = None
     launchd_operation: Literal["write", "bootstrap", "activate", "exit", "unload", "remove"]
     launchd_label: str
     actor_object_id: str | None = None

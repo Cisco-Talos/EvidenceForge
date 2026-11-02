@@ -1,5 +1,12 @@
 # PRD: EvidenceForge Canonical Event Model
 
+The explicit `macos_launch_item.launch_profile: root_xpcproxy_v11` system-job preset
+now owns bounded root true activation through canonical fork, xpcproxy exec, setsid
+and target exec. The loaded definition retains its clean environment independently
+of later file edits/removal. The existing service authority binds the already
+published process/group; no rendered record triggers sibling evidence. Other
+images, domains, automatic triggers and launchd Unified Log remain unqualified.
+
 ## Current generation admission (2026-10-24)
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact

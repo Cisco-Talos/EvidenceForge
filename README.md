@@ -436,6 +436,11 @@ foreground commands, with one terminal and distinct command process groups. Exis
 reuse their identities. Inner commands are not automatically expanded. Other GUI apps,
 restored jobs/new windows in an existing app, complex command
 plans and unknown binary metadata still limit broader complete process coverage.
+Explicit system jobs can select write-stage `launch_profile: root_xpcproxy_v11` for the
+reviewed root `/usr/bin/true` preset. Each activation adds one launchd fork and two execs
+(xpcproxy, then target), with a separate POSIX session and frozen loaded environment.
+See the [native system-job example](scenarios/macos-persistence-example/README.md).
+Other images, triggers and user LaunchAgents retain their gates.
 Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
 and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).
 

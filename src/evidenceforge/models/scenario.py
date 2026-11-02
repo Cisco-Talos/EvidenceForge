@@ -2196,6 +2196,10 @@ class MacosLaunchItemEventSpec(_EventSpecBase):
     size_bytes: int | None = Field(default=None, gt=0)
     version: int = Field(default=1, ge=1)
     run_at_load: bool = False
+    launch_profile: Literal["root_xpcproxy_v11"] | None = Field(
+        default=None,
+        description="Explicit root/cwd/null-stdio/environment preset for native activation",
+    )
     process_ref: str | None = Field(default=None, min_length=1)
     exit_code: int | None = Field(default=None, ge=0, le=255)
 
@@ -2229,6 +2233,7 @@ class MacosLaunchItemEventSpec(_EventSpecBase):
                 arguments=tuple(self.arguments),
                 principal="root",
                 run_at_load=self.run_at_load,
+                launch_profile=self.launch_profile,
             )
         elif (
             self.program is not None
@@ -2236,6 +2241,7 @@ class MacosLaunchItemEventSpec(_EventSpecBase):
             or self.size_bytes is not None
             or self.version != 1
             or self.run_at_load
+            or self.launch_profile is not None
         ):
             raise ValueError("Only a write may supply new definition or file-version facts")
         if self.process_ref is not None and self.operation != "activate":

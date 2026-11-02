@@ -4,9 +4,9 @@ On November 2, 2026 the human supplied the fixed report from the private macOS 2
 arm64 launchd kit. It reports COMPLETE/NONE, v11 shapes, no eviction/limit and
 passing provenance, readiness, sequence, target authentication, exact root
 lineage, zero exit, job removal, scratch-file removal and collector cleanup.
-Only that shareable report was opened. A separately authorized offline reviewer
-subsequently verified the same retained graph and returned fixed environment
-comparisons. Raw records, observed identifiers, native values and provenance
+Only fixed classifications were exposed to the agent. Separately authorized offline
+reviewers verified the retained graph locally and returned fixed environment
+comparisons. Raw records, observed identifiers, private native values and provenance
 are not copied here or committed.
 
 ## Observed process and identity relationships
@@ -62,21 +62,36 @@ short nominal lifecycle. The experiment's private token is never a scenario
 default or catalog argument. Other invocations retain their separate admission
 and completion requirements.
 
-## Environment and remaining boundary
+## Environment and generation boundary
 
 The first approved offline review reports xpcproxy's sole environment entry as
-`XPC_FLAGS=0x0`. The target retains the four controlled assignments, receives
-`XPC_FLAGS=1` and XPC_SERVICE_NAME equal to the exact test label, and has an
-additional key outside that reviewer's public allowlist. Unknown key names and
-values remain hidden. They are not silently assumed absent or modeled from a
-guess. A further comparison requires its own permission under the local-log rule.
+`XPC_FLAGS=0x0`. The separately approved version-2 review classifies every target
+entry: the four controlled assignments, `XPC_FLAGS=1`, XPC_SERVICE_NAME equal to
+the exact test label, and `OSLogRateLimit=64`. No unknown key remains. Each review
+ran once, offline, without commands, probes, collectors, writes or live queries.
+Those permissions are consumed.
 
-The selected root job's full native activation producer is not yet admitted.
-Reviewing the bounded process relationships and qualifying one binary does not
-close service-binding/publication/recovery or remaining environment requirements.
-No further collection is currently requested. User LaunchAgents, privilege
-drops, other triggers/restart policies, arbitrary helpers and launchd Unified
-Log messages were not observed and remain outside this reference.
+Generation selects the bounded producer explicitly with write-stage
+`launch_profile: root_xpcproxy_v11`. The current execution policy admits only
+`/usr/bin/true`, root/system domain, explicit activation and RunAtLoad false.
+Its clean PATH/LANG/LC_ALL environment is frozen into the modeled file definition
+before publication; loaded state retains it independently of file replacement
+or removal. The private authentication nonce is not modeled. The producer adds
+the three observed public launchd assignments and uses the existing phase
+journal for fork/xpcproxy exec, setsid and target exec. The service authority
+binds that already published process and group, without replaying a birth.
+Explicit known exit and unload retain the existing lifecycle owners.
+
+The invented complete CLI workload has two job starts, two forks and four execs,
+plus explicit zero exits. Its provisioning caller is explicitly pre-existing
+before collection; its startup is outside this measured workload. This does not
+qualify an arbitrary provisioning executable starting inside collection. Legacy
+definitions without the preset retain partial aggregate activation and fail the
+complete contract when that start occurs in-window.
+
+User LaunchAgents, privilege drops, other images, triggers/restart policies,
+arbitrary helpers and launchd Unified Log messages were not observed and remain
+outside this reference. No further collection is needed for this bounded preset.
 
 The [private instructions](PRIVATE-RUN.md) retain experiment controls and primary
 Apple sources. No reread of the original capture is authorized by this document.

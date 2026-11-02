@@ -116,8 +116,15 @@ when no typed event owns the intended occurrence; raw rendered rows must not tri
 sibling evidence.
 
 ## `macos_launch_item`
-Fields: `type`, `operation`, `label`, `caller_ref`, `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `process_ref`, `exit_code`, `technique`, and `description`.
+Fields: `type`, `operation`, `label`, `caller_ref`, `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `launch_profile`, `process_ref`, `exit_code`, `technique`, and `description`.
 Experimental arm64 Mac root/system-domain persistence stages. Use `operation: write|bootstrap|activate|exit|unload|remove`, `label`, and `caller_ref` referencing an earlier root process on that host. File stages require `path` under `/Library/LaunchDaemons/` ending in `.plist`; write additionally requires `program`, `arguments`, and `size_bytes`. Optional write fields are increasing `version` (default 1) and retained `run_at_load` (default false). Only activate accepts `process_ref`; only exit accepts `exit_code` (0–255). Other stages use the retained loaded definition. Explicit unload is required by the bounded profile. See [Mac endpoint guidance](evidence-endpoint-macos.md) for collection boundaries and the distinction between file removal and job unload.
+
+Write-stage `launch_profile: root_xpcproxy_v11` selects the bounded native root/system
+preset: installed `/usr/bin/true`, argv[0] equal to its program, RunAtLoad false and explicit
+activation. The engine freezes its configured clean environment into the file/loaded definition;
+each activation emits a real launchd fork, xpcproxy exec and target exec with a separate setsid.
+Known exit results are explicit. Other images/triggers and definitions without the preset do
+not acquire this native coverage. See `scenarios/macos-persistence-example/native-system-job.yaml`.
 
 
 `process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image, a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.

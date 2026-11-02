@@ -68,6 +68,8 @@ def test_invalid_workflow_rejected_before_generation(change: str, message: str) 
         {"size_bytes": 0},
         {"process_ref": "not-an-activation"},
         {"exit_code": 0},
+        {"launch_profile": "root_xpcproxy_v11", "run_at_load": True},
+        {"launch_profile": "unknown-native-preset"},
     ],
 )
 def test_write_rejects_inapplicable_or_missing_facts(updates: dict) -> None:

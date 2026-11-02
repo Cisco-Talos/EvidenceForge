@@ -102,6 +102,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     terminal_id: str | None = None,
     complete_native_ssh: bool = False,
     ssh_pty: bool = False,
+    native_system_job: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -394,6 +395,16 @@ def test_short_generation_checkpoint_suspension_and_resume(
             }
             for index, time in enumerate(["+30m", "+1h30m"])
         ]
+    if native_system_job:
+        scenario_data = yaml.safe_load(
+            Path("scenarios/macos-persistence-example/native-system-job.yaml").read_text()
+        )
+        scenario_data["time_window"]["duration"] = "3h"
+        # Retain a running job and its post-fork process group at the checkpoint,
+        # then exit, reactivate the loaded definition and unload after recovery.
+        later = {"job-6": "+2h10m", "job-7": "+2h20m", "job-8": "+2h30m", "job-unload": "+2h40m"}
+        for entry in scenario_data["storyline"]:
+            entry["time"] = later.get(entry["id"], entry["time"])
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
     seed = "123" if macos else "42"
@@ -485,6 +496,22 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "The active continuation must retain its authored end owner"
             )
     retained_helpers: set[str] = set()
+    if native_system_job:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        jobs = [process for _key, process in processes if process.image == "/usr/bin/true"]
+        assert len(jobs) == 1 and jobs[0].execution_ordinal == 2, (
+            cursor,
+            [(process.image, process.end_time) for _key, process in processes],
+        )
+        assert jobs[0].job_control.pgid == jobs[0].job_control.session.sid == jobs[0].pid
+        assert "OSLogRateLimit=64" in jobs[0].environment
     if terminal_id is not None:
         from evidenceforge.generation.checkpoints.packed import loads
         from evidenceforge.generation.checkpoints.state_values import decode_state_value
@@ -757,7 +784,13 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
         assert len(reads) >= 2
     elif macos:
-        if not denied_launch and not failed_exec and not persistence and not native:
+        if (
+            not denied_launch
+            and not failed_exec
+            and not persistence
+            and not native
+            and not native_system_job
+        ):
             assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
     else:

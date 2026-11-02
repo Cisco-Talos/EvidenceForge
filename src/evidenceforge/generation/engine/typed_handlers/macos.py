@@ -51,6 +51,7 @@ def handle_launch_item(
             arguments=tuple(spec.arguments),
             principal="root",
             run_at_load=spec.run_at_load,
+            launch_profile=spec.launch_profile,
         )
     request = MacosPersistenceRequest(
         caller=caller,
@@ -80,6 +81,7 @@ def handle_launch_item(
         deployments=dispatcher.deployment_registry,
         content=RuntimeContentIdentityManager(dispatcher.local_artifact_registry),
         metadata_provider=generator.macos_execution_metadata,
+        native_startups=generator._macos_finder_startups,
     )
     completed = bundle.execute(request)
     process = completed.process
@@ -94,6 +96,8 @@ def handle_launch_item(
     if spec.path is not None:
         result["file_path"] = spec.path
     if process is not None:
+        if process.execution_ordinal == 2 and spec.operation == "activate":
+            result["native_process_model"] = "launchd_exec"
         result.update(
             pid=process.pid, process_name=process.image, command_line=process.command_line
         )

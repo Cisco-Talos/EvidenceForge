@@ -3012,6 +3012,10 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
             for value in (job.label, job.program, job.principal, *job.arguments)
         )
         or type(job.run_at_load) is not bool
+        or (
+            job.launch_profile is not None
+            and (type(job.launch_profile) is not str or job.launch_profile != "root_xpcproxy_v11")
+        )
     ):
         raise StateError("local artifact publication has malformed launchd fields")
     return _with_macos_file_metadata(
@@ -3024,6 +3028,12 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
                 job.arguments,
                 job.principal,
                 job.run_at_load,
+                *((job.launch_environment,) if job.launch_environment is not None else ()),
+                *(
+                    (("launch-profile-v1", job.launch_profile),)
+                    if job.launch_profile is not None
+                    else ()
+                ),
             ),
         ),
         record,
@@ -3079,6 +3089,8 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
             arguments=record.launchd_job.arguments,
             principal=record.launchd_job.principal,
             run_at_load=record.launchd_job.run_at_load,
+            launch_profile=record.launchd_job.launch_profile,
+            launch_environment=record.launchd_job.launch_environment,
         ),
         macos_file=None
         if record.macos_file is None

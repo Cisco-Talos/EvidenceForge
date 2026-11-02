@@ -90,6 +90,7 @@ scenarios/macos-workstation-example/*
 scenarios/macos-persistence-example/*
 !scenarios/macos-persistence-example/scenario.yaml
 !scenarios/macos-persistence-example/group-cleanup.yaml
+!scenarios/macos-persistence-example/native-system-job.yaml
 !scenarios/macos-persistence-example/README.md
 !scenarios/macos-failed-exec-example/
 scenarios/macos-failed-exec-example/*

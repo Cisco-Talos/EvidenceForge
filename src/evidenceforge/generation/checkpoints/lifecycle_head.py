@@ -1863,6 +1863,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
         states,
     ) = _decode_snapshot_rows(document)
     process_by_id = {item.identity.object_id: item.identity for item in processes}
+    process_views = {item.identity.object_id: item.current_view for item in processes}
     active_group_bindings: dict[str, list[ServiceProcessBindingIdentity]] = {}
     for _, binding in service_bindings:
         if binding.closed_at is None:
@@ -1880,10 +1881,25 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             (group.session.leader_object_id, group.session.sid, group.session.started_at),
         ):
             leader = process_by_id.get(object_id)
+            view = process_views.get(object_id)
+            native_group = (
+                service.identity.launchd_job is not None
+                and service.identity.launchd_job.launch_profile == "root_xpcproxy_v11"
+                and leader is not None
+                and view is not None
+                and group.leader_object_id == group.session.leader_object_id == object_id
+                and group.pgid == group.session.sid == pid
+                and group.started_at == group.session.started_at == started_at
+                and leader.started_at < started_at <= view.changed_at
+                and view.execution_ordinal == 2
+                and view.image == service.identity.launchd_job.program
+                and view.token.principal == "root"
+            )
             if leader is not None and (
                 leader.hostname != group.session.hostname
                 or leader.pid != pid
                 or leader.started_at != started_at
+                and not native_group
             ):
                 raise CheckpointCorruptionError("Service group disagrees with retained leader")
         if any(

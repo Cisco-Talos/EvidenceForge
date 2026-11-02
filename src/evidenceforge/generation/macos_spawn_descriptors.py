@@ -30,7 +30,7 @@ def plan_spawn_descriptors(
     at, host = process.execution_started_at, process.hostname
     if intent.kind in {"ssh_shell", "ssh_pty_shell"}:
         raise StateError("Mac SSH shell file actions require the authenticated State session")
-    if intent.kind == "ssh_launcher":
+    if intent.kind in {"ssh_launcher", "launchd_job_launcher"}:
         if (
             terminal != "absent"
             or process.image != "/usr/libexec/xpcproxy"
@@ -40,10 +40,12 @@ def plan_spawn_descriptors(
             or process.principal != "root"
             or process.credentials is None
             or not process.credentials.is_unattributed_root
-            or not process.logon_id
+            or (not process.logon_id if intent.kind == "ssh_launcher" else bool(process.logon_id))
             or process.job_control is None
         ):
-            raise StateError("Mac SSH launcher file actions require its boot-parent root exec")
+            raise StateError(
+                "Mac root launcher file actions require its qualified boot-parent exec"
+            )
         return MacosDescriptorTable(
             host,
             at,
@@ -51,7 +53,14 @@ def plan_spawn_descriptors(
                 MacosDescriptorBinding(
                     fd,
                     "file",
-                    stable_uuid("macos-ssh-launcher-vnode", host, process.object_id, fd),
+                    stable_uuid(
+                        "macos-ssh-launcher-vnode"
+                        if intent.kind == "ssh_launcher"
+                        else "macos-job-launcher-vnode",
+                        host,
+                        process.object_id,
+                        fd,
+                    ),
                     False,
                 )
                 for fd in range(3)

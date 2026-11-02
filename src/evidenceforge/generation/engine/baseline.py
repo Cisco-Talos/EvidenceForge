@@ -4262,8 +4262,9 @@ class BaselineMixin:
     ) -> None:
         """Generate one hour of baseline activity.
 
-        Used by both the warm-up loop and the real baseline loop. During warm-up,
-        storyline/red-herring execution and emitter flushing are skipped.
+        Used by both the warm-up loop and the real baseline loop. Explicitly
+        authored warm-up entries establish state before collection; output
+        admission still suppresses their pre-window evidence.
         """
         self.state_manager.set_current_time(current_hour)
 
@@ -5834,9 +5835,7 @@ class BaselineMixin:
                 )
 
                 BaselineMixin._profile_begin_hour(self, "warmup", current_hour)
-                self._generate_hour(
-                    current_hour, enabled_users, emit_storylines=False, flush_emitters=False
-                )
+                self._generate_hour(current_hour, enabled_users, flush_emitters=False)
                 next_hour = self._baseline_pass_end(current_hour)
                 with BaselineMixin._baseline_profile_span(self, "baseline.post_hour_cleanup"):
                     self.state_manager.sweep_closed_connections(next_hour)

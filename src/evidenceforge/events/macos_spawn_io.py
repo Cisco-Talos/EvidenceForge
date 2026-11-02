@@ -24,6 +24,7 @@ class MacosSpawnIO:
         "ssh_session",
         "ssh_auth",
         "ssh_launcher",
+        "launchd_job_launcher",
         "ssh_shell",
         "ssh_pty_shell",
     ]
@@ -39,6 +40,7 @@ class MacosSpawnIO:
             "ssh_session",
             "ssh_auth",
             "ssh_launcher",
+            "launchd_job_launcher",
             "ssh_shell",
             "ssh_pty_shell",
         }:
