@@ -10,6 +10,7 @@ only a nonce-authenticated browser's exact launch ancestry and descendants.
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
@@ -24,6 +25,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import ModuleType
@@ -61,6 +63,29 @@ type Role = Literal[
     "OTHER",
 ]
 type ImageKind = Literal["MAIN", "RENDERER", "GPU", "HELPER", "CRASHPAD", "XPCPROXY"]
+type CodeItem = ImageKind | Literal["APP_INFO", "NONE"]
+type CodeCheck = Literal[
+    "READ_INFO",
+    "VALIDATE_INFO",
+    "FILE_HASH",
+    "SIGNATURE_VERIFY",
+    "SIGNATURE_METADATA",
+    "ENTITLEMENTS_DECODE",
+    "METADATA_FIELDS",
+    "CODE_RECHECK",
+    "NONE",
+]
+type CodeFailure = Literal[
+    "MISSING_FILE",
+    "SYMLINK",
+    "PERMISSION",
+    "COMMAND_EXIT",
+    "COMMAND_TIMEOUT",
+    "POLICY_REJECTED",
+    "INVALID_METADATA",
+    "IO",
+    "NONE",
+]
 type Error = Literal[
     "NONE",
     "INPUT",
@@ -238,7 +263,7 @@ class Image(reference.Model):
 
 
 class Manifest(reference.Model):
-    kit_version: Literal[1] = 1
+    kit_version: Literal[2] = 2
     os_version: str = Field(max_length=128)
     os_build: str = Field(max_length=128)
     uid: int = Field(gt=0, lt=2**32)
@@ -380,7 +405,7 @@ class Phase(reference.Model):
 
 
 class Report(reference.Model):
-    kit_version: Literal[1] = 1
+    kit_version: Literal[2] = 2
     purpose: Literal["CHROME_MAIN_AND_HELPER_DIAGNOSTIC"] = "CHROME_MAIN_AND_HELPER_DIAGNOSTIC"
     collection: Literal["NONCE_PROFILE_AUTHENTICATED_PROCESS_GRAPH"] = (
         "NONCE_PROFILE_AUTHENTICATED_PROCESS_GRAPH"
@@ -405,6 +430,9 @@ class Report(reference.Model):
         "COMPLETE",
     ] = "INPUT"
     target_platform: Check = "INCONCLUSIVE"
+    installed_code_item: CodeItem = "NONE"
+    installed_code_check: CodeCheck = "NONE"
+    installed_code_failure: CodeFailure = "NONE"
     provenance: Check = "INCONCLUSIVE"
     catalog_release: Literal["EXACT_155_0_8059_80", "OTHER", "NOT_CHECKED"] = "NOT_CHECKED"
     collector_ready: Check = "INCONCLUSIVE"
@@ -440,6 +468,42 @@ class DiagnosticError(reference.PrivateError):
     def __init__(self, code: Error, step: str) -> None:
         super().__init__(code)
         self.step = step
+
+
+class InstalledCodeError(DiagnosticError):
+    """Fixed code/check/reason labels; never command text, stderr, paths or values."""
+
+    def __init__(self, code: Error, item: CodeItem, check: CodeCheck, reason: CodeFailure) -> None:
+        super().__init__(code, "INSTALLED_CODE")
+        self.item, self.check, self.reason = item, check, reason
+
+    def labels(self) -> dict[str, str]:
+        return {
+            "installed_code_item": self.item,
+            "installed_code_check": self.check,
+            "installed_code_failure": self.reason,
+        }
+
+
+def _checked[T](item: CodeItem, check: CodeCheck, operation: Callable[[], T]) -> T:
+    try:
+        return operation()
+    except reference.PrivateError as error:
+        raise InstalledCodeError(error.code, item, check, "POLICY_REJECTED") from error
+    except subprocess.TimeoutExpired as error:
+        raise InstalledCodeError("BUILD", item, check, "COMMAND_TIMEOUT") from error
+    except subprocess.CalledProcessError as error:
+        raise InstalledCodeError("BUILD", item, check, "COMMAND_EXIT") from error
+    except OSError as error:
+        reason = {
+            errno.ENOENT: "MISSING_FILE",
+            errno.ELOOP: "SYMLINK",
+            errno.EACCES: "PERMISSION",
+            errno.EPERM: "PERMISSION",
+        }.get(error.errno, "IO")
+        raise InstalledCodeError("BUILD", item, check, reason) from error
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        raise InstalledCodeError("BUILD", item, check, "INVALID_METADATA") from error
 
 
 def prepare(destination: Path | None = None) -> Path:
@@ -514,61 +578,106 @@ def _code_output(args: list[str]) -> subprocess.CompletedProcess[bytes]:
 
 
 def _installed(kind: ImageKind, path: Path) -> Image:
-    image = support._installed_image(path)
+    image = _checked(kind, "FILE_HASH", lambda: support._installed_image(path))
+    # Chromium signs app bundles as bundles, and standalone tools as executables.
+    target = _signing_target(kind, path)
     verification = ["/usr/bin/codesign", "--verify", "--strict"]
     if kind != "XPCPROXY":
         verification.extend(
             [
                 "-R",
-                'anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
+                '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
             ]
         )
     else:
-        verification.extend(["-R", 'anchor apple and identifier "com.apple.xpc.proxy"'])
-    _code_output([*verification, str(path)])
-    result = _code_output(
-        [
-            "/usr/bin/codesign",
-            "-d",
-            "--verbose=4",
-            "--entitlements",
-            ":-",
-            str(path),
-        ]
+        verification.extend(["-R", '=anchor apple and identifier "com.apple.xpc.proxy"'])
+    _checked(kind, "SIGNATURE_VERIFY", lambda: _code_output([*verification, str(target)]))
+    result = _checked(
+        kind,
+        "SIGNATURE_METADATA",
+        lambda: _code_output(
+            [
+                "/usr/bin/codesign",
+                "-d",
+                "--verbose=4",
+                "--entitlements",
+                "-",
+                "--xml",
+                str(target),
+            ]
+        ),
     )
-    metadata = {}
-    for line in result.stderr.decode("utf-8", errors="strict").splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key in {"Identifier", "TeamIdentifier"}:
-            metadata[key] = value
-    # codesign emits the entitlement plist on stdout; unsigned/empty has no plist.
-    entitlements = plistlib.loads(result.stdout) if result.stdout.strip() else {}
-    if type(entitlements) is not dict or image != support._installed_image(path):
-        raise reference.PrivateError("BUILD")
-    return Image(
-        kind=kind,
-        path=str(path),
-        image=image,
-        signing_id=metadata["Identifier"],
-        team_id=None
-        if metadata.get("TeamIdentifier") in (None, "not set")
-        else metadata["TeamIdentifier"],
-        entitlements=entitlements,
+    entitlements = _checked(
+        kind,
+        "ENTITLEMENTS_DECODE",
+        lambda: plistlib.loads(result.stdout) if result.stdout.strip() else {},
     )
+
+    def metadata_image() -> Image:
+        metadata: dict[str, str] = {}
+        for line in result.stderr.decode("utf-8", errors="strict").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key in {"Identifier", "TeamIdentifier", "Executable"}:
+                if key in metadata:
+                    raise ValueError("Duplicate code metadata")
+                metadata[key] = value
+        if metadata.get("Executable") != str(path):
+            raise ValueError("Code metadata does not bind the expected executable")
+        if type(entitlements) is not dict:
+            raise ValueError("Entitlements require an object")
+        return Image(
+            kind=kind,
+            path=str(path),
+            image=image,
+            signing_id=metadata["Identifier"],
+            team_id=None
+            if metadata.get("TeamIdentifier") in (None, "not set")
+            else metadata["TeamIdentifier"],
+            entitlements=entitlements,
+        )
+
+    value = _checked(kind, "METADATA_FIELDS", metadata_image)
+
+    def unchanged() -> None:
+        if image != support._installed_image(path):
+            raise ValueError("Installed code changed")
+
+    _checked(kind, "CODE_RECHECK", unchanged)
+    return value
+
+
+def _signing_target(kind: ImageKind, path: Path) -> Path:
+    if kind in {"CRASHPAD", "XPCPROXY"}:
+        return path
+    if (
+        path.parent.name != "MacOS"
+        or path.parent.parent.name != "Contents"
+        or path.parents[2].suffix != ".app"
+    ):
+        raise InstalledCodeError("BUILD", kind, "METADATA_FIELDS", "INVALID_METADATA")
+    return path.parents[2]
 
 
 def installed_images() -> tuple[str, tuple[Image, ...]]:
     """HUMAN ONLY: read fixed installed Chrome code paths; enumerate no profiles."""
     if not APP.is_dir():
         raise reference.PrivateError("APP_MISSING")
-    info = plistlib.loads(_public_file(APP / "Contents/Info.plist"))
-    version = info.get("CFBundleShortVersionString")
-    if (
-        info.get("CFBundleIdentifier") != "com.google.Chrome"
-        or type(version) is not str
-        or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version) is None
-    ):
-        raise reference.PrivateError("BUILD")
+    raw = _checked("APP_INFO", "READ_INFO", lambda: _public_file(APP / "Contents/Info.plist"))
+
+    def info_version() -> str:
+        info = plistlib.loads(raw)
+        if type(info) is not dict:
+            raise ValueError("Installed app metadata requires an object")
+        version = info.get("CFBundleShortVersionString")
+        if (
+            info.get("CFBundleIdentifier") != "com.google.Chrome"
+            or type(version) is not str
+            or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version) is None
+        ):
+            raise ValueError("Unsupported installed code metadata")
+        return version
+
+    version = _checked("APP_INFO", "VALIDATE_INFO", info_version)
     base = APP / "Contents/Frameworks/Google Chrome Framework.framework/Versions" / version
     images = [_installed("MAIN", APP / "Contents/MacOS/Google Chrome")]
     for kind, name in (
@@ -593,6 +702,8 @@ def setup() -> Report:
     reference._write(root / "SETUP-LOCK", b"SETUP\n")
     try:
         chrome_version, images = installed_images()
+    except InstalledCodeError:
+        raise
     except (OSError, KeyError, ValueError, subprocess.SubprocessError) as error:
         raise DiagnosticError(
             error.code if isinstance(error, reference.PrivateError) else "BUILD", "INSTALLED_CODE"
@@ -1527,9 +1638,15 @@ def capture() -> Report:
     try:
         # Installed-code verification runs after all live collection/server cleanup.
         _manifest(root, installed=True)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         report = report.model_copy(
-            update={"error": "BUILD", "stage": "ERROR", "step": "VERIFY", "provenance": "FAIL"}
+            update={
+                "error": "BUILD",
+                "stage": "ERROR",
+                "step": "VERIFY",
+                "provenance": "FAIL",
+                **(error.labels() if isinstance(error, InstalledCodeError) else {}),
+            }
         )
     if tracker is not None:
         raws = sorted(tracker.records, key=lambda raw: reference._decode(raw)["global_seq_num"])
@@ -1670,7 +1787,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except reference.PrivateError as error:
         report = Report(
-            error=error.code, step=error.step if isinstance(error, DiagnosticError) else "INPUT"
+            error=error.code,
+            step=error.step if isinstance(error, DiagnosticError) else "INPUT",
+            **(error.labels() if isinstance(error, InstalledCodeError) else {}),
         )
     except KeyboardInterrupt:
         report = Report(error="INTERRUPTED")

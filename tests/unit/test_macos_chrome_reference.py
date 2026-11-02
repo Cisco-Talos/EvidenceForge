@@ -3,6 +3,7 @@
 
 """Invented records only; no native commands, installed apps, servers or captures."""
 
+import errno
 import io
 import json
 from copy import deepcopy
@@ -37,9 +38,21 @@ def _manifest() -> kit.Manifest:
     for index, (kind, path, identifier) in enumerate(
         (
             ("MAIN", str(kit.APP / "Contents/MacOS/Google Chrome"), "com.google.Chrome"),
-            ("RENDERER", f"/Applications/{CANARY}/Renderer", "com.google.Chrome.helper.renderer"),
-            ("GPU", f"/Applications/{CANARY}/GPU", "com.google.Chrome.helper.GPU"),
-            ("HELPER", f"/Applications/{CANARY}/Helper", "com.google.Chrome.helper"),
+            (
+                "RENDERER",
+                f"/Applications/{CANARY}/Renderer.app/Contents/MacOS/Renderer",
+                "com.google.Chrome.helper.renderer",
+            ),
+            (
+                "GPU",
+                f"/Applications/{CANARY}/GPU.app/Contents/MacOS/GPU",
+                "com.google.Chrome.helper.GPU",
+            ),
+            (
+                "HELPER",
+                f"/Applications/{CANARY}/Helper.app/Contents/MacOS/Helper",
+                "com.google.Chrome.helper",
+            ),
             ("CRASHPAD", f"/Applications/{CANARY}/crashpad", "com.google.Chrome.crashpad_handler"),
             ("XPCPROXY", "/usr/libexec/xpcproxy", "com.apple.xpc.proxy"),
         )
@@ -668,15 +681,17 @@ def test_vendor_metadata_query_verifies_code_without_opening_profiles(
         commands.append(args)
         return SimpleNamespace(
             stdout=plistlib.dumps(expected.entitlements) if "-d" in args else b"",
-            stderr=f"Identifier={expected.signing_id}\nTeamIdentifier={expected.team_id}\n".encode(),
+            stderr=f"Executable={expected.path}\nIdentifier={expected.signing_id}\nTeamIdentifier={expected.team_id}\n".encode(),
         )
 
     monkeypatch.setattr(kit, "_code_output", output)
     actual = kit._installed(expected.kind, Path(expected.path))
     assert actual == expected
     assert commands[0][0:3] == ["/usr/bin/codesign", "--verify", "--strict"]
-    assert "anchor apple generic" in commands[0][-2]
-    assert all(command[-1] == expected.path for command in commands)
+    assert commands[0][4].startswith("=anchor apple generic")
+    assert commands[1][commands[1].index("--entitlements") + 1] == "-"
+    assert "--xml" in commands[1]
+    assert all(command[-1] == str(Path(expected.path).parents[2]) for command in commands)
 
 
 def test_report_size_limit_is_an_explicit_refusal_not_a_successful_partial_graph(
@@ -687,3 +702,111 @@ def test_report_size_limit_is_an_explicit_refusal_not_a_successful_partial_graph
     bounded, raw = kit._bounded_report(report)
     assert bounded.error == "LIMIT" and bounded.stage == "ERROR" and bounded.phases == ()
     assert CANARY.encode() not in raw
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        ("missing", "MISSING_FILE"),
+        ("symlink", "SYMLINK"),
+        ("permission", "PERMISSION"),
+        ("exit", "COMMAND_EXIT"),
+        ("timeout", "COMMAND_TIMEOUT"),
+        ("metadata", "INVALID_METADATA"),
+        ("policy", "POLICY_REJECTED"),
+    ],
+)
+def test_installed_code_failures_export_only_closed_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+    expected: str,
+) -> None:
+    def fail() -> None:
+        if failure in {"missing", "symlink", "permission"}:
+            raise OSError(
+                {"missing": errno.ENOENT, "symlink": errno.ELOOP, "permission": errno.EACCES}[
+                    failure
+                ],
+                CANARY,
+                CANARY,
+            )
+        if failure == "exit":
+            raise kit.subprocess.CalledProcessError(
+                1, [CANARY], output=CANARY.encode(), stderr=CANARY.encode()
+            )
+        if failure == "timeout":
+            raise kit.subprocess.TimeoutExpired(
+                [CANARY], 15, output=CANARY.encode(), stderr=CANARY.encode()
+            )
+        if failure == "policy":
+            raise kit.reference.PrivateError("BUILD")
+        raise ValueError(CANARY)
+
+    def setup() -> None:
+        kit._checked("MAIN", "SIGNATURE_VERIFY", fail)
+
+    monkeypatch.setattr(kit, "setup", setup)
+    assert kit.main(["setup", "--private-run"]) == 2
+    raw = capsys.readouterr().out
+    report = json.loads(raw)
+    assert report["error"] == "BUILD" and report["step"] == "INSTALLED_CODE"
+    assert report["installed_code_item"] == "MAIN"
+    assert report["installed_code_check"] == "SIGNATURE_VERIFY"
+    assert report["installed_code_failure"] == expected
+    assert report["kit_version"] == 2
+    assert CANARY not in raw
+
+
+@pytest.mark.parametrize("kind", ["MAIN", "RENDERER", "GPU", "HELPER", "CRASHPAD", "XPCPROXY"])
+def test_signing_target_uses_bundles_for_apps_and_files_for_standalone_tools(
+    kind: kit.ImageKind,
+) -> None:
+    image = next(image for image in _manifest().images if image.kind == kind)
+    path = Path(image.path)
+    expected = path if kind in {"CRASHPAD", "XPCPROXY"} else path.parents[2]
+    assert kit._signing_target(kind, path) == expected
+
+
+def test_requirement_failure_stops_before_entitlement_queries_or_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = _manifest().images[0]
+    monkeypatch.setattr(kit.support, "_installed_image", lambda _path: image.image)
+    commands: list[list[str]] = []
+
+    def output(args: list[str]) -> None:
+        commands.append(args)
+        requirement = args[args.index("-R") + 1]
+        assert (
+            requirement == '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"'
+        )
+        raise kit.subprocess.CalledProcessError(1, args, stderr=CANARY.encode())
+
+    monkeypatch.setattr(kit, "_code_output", output)
+    with pytest.raises(kit.InstalledCodeError) as exc:
+        kit._installed("MAIN", Path(image.path))
+    assert exc.value.labels() == {
+        "installed_code_item": "MAIN",
+        "installed_code_check": "SIGNATURE_VERIFY",
+        "installed_code_failure": "COMMAND_EXIT",
+    }
+    assert len(commands) == 1 and CANARY not in str(exc.value)
+
+
+def test_bundle_signature_metadata_must_bind_the_hashed_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = _manifest().images[0]
+    monkeypatch.setattr(kit.support, "_installed_image", lambda _path: image.image)
+    monkeypatch.setattr(
+        kit,
+        "_code_output",
+        lambda _args: SimpleNamespace(
+            stdout=b"",
+            stderr=f"Executable=/{CANARY}/different\nIdentifier={image.signing_id}\n".encode(),
+        ),
+    )
+    with pytest.raises(kit.InstalledCodeError) as exc:
+        kit._installed("MAIN", Path(image.path))
+    assert exc.value.check == "METADATA_FIELDS" and exc.value.reason == "INVALID_METADATA"

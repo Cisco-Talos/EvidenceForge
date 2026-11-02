@@ -2239,3 +2239,37 @@ and its digest remain unchanged. Prepared fresh code-only handoff:
 must not be opened, listed or queried by an agent without separate permission.
 The next authorized agent action is to read the human-selected fixed shareable
 report, not to inspect native records or silently start this experiment.
+
+## November 2: repair Chrome kit installed-code setup
+
+The human reported `error: BUILD`, then clarified `Setup — INSTALLED_CODE`.
+No private kit, local log or installed Chrome metadata was opened to diagnose it.
+Source review found a concrete command-construction defect: the separate `-R`
+argument lacked the leading `=` that codesign requires for inline text and was
+therefore treated as a requirement filename. Apple's TN3127 documents the correct
+form. The entitlement display also lacked an explicit XML request; TN3125 says
+the default display is human-readable DER. The fresh v2 kit uses `-R '=…'` and
+`--entitlements - --xml`. Signature checks remain strict and retain the same
+Google/Apple constraints; no admission check is bypassed.
+
+Chromium's public signing/parts.py identifies app bundles as signing subjects
+and crashpad as a standalone executable. App checks now target the containing
+bundle; the metadata's Executable field must bind the exact separately hashed
+leaf. No app is modified or re-signed. Installed-code failures carry closed
+item/check/reason enums, so another failure can be diagnosed without native
+stderr, paths, exception text or identity values. Setup remains before any
+collector, browser, server or readiness-probe execution.
+
+The only native command executed by the agent was Apple's `csreq` parser with
+two literal public requirement strings. Both parsed successfully; this read no
+installed app, profile, private kit or log, and launched no test app or collector.
+Regression fixtures model command exits/timeouts, missing/symlink/permission
+errors, malformed metadata, invalid executable binding, bundle-vs-tool targets,
+XML arguments and inline-requirement syntax. Unknown error content is canaried
+and absent from every fixed JSON failure. The old handed-off kit is left intact.
+
+All 374 selected kit regressions pass (65 Chrome-specific). Whole Ruff/format,
+diff and behavior-manifest checks pass; generation revision 373 is unchanged.
+Fresh code-only version-2 handoff: `/private/tmp/eforge-chrome-kit-isc7tieu`.
+Do not inspect it after handoff without separate permission. Human should run
+setup there first and stop on failure; no capture is needed to verify this fix.
