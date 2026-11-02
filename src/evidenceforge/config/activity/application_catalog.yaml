@@ -3205,6 +3205,18 @@ applications:
   # Host-build identities and Mach-O UUIDs are modeled, not captured binaries.
   # Signing and absent entitlements below are explicit synthetic binary facts.
   # They do not assert the entitlement inventory of every installed Apple build.
+  - id: macos-true
+    display_name: macOS true
+    platforms:
+      macos:
+        image_path: /usr/bin/true
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.true, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/true]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
   - id: macos-id
     display_name: macOS id
     platforms:

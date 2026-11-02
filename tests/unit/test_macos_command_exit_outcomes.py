@@ -33,15 +33,18 @@ from tests.support.macos_ssh import macos_ssh_scenario
 
 @contextmanager
 def _engine(
-    tmp_path: Path, scenarios_dir: Path, *, native: bool = True
+    tmp_path: Path, scenarios_dir: Path, *, native: bool = True, complete: bool = False
 ) -> Iterator[tuple[GenerationEngine, System, User, ActiveSession]]:
     scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True)
+    scenario.macos_process_coverage = "complete" if complete else "partial"
     scenario.output.logs = [{"format": "ecar"}] + (
         [{"format": "macos_endpoint_security"}] if native else []
     )
     with generation_seed_scope(336):
         reset_thread_rng()
         engine = GenerationEngine(scenario, tmp_path)
+        if complete:
+            engine._chronological_es_delivery = True
         try:
             engine._initialize()
             user = scenario.environment.users[0]
@@ -94,6 +97,63 @@ def _native_exits(tmp_path: Path, pid: int) -> list:
         if (record := decode_endpoint_security_record(line)).event_type == 15
         and record.process.audit_token.pid == pid
     ]
+
+
+@pytest.mark.parametrize("native", [False, True], ids=["ecar-only", "native-es"])
+def test_reviewed_true_command_has_one_real_fork_exec_and_known_zero_exit(
+    tmp_path: Path, scenarios_dir: Path, native: bool
+) -> None:
+    with _engine(tmp_path, scenarios_dir, native=native, complete=native) as fixture:
+        engine, target, _user, _session = fixture
+        process, at = _launch(fixture, "/usr/bin/true")
+        assert process.principal != "root"  # Catalog binary is also usable from a user shell.
+        binary = engine.dispatcher.resolve_process_binary_identity(
+            target.hostname, process.principal, process.image, "macos"
+        )
+        assert binary.code_signature.signing_id == "com.apple.true"
+        assert process.executable_version.content_id == binary.content_id
+        assert process.image_security.codesigning_flags == 0x26011B11
+        engine.activity_generator.finalize_foreground_process_lifetimes(at + timedelta(seconds=1))
+        assert not engine.state_manager.is_process_active_at(
+            target.hostname, process.pid, at + timedelta(seconds=1)
+        )
+        if native:
+            engine._finalize_macos_process_coverage()
+            census = next(
+                host.process_census
+                for host in engine.dispatcher.macos_es_ingress.coverage.hosts
+                if host.hostname == target.hostname
+            )
+            assert census.complete and census.aggregate_births == 0
+            assert census.expected_forks == census.published_forks == 7
+            assert census.expected_execs == census.published_execs == 7
+    records = [
+        decode_endpoint_security_record(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    if native:
+        forks = [
+            row
+            for row in records
+            if row.event_type == 11 and row.event.fork.child.audit_token.pid == process.pid
+        ]
+        execs = [
+            row
+            for row in records
+            if row.event_type == 9 and row.event.exec.target.audit_token.pid == process.pid
+        ]
+        exits = [
+            row
+            for row in records
+            if row.event_type == 15 and row.process.audit_token.pid == process.pid
+        ]
+        assert len(forks) == len(execs) == len(exits) == 1
+        assert execs[0].event.exec.target.executable.path == "/usr/bin/true"
+        assert execs[0].event.exec.target.codesigning_flags == 0x26011B11
+        assert execs[0].event.exec.entitlements is None and exits[0].event.exit.stat == 0
+    else:
+        assert not records
 
 
 @pytest.mark.parametrize("native", [False, True])

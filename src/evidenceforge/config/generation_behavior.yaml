@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 370
+current_revision: 371
 history_start_revision: 1
-behavior_surface_sha256: 4691d8a7c94f40bd9f01bdb34c5c6d2cab208c8ee6c8cc9ee8d0f7365fb3d0ef
+behavior_surface_sha256: 1f131085b35be3b6fc506ae24fb44b64df24315dd5a2382acfd3386103b6a2f5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3560,3 +3560,13 @@ changes:
       - zsh_history
       - zeek
     summary: Adds explicit qualified Mac SSH PTY intent, shared receiver terminal allocation and retained fork/setpgid/exec for literal foreground commands; preserves non-PTY profiles and unknown teardown results.
+  - revision: 371
+    id: reviewed-macos-true-command-image
+    impact: localized
+    domains:
+      - macos-installed-command-catalog
+      - macos-process-lifecycle
+    formats:
+      - macos_endpoint_security
+      - ecar
+    summary: Adds the reviewed Apple true image, ARM64E runtime security and a bounded bare-command lifecycle with explicit zero completion; system launchd activation remains separately gated.

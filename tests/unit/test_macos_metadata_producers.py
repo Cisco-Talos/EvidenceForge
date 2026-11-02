@@ -132,6 +132,7 @@ def _terminal(
         ("/bin/zsh", 0x26010B01, -2147483646),
         ("/usr/libexec/xpcproxy", 0x26015B11, -2147483646),
         ("/usr/bin/id", 0x24000001, 0),
+        ("/usr/bin/true", 0x26011B11, -2147483646),
     ],
 )
 def test_reviewed_terminal_runtime_metadata_is_scoped_to_exact_apple_artifacts(

@@ -64,6 +64,8 @@ nested_command_shells:
   - image: /bin/bash
     arguments: ["/bin/bash"]
 command_completions:
+  - arguments: ["/usr/bin/true"]
+    exit_code: 0
   - arguments: ["/usr/bin/id"]
     exit_code: 0
   - arguments: ["/usr/bin/sw_vers"]
@@ -140,6 +142,14 @@ code_validation:
     is_platform_binary: true
     validation_category: 1
     cpu_subtype: -2147483646 # ARM64E | PTRAUTH_ABI, distinct from generic app arm64
+  # Reviewed bounded system-job target. Its null entitlements do not carry
+  # xpcproxy's ENTITLEMENTS_VALIDATED bit. Installed content IDs stay synthetic.
+  - product_id: apple-macos
+    artifact_names: ["true"]
+    codesigning_flags: 0x26011b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
   # Human-reviewed macOS 27 non-PTY loopback client and receiver exec snapshots.
   # This qualifies runtime security/slice, not the unresolved receiver graph/FDs.
   - product_id: apple-macos

@@ -223,7 +223,11 @@ def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation(
         assert platform.image_path == entry["image_path"]
         assert tuple(platform.deployment.architectures) == ("arm64",)
         assert platform.deployment.release_policy == "host_build"
-        assert shlex.split(platform.command_templates[0])[0] == platform.image_path
+        argv = shlex.split(platform.command_templates[0])
+        if entry["id"] == "macos-sshd-keygen-wrapper":
+            assert argv == ["sshd-keygen-wrapper"]
+        else:
+            assert argv[0] == platform.image_path
         release = _release_for_application_artifact(
             app, "macos", platform, platform.image_path, None, "arm64", "26.0"
         )

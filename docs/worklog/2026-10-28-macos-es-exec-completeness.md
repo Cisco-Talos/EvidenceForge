@@ -1954,3 +1954,75 @@ The human closes agents, runs setup then automatic one-window capture once, and
 shares only SHAREABLE-LAUNCHD-REPORT.json. Future native reads need separate
 explicit permission. The next implementation step depends on that fixed report;
 system launchd activation remains gated meanwhile.
+
+## November 2: review launchd facts and qualify its installed true command
+
+The human supplied only SHAREABLE-LAUNCHD-REPORT.json from the handed-off
+`/private/tmp/eforge-launchd-kit-4g2591rk` kit. That exact fixed report was read.
+It establishes COMPLETE/NONE, all collection/authentication/lineage/cleanup controls
+PASS, no eviction/limit and v11 shapes. One launchd fork preserves the boot image;
+the child execs xpcproxy, acquires its own group/session and execs true in the same
+lifetime, then exits zero. Root credentials, the boot parent's assigned nonzero
+unattributed audit origin and self responsibility persist. Native PID version
+increments at each exec. Both execs have three vnode standards, no controlling
+terminal, root cwd, no script and matching dyld paths. The nonzero ASID agrees
+with the existing assigned boot-origin producer; no new identity allocation is
+needed. es_client FAIL and audit_session_zero FAIL are false comparison predicates,
+not collection failures. The bounded facts and remaining limits are recorded in
+[REFERENCE.md](../design/macos-workstation-feasibility/launchd-reference/REFERENCE.md).
+
+The human separately authorized the new version-1 offline reviewer. It ran once
+against that capture, reading only bounded records/provenance/saved report and
+controlled code/guard metadata; it wrote nothing and started no native commands,
+jobs, probes, collectors or live queries. It verified original controls, exact
+selected graph and fixed report agreement. Xpcproxy has only XPC_FLAGS=0x0; true
+retains the four controls and has decimal XPC_FLAGS=1 and the exact test service
+label. At least one extra target key remains outside the allowlist and stays
+hidden. This permission is consumed; no further original-kit read is authorized.
+
+The version-2 checker adds only the public OSLogRateLimit candidate and the literal
+64, returning fixed labels. The name's presence was independently checked through
+a fixed Boolean search of the installed public launchd executable, not a process,
+environment, private kit or log read. The tested code-only reviewer is prepared at
+`/private/tmp/eforge-launchd-kit-7jtlfrbd/private_launchd_review.py`. Separate
+permission for that added comparison is pending. Do not open either handed-off
+kit, or run that review, without the new reply. No further collection is needed.
+
+Independent implementation adds `/usr/bin/true` to the engine-owned installed Mac
+catalog with no persona/default activation, reviewed com.apple.true/null-team/
+absent-entitlement facts, ARM64E pointer-auth slice and 0x26011b11 runtime flags.
+The validation bit absent from this image is not borrowed from xpcproxy. Binary
+hashes/UUIDs/file metadata stay synthetic and deployment-owned. Only the bare
+command receives a nominal short timing profile and explicit zero completion;
+arbitrary argv or other commands do not acquire a success default. YAML's true
+artifact name is explicitly quoted. Generation behavior revision 371 is localized
+to this command/catalog expansion, not system-job activation admission.
+
+Measurable acceptance: the native complete-collection workload including receiver
+startup plus the true command reconciles seven real forks/seven execs with zero
+aggregate births. The new command contributes exactly one fork, one exec and one
+known zero exit with correct flags/null entitlements. The eCAR-only explicit
+partial variant also succeeds. Both checks pass in 3.27 seconds. All 230 selected
+runtime/catalog/manifest/reference checks initially had 229 passes and one stale
+SSH catalog assertion: it expected an absolute wrapper argv despite revision
+369's reviewed basename. That assertion now tests the exact wrapper basename
+while retaining absolute paths for the other receiver roles. The additional
+offline tests pass all 34 cases, using invented data and forbidding commands,
+installed-image inspection and live queries. They cover code/guard/codec/report/
+provenance/nonce/graph tampering, symlinks, immutable files, parser redaction and
+closed public candidates. The final combined catalog/private-reference regression
+passes all 1,196 checks in 5.02 seconds, including the corrected catalog assertion.
+Whole Ruff/format checks pass. Revision-371 surface:
+`1f131085b35be3b6fc506ae24fb44b64df24315dd5a2382acfd3386103b6a2f5`.
+
+Full launchd activation remains unqualified. After the environment check, its
+canonical startup must replace the aggregate with the measured root fork,
+xpcproxy exec, setsid and target exec, preserving exact service binding, retained
+publication recovery and checkpoint ownership. The current persistence bundle is
+created per typed stage and its process/service composite accepts a staged birth,
+so simply inserting native rows or execs around that aggregate is insufficient.
+Use the existing canonical phase journal and service authority, retain the loaded
+definition after plist removal, and cover complete/filtered/checkpoint/fault
+workloads. Unsupported user domains, triggers, privilege drops and arbitrary
+helper graphs retain their gates. No native record, raw report or private
+provenance is committed, and no new collection ran during this work.
