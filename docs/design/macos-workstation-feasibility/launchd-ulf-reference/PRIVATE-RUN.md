@@ -85,3 +85,16 @@ repository helper supports `cleanup --kit-root KIT --private-run`. This validate
 the original kit's control hashes and runs its original exact-label cleanup guard,
 without changing the kit or reading records. `--kit-root` is forbidden for setup,
 capture and report. Do not replace files or rerun setup in the used kit.
+
+If cleanup reports `sudo_credentials: PASS` and `job_control: LOCATION_FAIL`, the
+root guard ran but could not validate the exact directory or recovery lease. This
+can also mean the directory is already absent; it does not prove leftovers exist.
+Use the current repository helper's `check-cleanup --kit-root KIT --private-run`
+only when requested. Run Python as your normal user after `sudo -v`. This groups
+directory ownership/mode, lease type/linkage/content and exact system-service
+existence comparisons. It compiles a temporary inspection helper outside the used
+kit, reads no native logs, starts no collector or job and removes no test resources.
+Service details are discarded and unknown error text stays hidden. Only simultaneous
+directory absence and an exact-label missing-service diagnostic yield
+`cleanup_state: ABSENCE_VERIFIED`; other results retain their explicit uncertainty.
+Do not rerun setup/capture or replace used-kit files to work around a rejected lease.

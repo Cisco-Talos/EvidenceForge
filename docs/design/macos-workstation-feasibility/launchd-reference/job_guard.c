@@ -87,9 +87,61 @@ static void label(const char *value) {
     (void)fflush(stdout);
 }
 
+/* Read only the exact control directory and lease; never enumerate other files. */
+static int inspect(const char *directory, const char *plist, int plen) {
+    int dir = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dir < 0) {
+        label(errno == ENOENT ? "DIRECTORY_ABSENT" :
+            (errno == EACCES || errno == EPERM) ? "DIRECTORY_ACCESS_DENIED" :
+            (errno == ELOOP || errno == ENOTDIR) ? "DIRECTORY_UNSAFE_PATH" :
+            "DIRECTORY_OPEN_FAIL");
+        return 0;
+    }
+    struct stat info;
+    if (fstat(dir, &info)) { close(dir); label("DIRECTORY_STAT_FAIL"); return 0; }
+    int owner = info.st_uid == 0;
+    int mode = (info.st_mode & 0777) == 0700;
+    int kind = S_ISDIR(info.st_mode);
+    label("DIRECTORY_PRESENT");
+    label(owner ? "DIRECTORY_OWNER_MATCH" : "DIRECTORY_OWNER_MISMATCH");
+    label(mode ? "DIRECTORY_MODE_MATCH" : "DIRECTORY_MODE_MISMATCH");
+    label(kind ? "DIRECTORY_KIND_MATCH" : "DIRECTORY_KIND_MISMATCH");
+    if (!owner || !mode || !kind) { close(dir); return 0; }
+    int file = openat(dir, "job.plist", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    int failure = errno;
+    close(dir);
+    if (file < 0) {
+        label(failure == ENOENT ? "LEASE_ABSENT" :
+            (failure == EACCES || failure == EPERM) ? "LEASE_ACCESS_DENIED" :
+            (failure == ELOOP || failure == ENOTDIR) ? "LEASE_UNSAFE_PATH" : "LEASE_OPEN_FAIL");
+        return 0;
+    }
+    if (fstat(file, &info)) { close(file); label("LEASE_STAT_FAIL"); return 0; }
+    owner = info.st_uid == 0;
+    mode = (info.st_mode & 0777) == 0600;
+    kind = S_ISREG(info.st_mode);
+    int links = info.st_nlink == 1;
+    int size = info.st_size == plen;
+    label("LEASE_PRESENT");
+    label(owner ? "LEASE_OWNER_MATCH" : "LEASE_OWNER_MISMATCH");
+    label(mode ? "LEASE_MODE_MATCH" : "LEASE_MODE_MISMATCH");
+    label(kind ? "LEASE_KIND_MATCH" : "LEASE_KIND_MISMATCH");
+    label(links ? "LEASE_LINKS_MATCH" : "LEASE_LINKS_MISMATCH");
+    label(size ? "LEASE_SIZE_MATCH" : "LEASE_SIZE_MISMATCH");
+    if (owner && mode && kind && links && size) {
+        char bytes[4096];
+        ssize_t count = read(file, bytes, sizeof(bytes));
+        label(count == plen && !memcmp(bytes, plist, (size_t)plen) ?
+            "LEASE_CONTENT_MATCH" : "LEASE_CONTENT_MISMATCH");
+    }
+    close(file);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 3 || geteuid() != 0 ||
-        (strcmp(argv[1], "run") && strcmp(argv[1], "cleanup")) || strlen(argv[2]) != 32)
+        (strcmp(argv[1], "run") && strcmp(argv[1], "cleanup") && strcmp(argv[1], "inspect")) ||
+        strlen(argv[2]) != 32)
         return 2;
     for (int i = 0; i < 32; ++i)
         if (!((argv[2][i] >= '0' && argv[2][i] <= '9') ||
@@ -133,6 +185,7 @@ int main(int argc, char **argv) {
         "</dict></dict></plist>\n", argv[2], argv[2], argv[2]);
     if (dlen < 0 || (size_t)dlen >= sizeof(directory) || slen < 0 ||
         (size_t)slen >= sizeof(service) || plen < 0 || (size_t)plen >= sizeof(plist)) return 2;
+    if (!strcmp(argv[1], "inspect")) return inspect(directory, plist, plen);
     int recovery = !strcmp(argv[1], "cleanup");
     if (!recovery && mkdir(directory, 0700)) { label("LOCATION_FAIL"); return 2; }
     int dir = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);

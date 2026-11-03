@@ -3080,3 +3080,40 @@ and cached sudo, then returns the exact guard failure classification. Its fixed
 report is pending. No further collection is requested; keep the kit and do not
 rerun setup/capture. The delivery gate stays open and the system cleanup status
 must not be called successful until verified.
+
+## 2026-11-03 — LOCATION_FAIL cleanup narrowed without native-log access
+
+The user supplied the version-3 cleanup JSON: cached sudo PASS, original guard
+LOCATION_FAIL, removal/files FAIL. Original control hashes passed before invocation.
+Code inspection shows that this label rejects the exact root control directory or
+recovery lease before removal. It includes missing-directory/lease cases and does
+not itself prove resources remain. No agent inspected that directory, queried the
+system job or read any native logs.
+
+One grouped read-only check is implemented, instead of requesting individual mode,
+owner or file values. It validates the original kit controls, compiles public C
+code in a fresh temporary directory, and invokes only its new inspect mode. That
+mode opens the exact nonce-owned directory and job.plist read-only, follows no leaf
+symlinks, rejects unsafe owner/mode/type/linkage, and compares safe bytes only to the
+existing generated public lease template. The original run/cleanup semantics and
+used kit's binary/source/config are unchanged. The check also queries only the
+exact generated system-service label, discarding stdout and classifying stderr
+locally. Unknown error text, IDs, paths and service details are never returned.
+Nonzero query exit is not absence: only the exact missing-service diagnostic qualifies.
+ABSENCE_VERIFIED requires both directory absence and proven exact-service absence;
+a matching owned lease remains distinct from cleanup success.
+
+All 69 focused tests pass, including 38 new grouped-check tests and the 31 existing
+kit tests. A compiled unprivileged harness exercises the C inspection function on
+invented temporary files only, with synthetic root metadata; it never invokes the
+real guard CLI, sudo, launchctl, a job or a collector. Missing/symlink/permission/
+linkage/size/content cases and no-file-change assertions pass. Python tests mock all
+native commands, suppress private canaries, reject incomplete/contradictory labels,
+require exact service/domain absence and preserve original-kit records untouched.
+C syntax checks also pass. The real grouped check has NOT been run by an agent.
+
+The user has been given `check-cleanup --kit-root` for the same original
+`/private/tmp/eforge-ulf-launchd-kit-cpmhqa3_`; its fixed JSON is pending. No additional
+collection is requested and launchd ULF remains gated. Production generation remains
+revision 377; passing recovery/evaluations are unchanged and are not repeated for
+this diagnostic-only work. Only the test kit's control state needs human input now.

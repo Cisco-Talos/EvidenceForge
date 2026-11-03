@@ -24,7 +24,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -123,6 +123,50 @@ class Report(Model):
         "NOT_OBSERVED"
     )
     messages: MessageCounts = Field(default_factory=MessageCounts)
+
+
+class CleanupState(Model):
+    """Closed diagnostics for the exact test lease and service, never their values."""
+
+    check_version: Literal[1] = 1
+    purpose: Literal["LAUNCHD_CLEANUP_STATE_CHECK"] = "LAUNCHD_CLEANUP_STATE_CHECK"
+    operation: Literal["READ_ONLY"] = "READ_ONLY"
+    error: Error = "NONE"
+    controls: Check = "INCONCLUSIVE"
+    sudo_credentials: Check = "INCONCLUSIVE"
+    directory: Literal[
+        "INCONCLUSIVE",
+        "PRESENT",
+        "ABSENT",
+        "ACCESS_DENIED",
+        "UNSAFE_PATH",
+        "OPEN_FAIL",
+        "STAT_FAIL",
+    ] = "INCONCLUSIVE"
+    directory_owner: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    directory_mode: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    directory_kind: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease: Literal[
+        "INCONCLUSIVE",
+        "PRESENT",
+        "ABSENT",
+        "ACCESS_DENIED",
+        "UNSAFE_PATH",
+        "OPEN_FAIL",
+        "STAT_FAIL",
+    ] = "INCONCLUSIVE"
+    lease_owner: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease_mode: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease_kind: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease_links: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease_size: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    lease_content: Literal["INCONCLUSIVE", "MATCH", "MISMATCH"] = "INCONCLUSIVE"
+    exact_service: Literal["INCONCLUSIVE", "PRESENT", "ABSENT"] = "INCONCLUSIVE"
+    cleanup_state: Literal["UNVERIFIED", "ABSENCE_VERIFIED", "OWNED_LEASE_PRESENT"] = "UNVERIFIED"
+    native_record_files: Literal["NOT_OPENED"] = "NOT_OPENED"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    jobs_started: Literal["NONE"] = "NONE"
+    files_changed_in_original_kit: Literal["NONE"] = "NONE"
 
 
 class PrivateError(ValueError):
@@ -576,15 +620,192 @@ def cleanup(root: Path) -> Report:
     )
 
 
+def _cleanup_state_labels(raw: bytes, base: CleanupState) -> CleanupState:
+    """Reject unknown/contradictory labels; never return a raw native value."""
+    fields = (
+        "directory",
+        "directory_owner",
+        "directory_mode",
+        "directory_kind",
+        "lease",
+        "lease_owner",
+        "lease_mode",
+        "lease_kind",
+        "lease_links",
+        "lease_size",
+        "lease_content",
+    )
+    allowed = {
+        f"{field}_{value}".upper().encode(): (field, value)
+        for field in fields
+        for value in get_args(CleanupState.model_fields[field].annotation)
+        if value != "INCONCLUSIVE"
+    }
+    updates: dict[str, str] = {}
+    for line in raw.splitlines():
+        pair = allowed.get(line)
+        if pair is None or pair[0] in updates:
+            return base.model_copy(update={"error": "CONTROL"})
+        updates[pair[0]] = pair[1]
+    if not updates or "directory" not in updates:
+        return base.model_copy(update={"error": "CONTROL"})
+    expected = {"directory"}
+    if updates["directory"] == "PRESENT":
+        directory_checks = {"directory_owner", "directory_mode", "directory_kind"}
+        expected |= directory_checks
+        if all(updates.get(field) == "MATCH" for field in directory_checks):
+            expected.add("lease")
+            if updates.get("lease") == "PRESENT":
+                lease_checks = {
+                    "lease_owner",
+                    "lease_mode",
+                    "lease_kind",
+                    "lease_links",
+                    "lease_size",
+                }
+                expected |= lease_checks
+                if all(updates.get(field) == "MATCH" for field in lease_checks):
+                    expected.add("lease_content")
+    if set(updates) != expected:
+        return base.model_copy(update={"error": "CONTROL"})
+    return CleanupState.model_validate(base.model_dump() | updates)
+
+
+def _exact_service_state(returncode: int, stderr: bytes, nonce: str) -> str:
+    """Require the explicit exact-service absence diagnostic, not any failed query."""
+    if returncode == 0:
+        return "PRESENT"
+    missing = (
+        f'Could not find service "org.evidenceforge.reference.launchd.{nonce}" in domain for system'
+    ).encode()
+    lines = stderr.strip().splitlines()
+    return (
+        "ABSENT"
+        if returncode > 0 and lines in ([missing], [b"Bad request.", missing])
+        else "INCONCLUSIVE"
+    )
+
+
+def check_cleanup(root: Path) -> CleanupState:
+    """Human-only read-only control inspection and one exact system-service query."""
+    _platform()
+    config = _config(root)
+    base = CleanupState(controls="PASS")
+    credentials = subprocess.run(
+        ["/usr/bin/sudo", "-n", "-v"],
+        env=SAFE_ENV,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if credentials.returncode:
+        return base.model_copy(update={"error": "CONTROL", "sudo_credentials": "FAIL"})
+    base = base.model_copy(update={"sudo_credentials": "PASS"})
+    source = (
+        Path(__file__).resolve().parent.parent
+        / "docs/design/macos-workstation-feasibility/launchd-reference/job_guard.c"
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="eforge-launchd-cleanup-check-", dir="/private/tmp"
+    ) as scratch:
+        binary = Path(scratch) / "inspect-guard"
+        compiled = subprocess.run(
+            [
+                "/usr/bin/cc",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Wno-unused-parameter",
+                str(source),
+                "-o",
+                str(binary),
+            ],
+            env=SAFE_ENV,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        if compiled.returncode:
+            return base.model_copy(update={"error": "BUILD"})
+        observed = subprocess.run(
+            ["/usr/bin/sudo", "-n", str(binary), "inspect", config.nonce],
+            env=SAFE_ENV,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=25,
+            check=False,
+        )
+        if observed.returncode or len(observed.stdout) > 4096:
+            base = base.model_copy(update={"error": "CONTROL"})
+        else:
+            base = _cleanup_state_labels(observed.stdout, base)
+    service = subprocess.run(
+        [
+            "/usr/bin/sudo",
+            "-n",
+            "/bin/launchctl",
+            "print",
+            "system/org.evidenceforge.reference.launchd." + config.nonce,
+        ],
+        env=SAFE_ENV,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=5,
+        check=False,
+    )
+    state = (
+        _exact_service_state(service.returncode, service.stderr, config.nonce)
+        if len(service.stderr) <= 4096
+        else "INCONCLUSIVE"
+    )
+    complete_lease = all(
+        getattr(base, field) == "MATCH"
+        for field in (
+            "directory_owner",
+            "directory_mode",
+            "directory_kind",
+            "lease_owner",
+            "lease_mode",
+            "lease_kind",
+            "lease_links",
+            "lease_size",
+            "lease_content",
+        )
+    )
+    outcome = (
+        "ABSENCE_VERIFIED"
+        if base.error == "NONE" and base.directory == "ABSENT" and state == "ABSENT"
+        else "OWNED_LEASE_PRESENT"
+        if base.error == "NONE" and complete_lease
+        else "UNVERIFIED"
+    )
+    return CleanupState.model_validate(
+        base.model_dump()
+        | {
+            "exact_service": state,
+            "cleanup_state": outcome,
+            "error": "CONTROL" if state == "INCONCLUSIVE" else base.error,
+        }
+    )
+
+
 def main() -> int:
     """Expose preparation separately from human-only native operations."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "setup", "capture", "report", "cleanup"))
+    parser.add_argument(
+        "operation", choices=("prepare", "setup", "capture", "report", "cleanup", "check-cleanup")
+    )
     parser.add_argument("--private-run", action="store_true")
     parser.add_argument("--kit-root", type=Path)
     args = parser.parse_args()
-    if args.kit_root is not None and args.operation != "cleanup":
-        parser.error("--kit-root is limited to exact-label cleanup; capture reuse is forbidden")
+    if args.kit_root is not None and args.operation not in {"cleanup", "check-cleanup"}:
+        parser.error("--kit-root is limited to cleanup/check-cleanup; capture reuse is forbidden")
     if args.operation == "prepare":
         print(json.dumps({"kit": str(prepare()), "stage": "PREPARED"}))
         return 0
@@ -592,6 +813,7 @@ def main() -> int:
         parser.error(
             "Native operations require explicit --private-run; preparation starts no collection"
         )
+    error_report = CleanupState if args.operation == "check-cleanup" else Report
     try:
         root = _root(args.kit_root or Path(__file__).absolute().parent)
         if args.operation == "setup":
@@ -600,14 +822,16 @@ def main() -> int:
             result = capture(root)
         elif args.operation == "cleanup":
             result = cleanup(root)
+        elif args.operation == "check-cleanup":
+            result = check_cleanup(root)
         else:
             result = Report.model_validate_json(_read(root / "SHAREABLE-ULF-REPORT.json"))
     except PrivateError as error:
-        result = Report(error=error.code)
+        result = error_report(error=error.code)
     except (OSError, ValueError, subprocess.SubprocessError):
-        result = Report(error="DATA")
+        result = error_report(error="DATA")
     except KeyboardInterrupt:
-        result = Report(error="CONTROL")
+        result = error_report(error="CONTROL")
     print(result.model_dump_json(indent=2))
     return 0 if result.error == "NONE" else 2
 

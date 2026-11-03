@@ -44,7 +44,7 @@ This exposed a concrete diagnostic reporting defect: capture reported COMPLETE/N
 without requiring successful job controls or a zero guard exit. Version 3 reports
 CONTROL/ERROR and CONTROL_INCOMPLETE for these cases, retains only the compiled
 guard's public literal failure labels, and checks the guard's exit. Unknown command
-output remains suppressed. A read-only cached-sudo preflight and grouped cleanup
+output remains suppressed. A noninteractive cached-sudo check and grouped cleanup
 labels distinguish credential, control and guard failures without revealing native
 command output. The corrected cleanup entry point can validate the original kit's
 control hashes and invoke its original guard via an explicit cleanup-only root
@@ -54,3 +54,32 @@ The user has been asked to run that cleanup diagnostic only. No further collecti
 is requested, and the used kit and its hash-bound files are unchanged. The ordinary
 verbosity SSH auth source is implemented separately; this launchd attempt does not
 invalidate its process or authentication acceptance.
+
+The version-3 cleanup report subsequently established cached sudo PASS and
+LOCATION_FAIL from the original guard. That guard returns this label before job
+removal when the exact root-owned directory cannot be opened/validated or its
+exact-content recovery lease cannot be validated. The label does not establish
+that resources remain; absence is one of its possible causes. Cleanup remains
+unverified, rather than being called successful or treated as proof of leftovers.
+
+A grouped read-only `check-cleanup` is now prepared. It validates the original
+kit's code/marker/guard hashes without opening records, compiles current public
+guard code into a separate temporary directory and invokes its inspection-only
+entry point with the original generated nonce. The C classifier opens only that
+exact directory and `job.plist`, refuses unsafe ownership/mode/type/linkage and
+compares safe lease bytes to the guard's existing public template. It returns
+fixed existence/metadata/content-match labels, never values or bytes. This does
+not execute the old capture helper or change any hash-bound file in the used kit.
+
+The same check queries only `launchctl print system/<generated-label>` with stdout
+discarded. Nonzero exit alone cannot prove absence. Only the exact generated-label
+system-domain missing-service diagnostic qualifies ABSENT; unknown stderr remains
+hidden and yields INCONCLUSIVE. Apple's
+[daemon troubleshooting guidance](https://developer.apple.com/documentation/network/troubleshooting-packet-traces)
+documents that missing-service diagnostic; the check also admits its known
+`Bad request.` prefix without generalizing failures to absence.
+ABSENCE_VERIFIED requires both missing control directory and explicit service
+absence. A safe matching lease is reported separately from completed cleanup.
+The check starts no jobs/collectors, removes no test resources, and deletes only
+its own fresh temporary compilation directory. The user has been given one
+grouped command; no agent has run it on the original kit.
