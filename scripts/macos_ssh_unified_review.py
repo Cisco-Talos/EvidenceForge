@@ -22,6 +22,7 @@ from typing import Literal, get_args
 
 from pydantic import Field, ValidationError
 
+from evidenceforge.events.macos_logging import UnifiedLogCallsite
 from evidenceforge.formats.macos_unified_log import UnifiedLogRecord
 
 
@@ -119,8 +120,84 @@ class FieldFailure(reference.Model):
     object_members: tuple[ObjectMember, ...] = ()
 
 
+class CallsiteShape(reference.Model):
+    """Public trace-header comparisons; never offsets, addresses or native text."""
+
+    log_namespace: Check
+    level_agreement: Check
+    pc_styles: tuple[
+        Literal[
+            "NONE",
+            "MAIN_IMAGE",
+            "SHARED_CACHE",
+            "PLUGIN",
+            "ABSOLUTE",
+            "UUID_RELATIVE",
+            "LARGE_SHARED_CACHE",
+            "UNUSED",
+        ],
+        ...,
+    ]
+    flags: tuple[
+        Literal[
+            "ACTIVITY",
+            "UNIQUE_PID",
+            "LARGE_OFFSET",
+            "PRIVATE_DATA",
+            "SUBSYSTEM",
+            "RULES",
+            "OVERSIZE",
+            "CONTEXT_DATA",
+            "UNKNOWN_BITS",
+        ],
+        ...,
+    ]
+    dynamic_format: Literal["PRESENT", "ABSENT", "MIXED"]
+    format_forms: tuple[
+        Literal[
+            "EMPTY",
+            "PUBLIC_C_STRING",
+            "C_STRING",
+            "SSH_SYSLOG_PRECISION",
+            "MATCHES_MESSAGE",
+            "OTHER",
+        ],
+        ...,
+    ]
+    static_offset_range: Check
+    pc_range: Check
+    pc_alignment: Check
+    dynamic_code_matches_pc: Check
+    source_absent: Check
+    backtrace_absent: Check
+
+
+class FamilyProfile(reference.Model):
+    """Group the approved fixed classifications, never the underlying row values."""
+
+    family: Literal[
+        "accepted_local_password",
+        "accepted_local_pam",
+        "pam_open",
+        "pam_close",
+        "disconnected_local",
+        "other_controlled",
+    ]
+    summary: unified.Summary
+    root_writer: Check
+    main_image_sender: Check
+    main_image_callsite: Check
+    zero_trace: Check
+    zero_program_counter: Check
+    zero_mach_timestamp: Check
+    zero_thread: Check
+    zero_activity: Check
+    rules_flag: Literal["PRESENT", "ABSENT", "MIXED"]
+    callsite_shape: CallsiteShape
+
+
 class Report(reference.Model):
-    review_version: Literal[1] = 1
+    review_version: Literal[1, 2, 3] = 3
     purpose: Literal["SSH_UNIFIED_LOG_SHAPE_REVIEW"] = "SSH_UNIFIED_LOG_SHAPE_REVIEW"
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -152,6 +229,7 @@ class Report(reference.Model):
     native_shapes: Check = "INCONCLUSIVE"
     failed_fields: tuple[FieldFailure, ...] = Field(default=(), max_length=32)
     valid_subset: unified.Summary | None = None
+    families: tuple[FamilyProfile, ...] = Field(default=(), max_length=6)
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     commands: Literal["NOT_STARTED"] = "NOT_STARTED"
     live_queries: Literal["NOT_PERFORMED"] = "NOT_PERFORMED"
@@ -219,6 +297,151 @@ def _integer_form(value: int) -> IntegerForm:
     if value == 2**64 - 1:
         return "U64_MAX"
     return "ABOVE_U64_MAX" if value > 2**64 - 1 else "POSITIVE_OTHER"
+
+
+def _main_callsite(row: UnifiedLogRecord) -> bool:
+    try:
+        modeled = UnifiedLogCallsite(
+            message_type=row.message_type,
+            subsystem=row.subsystem,
+            category=row.category,
+            format_string=row.format_string,
+            format_string_offset=row.trace_id >> 32,
+            program_counter=row.sender_program_counter,
+            has_rules=bool((row.trace_id >> 16) & 0x0400),
+        )
+    except ValueError:
+        return False
+    return modeled.trace_id == row.trace_id
+
+
+def _callsite_shape(rows: list[UnifiedLogRecord]) -> CallsiteShape:
+    # Apple's public firehose_types_private.h defines these protocol bits. This
+    # enumerates public semantics only; unrecognized bits never leave as numbers.
+    styles = (
+        "NONE",
+        "MAIN_IMAGE",
+        "SHARED_CACHE",
+        "PLUGIN",
+        "ABSOLUTE",
+        "UUID_RELATIVE",
+        "LARGE_SHARED_CACHE",
+        "UNUSED",
+    )
+    flags = {
+        0x0001: "ACTIVITY",
+        0x0010: "UNIQUE_PID",
+        0x0020: "LARGE_OFFSET",
+        0x0100: "PRIVATE_DATA",
+        0x0200: "SUBSYSTEM",
+        0x0400: "RULES",
+        0x0800: "OVERSIZE",
+        0x1000: "CONTEXT_DATA",
+    }
+    names: set[str] = set()
+    for row in rows:
+        bits = (row.trace_id >> 16) & 0xFFFF
+        names.update(name for mask, name in flags.items() if bits & mask)
+        if bits & ~(0x000E | sum(flags)):
+            names.add("UNKNOWN_BITS")
+    formats: set[str] = set()
+    for row in rows:
+        formats.add(
+            {
+                "": "EMPTY",
+                "%s": "C_STRING",
+                "%{public}s": "PUBLIC_C_STRING",
+                "%.500s": "SSH_SYSLOG_PRECISION",
+            }.get(
+                row.format_string,
+                "MATCHES_MESSAGE" if row.format_string == row.event_message else "OTHER",
+            )
+        )
+    dynamic = {bool(row.trace_id & (1 << 63)) for row in rows}
+    types = {"Default": 0, "Info": 1, "Debug": 2, "Error": 16, "Fault": 17}
+    return CallsiteShape.model_validate(
+        {
+            "log_namespace": "PASS" if all(row.trace_id & 0xFF == 4 for row in rows) else "FAIL",
+            "level_agreement": "PASS"
+            if all((row.trace_id >> 8) & 0xFF == types[row.message_type] for row in rows)
+            else "FAIL",
+            "pc_styles": tuple(sorted({styles[(row.trace_id >> 17) & 7] for row in rows})),
+            "flags": tuple(sorted(names)),
+            "dynamic_format": "MIXED"
+            if len(dynamic) > 1
+            else "PRESENT"
+            if True in dynamic
+            else "ABSENT",
+            "format_forms": tuple(sorted(formats)),
+            "static_offset_range": "PASS"
+            if all(0 < row.trace_id >> 32 < 2**31 for row in rows)
+            else "FAIL",
+            "pc_range": "PASS"
+            if all(0 < row.sender_program_counter < 2**32 for row in rows)
+            else "FAIL",
+            "pc_alignment": "PASS"
+            if all(row.sender_program_counter % 4 == 0 for row in rows)
+            else "FAIL",
+            "dynamic_code_matches_pc": "PASS"
+            if all(row.trace_id >> 32 == row.sender_program_counter | 0x80000000 for row in rows)
+            else "FAIL",
+            "source_absent": "PASS" if all(row.source is None for row in rows) else "FAIL",
+            "backtrace_absent": "PASS" if all(row.backtrace is None for row in rows) else "FAIL",
+        }
+    )
+
+
+def _families(rows: list[dict], windows: tuple, username: str) -> tuple[FamilyProfile, ...]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        one = unified.summarize([row], windows, username)
+        family = next(name for name in unified.Messages.model_fields if getattr(one.messages, name))
+        grouped.setdefault(family, []).append(row)
+    result: list[FamilyProfile] = []
+    for family, members in sorted(grouped.items()):
+        records = [UnifiedLogRecord.model_validate_json(json.dumps(row)) for row in members]
+        rules = {bool((row.trace_id >> 16) & 0x0400) for row in records}
+        result.append(
+            FamilyProfile.model_validate(
+                {
+                    "family": family,
+                    "summary": unified.summarize(members, windows, username),
+                    "root_writer": "PASS" if all(row.user_id == 0 for row in records) else "FAIL",
+                    "main_image_sender": "PASS"
+                    if all(
+                        row.sender_image_path == row.process_image_path
+                        and row.process_image_uuid
+                        and row.sender_image_uuid == row.process_image_uuid
+                        for row in records
+                    )
+                    else "FAIL",
+                    "main_image_callsite": "PASS"
+                    if all(_main_callsite(row) for row in records)
+                    else "FAIL",
+                    "zero_trace": "PASS" if all(row.trace_id == 0 for row in records) else "FAIL",
+                    "zero_program_counter": "PASS"
+                    if all(row.sender_program_counter == 0 for row in records)
+                    else "FAIL",
+                    "zero_mach_timestamp": "PASS"
+                    if all(row.mach_timestamp == 0 for row in records)
+                    else "FAIL",
+                    "zero_thread": "PASS" if all(row.thread_id == 0 for row in records) else "FAIL",
+                    "zero_activity": "PASS"
+                    if all(
+                        row.activity_identifier == row.parent_activity_identifier == 0
+                        for row in records
+                    )
+                    else "FAIL",
+                    "rules_flag": "MIXED"
+                    if len(rules) > 1
+                    else "PRESENT"
+                    if True in rules
+                    else "ABSENT",
+                    "callsite_shape": _callsite_shape(records),
+                }
+            )
+        )
+    return tuple(result)
 
 
 def diagnose(rows: list[dict], windows: tuple, username: str) -> Report:
@@ -326,6 +549,7 @@ def diagnose(rows: list[dict], windows: tuple, username: str) -> Report:
         native_shapes="FAIL" if errors else "PASS" if logs else "INCONCLUSIVE",
         failed_fields=tuple(failures),
         valid_subset=unified.summarize(valid, windows, username),
+        families=_families(valid, windows, username),
     )
 
 

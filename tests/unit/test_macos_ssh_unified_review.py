@@ -54,6 +54,8 @@ def test_all_log_errors_are_reported_without_native_values_context_or_unknown_ke
     source = next(item for item in report.failed_fields if item.field == "source")
     assert source.value_types == ("OBJECT",) and set(source.object_members) == {"file", "OTHER"}
     assert report.valid_subset.messages.accepted_local_password == 1
+    assert len(report.families) == 1
+    assert report.families[0].family == "accepted_local_password"
     assert SECRET not in report.model_dump_json()
     assert report.gate_status == "NOT_EVALUATED"
 
@@ -66,6 +68,55 @@ def test_activity_records_do_not_poison_valid_log_classification() -> None:
     assert report.other_event_kinds == ("ACTIVITY_CREATE",)
     assert report.native_shapes == "PASS" and report.classified_log_rows == 1
     assert report.shape_scope == "LOG_EVENT_ROWS_ONLY" and report.gate_status == "NOT_EVALUATED"
+
+
+def test_grouped_families_do_not_misattribute_another_messages_sender_or_format() -> None:
+    accepted = _ulf()
+    unrelated = _ulf() | {"eventMessage": SECRET, "senderImagePath": SECRET, "formatString": SECRET}
+    report = kit.diagnose([accepted, unrelated], _windows(), SECRET)
+    families = {item.family: item for item in report.families}
+    assert families["accepted_local_password"].summary.senders == ("SYSTEM_ASL",)
+    assert families["accepted_local_password"].summary.static_formats == ("PUBLIC_C_STRING",)
+    assert families["other_controlled"].summary.senders == ("OTHER",)
+    assert families["other_controlled"].summary.static_formats == ("OTHER",)
+    assert SECRET not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_callsite_shapes_expose_only_public_flags_and_comparisons(dynamic: bool) -> None:
+    pc = 65536
+    code = pc | 0x80000000 if dynamic else 131072
+    row = _ulf() | {
+        "traceID": (code << 32) | (0x0002 << 16) | (1 << 8) | 4,
+        "senderProgramCounter": pc,
+        "formatString": "" if dynamic else "%.500s",
+        "messageType": "Info",
+    }
+    report = kit.diagnose([row], _windows(), SECRET)
+    shape = report.families[0].callsite_shape
+    assert shape.log_namespace == shape.level_agreement == "PASS"
+    assert shape.pc_styles == ("MAIN_IMAGE",) and shape.flags == ()
+    assert shape.dynamic_format == ("PRESENT" if dynamic else "ABSENT")
+    assert shape.format_forms == (("EMPTY",) if dynamic else ("SSH_SYSLOG_PRECISION",))
+    assert shape.dynamic_code_matches_pc == ("PASS" if dynamic else "FAIL")
+    assert shape.static_offset_range == ("FAIL" if dynamic else "PASS")
+    assert shape.pc_range == shape.pc_alignment == shape.source_absent == "PASS"
+    assert SECRET not in report.model_dump_json()
+
+
+def test_unrecognized_trace_bits_and_text_are_suppressed() -> None:
+    row = _ulf() | {
+        "traceID": (123 << 32) | (0x8001 << 16) | (1 << 8) | 3,
+        "formatString": SECRET,
+        "senderProgramCounter": 2**40 + 1,
+    }
+    report = kit.diagnose([row], _windows(), SECRET)
+    shape = report.families[0].callsite_shape
+    assert shape.flags == ("ACTIVITY", "UNKNOWN_BITS")
+    assert shape.format_forms == ("OTHER",)
+    assert shape.log_namespace == shape.level_agreement == shape.pc_alignment == "FAIL"
+    assert shape.pc_range == "FAIL"
+    assert SECRET not in report.model_dump_json()
 
 
 @pytest.mark.parametrize(

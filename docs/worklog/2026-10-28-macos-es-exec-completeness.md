@@ -2855,3 +2855,44 @@ entry point is `private_ssh_ulf_review.py`. The intended source is the existing
 step requires explicit permission under the standing no-local-log-read rule;
 silence is not permission. This reviewer covers the schema defects together,
 rather than requesting one field at a time. No private input has yet been read.
+
+## 2026-11-03 — Authorized SSH ULF review resolves the schema failure
+
+The user authorized the prepared bounded offline reviewer. Its fixed output passes
+provenance, original collection controls and execution binding: **38 retained rows,
+17 valid ordinary logEvent rows, 21 activityCreateEvent rows, zero invalid ordinary
+logs**. The production codec already accepts all 17 actual logs. The original
+capture analyzer had applied its log-only schema to activity records and returned
+before classifying the genuine logs. No production schema was relaxed.
+
+Grouping the same fixed classifications establishes one accepted keyboard-interactive/
+PAM authentication record: SESSION role, root writer, same main-image sender/UUID,
+Info, empty subsystem/category, zero activity and parent activity. Trace, sender PC,
+Mach time and thread are nonzero. Its callsite does not match the existing static
+main-image profile. The other 16 messages remain unclassified; no PAM-open/close,
+disconnect or session-completion template is qualified from them. Only fixed labels
+were returned. Native values, unknown text/names, records and private identities
+were neither displayed nor copied into Git. No collector, app, probe or live query
+was started; the source capture was not changed.
+
+The capture summary now separates ordinary-log/other/invalid/classified counts and
+states LOG_EVENT_ROWS_ONLY. Activity-only input cannot pass ordinary-log shape;
+invalid ordinary logs still fail the overall shape but cannot hide valid-subset
+message counts. Version-1 saved summaries remain readable. Invented regression
+inputs cover both defects and suppress unknown-field/text canaries.
+
+The grouped reviewer additionally prepares public trace-header/known-format/range/
+alignment/code-to-PC classifications without exporting numeric values. The public
+Apple XNU layout and OpenSSH logger provide comparison candidates, not a substitute
+for the private observation. A tested code-only version-3 reader is prepared at
+`/private/tmp/eforge-ssh-ulf-review-e2cf_keq`, retaining the trusted old support and
+expected hashes from the earlier code-only reader. It has NOT been run against the
+capture. Separate permission is pending for the additional comparisons under the
+standing local-log rule. No new collection is requested and no unknown source
+profile is enabled merely to finish the phase.
+
+All **267 selected routine privacy/reference checks** pass, including **24** offline
+review tests and **22** ULF capture tests. Whole Ruff/format checks pass. Production
+generation behavior remains revision 375; no unchanged generation or blind panel
+was repeated. Expanded ULF and final acceptance remain incomplete. Launchd's
+separate zero-row reference remains unqualified and unchanged.

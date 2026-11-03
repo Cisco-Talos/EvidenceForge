@@ -179,6 +179,30 @@ def test_unknown_shape_and_empty_retention_remain_unqualified() -> None:
     assert empty.readiness_scope == "OWN_PROCESS_MARKER_ONLY"
 
 
+def test_activity_entries_cannot_poison_valid_logs_or_claim_log_shape_coverage() -> None:
+    activity = _ulf() | {"eventType": "activityCreateEvent", SECRET: SECRET}
+    summary = kit.summarize([activity, _ulf()], _windows(), SECRET)
+    assert summary.native_shapes == "PASS"
+    assert summary.retained_rows == 2
+    assert summary.log_event_rows == summary.other_event_rows == summary.classified_log_rows == 1
+    assert summary.invalid_log_rows == 0
+    assert summary.messages.accepted_local_password == 1
+    assert summary.shape_scope == "LOG_EVENT_ROWS_ONLY"
+    only_activity = kit.summarize([activity], _windows(), SECRET)
+    assert only_activity.native_shapes == "INCONCLUSIVE"
+    assert only_activity.classified_log_rows == 0
+    assert SECRET not in summary.model_dump_json()
+
+
+def test_bad_log_does_not_hide_valid_subset_and_still_fails_overall_shape() -> None:
+    summary = kit.summarize([_ulf() | {SECRET: SECRET}, _ulf()], _windows(), SECRET)
+    assert summary.native_shapes == "FAIL"
+    assert summary.log_event_rows == 2
+    assert summary.invalid_log_rows == summary.classified_log_rows == 1
+    assert summary.messages.accepted_local_password == 1
+    assert SECRET not in summary.model_dump_json()
+
+
 def test_redacted_native_messages_stay_redacted_and_never_become_auth_success() -> None:
     row = _ulf() | {
         "eventMessage": "Accepted password for <private> from <private> port <private> ssh2"

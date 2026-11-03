@@ -68,7 +68,7 @@ class Messages(Model):
 
 
 class Summary(Model):
-    kit_version: Literal[1] = 1
+    kit_version: Literal[1, 2] = 2
     purpose: Literal["SSH_UNIFIED_LOG_DIAGNOSTIC"] = "SSH_UNIFIED_LOG_DIAGNOSTIC"
     collection: Literal["ES_AUTHENTICATED_SERVER_EXECUTION_WINDOWS"] = (
         "ES_AUTHENTICATED_SERVER_EXECUTION_WINDOWS"
@@ -81,6 +81,11 @@ class Summary(Model):
     collector_cleanup: Check = "INCONCLUSIVE"
     execution_binding: Check = "INCONCLUSIVE"
     retained_rows: int = Field(default=0, ge=0, le=256)
+    shape_scope: Literal["LOG_EVENT_ROWS_ONLY"] = "LOG_EVENT_ROWS_ONLY"
+    log_event_rows: int = Field(default=0, ge=0, le=256)
+    other_event_rows: int = Field(default=0, ge=0, le=256)
+    invalid_log_rows: int = Field(default=0, ge=0, le=256)
+    classified_log_rows: int = Field(default=0, ge=0, le=256)
     native_shapes: Check = "INCONCLUSIVE"
     ring_evicted: bool = False
     roles: tuple[Role, ...] = ()
@@ -195,11 +200,22 @@ def summarize(rows: list[dict], windows: tuple[ExecutionWindow, ...], username: 
         reference_result="RECORDS_REQUIRE_REVIEW" if selected else "NO_MATCHING_ROWS",
     )
     parsed: list[UnifiedLogRecord] = []
-    for row in selected:
+    invalid = 0
+    logs = [row for row in selected if row.get("eventType") == "logEvent"]
+    for row in logs:
         try:
             parsed.append(UnifiedLogRecord.model_validate_json(json.dumps(row)))
         except ValueError:
-            return base.model_copy(update={"native_shapes": "FAIL"})
+            invalid += 1
+    base = base.model_copy(
+        update={
+            "log_event_rows": len(logs),
+            "other_event_rows": len(selected) - len(logs),
+            "invalid_log_rows": invalid,
+            "classified_log_rows": len(parsed),
+            "native_shapes": "FAIL" if invalid else "PASS" if logs else "INCONCLUSIVE",
+        }
+    )
     if not parsed:
         return base
     counts = {name: 0 for name in Messages.model_fields}
@@ -257,7 +273,6 @@ def summarize(rows: list[dict], windows: tuple[ExecutionWindow, ...], username: 
     return Summary.model_validate(
         base.model_dump()
         | {
-            "native_shapes": "PASS",
             "roles": tuple(sorted(roles)),
             "senders": tuple(sorted(senders)),
             "static_formats": tuple(sorted(formats)),

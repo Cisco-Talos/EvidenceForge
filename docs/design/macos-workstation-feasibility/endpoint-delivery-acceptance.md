@@ -47,6 +47,10 @@ After its unobserved result, the next human-run reference is the opt-in
 [SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reuses the existing
 controlled loopback connection and ES ancestry solely to authenticate ULF retention;
 it does not expand the ES metadata research scope. Its first fixed report retained
-38 bound rows with successful cleanup but failed the implemented schema. The next
-step is a separately authorized [offline shape review](ssh-startup-reference/ULF-REFERENCE.md)
-of those existing records, not another capture. No SSH ULF template is enabled yet.
+38 bound rows with successful cleanup but failed the implemented schema. The approved
+[offline shape review](ssh-startup-reference/ULF-REFERENCE.md) resolved that failure:
+17 valid ordinary logs and 21 activity-creation entries. One ordinary log records
+successful keyboard-interactive/PAM authentication from root-owned sshd-session.
+Its callsite differs from the existing static-main-image generation profile. The
+remaining grouped callsite comparison uses the same capture and requires separate
+permission; no new capture is requested. No SSH ULF template is enabled yet.
