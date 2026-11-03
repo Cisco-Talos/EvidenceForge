@@ -66,11 +66,41 @@ def test_fixed_analysis_never_exports_unknown_strings_or_native_values() -> None
 
 
 def test_empty_capture_and_unknown_envelope_are_not_qualification() -> None:
-    assert kit.analyze([], LABEL, kit.Report()).native_shapes == "INCONCLUSIVE"
+    empty = kit.analyze([], LABEL, kit.Report(stage="COMPLETE", collector_ready="PASS"))
+    assert empty.native_shapes == "INCONCLUSIVE"
+    assert empty.reference_result == "NO_MATCHING_ROWS"
+    assert empty.readiness_scope == "OWN_PROCESS_MARKER_ONLY"
+    assert empty.launchd_writer == "INCONCLUSIVE"
+    assert empty.gate_status == "NOT_EVALUATED"
     row = _row(LABEL + " " + SECRET) | {SECRET: SECRET}
     report = kit.analyze([row], LABEL, kit.Report())
     assert report.native_shapes == "FAIL"
     assert SECRET not in report.model_dump_json()
+
+
+@pytest.mark.parametrize("location", ["message_only", "category_only", "both"])
+def test_label_can_be_in_message_or_category_without_disclosing_either(location: str) -> None:
+    row = _row("service state: running")
+    if location in {"message_only", "both"}:
+        row["eventMessage"] = LABEL + " " + row["eventMessage"]
+    if location in {"category_only", "both"}:
+        row["category"] = LABEL + " " + SECRET
+    report = kit.analyze([row], LABEL, kit.Report())
+    assert report.native_shapes == "PASS"
+    assert report.reference_result == "RECORDS_REQUIRE_REVIEW"
+    assert report.messages.running == 1
+    assert getattr(report.label_matches, location) == 1
+    assert all(value not in report.model_dump_json() for value in (LABEL, NONCE, SECRET))
+    assert report.gate_status == "NOT_EVALUATED"
+
+
+def test_predicate_keeps_launchd_and_nonce_required_for_both_match_fields() -> None:
+    predicate = kit._predicate(kit.Config(nonce=NONCE, hashes={}))
+    assert predicate == (
+        f'(process == "launchd" AND (eventMessage CONTAINS "{LABEL}" '
+        f'OR category CONTAINS "{LABEL}")) '
+        f'OR (process == "ready-marker" AND eventMessage == "EFORGE_ULF_READY {NONCE}")'
+    )
 
 
 def test_analysis_rejects_an_unrelated_record_and_excessive_retention() -> None:
@@ -114,8 +144,9 @@ def test_report_only_reads_saved_fixed_json(
     assert json.loads(capsys.readouterr().out)["stage"] == "COMPLETE"
 
 
+@pytest.mark.parametrize("label_location", ["message_only", "category_only", "both"])
 def test_capture_filters_unrelated_input_and_closes_both_processes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label_location: str
 ) -> None:
     class Process:
         def __init__(self, data: bytes, *, running: bool) -> None:
@@ -138,7 +169,18 @@ def test_capture_filters_unrelated_input_and_closes_both_processes(
             return 0
 
     marker = {"eventMessage": "EFORGE_ULF_READY " + NONCE}
-    rows = [marker, _row(SECRET), _row(LABEL + " service state: running")]
+    target = _row("service state: running")
+    if label_location in {"message_only", "both"}:
+        target["eventMessage"] = LABEL + " " + target["eventMessage"]
+    if label_location in {"category_only", "both"}:
+        target["category"] = LABEL
+    rows = [
+        marker,
+        _row(SECRET),
+        _row(SECRET) | {"category": LABEL, "processID": 999},
+        _row(SECRET) | {"category": LABEL, "processImagePath": "/invented/other-writer"},
+        target,
+    ]
     collector = Process(b"".join((json.dumps(r) + "\n").encode() for r in rows), running=True)
     job = Process(b"REGISTERED\nACTIVATED\nREMOVED\nFILES_REMOVED\n", running=False)
     calls: list[list[str]] = []
@@ -159,6 +201,7 @@ def test_capture_filters_unrelated_input_and_closes_both_processes(
     assert report.collector_ready == report.collector_cleanup == "PASS"
     assert report.job_activated == report.job_removed == report.temporary_files_removed == "PASS"
     assert report.native_shapes == "PASS" and report.retained_rows == 1
+    assert getattr(report.label_matches, label_location) == 1
     assert collector.stopped and job.stopped
     assert calls[0][:3] == ["/usr/bin/log", "stream", "--style"]
     assert LABEL in calls[0][-1]

@@ -2734,3 +2734,31 @@ because the existing code passes deterministic checks. No new assessment loop is
 Whole Ruff/format/diff/behavior checks pass. Revision 375 digest:
 `569998740598b3b228f4bc1b06408bfe1d765efeb9e6bcfbffdca72a7f147e7f`.
 No feature-branch product version bump or release is made.
+
+## 2026-11-03 — Launchd ULF result: zero retained rows, no template qualified
+
+The user supplied only the fixed version-1 JSON: error NONE, stage COMPLETE,
+readiness/activation/job removal/private temporary-file removal/collector cleanup
+all PASS, retained_rows 0. Native envelope/writer/sender/subsystem/message checks
+are consequently INCONCLUSIVE or NOT_OBSERVED. This confirms the controlled job
+ran and cleanup passed; it does not prove that launchd emits no ULF on macOS 27.
+No private kit, native record file, local diagnostic file or its metadata was read.
+
+Code inspection found the selection limitation: only eventMessage could carry the
+generated label. Version 2 matches eventMessage OR category in both the OS predicate
+and retention, still requiring the unpredictable full job label, launchd, PID 1 and
+/sbin/launchd. Fixed counters expose match location without observed field values.
+Readiness is now explicitly OWN_PROCESS_MARKER_ONLY; empty retention reports
+NO_MATCHING_ROWS. Twenty invented-record/containment tests pass, including category-
+only matches, foreign-writer exclusion, private-field suppression and no qualification
+from marker-only readiness. This correction has not been run natively. The used
+version-1 kit remains untouched; no new collection is requested merely to get a
+positive result.
+
+Apple Developer Technical Support points to a separate launchd diagnostic file:
+https://developer.apple.com/forums/thread/791996 . This is a primary-source clue to
+check the collection-source assumption, not proof of macOS 27 behavior. The new
+launchd-ulf-reference/REFERENCE.md records that distinction. The launchd ULF gate
+remains unpassed; no new file-log format or guessed ULF template is enabled, and
+no requirement was silently removed. SSH ULF remains the next distinct reference
+family. This is not a reason to restart broad collection or a blind review loop.

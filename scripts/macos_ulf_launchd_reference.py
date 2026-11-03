@@ -62,8 +62,16 @@ class MessageCounts(Model):
     other_test_item: int = Field(default=0, ge=0)
 
 
+class LabelMatches(Model):
+    """Locate only the generated label, without exposing either native field."""
+
+    message_only: int = Field(default=0, ge=0)
+    category_only: int = Field(default=0, ge=0)
+    both: int = Field(default=0, ge=0)
+
+
 class Report(Model):
-    kit_version: Literal[1] = 1
+    kit_version: Literal[1, 2] = 2
     purpose: Literal["LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"] = "LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
@@ -71,11 +79,16 @@ class Report(Model):
     error: Error = "NONE"
     stage: Literal["PREPARED", "SETUP_READY", "COMPLETE", "ERROR"] = "ERROR"
     collector_ready: Check = "INCONCLUSIVE"
+    readiness_scope: Literal["OWN_PROCESS_MARKER_ONLY"] = "OWN_PROCESS_MARKER_ONLY"
     job_activated: Check = "INCONCLUSIVE"
     job_removed: Check = "INCONCLUSIVE"
     temporary_files_removed: Check = "INCONCLUSIVE"
     collector_cleanup: Check = "INCONCLUSIVE"
     retained_rows: int = Field(default=0, ge=0, le=256)
+    reference_result: Literal["NOT_EVALUATED", "NO_MATCHING_ROWS", "RECORDS_REQUIRE_REVIEW"] = (
+        "NOT_EVALUATED"
+    )
+    label_matches: LabelMatches = Field(default_factory=LabelMatches)
     native_shapes: Check = "INCONCLUSIVE"
     launchd_writer: Check = "INCONCLUSIVE"
     root_writer: Check = "INCONCLUSIVE"
@@ -206,12 +219,50 @@ def _config(root: Path) -> Config:
     return config
 
 
+def _label_location(
+    row: dict, label: str
+) -> Literal["message_only", "category_only", "both"] | None:
+    """Authenticate the test item in message text or the structured category."""
+    text, category = row.get("eventMessage"), row.get("category")
+    in_text = isinstance(text, str) and label in text
+    in_category = isinstance(category, str) and label in category
+    if in_text and in_category:
+        return "both"
+    if in_text:
+        return "message_only"
+    if in_category:
+        return "category_only"
+    return None
+
+
+def _predicate(config: Config) -> str:
+    """Select the same nonce fields at the OS boundary and at retention."""
+    label = "org.evidenceforge.reference.launchd." + config.nonce
+    return (
+        f'(process == "launchd" AND (eventMessage CONTAINS "{label}" '
+        f'OR category CONTAINS "{label}")) '
+        f'OR (process == "ready-marker" AND eventMessage == "EFORGE_ULF_READY {config.nonce}")'
+    )
+
+
 def analyze(rows: list[dict], label: str, base: Report) -> Report:
     """Return fixed comparisons only; unknown strings never leave private memory."""
     if len(rows) > 256:
         raise PrivateError("LIMIT")
-    if any(label not in str(row.get("eventMessage", "")) for row in rows):
+    locations = [_label_location(row, label) for row in rows]
+    if any(location is None for location in locations):
         raise PrivateError("CONTROL")
+    base = base.model_copy(
+        update={
+            "retained_rows": len(rows),
+            "reference_result": "RECORDS_REQUIRE_REVIEW" if rows else "NO_MATCHING_ROWS",
+            "label_matches": LabelMatches(
+                message_only=locations.count("message_only"),
+                category_only=locations.count("category_only"),
+                both=locations.count("both"),
+            ),
+        }
+    )
     parsed: list[UnifiedLogRecord] = []
     for row in rows:
         try:
@@ -288,7 +339,7 @@ def capture(root: Path) -> Report:
     if (root / "records.ndjson").exists():
         raise PrivateError("CONTROL")
     label = "org.evidenceforge.reference.launchd." + config.nonce
-    predicate = f'(process == "launchd" AND eventMessage CONTAINS "{label}") OR (process == "ready-marker" AND eventMessage == "EFORGE_ULF_READY {config.nonce}")'
+    predicate = _predicate(config)
     rows: list[dict] = []
     flags: set[str] = set()
     ready = False
@@ -381,8 +432,7 @@ def capture(root: Path) -> Report:
                         if text == "EFORGE_ULF_READY " + config.nonce:
                             ready = True
                         elif (
-                            isinstance(text, str)
-                            and label in text
+                            _label_location(row, label) is not None
                             and row.get("processID") == 1
                             and row.get("processImagePath") == "/sbin/launchd"
                         ):

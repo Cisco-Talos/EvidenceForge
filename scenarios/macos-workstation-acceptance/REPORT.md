@@ -40,8 +40,10 @@ No new blind panel or assessment loop was started.
 workload is just two loginwindow workspace-entry records. The separately qualified
 ASP policy-refusal path remains available, but no SSH authentication/session or
 launchd job lifecycle ULF template has been added. The existing captures for those
-families explicitly contain no ULF. A new private launchd diagnostic is prepared;
-its human-run report is pending. Unknown GUI/SSH exit outcomes remain explicit
+families explicitly collected no ULF. The private launchd ULF test completed all
+controls but retained zero rows and qualifies
+no template. Its message-only filter limitation is corrected in code without a
+native rerun. Unknown GUI/SSH exit outcomes remain explicit
 lifecycle limits. Final acceptance of expanded ULF follows reference qualification
 and implementation, not the current deterministic score.
 

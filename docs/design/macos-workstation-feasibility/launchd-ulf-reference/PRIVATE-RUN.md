@@ -12,9 +12,10 @@ or boot out an entire domain. Every child launchctl command has a deadline; the
 guard has a separate cancellation/watchdog cleanup path. Machine failure/SIGKILL or
 launchctl failure can still prevent cleanup and must not be reported as success.
 
-The normal-user `log stream` predicate selects only launchd messages containing
-that generated label and an own-process readiness marker. Retention independently
-requires PID 1, `/sbin/launchd` and the exact generated label. Unrelated input is
+The version-2 normal-user `log stream` predicate selects only launchd rows containing
+that generated label in `eventMessage` or `category`, plus an own-process readiness
+marker. Retention independently requires PID 1, `/sbin/launchd` and the exact generated
+label in one of those same fields. Unrelated input is
 discarded in memory. Input, record and total-time limits are fixed. No ES collector,
 browser, SSH connection, real app or installed-code query is used. Native rows stay
 in this private kit, never in the repository. Reports contain only fixed labels and
@@ -52,6 +53,18 @@ The saved fixed report can be printed again with:
 does not qualify a template. This is a finite shape diagnostic, not automatic
 permission to enable launchd generation. SSH ULF qualification is a separate bounded
 reference; this test does not establish SSH messages.
+
+`collector_ready: PASS` proves only the own-process marker channel. It does not prove
+that launchd writes to ULF or that the reader can observe launchd's output. Version 2
+states this as `readiness_scope: OWN_PROCESS_MARKER_ONLY`, reports message/category
+label matches separately and labels empty retention as `NO_MATCHING_ROWS`.
+
+The first human-run version-1 attempt completed every control and cleanup but
+retained zero rows. It selected the label only in message text, so it could not
+test category-labelled output. The filter correction is code-tested; it has not
+been run against native data. **Do not repeat collection solely to turn a zero
+into a positive result.** The [reference note](REFERENCE.md) records the limitation
+and the distinction between ULF and launchd's separate diagnostic file.
 
 If removal or temporary-file cleanup fails, retain the kit and report only those
 fixed statuses. Run the exact-label recovery as your normal user:
