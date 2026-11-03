@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 374
+current_revision: 375
 history_start_revision: 1
-behavior_surface_sha256: d20e1cafe315eaca2a79bb4840ca292ce2b35f2a576453d0ef0c0d457d31c6bc
+behavior_surface_sha256: 569998740598b3b228f4bc1b06408bfe1d765efeb9e6bcfbffdca72a7f147e7f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3598,3 +3598,9 @@ changes:
     domains: [macos-process-lifecycle, macos-execution-metadata, application-catalog]
     formats: [macos_endpoint_security, ecar]
     summary: Adds native Chrome startup and exact renderer/generic-GPU/network helper fork-exec producers with independent signer metadata, canonical sandbox pipes and retained recovery; repairs optional launch spacing.
+  - revision: 375
+    id: macos-uname-natural-completion
+    impact: localized
+    domains: [macos-process-lifecycle]
+    formats: [macos_endpoint_security]
+    summary: Declares a nominal successful result for the exact uname -a invocation when its owning natural completion is untruncated; unknown or forced session teardown results remain unknown.

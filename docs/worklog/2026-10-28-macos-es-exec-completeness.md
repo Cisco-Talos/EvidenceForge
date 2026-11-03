@@ -2676,3 +2676,61 @@ Remaining finite sequence:
 4. One combined acceptance and bounded realism review, after actual implementation; repair
    concrete blockers. Do not restart an open-ended assessment loop or declare unqualified
    ULF families accurate.
+
+
+## 2026-11-02 — Lifecycle accounting, current-code acceptance and finite ULF blocker
+
+The combined recovery milestone was committed as 748febe6 and pushed before
+continuing development. Phase 1 is closed for the agreed bounded workload; this
+is not universal application support or a guarantee of known results for all exits.
+
+Revision **375** declares a nominal zero result only for the exact installed
+`/usr/bin/uname -a` invocation at its untruncated natural completion. The existing
+query owner remains responsible; successful exec or generic session teardown cannot
+supply the result. Natural-completion, forced/truncated/held/deadline, replacement,
+explicit-signal, frozen-policy and recovery checks pass (**32 routine tests**).
+Measurement now separately exposes native exit row count and unknown exit
+observations. Its initial exit counter incorrectly used event number 10; a regression
+test now requires the typed ESExitEvent union (native exit is 15). Earlier diagnostic
+JSON with zero exit counts is superseded by CURRENT-RESULTS.json, not edited in place.
+
+Current unchanged primary: **33 forks/39 execs/85 ES rows**, **13 known native exits**,
+**13 unknown exit observations**, no missing roles/authored starts/aggregate births.
+The three-hour companion repeats full suspend/verify/exact resume and equality of
+all **22 deterministic files** plus native filtering: **45 forks/55 execs/113 ES rows**,
+**16 background execs**, **13 known exits/32 unknown exit observations**. These
+observation counts are not an independent full terminal-result census. Both gate
+runs pass. One evaluation per current bundle passes applicable hard gates at
+**88.9170** (primary) and **88.7093** (companion, 2,817 records). A bounded current-code
+review of nine execution roles, one uname exit and two ULF workspace rows found
+no concrete identity/argument/writer contradiction; it does not qualify missing families.
+
+The finite phases and stopping conditions are now recorded in
+`endpoint-delivery-acceptance.md`. Phases 2–4 are **not all complete**: arbitrary GUI/SSH
+teardown remains unknown; SSH authentication/session and launchd job activation/
+completion ULF require bounded native references. Existing ES-only captures cannot
+verify their writer/sender/callsite/message shapes. No guessed ULF template was added.
+The current primary/companion contain only **two** ULF loginwindow workspace entries;
+that limitation is now explicit in the current report and machine-readable summary.
+
+A human-run launchd ULF diagnostic is prepared at
+`/private/tmp/eforge-ulf-launchd-kit-jkrwd8g7`. Preparation only copied public code.
+The kit's **14 routine privacy/containment tests** and the measurement's **7 tests**
+pass, along with C syntax checks of the public marker and existing restricted job guard.
+No compiled program, native collector, job, installed-code query or private log reader
+was run. The ULF collector runs as the normal user; only the existing restricted job
+guard uses sudo. Both the OS predicate and retention require the generated job label;
+retention also requires launchd/PID 1. Ambient input is discarded in bounded memory,
+private records stay outside Git, and unknown strings/values never enter fixed JSON.
+The guard independently removes the exact job/private plist; cleanup failures remain
+visible and an exact-label recovery operation starts no collector or new job.
+
+The user was asked asynchronously to run setup/capture privately with agents closed
+and share only fixed JSON. That request is pending; silence is not collection permission.
+SSH ULF remains a distinct bounded reference requirement. Do not read this or any old
+private kit without separate approval. Do not mark expanded ULF/final acceptance complete
+because the existing code passes deterministic checks. No new assessment loop is needed.
+
+Whole Ruff/format/diff/behavior checks pass. Revision 375 digest:
+`569998740598b3b228f4bc1b06408bfe1d765efeb9e6bcfbffdca72a7f147e7f`.
+No feature-branch product version bump or release is made.

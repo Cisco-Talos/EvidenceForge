@@ -26,7 +26,7 @@ The first low-intensity diagnostic scheduled no user timestamps at this seed.
 During initial workload construction, intensity was raised to medium to exercise
 the background requirement. The seed, time window and all intended activities
 were retained. Both initial and active-baseline results are reported; a zero-start
-baseline never counts as acceptance.
+sample alone never proves the positive background coverage path.
 
 The OS-inventory job and its fixture provisioning caller are explicitly installed
 and registered before collection. The caller is pre-existing setup state; its

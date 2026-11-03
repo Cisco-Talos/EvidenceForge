@@ -1,0 +1,65 @@
+# Private launchd Unified Log reference
+
+Preparation copies public code to a fresh mode-0700 directory under `/private/tmp`.
+It reads no captures and runs no native commands. Setup and capture are human-run;
+the agent must not start them under the existing privacy boundary.
+
+This checks one temporary system job with an unpredictable generated label. The
+existing restricted job guard creates an exact root-owned temporary plist, registers
+it without `RunAtLoad`, starts `/usr/bin/true`, then removes the job and plist. It
+does not enable/disable services, install in startup directories, inspect real jobs
+or boot out an entire domain. Every child launchctl command has a deadline; the
+guard has a separate cancellation/watchdog cleanup path. Machine failure/SIGKILL or
+launchctl failure can still prevent cleanup and must not be reported as success.
+
+The normal-user `log stream` predicate selects only launchd messages containing
+that generated label and an own-process readiness marker. Retention independently
+requires PID 1, `/sbin/launchd` and the exact generated label. Unrelated input is
+discarded in memory. Input, record and total-time limits are fixed. No ES collector,
+browser, SSH connection, real app or installed-code query is used. Native rows stay
+in this private kit, never in the repository. Reports contain only fixed labels and
+bounded counts. Unknown subsystem/category/format/message values are not disclosed.
+
+## Run as your normal user
+
+Use the fresh kit path supplied in chat as `KIT`. Close agents before collection.
+These are separate commands; the entire Python helper must not run under sudo.
+
+```sh
+cd KIT
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py setup --private-run
+```
+
+Continue only for `stage: SETUP_READY` and `error: NONE`. Setup compiles controls
+without executing them. It reads no native records. Then:
+
+```sh
+sudo -v && /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py capture --private-run
+```
+
+One window only. Readiness normally appears within eight seconds; the collector
+window is at most 35 seconds, followed by bounded cleanup. No dialog, additional
+command, browser action or password entry after `sudo -v` is expected. The helper
+automatically prints fixed JSON. Share only that JSON, or the saved
+`SHAREABLE-ULF-REPORT.json`; do not share native rows, screenshots or private paths.
+The saved fixed report can be printed again with:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py report --private-run
+```
+
+`gate_status: NOT_EVALUATED` is expected. An empty result or `OTHER` classification
+does not qualify a template. This is a finite shape diagnostic, not automatic
+permission to enable launchd generation. SSH ULF qualification is a separate bounded
+reference; this test does not establish SSH messages.
+
+If removal or temporary-file cleanup fails, retain the kit and report only those
+fixed statuses. Run the exact-label recovery as your normal user:
+
+```sh
+sudo -v && /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py cleanup --private-run
+```
+
+This starts no collector or new job, performs no job query, and cannot remove an
+entire domain. Do not delete the kit or assume the job is absent. A cancelled run
+must not be reused for a second capture; prepare a fresh kit after resolving cleanup.

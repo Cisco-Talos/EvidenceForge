@@ -159,6 +159,9 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         item.activity_supported and item.census_complete and item.background_native_execs > 0
         for item in measurements
     ), measurements
+    assert all(
+        item.native_exit_rows > 0 and item.exit_outcomes_unknown > 0 for item in measurements
+    )
     (tmp_path / "RESULTS.json").write_text(
         json.dumps(
             {

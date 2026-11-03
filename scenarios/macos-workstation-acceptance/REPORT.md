@@ -1,67 +1,54 @@
-# Mac workstation acceptance after native Chrome integration
+# Current Mac workstation acceptance
 
-The complete workload now generates successfully, including Chrome and all three
-required helper roles. Every modeled process start/successful exec in both full
-runs reconciles exactly with ES, with zero aggregate starts. This is bounded
-engineering acceptance, not universal macOS or Chrome authenticity.
+The bounded process-start milestone is complete. Every modeled in-window fork
+and successful exec in the two-Mac acceptance matrix reconciles with native ES,
+with zero aggregate starts. The original thirty-minute source and seed are
+unchanged; quiet baseline sampling and positive companions remain separate.
 
-The primary seed remains **not fully exercised** for the original positive
-background requirement: it schedules no background process starts. The separate,
-predeclared supplemental seed does exercise that path and remains separately labeled.
+| Current revision 375 run | Forks / native | Execs / native | Native exits with known result | Unknown exit observations | Background execs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Thirty-minute primary, seed 373 | 33 / 33 | 39 / 39 | 13 | 13 | 0 |
+| Three-hour recovery companion, seed 373 | 45 / 45 | 55 / 55 | 13 | 32 | 16 |
 
-| Full workload | Forks expected / ES | Execs expected / ES | ES rows | Background execs | Native census |
-| --- | ---: | ---: | ---: | ---: | --- |
-| Primary seed 373 | 33 / 33 | 39 / 39 | 84 | 0 | Exact; background unexercised |
-| Supplemental seed 375 | 37 / 37 | 44 / 44 | 93 | 5 | Exact; positive background |
+Unknown counts are ingress coverage observations, not a universal census of
+all terminal results. Start completeness does not imply exit-result completeness.
+The source omits native exit rows when the canonical result is unknown. The new
+literal `uname -a` nominal policy adds one known natural completion; it cannot
+apply to other arguments, replaced images, truncated commands or session teardown.
+Directory-listing, GUI shutdown and SSH final-worker results are not assumed zero.
 
-Both runs retain all authored target activities, two Macs, Terminal and iTerm2,
-SSH with and without a PTY, browsing, inventory jobs, the thirty-minute window,
-medium baseline intensity and complete native coverage policy. There are no
-missing executable roles, authored PID/image traces or fork/exec obligations.
-The two explicitly optional warmup cleanup logoffs may be no-ops when no warmup
-session exists; only their typed no_matching_session result is accepted.
-Skipped process starts and other unsuccessful actions cannot use that exception.
+Both runs realize all authored activities and required executable/argument roles:
+Apple Terminal, iTerm2, local queries, SSH with and without a PTY, Chrome main and
+renderer/GPU/network helpers, browsing and OS-inventory jobs. The original,
+predeclared supplemental seed 375 also exercises positive baseline activity;
+its revision-374 results remain historical and are not relabelled as revision 375.
 
-The reference corrected the GPU physical-image expectation: the generic Chrome
-Helper ran GPU work. The fixture preserves renderer, GPU and network roles, and
-measurement requires their argument vectors independently. Sharing a helper
-executable cannot let one operational role satisfy another. This corrects the
-variant; it does not remove the GPU activity or lower the completeness policy.
+The recovery companion passes public suspension, read-only verification and exact
+resume with retained SSH continuations and live terminal/browser/helper work.
+All **22 deterministic bundle files** match uninterrupted generation, and native-only
+filtering preserves identical ES bytes. Neither source coverage nor recovery was
+made to pass by removing workload families or weakening the complete ES policy.
 
-Verification on the primary full bundle:
+Deterministic evaluation verifies both authoritative bundles and passes applicable
+hard gates: primary **88.9170/100**, recovery **88.7093/100**. These scores do not qualify
+unimplemented native templates. The small lab retains low noise-volume/diversity
+limitations. A bounded current-code review of nine execution roles, one known exit
+and two ULF rows found no concrete identity, helper-argument or writer contradiction.
+No new blind panel or assessment loop was started.
 
-- All 33 forks and 39 execs agree with eCAR, including exec identity versions,
-  paths and canonical argument vectors.
-- Native-only output is byte-identical across both hosts: all 84 ES records.
-- Deterministic evaluation verifies the authoritative bundle and passes every
-  applicable hard gate, with score 88.9227/100. Low behavioral diversity and
-  noise volume remain reported limits of this small lab.
-- The separate twelve-hour native browser-helper checkpoint gate passes
-  suspension, integrity verification, exact resume and deterministic output
-  equivalence while retaining live helpers at the checkpoint. Unit fault tests
-  cover both fork and exec before-commit/lost-return recovery, one pipe allocation,
-  State snapshot restoration and no duplicate process identities.
+**The endpoint delivery sequence is not fully complete.** Current ULF output in this
+workload is just two loginwindow workspace-entry records. The separately qualified
+ASP policy-refusal path remains available, but no SSH authentication/session or
+launchd job lifecycle ULF template has been added. The existing captures for those
+families explicitly contain no ULF. A new private launchd diagnostic is prepared;
+its human-run report is pending. Unknown GUI/SSH exit outcomes remain explicit
+lifecycle limits. Final acceptance of expanded ULF follows reference qualification
+and implementation, not the current deterministic score.
 
-The exact thirty-minute source has no usable intermediate hourly suspension
-boundary. A checkpoint-enabled attempt finished without reaching the test hook;
-it does not count as full-workload recovery acceptance. No source time or duration
-was changed to disguise that limit. The component recovery gate is explicitly
-separate from this remaining full-workload acceptance condition.
+See the finite [four-phase delivery plan](../../docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
+and [current machine-readable results](CURRENT-RESULTS.json). The previous
+[Chrome integration results](CHROME-RESULTS.json), [initial report](INITIAL-REPORT.md)
+and [original slice results](RESULTS.json) remain dated historical evidence.
 
-The producer uses frozen synthetic release identities and declared environment,
-pipe-slot and timing choices. Static vendor templates and bounded macOS 27
-relationships are qualified independently; the private installed Chrome build
-differed from the frozen catalog and does not establish exact release parity.
-Dedicated-GPU, Crashpad double-fork, alerts and arbitrary helper invocations remain
-outside this bounded producer. Unknown exit outcomes stay unknown. No general
-app-launch Unified Log family, browser IPC or helper-owned network traffic is inferred.
-No private capture, native record or observed private value is included here.
-
-Machine-readable current results: [CHROME-RESULTS.json](CHROME-RESULTS.json).
-Synthetic bundles are retained under
-`runs/macos-workstation-acceptance/2026-11-02-chrome-native-374/` (ignored).
-Generation behavior revision: 374. No product release version is changed.
-
-The [initial measurement](INITIAL-REPORT.md) and [original slice results](RESULTS.json)
-remain historical evidence of the former Chrome blocker; they are superseded by
-this report for current capability. No assessment loop was started.
+All data in these runs is synthetic. Native references are not committed, copied
+into the repository or inspected during this work. No product release version changed.

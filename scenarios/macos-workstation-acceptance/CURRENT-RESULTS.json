@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "generation_behavior_revision": 375,
+  "phase_1": "COMPLETE_BOUNDED_WORKLOAD",
+  "phases_2_to_4": "NOT_ALL_COMPLETE",
+  "measurements": [
+    {
+      "run": "primary",
+      "seed": 373,
+      "forks": 33,
+      "execs": 39,
+      "background_native_execs": 0,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 13,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "bc6e8b1a145832765e6f1872d93c782010f8c7f5dba6353ebdfeb895946b4bd4"
+    },
+    {
+      "run": "combined-recovery",
+      "seed": 373,
+      "forks": 45,
+      "execs": 55,
+      "background_native_execs": 16,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 32,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "580aaab3f00988989edebf36b320730b422b68d5e85e9f4677cfa884810cfd04"
+    }
+  ],
+  "combined_exact_resume_files_equal": true,
+  "combined_native_filter_bytes_equal": true,
+  "deterministic_files_compared": 22,
+  "primary_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 88.91704685712276,
+    "source_counts": {
+      "ecar": 176,
+      "macos_endpoint_security": 85,
+      "macos_unified_log": 2,
+      "zeek_conn": 35,
+      "zeek_dns": 14,
+      "zeek_files": 4,
+      "zeek_ssl": 16,
+      "zeek_x509": 4,
+      "zsh_history": 8
+    }
+  },
+  "remaining": [
+    "Known results do not cover arbitrary GUI or SSH teardown; unknown results are reported and not rendered as successful exits.",
+    "SSH authentication/session and launchd activation/completion Unified Log messages require bounded references before implementation.",
+    "Final acceptance of those new families follows their implementation; current deterministic acceptance cannot qualify missing templates."
+  ],
+  "scope": "Synthetic engineering acceptance; no private records or observed native values are included.",
+  "combined_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 88.70928572014297,
+    "total_records": 2817
+  },
+  "bounded_current_code_review": {
+    "es_records_reviewed": 10,
+    "ulf_records_reviewed": 2,
+    "result": "No concrete identity, helper-argument or writer contradiction in this sample; expanded ULF acceptance remains pending."
+  }
+}

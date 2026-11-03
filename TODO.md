@@ -81,7 +81,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] Finish the finite Mac endpoint delivery sequence: explicit lifecycle outcomes for the
   supported workload; reference-qualified minimum Unified Log coverage; one combined final
   acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and
-  evidence blockers belong in the same worklog.
+  evidence blockers are fixed in the [delivery plan](docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
+  and the same worklog. New SSH/launchd ULF templates require bounded native references;
+  existing ES-only references do not close those gates.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native

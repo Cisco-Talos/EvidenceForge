@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from scripts.measure_macos_workstation import (
     Case,
     RequiredExecution,
@@ -16,8 +17,39 @@ from scripts.measure_macos_workstation import (
     summarize,
 )
 
+from evidenceforge.formats.macos_endpoint_security import ESExit, ESExitEvent
 from evidenceforge.generation.engine.typed_handlers.authentication import handle_logoff
 from evidenceforge.models.scenario import LogoffEventSpec
+
+
+def test_measurement_counts_native_exit_union_rather_than_an_unrelated_event_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import scripts.measure_macos_workstation as measurement
+
+    (tmp_path / "GENERATION_MANIFEST.json").write_text(
+        '{"generation_seed":373,"output_target":"default"}'
+    )
+    (tmp_path / "GROUND_TRUTH.json").write_text("{}")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "macos_endpoint_security.ndjson").write_text("invented exit\n")
+    monkeypatch.setattr(
+        measurement,
+        "GroundTruthDocument",
+        SimpleNamespace(
+            model_validate_json=lambda raw: SimpleNamespace(events=(), macos_native_coverage=None)
+        ),
+    )
+    monkeypatch.setattr(
+        measurement,
+        "decode_endpoint_security_record",
+        lambda raw: SimpleNamespace(event_type=15, event=ESExitEvent(exit=ESExit(stat=0))),
+    )
+    case = Case(name="exit", description="Known exit", steps=(), required_images=())
+    result = summarize(tmp_path, case, full=True, exit_code=0, text="")
+    assert result.native_exit_rows == 1
+    assert result.exit_outcomes_unknown is None
 
 
 def test_slice_preserves_baseline_and_environment_and_declares_partial() -> None:

@@ -158,12 +158,13 @@ def test_reviewed_true_command_has_one_real_fork_exec_and_known_zero_exit(
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("owner", ["bounded_finalizer", "command_completion"])
+@pytest.mark.parametrize("command", ["/usr/bin/id", "/usr/bin/uname -a"])
 def test_nominal_command_completion_commits_one_known_exit(
-    tmp_path: Path, scenarios_dir: Path, native: bool, owner: str
+    tmp_path: Path, scenarios_dir: Path, native: bool, owner: str, command: str
 ) -> None:
     with _engine(tmp_path, scenarios_dir, native=native) as fixture:
         engine, target, user, session = fixture
-        process, at = _launch(fixture)
+        process, at = _launch(fixture, command)
         if owner == "bounded_finalizer":
             engine.activity_generator.finalize_foreground_process_lifetimes(
                 at + timedelta(seconds=1)

@@ -19,7 +19,10 @@ from pydantic import BaseModel, ConfigDict
 
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
-from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+from evidenceforge.formats.macos_endpoint_security import (
+    ESExitEvent,
+    decode_endpoint_security_record,
+)
 
 
 class RequiredExecution(BaseModel):
@@ -72,6 +75,8 @@ class Measurement(BaseModel):
     unrealized_steps: tuple[str, ...] = ()
     authored_phase_gaps: tuple[str, ...] = ()
     background_native_execs: int | None = None
+    native_exit_rows: int | None = None
+    exit_outcomes_unknown: int | None = None
     activity_supported: bool = False
     census_complete: bool = False
     manifest_sha256: str | None = None
@@ -152,10 +157,13 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
     images: dict[str, int] = {}
     native_executions: set[tuple[str, int, str]] = set()
     native_arguments: list[tuple[str, tuple[str, ...]]] = []
+    native_exit_rows = 0
     for path in sorted((output / "data").rglob("macos_endpoint_security.ndjson")):
         with path.open() as stream:
             for line in stream:
                 record = decode_endpoint_security_record(line)
+                if isinstance(record.event, ESExitEvent):
+                    native_exit_rows += 1
                 if record.event_type == 9:
                     image = record.event.exec.target.executable.path
                     images[image] = images.get(image, 0) + 1
@@ -249,6 +257,19 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
         unrealized_steps=missing_steps,
         authored_phase_gaps=tuple(sorted(set(gaps))),
         background_native_execs=background,
+        native_exit_rows=native_exit_rows,
+        exit_outcomes_unknown=(
+            sum(
+                item.count
+                for host in coverage.hosts
+                for item in host.observations
+                if item.phase == "exit"
+                and item.reason == "exit_outcome_unknown"
+                and item.status != "out_of_window"
+            )
+            if coverage is not None
+            else None
+        ),
         census_complete=complete,
         activity_supported=supported,
         manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),

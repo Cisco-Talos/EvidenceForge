@@ -101,6 +101,8 @@ command_completions:
     exit_code: 0
   - arguments: ["/usr/bin/sw_vers", "-productVersion"]
     exit_code: 0
+  - arguments: ["/usr/bin/uname", "-a"]
+    exit_code: 0
 terminal:
   volume_id: modeled-devfs
   device: 16777217
