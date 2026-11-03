@@ -128,3 +128,19 @@ cleanup, not native ES/ULF execution evidence. Only after this report can the us
 run one separate fresh bounded ULF capture. No capture is enabled automatically,
 and absence of qualifying records still leaves launchd ULF gated. Code-only
 preparation and synthetic tests do not close the native evidence gate.
+
+## Collector-free controls passed; one fresh ULF capture pending
+
+The user supplied the fixed activation-control report with error NONE, stage COMPLETE,
+original controls and cached sudo PASS, all directory/lease/registration/activation/
+job-removal/file-removal fields PASS, guard_exit ZERO, no control_failures and result
+PASS. Collectors were NOT_STARTED and native record files NOT_OPENED. This establishes
+the stated LAUNCHCTL_ACKNOWLEDGEMENT scope and completed cleanup. It does not explain
+the earlier attempt's failure or establish native execution/ULF messages.
+
+A separate fresh code-only kit has been prepared for the one planned bounded ULF
+capture with the already-tested category-or-message selector and detailed controls.
+The self-test kit is not reused. Setup and collection remain human-run; no agent has
+started them or read private files. If the capture passes its controls but yields no
+qualifying records, leave launchd ULF gated and stop collecting. No separate diagnostic
+file source or broader metadata/assessment investigation is added to compensate.

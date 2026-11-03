@@ -3186,3 +3186,30 @@ setup followed by `self-test --private-run` as their normal user, with cached su
 used only inside the guard. Its fixed JSON is pending; no capture command is currently
 requested. Preserve failed kits. A passing test requires a distinct fresh kit before
 any later native capture, and does not silently close the launchd ULF gate.
+
+## 2026-11-03 — Activation controls pass; one fresh bounded ULF capture prepared
+
+The user supplied only the fixed collector-free report from the fresh self-test:
+error NONE, stage COMPLETE, original controls/cached sudo PASS, all directory,
+lease, registration, activation, job-removal and file-removal checks PASS, guard_exit
+ZERO, no failures and result PASS. The scope remains LAUNCHCTL_ACKNOWLEDGEMENT;
+native execution evidence was NOT_COLLECTED, native files NOT_OPENED and collectors
+NOT_STARTED. This closes the control prerequisite and verifies cleanup for that
+attempt. It does not identify the earlier failure's cause or qualify native ULF.
+No agent repeated the test or inspected private kit contents.
+
+Code-only preparation created the separate fresh capture kit
+`/private/tmp/eforge-ulf-launchd-kit-ds9mv7tm` from the unchanged tested version-4
+helper/guard. No setup, collector, job or native query has been started by an agent.
+The user has been given normal-user setup followed by the bounded capture command
+in that fresh kit, after closing agents. The consumed self-test kit is not reused.
+Only the fixed JSON is requested; native rows remain private and outside Git.
+
+The stopping rule is unchanged: after this one category-or-message bounded capture,
+if controls pass but no qualifying rows appear, leave launchd ULF gated and stop
+collecting. Do not add a separate launchd diagnostic-file source or broader metadata/
+assessment investigation. Phase 3/4 full-scope native acceptance remains open until
+qualifying evidence exists; existing ES/process coverage and current supported ULF
+families retain their passing results. Production generation, revision 377, scenario
+inputs and acceptance bundles are unchanged. This is a documentation/aggregate-status
+update only; no behavioral tests or generation are repeated.

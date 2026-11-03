@@ -74,9 +74,10 @@ gated; it is not silently removed from full-scope phase 3/4 acceptance. See the
 launchd reference note for the fixed reports and their limits.
 
 The user subsequently authorized the next finite step: a collector-free activation/
-cleanup check with fixed stage/reason diagnostics. Version 4 is prepared and tested;
-the private self-test report is pending. This checks launchctl acknowledgements and
-cleanup only, with no native execution evidence or ULF gate closure. A one-shot
-control kit cannot later be reused for capture. Only after a passing control report
-will one separate fresh bounded ULF capture be considered. Do not restart broader
-process metadata research or repeat a blind panel to compensate for this gate.
+cleanup check with fixed stage/reason diagnostics. Its private version-4 report now
+passes every control, guard_exit ZERO and result PASS. This establishes launchctl
+acknowledgements and cleanup only, with no native execution evidence or ULF gate
+closure. A separate fresh bounded ULF capture is prepared and pending human execution;
+the one-shot control kit cannot be reused. If this capture passes its controls but
+has no qualifying records, leave launchd ULF gated and stop collecting. Do not restart
+broader process metadata research or repeat a blind panel to compensate for this gate.

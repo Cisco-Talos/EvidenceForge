@@ -58,7 +58,7 @@
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
-    "Launchd ULF remains reference-gated. The corrected-selector attempt failed activation controls; zero rows are inconclusive. A human-run grouped check verified both test directory and exact service absent; no cleanup or new collection is requested.",
+    "Launchd ULF remains reference-gated. The collector-free job-control test passed all creation/registration/activation/removal checks and zero guard exit. One separate fresh bounded ULF capture is pending human execution; a valid empty result will remain gated without further collection.",
     "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
     "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
   ],
@@ -123,10 +123,18 @@
     "qualifies_launchd_ulf": false
   },
   "launchd_activation_control_test": {
-    "status": "PREPARED_PENDING_HUMAN_RUN",
+    "status": "PASS_HUMAN_FIXED_REPORT",
     "collection": "NONE",
     "scope": "Launchctl activation acknowledgement and exact job/file cleanup",
     "qualifies_native_execution_or_ulf": false,
-    "one_shot_kit_required": true
+    "one_shot_kit_required": true,
+    "guard_exit": "ZERO",
+    "all_control_fields": "PASS",
+    "cleanup": "PASS"
+  },
+  "launchd_ulf_capture": {
+    "status": "PREPARED_PENDING_HUMAN_RUN",
+    "uses_separate_fresh_kit": true,
+    "stopping_rule": "If controls pass with no qualifying rows, leave gated and stop collecting"
   }
 }

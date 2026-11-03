@@ -67,11 +67,12 @@ message template or separate diagnostic-file source is promoted. Current exact
 recovery and evaluation cover the implemented families; they do not close the
 launchd ULF gate or mark full-scope phases 3/4 complete.
 
-The next authorized step is a private collector-free job-control check. Its tested
-version-4 helper reports precise failure stages and coarse causes, preserves legacy
-kits, and requires a fresh one-shot kit. A successful launchctl acknowledgement and
-cleanup do not themselves qualify native execution or ULF output. No existing
-generation measurements are relabelled or rerun for this diagnostic-only change.
+The private collector-free version-4 job-control check passed all controls with zero
+guard exit and successful cleanup. Its launchctl acknowledgements do not themselves
+qualify native execution or ULF output. One separate fresh bounded ULF capture is
+prepared and pending human execution; if it passes controls but has no qualifying
+rows, leave the source gated and stop collecting. No existing generation measurements
+are relabelled or rerun for this diagnostic-only change.
 
 See the finite [four-phase delivery plan](../../docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
 and [current machine-readable results](CURRENT-RESULTS.json). The previous
