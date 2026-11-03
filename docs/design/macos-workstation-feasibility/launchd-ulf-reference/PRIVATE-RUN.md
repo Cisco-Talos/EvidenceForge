@@ -21,7 +21,46 @@ browser, SSH connection, real app or installed-code query is used. Native rows s
 in this private kit, never in the repository. Reports contain only fixed labels and
 bounded counts. Unknown subsystem/category/format/message values are not disclosed.
 
-## Run as your normal user
+## First verify job controls without collection
+
+The next requested run is the version-4 collector-free control test. Use only the
+fresh control kit supplied in chat; older kits remain unchanged. Run as your normal
+user in one window:
+
+```sh
+cd CONTROL_KIT
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py setup --private-run
+```
+
+Continue only for SETUP_READY/NONE:
+
+```sh
+sudo -v && /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B ./private_ulf_launchd.py self-test --private-run
+```
+
+This executes only the restricted temporary-job guard. No ES/ULF collector or
+readiness marker starts, no job query runs and no native record is opened. The
+guard keeps its cancellation pipe open through normal completion, requests the
+same fixed `/usr/bin/true` job, and performs exact-label removal and file cleanup.
+Each launchctl command retains its deadline and the guard retains its watchdog.
+The returned JSON is also saved as SHAREABLE-ACTIVATION-REPORT.json. Share only that
+fixed report, including failures. Unknown command output and numeric error values
+are suppressed. A `control_failures` entry identifies a fixed stage and coarse
+reason, for example DIRECTORY_CREATE/PERMISSION_DENIED or REGISTRATION/COMMAND_EXIT.
+
+PASS requires all creation, lease, registration, activation, job-removal and file-
+removal fields PASS, guard_exit ZERO and result PASS. Activation here means the
+launchctl acknowledgement; native execution evidence remains NOT_COLLECTED and
+gate_status stays NOT_EVALUATED. A timeout or signal cannot pass based on success-
+looking status text. Failed cleanup remains unverified and requires its own fixed
+report; do not delete the kit.
+
+The attempt marker makes this kit one-use and prevents later capture in it. Even a
+passing test needs a separate fresh capture kit. Do not run the capture instructions
+below until the control report is reviewed and a fresh kit is supplied. No new
+capture is requested by preparation or a passing control test alone.
+
+## Capture in a separate fresh kit after the control test
 
 Use the fresh kit path supplied in chat as `KIT`. Close agents before collection.
 These are separate commands; the entire Python helper must not run under sudo.
@@ -61,9 +100,10 @@ label matches separately and labels empty retention as `NO_MATCHING_ROWS`.
 
 The first human-run version-1 attempt completed every control and cleanup but
 retained zero rows. It selected the label only in message text, so it could not
-test category-labelled output. The filter correction is code-tested; it has not
-been run against native data. **Do not repeat collection solely to turn a zero
-into a positive result.** The [reference note](REFERENCE.md) records the limitation
+test category-labelled output. The corrected-selector attempt subsequently failed
+activation controls; the grouped read-only check verified its directory and exact
+service absent. That attempt does not establish ULF visibility. **Do not repeat
+collection solely to turn a zero into a positive result.** The [reference note](REFERENCE.md) records the limitation
 and the distinction between ULF and launchd's separate diagnostic file.
 
 If removal or temporary-file cleanup fails, retain the kit and report only those
@@ -98,3 +138,7 @@ Service details are discarded and unknown error text stays hidden. Only simultan
 directory absence and an exact-label missing-service diagnostic yield
 `cleanup_state: ABSENCE_VERIFIED`; other results retain their explicit uncertainty.
 Do not rerun setup/capture or replace used-kit files to work around a rejected lease.
+
+New version-4 configurations select detailed guard statuses explicitly. Historical
+configurations keep their original run/cleanup protocol and remain readable. New
+reports add fixed control failure labels without changing old hash-bound kits.

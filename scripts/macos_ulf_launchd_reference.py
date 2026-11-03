@@ -37,7 +37,7 @@ type Error = Literal[
 SAFE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_LINE = 128 * 1024
-GUARD_LABELS = frozenset(
+BASE_GUARD_LABELS = frozenset(
     {
         "REGISTERED",
         "ACTIVATED",
@@ -66,6 +66,67 @@ class Model(BaseModel):
 class Config(Model):
     nonce: str = Field(pattern="^[a-f0-9]{32}$")
     hashes: dict[str, str]
+    guard_protocol: Literal["legacy", "detailed-v1"] = "legacy"
+
+
+class ControlFailure(Model):
+    """Fixed guard operation and coarse cause, never command output or errno values."""
+
+    stage: Literal[
+        "DIRECTORY_CREATE",
+        "DIRECTORY_OPEN",
+        "DIRECTORY_STAT",
+        "DIRECTORY_VALIDATE",
+        "LEASE_PATH",
+        "LEASE_CREATE",
+        "LEASE_WRITE",
+        "LEASE_CLOSE",
+        "LEASE_VALIDATE",
+        "REGISTRATION",
+        "ACTIVATION",
+        "REMOVAL",
+        "FILE_REMOVAL",
+    ]
+    reason: Literal[
+        "ALREADY_EXISTS",
+        "NOT_FOUND",
+        "PERMISSION_DENIED",
+        "NO_SPACE",
+        "READ_ONLY",
+        "UNSAFE_PATH",
+        "RESOURCE_LIMIT",
+        "INTERRUPTED",
+        "OTHER_SYSTEM_ERROR",
+        "UNSAFE_METADATA",
+        "BOUNDS",
+        "CONTENT_UNVERIFIED",
+        "SHORT_WRITE",
+        "CLOCK_ERROR",
+        "CANCELLED",
+        "SPAWN_ERROR",
+        "COMMAND_SIGNAL",
+        "COMMAND_EXIT",
+        "WAIT_ERROR",
+        "TIMED_OUT",
+    ]
+
+
+FAILURE_LABELS: dict[str, ControlFailure] = {
+    f"FAILURE_{stage}_{reason}": ControlFailure(stage=stage, reason=reason)
+    for stage in get_args(ControlFailure.model_fields["stage"].annotation)
+    for reason in get_args(ControlFailure.model_fields["reason"].annotation)
+}
+GUARD_LABELS = (
+    BASE_GUARD_LABELS
+    | frozenset(FAILURE_LABELS)
+    | {
+        "DIRECTORY_CREATED",
+        "LEASE_WRITTEN",
+        "REGISTRATION_ATTEMPTED",
+        "ACTIVATION_ATTEMPTED",
+        "REMOVAL_ATTEMPTED",
+    }
+)
 
 
 class MessageCounts(Model):
@@ -84,7 +145,7 @@ class LabelMatches(Model):
 
 
 class Report(Model):
-    kit_version: Literal[1, 2, 3] = 3
+    kit_version: Literal[1, 2, 3, 4] = 4
     purpose: Literal["LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"] = "LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
@@ -98,6 +159,7 @@ class Report(Model):
     temporary_files_removed: Check = "INCONCLUSIVE"
     collector_cleanup: Check = "INCONCLUSIVE"
     sudo_credentials: Check = "INCONCLUSIVE"
+    control_failures: tuple[ControlFailure, ...] = Field(default=(), max_length=8)
     job_control: Literal[
         "NOT_EVALUATED",
         "PASS",
@@ -123,6 +185,32 @@ class Report(Model):
         "NOT_OBSERVED"
     )
     messages: MessageCounts = Field(default_factory=MessageCounts)
+
+
+class ActivationReport(Model):
+    """Collector-free job control acknowledgement; not proof of a native ES/ULF event."""
+
+    control_test_version: Literal[1] = 1
+    purpose: Literal["LAUNCHD_ACTIVATION_CONTROL_TEST"] = "LAUNCHD_ACTIVATION_CONTROL_TEST"
+    collection: Literal["NONE"] = "NONE"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    error: Error = "NONE"
+    stage: Literal["COMPLETE", "ERROR"] = "ERROR"
+    controls: Check = "INCONCLUSIVE"
+    sudo_credentials: Check = "INCONCLUSIVE"
+    directory_created: Check = "INCONCLUSIVE"
+    lease_written: Check = "INCONCLUSIVE"
+    job_registered: Check = "INCONCLUSIVE"
+    job_activated: Check = "INCONCLUSIVE"
+    job_removed: Check = "INCONCLUSIVE"
+    temporary_files_removed: Check = "INCONCLUSIVE"
+    guard_exit: Literal["NOT_RUN", "ZERO", "NONZERO", "SIGNAL", "TIMED_OUT"] = "NOT_RUN"
+    control_failures: tuple[ControlFailure, ...] = Field(default=(), max_length=8)
+    result: Literal["PASS", "FAIL", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    activation_scope: Literal["LAUNCHCTL_ACKNOWLEDGEMENT"] = "LAUNCHCTL_ACKNOWLEDGEMENT"
+    native_execution_evidence: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+    native_record_files: Literal["NOT_OPENED"] = "NOT_OPENED"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
 
 
 class CleanupState(Model):
@@ -272,6 +360,7 @@ def setup(root: Path) -> Report:
     config = Config(
         nonce=uuid.uuid4().hex,
         hashes={name: hashlib.sha256(_read(root / name)).hexdigest() for name in names},
+        guard_protocol="detailed-v1",
     )
     _write(root / "CONFIG.json", config.model_dump_json().encode())
     return Report(stage="SETUP_READY")
@@ -317,6 +406,16 @@ def _predicate(config: Config) -> str:
 def _guard_flags(raw: bytes) -> set[str]:
     """Keep only the compiled guard's literal status vocabulary, never command output."""
     return {label for label in GUARD_LABELS if label.encode("ascii") in raw.splitlines()}
+
+
+def _guard_failures(flags: set[str]) -> tuple[ControlFailure, ...]:
+    """Keep stage order while suppressing unknown guard text."""
+    return tuple(value for label, value in FAILURE_LABELS.items() if label in flags)
+
+
+def _guard_operation(config: Config, *, recovery: bool = False) -> str:
+    operation = "cleanup" if recovery else "run"
+    return operation + "-diagnostic" if config.guard_protocol == "detailed-v1" else operation
 
 
 def _guard_status(flags: set[str], *, complete: bool) -> str:
@@ -432,7 +531,7 @@ def capture(root: Path) -> Report:
     """Human-only live capture: OS predicate and private retention both require the nonce."""
     _platform()
     config = _config(root)
-    if (root / "records.ndjson").exists():
+    if (root / "records.ndjson").exists() or (root / "CONTROL-TEST-ATTEMPTED.json").exists():
         raise PrivateError("CONTROL")
     label = "org.evidenceforge.reference.launchd." + config.nonce
     predicate = _predicate(config)
@@ -488,7 +587,13 @@ def capture(root: Path) -> Report:
                         flush=True,
                     )
                     job = subprocess.Popen(
-                        ["/usr/bin/sudo", "-n", str(root / "job-guard"), "run", config.nonce],
+                        [
+                            "/usr/bin/sudo",
+                            "-n",
+                            str(root / "job-guard"),
+                            _guard_operation(config),
+                            config.nonce,
+                        ],
                         env=SAFE_ENV,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
@@ -559,6 +664,7 @@ def capture(root: Path) -> Report:
         job_returncode == 0
         and {"REGISTERED", "ACTIVATED", "REMOVED", "FILES_REMOVED"} <= flags
         and not any(flag.endswith("_FAIL") for flag in flags)
+        and not _guard_failures(flags)
     )
     error = "CONTROL" if not control_complete else "COLLECTOR" if not cleanup else "NONE"
     base = Report(
@@ -570,6 +676,7 @@ def capture(root: Path) -> Report:
         temporary_files_removed="PASS" if "FILES_REMOVED" in flags else "FAIL",
         collector_cleanup="PASS" if cleanup else "FAIL",
         job_control=_guard_status(flags, complete=control_complete),
+        control_failures=_guard_failures(flags),
     )
     raw = b"".join((json.dumps(row) + "\n").encode() for row in rows)
     if len(raw) > MAX_BYTES:
@@ -596,7 +703,13 @@ def cleanup(root: Path) -> Report:
     if credentials.returncode:
         return Report(error="CONTROL", sudo_credentials="FAIL", job_control="NO_STATUS")
     result = subprocess.run(
-        ["/usr/bin/sudo", "-n", str(root / "job-guard"), "cleanup", config.nonce],
+        [
+            "/usr/bin/sudo",
+            "-n",
+            str(root / "job-guard"),
+            _guard_operation(config, recovery=True),
+            config.nonce,
+        ],
         env=SAFE_ENV,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -609,6 +722,7 @@ def cleanup(root: Path) -> Report:
         result.returncode == 0
         and {"REMOVED", "FILES_REMOVED"} <= labels
         and not any(flag.endswith("_FAIL") for flag in labels)
+        and not _guard_failures(labels)
     )
     return Report(
         stage="COMPLETE" if success else "ERROR",
@@ -617,7 +731,126 @@ def cleanup(root: Path) -> Report:
         job_removed="PASS" if "REMOVED" in labels else "FAIL",
         temporary_files_removed="PASS" if "FILES_REMOVED" in labels else "FAIL",
         job_control=_guard_status(labels, complete=success),
+        control_failures=_guard_failures(labels),
     )
+
+
+def self_test(root: Path) -> ActivationReport:
+    """Human-only one-shot activation/cleanup; keep cancellation open and collect no logs."""
+    _platform()
+    config = _config(root)
+    base = ActivationReport(controls="PASS")
+    if config.guard_protocol != "detailed-v1" or any(
+        (root / name).exists()
+        for name in (
+            "CONTROL-TEST-ATTEMPTED.json",
+            "SHAREABLE-ACTIVATION-REPORT.json",
+            "records.ndjson",
+        )
+    ):
+        return base.model_copy(update={"error": "CONTROL", "controls": "FAIL"})
+    credentials = subprocess.run(
+        ["/usr/bin/sudo", "-n", "-v"],
+        env=SAFE_ENV,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if credentials.returncode:
+        return base.model_copy(update={"error": "CONTROL", "sudo_credentials": "FAIL"})
+    _write(root / "CONTROL-TEST-ATTEMPTED.json", b'{"collection":"NONE"}\n')
+    job = subprocess.Popen(
+        ["/usr/bin/sudo", "-n", str(root / "job-guard"), _guard_operation(config), config.nonce],
+        env=SAFE_ENV,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    returncode: int | None = None
+    timed_out = False
+    raw = b""
+    try:
+        try:
+            # Guard output is bounded literals, below pipe capacity. Waiting first
+            # preserves the cancellation channel; communicate() would close it.
+            returncode = job.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            if job.stdin is not None:
+                job.stdin.close()
+            try:
+                returncode = job.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                returncode = None
+        if returncode is not None and job.stdout is not None:
+            raw = job.stdout.read(4097)
+    finally:
+        for stream in (job.stdin, job.stdout):
+            if stream is not None:
+                stream.close()
+    flags = _guard_flags(raw) if len(raw) <= 4096 else set()
+    failures = _guard_failures(flags)
+    lines = raw.splitlines()
+    encoded_labels = {label.encode("ascii") for label in GUARD_LABELS}
+    protocol_valid = (
+        len(raw) <= 4096
+        and len(lines) == len(set(lines))
+        and all(line in encoded_labels for line in lines)
+    )
+    complete = (
+        not timed_out
+        and protocol_valid
+        and returncode == 0
+        and {
+            "DIRECTORY_CREATED",
+            "LEASE_WRITTEN",
+            "REGISTERED",
+            "ACTIVATED",
+            "REMOVED",
+            "FILES_REMOVED",
+        }
+        <= flags
+        and not failures
+        and not any(flag.endswith("_FAIL") for flag in flags)
+    )
+    report = ActivationReport(
+        error="NONE" if complete else "LIMIT" if len(raw) > 4096 else "CONTROL",
+        stage="COMPLETE" if complete else "ERROR",
+        controls="PASS",
+        sudo_credentials="PASS",
+        **{
+            field: (
+                "PASS"
+                if label in flags
+                else "FAIL"
+                if any(failure.stage in stages for failure in failures)
+                else "INCONCLUSIVE"
+            )
+            for field, label, stages in (
+                ("directory_created", "DIRECTORY_CREATED", {"DIRECTORY_CREATE"}),
+                ("lease_written", "LEASE_WRITTEN", {"LEASE_CREATE", "LEASE_WRITE", "LEASE_CLOSE"}),
+                ("job_registered", "REGISTERED", {"REGISTRATION"}),
+                ("job_activated", "ACTIVATED", {"ACTIVATION"}),
+                ("job_removed", "REMOVED", {"REMOVAL"}),
+                ("temporary_files_removed", "FILES_REMOVED", {"FILE_REMOVAL"}),
+            )
+        },
+        guard_exit=(
+            "TIMED_OUT"
+            if timed_out
+            else "ZERO"
+            if returncode == 0
+            else "SIGNAL"
+            if returncode is not None and returncode < 0
+            else "NONZERO"
+        ),
+        control_failures=failures,
+        result="PASS" if complete else "INCONCLUSIVE" if timed_out else "FAIL",
+    )
+    _write(root / "SHAREABLE-ACTIVATION-REPORT.json", report.model_dump_json(indent=2).encode())
+    return report
 
 
 def _cleanup_state_labels(raw: bytes, base: CleanupState) -> CleanupState:
@@ -799,7 +1032,8 @@ def main() -> int:
     """Expose preparation separately from human-only native operations."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "operation", choices=("prepare", "setup", "capture", "report", "cleanup", "check-cleanup")
+        "operation",
+        choices=("prepare", "setup", "capture", "report", "cleanup", "check-cleanup", "self-test"),
     )
     parser.add_argument("--private-run", action="store_true")
     parser.add_argument("--kit-root", type=Path)
@@ -813,7 +1047,13 @@ def main() -> int:
         parser.error(
             "Native operations require explicit --private-run; preparation starts no collection"
         )
-    error_report = CleanupState if args.operation == "check-cleanup" else Report
+    error_report = (
+        CleanupState
+        if args.operation == "check-cleanup"
+        else ActivationReport
+        if args.operation == "self-test"
+        else Report
+    )
     try:
         root = _root(args.kit_root or Path(__file__).absolute().parent)
         if args.operation == "setup":
@@ -824,6 +1064,8 @@ def main() -> int:
             result = cleanup(root)
         elif args.operation == "check-cleanup":
             result = check_cleanup(root)
+        elif args.operation == "self-test":
+            result = self_test(root)
         else:
             result = Report.model_validate_json(_read(root / "SHAREABLE-ULF-REPORT.json"))
     except PrivateError as error:

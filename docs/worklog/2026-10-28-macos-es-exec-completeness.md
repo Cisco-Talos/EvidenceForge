@@ -3140,3 +3140,49 @@ incomplete until a launchd ULF message/envelope is qualified; the family was not
 silently dropped from the plan. Production code, scenario inputs, behavior
 revision 377 and prior passing recovery/evaluation results are unchanged. This is
 a documentation-only reconciliation; no generation or behavioral tests are rerun.
+
+## 2026-11-03 — Collector-free activation check prepared
+
+After asking what comes next, the user authorized continuing the finite sequence:
+precise job-activation diagnostics, a private collector-free control test, then one
+separate bounded ULF capture only if those controls pass. The original kit's verified
+absence remains closed; no original private file or native log was opened or changed.
+
+Version 4 has fixed stage/reason pairs for directory create/open/stat/validation,
+lease path/create/write/close/validation, registration, activation, removal and file
+removal. Coarse errno categories and command exit/signal/timeout/cancellation causes
+are allowlisted; native strings, error numbers, paths, IDs and command output remain
+suppressed. New configs explicitly select detailed-v1 guard operations. Legacy configs
+retain run/cleanup, and the shared ES reference reader keeps its original literal
+wire vocabulary. No used kit was updated and original root target restrictions,
+content-verified recovery lease, deadlines and cancellation/watchdog rules remain.
+
+The new one-shot self-test validates frozen controls and cached sudo, starts only
+the exact guard with stdin PIPE held open through normal completion, waits for its
+bounded literal output and reports all control outcomes. communicate() is deliberately
+not used: its stdin close would cancel the guard. A timeout closes cancellation and
+waits for the watchdog cleanup path, retaining uncertainty if it still does not exit.
+Signals, partial flags, nonzero exit or unknown/duplicate output cannot pass. The
+attempt marker precedes guard launch and prevents retry or later capture in that
+kit. No collector, readiness marker, job query or native record read occurs.
+Activation scope is explicitly LAUNCHCTL_ACKNOWLEDGEMENT, with native execution
+NOT_COLLECTED and gate_status NOT_EVALUATED; this is not native ULF qualification.
+
+All **161 related tests** pass, including **37 new activation-control tests** and the
+124 existing launchd/reference/cleanup tests. A compiled C harness substitutes all
+job/process/clock primitives, redirects guard paths to invented pytest files, and
+supplies synthetic root metadata. It exercises creation, metadata, lease, registration,
+activation, removal, timeout, cancellation, spawn, signal and clock failures without
+sudo, launchctl, native jobs or real privileged paths. Legacy success bytes match;
+the synthetic success path removes its own files. Python tests cover fresh setup/
+hash/protocol selection without execution, pipe lifetime, deadlines, zero/nonzero/
+signal recovery, one-shot rejection, privacy canaries and capture exclusion.
+C syntax checks pass. Production generation remains revision 377 and its prior
+exact recovery/evaluation results are unchanged; no generation or panel is repeated.
+
+Code-only preparation created `/private/tmp/eforge-ulf-launchd-kit-st5dekg3`. No setup,
+self-test, probe, job or collection has been run by an agent. The user has been given
+setup followed by `self-test --private-run` as their normal user, with cached sudo
+used only inside the guard. Its fixed JSON is pending; no capture command is currently
+requested. Preserve failed kits. A passing test requires a distinct fresh kit before
+any later native capture, and does not silently close the launchd ULF gate.

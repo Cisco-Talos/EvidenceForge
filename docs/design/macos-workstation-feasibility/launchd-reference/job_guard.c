@@ -19,7 +19,34 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t stopping;
+static int detailed;
+static const char *command_reason = "NOT_OBSERVED";
 static void stop(int ignored) { (void)ignored; stopping = 1; }
+
+static void label(const char *value);
+
+static const char *system_reason(int value) {
+    switch (value) {
+    case EEXIST: return "ALREADY_EXISTS";
+    case ENOENT: return "NOT_FOUND";
+    case EACCES: case EPERM: return "PERMISSION_DENIED";
+    case ENOSPC: case EDQUOT: return "NO_SPACE";
+    case EROFS: return "READ_ONLY";
+    case ELOOP: case ENOTDIR: return "UNSAFE_PATH";
+    case EMFILE: case ENFILE: return "RESOURCE_LIMIT";
+    case EINTR: return "INTERRUPTED";
+    default: return "OTHER_SYSTEM_ERROR";
+    }
+}
+
+static void failure(const char *coarse, const char *stage, const char *reason) {
+    label(coarse);
+    /* Callers use fixed stage/reason vocabulary, never native strings or errno values. */
+    if (detailed) {
+        (void)printf("FAILURE_%s_%s\n", stage, reason);
+        (void)fflush(stdout);
+    }
+}
 
 static double now(void) {
     struct timespec value;
@@ -51,10 +78,12 @@ static int reap(pid_t child) {
 
 /* Only the four callers below supply argv; each command has a separate deadline. */
 static int command(char *const args[], int cleanup) {
+    command_reason = "NOT_OBSERVED";
     double start = now();
-    if (start < 0 || (!cleanup && cancelled())) return -1;
+    if (start < 0) { command_reason = "CLOCK_ERROR"; return -1; }
+    if (!cleanup && cancelled()) { command_reason = "CANCELLED"; return -1; }
     pid_t child = fork();
-    if (child < 0) return -1;
+    if (child < 0) { command_reason = "SPAWN_ERROR"; return -1; }
     if (child == 0) {
         if (setpgid(0, 0)) _exit(2);
         int null = open("/dev/null", O_RDWR);
@@ -70,10 +99,16 @@ static int command(char *const args[], int cleanup) {
     for (;;) {
         int status;
         pid_t result = waitpid(child, &status, WNOHANG);
-        if (result == child) return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
-        if (result < 0 && errno != EINTR) return -1;
+        if (result == child) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return 0;
+            command_reason = WIFSIGNALED(status) ? "COMMAND_SIGNAL" : "COMMAND_EXIT";
+            return -1;
+        }
+        if (result < 0 && errno != EINTR) { command_reason = "WAIT_ERROR"; return -1; }
         double current = now();
         if (current < 0 || current - start > 5 || (!cleanup && cancelled())) {
+            command_reason = current < 0 ? "CLOCK_ERROR" :
+                current - start > 5 ? "TIMED_OUT" : "CANCELLED";
             (void)reap(child);
             return -1;
         }
@@ -140,12 +175,14 @@ static int inspect(const char *directory, const char *plist, int plen) {
 
 int main(int argc, char **argv) {
     if (argc != 3 || geteuid() != 0 ||
-        (strcmp(argv[1], "run") && strcmp(argv[1], "cleanup") && strcmp(argv[1], "inspect")) ||
+        (strcmp(argv[1], "run") && strcmp(argv[1], "cleanup") && strcmp(argv[1], "inspect") &&
+         strcmp(argv[1], "run-diagnostic") && strcmp(argv[1], "cleanup-diagnostic")) ||
         strlen(argv[2]) != 32)
         return 2;
     for (int i = 0; i < 32; ++i)
         if (!((argv[2][i] >= '0' && argv[2][i] <= '9') ||
               (argv[2][i] >= 'a' && argv[2][i] <= 'f'))) return 2;
+    detailed = !strcmp(argv[1], "run-diagnostic") || !strcmp(argv[1], "cleanup-diagnostic");
     struct sigaction action = {0};
     action.sa_handler = stop;
     sigemptyset(&action.sa_mask);
@@ -186,18 +223,30 @@ int main(int argc, char **argv) {
     if (dlen < 0 || (size_t)dlen >= sizeof(directory) || slen < 0 ||
         (size_t)slen >= sizeof(service) || plen < 0 || (size_t)plen >= sizeof(plist)) return 2;
     if (!strcmp(argv[1], "inspect")) return inspect(directory, plist, plen);
-    int recovery = !strcmp(argv[1], "cleanup");
-    if (!recovery && mkdir(directory, 0700)) { label("LOCATION_FAIL"); return 2; }
+    int recovery = !strcmp(argv[1], "cleanup") || !strcmp(argv[1], "cleanup-diagnostic");
+    if (!recovery) {
+        if (mkdir(directory, 0700)) {
+            failure("LOCATION_FAIL", "DIRECTORY_CREATE", system_reason(errno)); return 2;
+        }
+        if (detailed) label("DIRECTORY_CREATED");
+    }
     int dir = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     struct stat info;
-    if (dir < 0 || fstat(dir, &info) || info.st_uid != 0 ||
-        !S_ISDIR(info.st_mode) || (info.st_mode & 0777) != 0700) {
-        if (dir >= 0) close(dir);
-        label("LOCATION_FAIL"); return 2;
+    if (dir < 0) {
+        failure("LOCATION_FAIL", "DIRECTORY_OPEN", system_reason(errno)); return 2;
+    }
+    if (fstat(dir, &info)) {
+        int problem = errno;
+        close(dir); failure("LOCATION_FAIL", "DIRECTORY_STAT", system_reason(problem)); return 2;
+    }
+    if (info.st_uid != 0 || !S_ISDIR(info.st_mode) || (info.st_mode & 0777) != 0700) {
+        close(dir); failure("LOCATION_FAIL", "DIRECTORY_VALIDATE", "UNSAFE_METADATA"); return 2;
     }
     char path[200];
     int pathlen = snprintf(path, sizeof(path), "%s/job.plist", directory);
-    if (pathlen < 0 || (size_t)pathlen >= sizeof(path)) { close(dir); return 2; }
+    if (pathlen < 0 || (size_t)pathlen >= sizeof(path)) {
+        close(dir); failure("LOCATION_FAIL", "LEASE_PATH", "BOUNDS"); return 2;
+    }
     if (recovery) {
         int file = openat(dir, "job.plist", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
         char bytes[4096];
@@ -207,28 +256,40 @@ int main(int argc, char **argv) {
             count = read(file, bytes, sizeof(bytes));
         if (file >= 0) close(file);
         if (count != plen || memcmp(bytes, plist, (size_t)plen)) {
-            close(dir); label("LOCATION_FAIL"); return 2;
+            close(dir); failure("LOCATION_FAIL", "LEASE_VALIDATE", "CONTENT_UNVERIFIED"); return 2;
         }
     } else {
         int file = openat(dir, "job.plist",
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (file < 0) { close(dir); label("LOCATION_FAIL"); return 2; }
+        if (file < 0) {
+            int problem = errno;
+            close(dir); failure("LOCATION_FAIL", "LEASE_CREATE", system_reason(problem)); return 2;
+        }
         ssize_t written = write(file, plist, (size_t)plen);
+        int write_problem = written < 0 ? errno : 0;
         int closed = close(file);
+        int close_problem = closed ? errno : 0;
         if (written != plen || closed) {
             (void)unlinkat(dir, "job.plist", 0); close(dir); (void)rmdir(directory);
-            label("LOCATION_FAIL"); return 2;
+            if (written != plen)
+                failure("LOCATION_FAIL", "LEASE_WRITE", write_problem ?
+                    system_reason(write_problem) : "SHORT_WRITE");
+            else failure("LOCATION_FAIL", "LEASE_CLOSE", system_reason(close_problem));
+            return 2;
         }
+        if (detailed) label("LEASE_WRITTEN");
     }
     int activated = 0;
     if (!recovery) {
         char *const bootstrap[] = {"/bin/launchctl", "bootstrap", "system", path, NULL};
+        if (detailed) label("REGISTRATION_ATTEMPTED");
         if (command(bootstrap, 0) == 0) {
             label("REGISTERED");
             char *const kickstart[] = {"/bin/launchctl", "kickstart", service, NULL};
+            if (detailed) label("ACTIVATION_ATTEMPTED");
             if (command(kickstart, 0) == 0) { label("ACTIVATED"); activated = 1; }
-            else label("ACTIVATION_FAIL");
-        } else label("REGISTRATION_FAIL");
+            else failure("ACTIVATION_FAIL", "ACTIVATION", command_reason);
+        } else failure("REGISTRATION_FAIL", "REGISTRATION", command_reason);
         double start = now();
         const struct timespec pause = {0, 100000000};
         while (activated && !cancelled()) {
@@ -239,14 +300,21 @@ int main(int argc, char **argv) {
     }
     /* Even a bootstrap timeout/lost return gets an exact-label cleanup attempt. */
     char *const bootout[] = {"/bin/launchctl", "bootout", service, NULL};
+    if (detailed) label("REMOVAL_ATTEMPTED");
     int removed = command(bootout, 1) == 0;
-    label(removed ? "REMOVED" : "REMOVAL_FAIL");
+    if (removed) label("REMOVED");
+    else failure("REMOVAL_FAIL", "REMOVAL", command_reason);
     int files_removed = 0;
     if (removed) {
         files_removed = unlinkat(dir, "job.plist", 0) == 0;
+        int file_problem = files_removed ? 0 : errno;
         close(dir);
-        if (rmdir(directory)) files_removed = 0;
-        label(files_removed ? "FILES_REMOVED" : "FILES_FAIL");
+        if (rmdir(directory)) {
+            if (!file_problem) file_problem = errno;
+            files_removed = 0;
+        }
+        if (files_removed) label("FILES_REMOVED");
+        else failure("FILES_FAIL", "FILE_REMOVAL", system_reason(file_problem));
     } else close(dir);  /* Retain the root-owned exact-content recovery lease. */
     alarm(0);
     return removed && files_removed && (recovery || activated) ? 0 : 2;

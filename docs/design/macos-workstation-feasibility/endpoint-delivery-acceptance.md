@@ -72,3 +72,11 @@ establish activation or ULF visibility in the failed attempt. No further collect
 is requested, and no native files were opened by the agent. Launchd ULF remains
 gated; it is not silently removed from full-scope phase 3/4 acceptance. See the
 launchd reference note for the fixed reports and their limits.
+
+The user subsequently authorized the next finite step: a collector-free activation/
+cleanup check with fixed stage/reason diagnostics. Version 4 is prepared and tested;
+the private self-test report is pending. This checks launchctl acknowledgements and
+cleanup only, with no native execution evidence or ULF gate closure. A one-shot
+control kit cannot later be reused for capture. Only after a passing control report
+will one separate fresh bounded ULF capture be considered. Do not restart broader
+process metadata research or repeat a blind panel to compensate for this gate.

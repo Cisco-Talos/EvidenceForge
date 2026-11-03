@@ -105,3 +105,26 @@ or validate its controls, and does not convert that run's zero rows into a valid
 launchd ULF absence observation. No further capture or cleanup is requested.
 The missing product evidence is still a qualified launchd ULF message/envelope
 from an activated controlled job; current launchd process evidence remains in ES.
+
+## Next finite step: collector-free activation controls
+
+After asking what comes next, the user authorized continuing the collector-free
+activation check before another ULF capture. Version 4 has an explicit detailed
+guard protocol and a one-shot self-test. The root guard identifies filesystem,
+lease, registration, activation, removal and file-removal failures with fixed
+stage/reason pairs. Syscall errno values and command output never leave the private
+process. The original run/cleanup protocol and used kit files remain unchanged.
+
+The self-test starts only the exact controlled job guard, keeps its cancellation
+pipe open during normal completion, and starts no collector, readiness marker or
+job query. It requires zero guard exit and every success flag; timeouts, signals,
+unknown/duplicate output or partial success cannot pass. Failed cases remain
+preserved. It records an attempt before starting the guard and refuses reuse or
+capture in the same kit. Fresh setup hashes and declares the detailed protocol;
+old configurations stay legacy and cannot run this new test by accident.
+
+A passing report establishes launchctl control acknowledgements and completed
+cleanup, not native ES/ULF execution evidence. Only after this report can the user
+run one separate fresh bounded ULF capture. No capture is enabled automatically,
+and absence of qualifying records still leaves launchd ULF gated. Code-only
+preparation and synthetic tests do not close the native evidence gate.

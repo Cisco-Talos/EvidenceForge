@@ -121,5 +121,12 @@
     "cleanup_state": "ABSENCE_VERIFIED",
     "cleanup_needed": false,
     "qualifies_launchd_ulf": false
+  },
+  "launchd_activation_control_test": {
+    "status": "PREPARED_PENDING_HUMAN_RUN",
+    "collection": "NONE",
+    "scope": "Launchctl activation acknowledgement and exact job/file cleanup",
+    "qualifies_native_execution_or_ulf": false,
+    "one_shot_kit_required": true
   }
 }
