@@ -43,3 +43,7 @@ entity values; it does not claim byte identity with the private system's executa
 
 The next launchd diagnostic is documented in
 [launchd-ulf-reference/PRIVATE-RUN.md](launchd-ulf-reference/PRIVATE-RUN.md).
+After its unobserved result, the next human-run reference is the opt-in
+[SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reuses the existing
+controlled loopback connection and ES ancestry solely to authenticate ULF retention;
+it does not expand the ES metadata research scope. The prepared kit has not collected.

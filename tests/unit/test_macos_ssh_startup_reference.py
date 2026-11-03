@@ -5,6 +5,7 @@
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,8 +13,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 from scripts import macos_ssh_startup_reference as kit
+from scripts import macos_ssh_unified_reference as unified
 
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
+from tests.unit.test_macos_ulf_launchd_reference import _row
 
 _CANARY = "INVENTED_PRIVATE_SSH_CANARY"
 
@@ -304,10 +307,11 @@ def test_prepare_copies_code_only_and_extends_the_reviewed_hard_stop(tmp_path: P
 
 
 @pytest.mark.parametrize("pty", [False, True])
+@pytest.mark.parametrize("unified_log", [False, True])
 def test_setup_and_provenance_use_mocked_native_commands_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pty: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pty: bool, unified_log: bool
 ) -> None:
-    root = kit.prepare(tmp_path / "fresh", pty=pty)
+    root = kit.prepare(tmp_path / "fresh", pty=pty, unified_log=unified_log)
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
     monkeypatch.setattr(
@@ -338,6 +342,7 @@ def test_setup_and_provenance_use_mocked_native_commands_only(
     assert report.terminal_mode == ("PTY" if pty else "NON_PTY")
     assert commands == ["/usr/bin/clang", "/usr/bin/clang", "/usr/bin/codesign"]
     assert kit._manifest(root).username == _CANARY
+    assert (kit._manifest(root).unified_experiment_sha256 is not None) is unified_log
     (root / "ssh_marker.c").write_bytes(b"changed code")
     with pytest.raises(kit.reference.PrivateError, match="BUILD"):
         kit.capture()
@@ -373,14 +378,18 @@ def test_client_is_loopback_only_config_free_password_only_and_preserves_stdio()
 @pytest.mark.parametrize(
     "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
 )
+@pytest.mark.parametrize("unified_log", [False, True])
 def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str | None,
+    unified_log: bool,
 ) -> None:
     root = tmp_path / "fresh"
     root.mkdir(mode=0o700)
     manifest = _manifest()
+    if unified_log:
+        manifest = manifest.model_copy(update={"unified_experiment_sha256": "a" * 64})
     monkeypatch.setattr(kit, "_root", lambda: root)
     monkeypatch.setattr(kit, "_manifest", lambda _root: manifest)
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
@@ -409,7 +418,10 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
             if not self.tracker.ready:
                 self.tracker.ready = True
             elif not self.sent:
-                for row in _chain():
+                for index, row in enumerate(_chain()):
+                    row["time"] = (
+                        datetime(2026, 11, 3, 12, tzinfo=UTC) + timedelta(seconds=index)
+                    ).isoformat()
                     self.tracker.accept(json.dumps(row).encode())
                 kit.reference._write(
                     root / "CLIENT-CONTROL.json",
@@ -417,6 +429,34 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
                 )
                 self.sent = True
 
+    class UnifiedCollector:
+        def __init__(self, _root: Path, _nonce: str) -> None:
+            self.ready, self.evicted = False, False
+            row = _row(f"Accepted password for {_CANARY} from 127.0.0.1 port 50000 ssh2") | {
+                "processID": 1200,
+                "processImagePath": kit.PATHS["SESSION"],
+                "timestamp": "2026-11-03 12:00:05.500000+0000",
+            }
+            self.rows = [(len(json.dumps(row)), row)]
+
+        def tick(self) -> None:
+            if failure == "ulf_stream":
+                raise ValueError("ULF_COLLECTOR")
+            self.ready = True
+
+        def stop(self) -> bool:
+            closed.append("unified")
+            return failure != "ulf_cleanup"
+
+    if unified_log:
+        monkeypatch.setattr(kit, "_unified_module", lambda: unified)
+        monkeypatch.setattr(unified, "Collector", UnifiedCollector)
+        if failure == "ulf_binding":
+
+            def binding_failure(*args: object, **kwargs: object) -> None:
+                raise ValueError("ULF_BINDING")
+
+            monkeypatch.setattr(unified, "execution_windows", binding_failure)
     monkeypatch.setattr(kit.subprocess, "Popen", popen)
     monkeypatch.setattr(kit.reference, "Pump", Pump)
     monkeypatch.setattr(kit.reference, "_start", lambda *_args: SimpleNamespace(pid=77))
@@ -437,6 +477,8 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
     report = kit.capture()
     assert commands == [["/usr/bin/sudo", "-n", str(root / "collector-guard")]]
     assert set(closed) >= {"guard", "stdout", "selector"}
+    if unified_log:
+        assert "unified" in closed
     if failure != "collector" and failure != "interrupted":
         assert "probe" in closed
     assert _CANARY not in report.model_dump_json()
@@ -452,10 +494,21 @@ def test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success(
             "analysis": "INTERNAL",
             "cleanup": "COLLECTOR",
             "limit": "LIMIT",
+            "ulf_stream": "COLLECTOR",
+            "ulf_cleanup": "COLLECTOR",
+            "ulf_binding": "DATA",
         }[failure]
     )
     assert report.limit_scope == ("CORE_EVENTS" if failure == "limit" else "NOT_REACHED")
     assert _CANARY not in next(root.rglob("SHAREABLE-REPORT.json")).read_text()
+    ulf_files = list(root.rglob("ssh-unified-events.ndjson"))
+    assert bool(ulf_files) is (unified_log and failure is None)
+    if ulf_files:
+        summary = unified.Summary.model_validate_json(
+            (ulf_files[0].parent / "SHAREABLE-SSH-ULF-REPORT.json").read_bytes()
+        )
+        assert summary.retained_rows == 1 and summary.collector_cleanup == "PASS"
+        assert _CANARY not in summary.model_dump_json()
 
 
 def test_parser_error_never_echoes_the_untrusted_argument(

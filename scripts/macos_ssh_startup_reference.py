@@ -176,6 +176,7 @@ CODE = (
     "collector_guard.c",
     "ssh_graph_support.py",
 )
+UNIFIED_CODE = "ssh_unified_support.py"
 MAX_ROWS, MAX_BYTES, MAX_STREAM, MAX_RETAINED = 2048, 32 * 1_048_576, 128 * 1_048_576, 96
 
 
@@ -196,12 +197,20 @@ class Manifest(reference.Model):
     gid: int = Field(ge=0, lt=2**32)
     terminal_mode: TerminalMode = "NON_PTY"
     experiment_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    unified_experiment_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    unified_code_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class Experiment(reference.Model):
     """Code-only selection frozen by setup; it contains no observed data."""
 
     terminal_mode: Literal["PTY"] = "PTY"
+
+
+class UnifiedExperiment(reference.Model):
+    """Separate opt-in; existing terminal-mode experiments remain unchanged."""
+
+    collect_unified_log: Literal[True] = True
 
 
 class GraphSnapshot(reference.Model):
@@ -368,7 +377,9 @@ class Report(reference.Model):
     fork_roles: tuple[Role, ...] = Field(default=(), max_length=32)
     forks: tuple[Fork, ...] = Field(default=(), max_length=32)
     exits: tuple[Exit, ...] = Field(default=(), max_length=32)
-    unified_log: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+    unified_log: Literal["NOT_COLLECTED", "NOT_RETAINED", "FIXED_REPORT_AVAILABLE"] = (
+        "NOT_COLLECTED"
+    )
     terminal_mode: TerminalMode = "NON_PTY"
     pty: Literal["NOT_COLLECTED", "REQUESTED", "OBSERVED", "NOT_OBSERVED"] = "NOT_COLLECTED"
     command_fork: Check = "INCONCLUSIVE"
@@ -1007,10 +1018,12 @@ def analyze_exits(raws: list[bytes], manifest: Manifest) -> tuple[Exit, ...]:
     return tuple(result)
 
 
-def prepare(destination: Path | None = None, *, pty: bool = False) -> Path:
+def prepare(
+    destination: Path | None = None, *, pty: bool = False, unified_log: bool = False
+) -> Path:
     """AGENT SAFE: copy reviewed code only, with no commands or native reads."""
     source = Path(__file__).resolve()
-    if type(pty) is not bool:
+    if type(pty) is not bool or type(unified_log) is not bool:
         raise reference.PrivateError("INPUT")
     parent = (destination.parent if destination else Path("/private/tmp")).resolve(strict=True)
     reference._outside_git(parent)
@@ -1052,6 +1065,14 @@ def prepare(destination: Path | None = None, *, pty: bool = False) -> Path:
     )
     if pty:
         reference._write(root / "EXPERIMENT.json", Experiment().model_dump_json().encode())
+    if unified_log:
+        shutil.copyfile(source.with_name("macos_ssh_unified_reference.py"), root / UNIFIED_CODE)
+        (root / UNIFIED_CODE).chmod(0o600)
+        reference._write(
+            root / "ULF-EXPERIMENT.json", UnifiedExperiment().model_dump_json().encode()
+        )
+        shutil.copyfile(docs / "ssh-startup-reference/ULF-PRIVATE-RUN.md", root / "PRIVATE-RUN.md")
+        (root / "PRIVATE-RUN.md").chmod(0o600)
     return root
 
 
@@ -1106,6 +1127,12 @@ def setup() -> Report:
         gid=account.pw_gid,
         terminal_mode=mode,
         experiment_sha256=experiment_digest,
+        unified_experiment_sha256=_unified_experiment(root),
+        unified_code_sha256=(
+            reference._digest(root / UNIFIED_CODE)
+            if _unified_experiment(root) is not None
+            else None
+        ),
     )
     reference._write(root / "SETUP.json", manifest.model_dump_json().encode())
     return Report(
@@ -1128,6 +1155,29 @@ def _experiment(root: Path) -> tuple[TerminalMode, str | None]:
     return experiment.terminal_mode, reference._digest(path)
 
 
+def _unified_experiment(root: Path) -> str | None:
+    path = root / "ULF-EXPERIMENT.json"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    UnifiedExperiment.model_validate_json(reference._read(path))
+    return reference._digest(path)
+
+
+def _unified_module() -> ModuleType:
+    path = Path(__file__).resolve().with_name(UNIFIED_CODE)
+    if not path.exists():
+        path = Path(__file__).resolve().with_name("macos_ssh_unified_reference.py")
+    spec = importlib.util.spec_from_file_location("_eforge_ssh_unified_support", path)
+    if spec is None or spec.loader is None:
+        raise reference.PrivateError("BUILD")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _manifest(root: Path) -> Manifest:
     manifest = Manifest.model_validate_json(reference._read(root / "SETUP.json"))
     if (
@@ -1141,6 +1191,13 @@ def _manifest(root: Path) -> Manifest:
         )
         or set(manifest.images) != set(PATHS)
         or (manifest.terminal_mode, manifest.experiment_sha256) != _experiment(root)
+        or manifest.unified_experiment_sha256 != _unified_experiment(root)
+        or manifest.unified_code_sha256
+        != (
+            reference._digest(root / UNIFIED_CODE)
+            if manifest.unified_experiment_sha256 is not None
+            else None
+        )
     ):
         raise reference.PrivateError("BUILD")
     return manifest
@@ -1253,7 +1310,14 @@ def capture() -> Report:
     collector = None
     pump = None
     probes = []
+    unified = _unified_module() if manifest.unified_experiment_sha256 is not None else None
+    unified_collector = None
+    unified_rows = []
+    unified_report = None
     try:
+        if unified is not None:
+            unified_collector = unified.Collector(root, manifest.nonce)
+            report = report.model_copy(update={"unified_log": "NOT_RETAINED"})
         collector = subprocess.Popen(
             ["/usr/bin/sudo", "-n", str(root / "collector-guard")],
             env=reference.SAFE_ENV,
@@ -1263,14 +1327,22 @@ def capture() -> Report:
         )
         pump = reference.Pump(collector, tracker, {})
         deadline, next_probe = time.monotonic() + 10, 0.0
-        while time.monotonic() < deadline and not tracker.ready:
-            if time.monotonic() >= next_probe and len(probes) < 8:
+        while time.monotonic() < deadline and not (
+            tracker.ready and (unified_collector is None or unified_collector.ready)
+        ):
+            if time.monotonic() >= next_probe and len(tracker.ready_pids) < 8:
                 probe = reference._start(root / "ssh-marker", "--ready")
                 probes.append(probe)
                 tracker.ready_pids.add(probe.pid)
+                if unified_collector is not None:
+                    probes.append(
+                        reference._start(root / "ssh-marker", "--ulf-ready", manifest.nonce)
+                    )
                 next_probe = time.monotonic() + 1
             pump.tick()
-        if not tracker.ready:
+            if unified_collector is not None:
+                unified_collector.tick()
+        if not tracker.ready or (unified_collector is not None and not unified_collector.ready):
             raise reference.PrivateError("COLLECTOR")
         tracker.collecting = True
         step = "CONNECTION"
@@ -1288,12 +1360,16 @@ def capture() -> Report:
             tracker.marker_exit is not None and tracker.client_exit
         ):
             pump.tick()
+            if unified_collector is not None:
+                unified_collector.tick()
         if tracker.marker_exit is None or not tracker.client_exit:
             raise reference.PrivateError("TIMEOUT")
         # Drain server termination rows without starting another connection.
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             pump.tick()
+            if unified_collector is not None:
+                unified_collector.tick()
         step = "ANALYSIS"
         control = reference._decode(reference._read(root / "CLIENT-CONTROL.json"))
         if (
@@ -1357,6 +1433,7 @@ def capture() -> Report:
             command_fork=command_fork,
             core_graph=core_graph,
             retained_scope=report.retained_scope,
+            unified_log="NOT_RETAINED" if unified_collector is not None else "NOT_COLLECTED",
             forks=analyze_forks(raws, manifest),
             exits=analyze_exits(raws, manifest),
             fork_roles=tuple(
@@ -1365,6 +1442,16 @@ def capture() -> Report:
                 if reference._decode(raw)["event_type"] == 11
             ),
         )
+        if unified_collector is not None:
+            windows = unified.execution_windows(
+                [reference._decode(raw) for raw in raws],
+                identity=reference._identity,
+                role_of=lambda process: _role(process, manifest),
+            )
+            unified_rows = unified.select_rows(
+                [row for _size, row in unified_collector.rows], windows
+            )
+            unified_report = unified.summarize(unified_rows, windows, manifest.username)
     except (
         reference.PrivateError,
         OSError,
@@ -1397,9 +1484,30 @@ def capture() -> Report:
             reference._stop_probe(probe)
         if collector is not None and collector.stdout is not None:
             collector.stdout.close()
+        if unified_collector is not None:
+            unified_cleaned = unified_collector.stop()
+            cleaned = cleaned and unified_cleaned
+            if unified_report is not None:
+                unified_report = unified_report.model_copy(
+                    update={
+                        "collector_ready": reference._check(unified_collector.ready),
+                        "collector_cleanup": reference._check(unified_cleaned),
+                        "ring_evicted": unified_collector.evicted,
+                    }
+                )
     report = report.model_copy(update={"collector_cleanup": reference._check(cleaned)})
     if report.error == "NONE" and cleaned:
         reference._write(run / "ssh-chain-events.jsonl", b"\n".join(raws) + b"\n")
+        if unified_report is not None:
+            native = b"".join((json.dumps(row) + "\n").encode() for row in unified_rows)
+            if len(native) > unified.MAX_BYTES:
+                raise CaptureLimit("RETAINED_ROWS")
+            reference._write(run / "ssh-unified-events.ndjson", native)
+            reference._write(
+                run / "SHAREABLE-SSH-ULF-REPORT.json",
+                unified_report.model_dump_json(indent=2).encode(),
+            )
+            report = report.model_copy(update={"unified_log": "FIXED_REPORT_AVAILABLE"})
     elif report.error == "NONE":
         report = report.model_copy(update={"error": "COLLECTOR", "stage": "ERROR"})
     reference._write(run / "SHAREABLE-REPORT.json", report.model_dump_json(indent=2).encode())
@@ -1407,6 +1515,14 @@ def capture() -> Report:
 
 
 def _failure(error: BaseException) -> Error:
+    if type(error) is ValueError:
+        unified_failure: dict[str, Error] = {
+            "ULF_BINDING": "DATA",
+            "ULF_COLLECTOR": "COLLECTOR",
+            "ULF_LIMIT": "LIMIT",
+        }
+        if str(error) in unified_failure:
+            return unified_failure[str(error)]
     if isinstance(error, reference.PrivateError) and error.code in {
         "INPUT",
         "LOCATION",
@@ -1434,22 +1550,30 @@ def main() -> None:
     try:
         parser = reference.QuietParser(description=__doc__)
         parser.add_argument(
-            "operation", choices=("prepare", "setup", "capture", "connect", "report")
+            "operation", choices=("prepare", "setup", "capture", "connect", "report", "ulf-report")
         )
         parser.add_argument("--destination", type=Path)
         parser.add_argument("--private-run", action="store_true")
         parser.add_argument("--pty", action="store_true")
+        parser.add_argument("--unified-log", action="store_true")
         args = parser.parse_args()
         operation = args.operation
         if args.operation == "prepare":
             if args.private_run:
                 raise reference.PrivateError("INPUT")
-            print(prepare(args.destination, pty=args.pty))
+            print(prepare(args.destination, pty=args.pty, unified_log=args.unified_log))
             return
-        if not args.private_run or args.destination is not None or args.pty:
+        if not args.private_run or args.destination is not None or args.pty or args.unified_log:
             raise reference.PrivateError("INPUT")
         if args.operation == "connect":
             connect()
+            return
+        if args.operation == "ulf-report":
+            root = _root()
+            summary = _unified_module().Summary.model_validate_json(
+                reference._read(reference._active(root) / "SHAREABLE-SSH-ULF-REPORT.json")
+            )
+            print(summary.model_dump_json(indent=2), flush=True)
             return
         if args.operation == "report":
             root = _root()
@@ -1474,7 +1598,9 @@ def main() -> None:
             error=_failure(error),
             limit_scope=error.scope if isinstance(error, CaptureLimit) else "NOT_REACHED",
         )
-    if operation == "capture" and report.terminal_mode == "PTY":
+    if operation == "capture" and (
+        report.terminal_mode == "PTY" or report.unified_log != "NOT_COLLECTED"
+    ):
         print(
             report.model_dump_json(
                 include={
@@ -1488,6 +1614,7 @@ def main() -> None:
                     "pty",
                     "command_fork",
                     "collector_cleanup",
+                    "unified_log",
                 }
             ),
             flush=True,

@@ -238,8 +238,9 @@ def test_terminal_equivalence_ignores_stat_times_but_requires_exact_identity(cha
 @pytest.mark.parametrize(
     "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
 )
+@pytest.mark.parametrize("unified_log", [False, True])
 def test_pty_capture_uses_shared_cleanup_and_validates_graph_in_memory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None, unified_log: bool
 ) -> None:
     monkeypatch.setattr(
         mocked_capture.__globals__["kit"], "_manifest", lambda _root: _pty_manifest()
@@ -247,7 +248,7 @@ def test_pty_capture_uses_shared_cleanup_and_validates_graph_in_memory(
     # The shared mocked harness supplies its manifest and rows through these helpers.
     monkeypatch.setitem(mocked_capture.__globals__, "_manifest", _pty_manifest)
     monkeypatch.setitem(mocked_capture.__globals__, "_chain", _pty_chain)
-    mocked_capture(tmp_path, monkeypatch, failure)
+    mocked_capture(tmp_path, monkeypatch, failure, unified_log)
     report = kit.Report.model_validate_json(
         next(tmp_path.rglob("SHAREABLE-REPORT.json")).read_bytes()
     )

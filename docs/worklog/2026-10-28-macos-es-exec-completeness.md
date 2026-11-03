@@ -2762,3 +2762,51 @@ launchd-ulf-reference/REFERENCE.md records that distinction. The launchd ULF gat
 remains unpassed; no new file-log format or guessed ULF template is enabled, and
 no requirement was silently removed. SSH ULF remains the next distinct reference
 family. This is not a reason to restart broad collection or a blind review loop.
+
+## 2026-11-03 — SSH ULF reference prepared; no native run
+
+The launchd correction/result note was pushed as 6221bf51. Rather than requesting
+another launchd run to force a positive, work moved to the distinct SSH ULF family.
+The opt-in `prepare --unified-log` extends the existing controlled loopback workflow.
+The original non-PTY/PTY workflows retain their source-code inventory and default
+behavior; ULF support and its opt-in selection have separate frozen hashes so old
+reference/reviewer provenance remains usable. No production generator input changed.
+
+The new normal-user ULF reader subscribes to SSH server process names plus a
+nonce-authenticated own marker. Ambient input remains in bounded memory only
+(8 MiB/2,048 rows, 64 MiB total, 128 KiB line bound). Before any ULF native row can be
+written, the existing ES marker/client/receiver proof must succeed. Retention uses
+closed selected server execution intervals with exact PID, executable and half-open
+time bounds, including each exec epoch. Launchd, client/shell processes, different
+images, other connections, PID-reuse gaps and unclosed executions cannot claim a
+match. Ambiguous identities/windows or capacity errors fail closed. Selected
+retention is capped at 256 rows and 8 MiB serialized. Only test-bound data is saved
+in the private kit, outside Git; no native records or observed identifiers are
+returned to an agent.
+
+The separate fixed summary reports envelope shape, server-role/sender/format classes,
+message levels, redaction and controlled authentication/PAM message-family counts.
+Unknown text, subsystem/category values, user names, addresses, ports and IDs stay
+private. Redacted messages are not reinterpreted as observed authentication success.
+The own-process ULF marker proves only its channel, not SSH visibility; zero retention
+remains NO_MATCHING_ROWS and gate_status remains NOT_EVALUATED. This is evidence
+acquisition, not permission to add guessed templates or a new syslog format.
+
+The same normal-user setup compiles/signs the existing marker; a new --ulf-ready
+path logs only a generated public nonce. No settings, server configuration, users,
+Full Disk Access or persistent services are changed. Only the existing bounded
+eslogger guard uses sudo. Capture is compact for ULF opt-in; `ulf-report` reads saved
+fixed JSON, starts no process and makes no live query. Instructions preserve the
+two-window non-PTY procedure, including pasting PRIVATE_REMOTE_COMMAND after password
+entry even when the remote shell prints no prompt.
+
+All **241 selected routine checks** pass across new privacy/binding/capacity tests,
+SSH/PTY capture and failure cleanup, old reviewer compatibility, and both launchd
+kits/reviewers. The marker passes C syntax checking; no compiled control was executed.
+Whole Ruff/format/diff/behavior checks pass. Revision remains 375. No generation,
+blind assessment or unrelated regression loop was repeated.
+
+Code-only preparation created `/private/tmp/eforge-ssh-startup-kit-9pmp5kku`.
+No setup, installed-code inspection, SSH connection, collector or private log reader
+was run. The next input is the human-run fixed SSH ULF JSON, with agents closed for
+collection. The used launchd kit and every older private capture remain untouched.
