@@ -1,5 +1,10 @@
 # Launchd ULF: controlled test, no qualifying rows
 
+**Current evidence status:** the final version-4 category-or-message capture passed
+its job and cleanup controls and retained zero rows. The finite collection sequence
+has ended under the agreed stopping rule. Launchd ULF stays gated; no further
+collection, private-log review or alternate file source is requested.
+
 **Current cleanup status:** the human-run grouped check verified both the test
 directory and exact system service ABSENT on 2026-11-03. No cleanup is needed.
 Launchd ULF remains unqualified; verified absence does not establish job activation
@@ -144,3 +149,31 @@ The self-test kit is not reused. Setup and collection remain human-run; no agent
 started them or read private files. If the capture passes its controls but yields no
 qualifying records, leave launchd ULF gated and stop collecting. No separate diagnostic
 file source or broader metadata/assessment investigation is added to compensate.
+
+## Final bounded capture: controls pass, no matching rows
+
+The user supplied the version-4 fixed report from the separate fresh capture kit.
+It reports error NONE, stage COMPLETE, collector readiness PASS, job activation/
+job-removal/file-removal/collector-cleanup PASS, job_control PASS, no control_failures,
+zero retained rows and reference_result NO_MATCHING_ROWS. Message-only, category-only
+and combined label counters are all zero. Writer/sender/subsystem/static format
+remain NOT_OBSERVED, with native shapes INCONCLUSIVE. Nothing native is qualified
+by an empty record set.
+
+The separate sudo_credentials field is INCONCLUSIVE because capture does not run
+the cleanup check's independent credential preflight. It is not a reported sudo
+failure: the root-only guard completed its job controls successfully. Readiness is
+still explicitly OWN_PROCESS_MARKER_ONLY and cannot prove visibility into launchd.
+
+This is a valid empty result for the bounded selector, not proof that launchd never
+writes ULF or that every endpoint collector would observe no launchd messages.
+No native records or kit files were opened by an agent. Completed cleanup requires
+no new recovery check. The used kit remains preserved outside Git.
+
+The stopping rule is now exercised: collection ends and no launchd ULF template is
+enabled. Native writer/callsite/message evidence is still missing. Existing launchd
+process starts and qualified known exits remain in ES, and supported workspace,
+policy-refusal and SSH-authentication ULF families are unchanged. Original full-scope
+phase 3/4 acceptance remains explicitly incomplete; this family was not silently
+removed from its requirements. Reopening it would require a separately agreed new
+evidence approach, not another run looking for a positive result.

@@ -58,7 +58,7 @@
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
-    "Launchd ULF remains reference-gated. The collector-free job-control test passed all creation/registration/activation/removal checks and zero guard exit. One separate fresh bounded ULF capture is pending human execution; a valid empty result will remain gated without further collection.",
+    "Launchd ULF remains reference-gated. The final corrected bounded capture passed controls and cleanup but retained zero rows. Collection has ended under the agreed stopping rule; no alternate file source or further collection is requested.",
     "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
     "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
   ],
@@ -133,8 +133,19 @@
     "cleanup": "PASS"
   },
   "launchd_ulf_capture": {
-    "status": "PREPARED_PENDING_HUMAN_RUN",
+    "status": "COMPLETE_NO_QUALIFYING_ROWS",
     "uses_separate_fresh_kit": true,
-    "stopping_rule": "If controls pass with no qualifying rows, leave gated and stop collecting"
+    "stopping_rule": "If controls pass with no qualifying rows, leave gated and stop collecting",
+    "basis": "Human-supplied fixed report; no agent native-data access",
+    "controls": "PASS",
+    "cleanup": "PASS",
+    "retained_rows": 0,
+    "reference_result": "NO_MATCHING_ROWS",
+    "native_shapes": "INCONCLUSIVE",
+    "readiness_scope": "OWN_PROCESS_MARKER_ONLY",
+    "collection_sequence": "ENDED_BY_STOPPING_RULE",
+    "qualifies_launchd_ulf": false,
+    "global_absence_established": false,
+    "further_collection_requested": false
   }
 }

@@ -3213,3 +3213,36 @@ qualifying evidence exists; existing ES/process coverage and current supported U
 families retain their passing results. Production generation, revision 377, scenario
 inputs and acceptance bundles are unchanged. This is a documentation/aggregate-status
 update only; no behavioral tests or generation are repeated.
+
+## 2026-11-03 — Final corrected launchd ULF capture is valid but empty; stop collecting
+
+The user supplied only the fixed version-4 report from the separate fresh kit.
+Error NONE, stage COMPLETE, collector readiness/job activation/job removal/file
+removal/collector cleanup PASS, job_control PASS and no control failures. The
+category-or-message selector retained zero rows, with all label-location counters
+zero and reference_result NO_MATCHING_ROWS. Native shape is INCONCLUSIVE and
+writer/sender/subsystem/static format are NOT_OBSERVED. The standalone sudo preflight
+field is INCONCLUSIVE because capture does not perform that separate check; root-
+guard completion already passed and no credential failure is reported. Readiness
+scope remains OWN_PROCESS_MARKER_ONLY, not proof of launchd visibility.
+
+This is a valid empty bounded result, not global absence or a failed activation
+attempt. The agreed stopping rule is exercised: **stop collecting and leave launchd
+ULF gated**. No new capture, offline native-record review, job query, cleanup check,
+alternate launchd diagnostic-file source, metadata research or blind panel is
+requested. Completed cleanup needs no follow-up. Preserve used kits outside Git.
+No agent read private files, started native commands or reproduced collection.
+
+Only this closed outcome is recorded in the reference, delivery plan and aggregate
+acceptance metadata. No source template is promoted. Existing ES evidence for
+launchd process starts/known exits and ULF workspace/policy/SSH-authentication
+families remain available with their passing current-code acceptance. Original
+full-scope phase 3/4 acceptance remains explicitly incomplete because launchd ULF
+has no qualified native message/envelope. The family was not silently dropped.
+The finite investigation ends here; reopening it requires a separately agreed
+new evidence approach rather than repeated attempts for positivity.
+
+Production code, revision 377, scenario inputs and generated acceptance bundles
+are unchanged. This documentation-only reconciliation needs no new behavioral
+suite, generation, evaluation or assessment loop. Prior 161 diagnostic tests and
+combined exact recovery/evaluations retain their stated evidence and limits.

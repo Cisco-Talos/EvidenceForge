@@ -9,8 +9,8 @@ stay outside Git and are never inspected by agents without specific permission.
 | --- | --- | --- |
 | 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete at revision 374. Primary: 33 forks/39 execs. Recovery companion: 45 forks/55 execs, 16 background execs, all 22 deterministic files identical. |
 | 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | Complete for the bounded outcome contract: 13 known native exits in each workload, with 13/32 explicit unknown observations. Query completion and reconciliation pass; arbitrary GUI/SSH teardown remains unknown, not successful. |
-| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, ordinary-verbosity SSH accepted authentication, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal, observed PAM success and source-derived plain-public-key success through the same qualified logger exist. On 2026-11-03 the user retained ordinary daemon verbosity and left VERBOSE session messages gated. The first controlled launchd ULF test completed all controls but retained zero rows; message-only filtering limited that test. The category-filter correction is code-tested. No launchd template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
-| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 377 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for the implemented families. Final acceptance of the full ULF scope still depends on the remaining phase 3 evidence. |
+| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, ordinary-verbosity SSH accepted authentication, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal, observed PAM success and source-derived plain-public-key success through the same qualified logger exist. On 2026-11-03 the user retained ordinary daemon verbosity and left VERBOSE session messages gated. The final corrected category-or-message capture passed job/cleanup controls but retained zero rows. The agreed collection sequence has ended; launchd ULF stays gated and no template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
+| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 377 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for the implemented families. Original full-scope acceptance remains unpassed because launchd ULF is unqualified; finite reference collection has ended. |
 
 The quiet thirty-minute primary is preserved as a quiet sampling case. The
 predeclared positive seed and longer same-seed recovery companion exercise background
@@ -76,8 +76,11 @@ launchd reference note for the fixed reports and their limits.
 The user subsequently authorized the next finite step: a collector-free activation/
 cleanup check with fixed stage/reason diagnostics. Its private version-4 report now
 passes every control, guard_exit ZERO and result PASS. This establishes launchctl
-acknowledgements and cleanup only, with no native execution evidence or ULF gate
-closure. A separate fresh bounded ULF capture is prepared and pending human execution;
-the one-shot control kit cannot be reused. If this capture passes its controls but
-has no qualifying records, leave launchd ULF gated and stop collecting. Do not restart
-broader process metadata research or repeat a blind panel to compensate for this gate.
+acknowledgements and cleanup only. The separate fresh version-4 bounded ULF capture
+subsequently passed job/collector controls and cleanup but retained zero rows under
+the corrected category-or-message selector. This is a valid bounded empty result,
+not a global absence claim. The agreed stopping rule is now exercised: collection
+ends, launchd ULF remains gated, and no alternate file source or broader metadata/
+assessment investigation is added. Known launchd process evidence remains in ES.
+Current supported-family acceptance passes; original full-scope phase 3/4 acceptance
+is still explicitly incomplete because launchd ULF has no qualified message/envelope.
