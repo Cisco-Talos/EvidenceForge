@@ -62,3 +62,10 @@ outside this delivery scope; increasing collector verbosity cannot enable them.
 No capture is requested for those messages. See the same reference note for exact
 source and visibility limits. Launchd ULF remains the only unclosed minimum-family
 evidence gate; ES already covers the controlled job's process start and known exit.
+
+The human-run corrected launchd selector subsequently returned failed job activation
+and removal/file controls. Its zero rows are inconclusive, not a qualified absence.
+Exact-label cleanup also failed its original fixed checks; a tested grouped cleanup
+diagnostic is pending human execution. No further collection is requested before
+verified cleanup, and no native files were opened by the agent. See the launchd
+reference note for this separate diagnostic failure and its reporting correction.

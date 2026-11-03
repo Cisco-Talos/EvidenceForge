@@ -57,8 +57,10 @@ Other unqualified PAM/disconnect messages are not fabricated. No native records
 were read again for this source-derived extension.
 
 The first launchd test retained zero rows. Its message-only selector has a code-tested
-category-or-message correction; a fresh code-only kit is prepared for one bounded
-private test. No launchd message template or separate diagnostic-file source is
+category-or-message correction. The corrected human-run attempt then failed job
+activation and cleanup controls; its zero rows are inconclusive. Exact-label cleanup
+also failed its original checks, so a tested grouped cleanup diagnostic is pending
+human execution. No further collection is requested. No launchd message template or separate diagnostic-file source is
 promoted. If the corrected test is also empty, leave ULF gated rather than repeat
 collection for a positive result. Current exact recovery and evaluation cover the
 implemented families; they do not close that gate.

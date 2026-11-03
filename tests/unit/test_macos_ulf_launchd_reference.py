@@ -144,9 +144,33 @@ def test_report_only_reads_saved_fixed_json(
     assert json.loads(capsys.readouterr().out)["stage"] == "COMPLETE"
 
 
-@pytest.mark.parametrize("label_location", ["message_only", "category_only", "both"])
+@pytest.mark.parametrize(
+    "label_location,guard_output,guard_returncode,expected_status",
+    [
+        (location, b"REGISTERED\nACTIVATED\nREMOVED\nFILES_REMOVED\n", 0, "PASS")
+        for location in ("message_only", "category_only", "both")
+    ]
+    + [
+        ("message_only", b"LOCATION_FAIL\n", 2, "LOCATION_FAIL"),
+        (
+            "message_only",
+            b"REGISTERED\nACTIVATION_FAIL\nREMOVED\nFILES_REMOVED\n",
+            2,
+            "ACTIVATION_FAIL",
+        ),
+        ("message_only", b"REGISTERED\nACTIVATED\nREMOVAL_FAIL\n", 2, "REMOVAL_FAIL"),
+        ("message_only", b"REGISTERED\nACTIVATED\nREMOVED\nFILES_FAIL\n", 2, "FILES_FAIL"),
+        ("message_only", SECRET.encode(), 1, "NO_STATUS"),
+        ("message_only", b"REGISTERED\nACTIVATED\nREMOVED\nFILES_REMOVED\n", 2, "INCOMPLETE"),
+    ],
+)
 def test_capture_filters_unrelated_input_and_closes_both_processes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label_location: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    label_location: str,
+    guard_output: bytes,
+    guard_returncode: int,
+    expected_status: str,
 ) -> None:
     class Process:
         def __init__(self, data: bytes, *, running: bool) -> None:
@@ -166,7 +190,7 @@ def test_capture_filters_unrelated_input_and_closes_both_processes(
 
         def wait(self, timeout: int) -> int:
             self.stopped = True
-            return 0
+            return 0 if self.running else guard_returncode
 
     marker = {"eventMessage": "EFORGE_ULF_READY " + NONCE}
     target = _row("service state: running")
@@ -182,7 +206,7 @@ def test_capture_filters_unrelated_input_and_closes_both_processes(
         target,
     ]
     collector = Process(b"".join((json.dumps(r) + "\n").encode() for r in rows), running=True)
-    job = Process(b"REGISTERED\nACTIVATED\nREMOVED\nFILES_REMOVED\n", running=False)
+    job = Process(guard_output, running=False)
     calls: list[list[str]] = []
 
     def popen(arguments: list[str], **kwargs: object) -> Process:
@@ -199,8 +223,18 @@ def test_capture_filters_unrelated_input_and_closes_both_processes(
     )
     report = kit.capture(tmp_path)
     assert report.collector_ready == report.collector_cleanup == "PASS"
-    assert report.job_activated == report.job_removed == report.temporary_files_removed == "PASS"
-    assert report.native_shapes == "PASS" and report.retained_rows == 1
+    assert report.job_control == expected_status
+    if expected_status == "PASS":
+        assert (
+            report.job_activated == report.job_removed == report.temporary_files_removed == "PASS"
+        )
+        assert report.error == "NONE" and report.stage == "COMPLETE"
+        assert report.native_shapes == "PASS"
+    else:
+        assert report.error == "CONTROL" and report.stage == "ERROR"
+        assert report.reference_result == "CONTROL_INCOMPLETE"
+        assert report.native_shapes == "INCONCLUSIVE"
+    assert report.retained_rows == 1
     assert getattr(report.label_matches, label_location) == 1
     assert collector.stopped and job.stopped
     assert calls[0][:3] == ["/usr/bin/log", "stream", "--style"]
@@ -244,4 +278,77 @@ def test_recovery_uses_only_the_exact_guard_cleanup_and_never_exports_output(
     report = kit.cleanup(tmp_path)
     assert report.job_removed == report.temporary_files_removed == "PASS"
     assert SECRET not in report.model_dump_json()
-    assert calls == [["/usr/bin/sudo", "-n", str(tmp_path / "job-guard"), "cleanup", NONCE]]
+    assert report.sudo_credentials == report.job_control == "PASS"
+    assert calls == [
+        ["/usr/bin/sudo", "-n", "-v"],
+        ["/usr/bin/sudo", "-n", str(tmp_path / "job-guard"), "cleanup", NONCE],
+    ]
+
+
+@pytest.mark.parametrize(
+    "output,status", [(b"LOCATION_FAIL\n", "LOCATION_FAIL"), (SECRET.encode(), "NO_STATUS")]
+)
+def test_cleanup_reports_only_allowlisted_guard_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: bytes, status: str
+) -> None:
+    monkeypatch.setattr(kit, "_platform", lambda: None)
+    monkeypatch.setattr(kit, "_config", lambda root: kit.Config(nonce=NONCE, hashes={}))
+    results = iter([SimpleNamespace(returncode=0), SimpleNamespace(returncode=2, stdout=output)])
+    monkeypatch.setattr(kit.subprocess, "run", lambda *a, **k: next(results))
+    report = kit.cleanup(tmp_path)
+    assert report.error == "CONTROL" and report.stage == "ERROR"
+    assert report.job_control == status and report.sudo_credentials == "PASS"
+    assert SECRET not in report.model_dump_json()
+
+
+def test_cleanup_without_cached_sudo_cannot_run_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kit, "_platform", lambda: None)
+    monkeypatch.setattr(kit, "_config", lambda root: kit.Config(nonce=NONCE, hashes={}))
+    calls = []
+
+    def run(arguments: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append(arguments)
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(kit.subprocess, "run", run)
+    report = kit.cleanup(tmp_path)
+    assert report.error == "CONTROL" and report.sudo_credentials == "FAIL"
+    assert calls == [["/usr/bin/sudo", "-n", "-v"]]
+
+
+def test_external_kit_override_is_cleanup_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        kit.sys,
+        "argv",
+        ["private_ulf_launchd.py", "capture", "--kit-root", SECRET, "--private-run"],
+    )
+    monkeypatch.setattr(kit, "_root", lambda *a: pytest.fail("no existing kit read"))
+    with pytest.raises(SystemExit):
+        kit.main()
+    assert SECRET not in capsys.readouterr().err
+
+
+def test_cleanup_override_uses_the_original_control_root_without_reading_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[Path] = []
+
+    def root(path: Path) -> Path:
+        seen.append(path)
+        return tmp_path
+
+    monkeypatch.setattr(kit, "_root", root)
+    monkeypatch.setattr(kit, "cleanup", lambda path: kit.Report(stage="COMPLETE"))
+    monkeypatch.setattr(kit, "_read", lambda *a: pytest.fail("no native record read"))
+    monkeypatch.setattr(
+        kit.sys,
+        "argv",
+        ["private_ulf_launchd.py", "cleanup", "--kit-root", str(tmp_path), "--private-run"],
+    )
+    assert kit.main() == 0
+    assert seen == [tmp_path]
+    assert json.loads(capsys.readouterr().out)["stage"] == "COMPLETE"

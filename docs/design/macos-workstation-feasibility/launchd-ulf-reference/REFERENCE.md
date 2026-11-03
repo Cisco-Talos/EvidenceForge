@@ -29,3 +29,28 @@ The launchd ULF generation gate remains unpassed. No template is enabled from th
 report, and no new native file source is silently added to the product scope.
 There is no recommendation to repeat collection merely to obtain a positive result.
 SSH ULF remains a separate planned family; launchd ES coverage is already implemented.
+
+## Corrected-selector attempt: job controls did not pass
+
+The user supplied the version-2 category-or-message report from
+`/private/tmp/eforge-ulf-launchd-kit-cpmhqa3_`. The own-process marker and collector
+cleanup pass, but activation, job removal and temporary-file removal FAIL. Zero
+rows in this attempt cannot establish launchd source visibility: the controlled
+job's execution was not established. The original exact-label cleanup command also
+returned CONTROL with removal/file checks failing. Preserve the kit; cleanup is
+unverified. No agent opened this kit's records or queried its system job.
+
+This exposed a concrete diagnostic reporting defect: capture reported COMPLETE/NONE
+without requiring successful job controls or a zero guard exit. Version 3 reports
+CONTROL/ERROR and CONTROL_INCOMPLETE for these cases, retains only the compiled
+guard's public literal failure labels, and checks the guard's exit. Unknown command
+output remains suppressed. A read-only cached-sudo preflight and grouped cleanup
+labels distinguish credential, control and guard failures without revealing native
+command output. The corrected cleanup entry point can validate the original kit's
+control hashes and invoke its original guard via an explicit cleanup-only root
+override. It cannot reuse capture or start a new job, and reads no native records.
+
+The user has been asked to run that cleanup diagnostic only. No further collection
+is requested, and the used kit and its hash-bound files are unchanged. The ordinary
+verbosity SSH auth source is implemented separately; this launchd attempt does not
+invalidate its process or authentication acceptance.

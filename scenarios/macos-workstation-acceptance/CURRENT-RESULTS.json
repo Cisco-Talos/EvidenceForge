@@ -58,7 +58,7 @@
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
-    "Launchd activation/completion ULF remains reference-gated; corrected category/message selector is prepared for one bounded private test.",
+    "Launchd ULF remains reference-gated. The corrected-selector attempt failed activation and cleanup controls; zero rows are inconclusive. Grouped exact-label cleanup diagnosis is pending human execution, with no new collection requested.",
     "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
     "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
   ],

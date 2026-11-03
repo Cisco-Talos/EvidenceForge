@@ -76,3 +76,12 @@ sudo -v && /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B .
 This starts no collector or new job, performs no job query, and cannot remove an
 entire domain. Do not delete the kit or assume the job is absent. A cancelled run
 must not be reused for a second capture; prepare a fresh kit after resolving cleanup.
+
+Version 3 treats failed job controls or nonzero guard exit as CONTROL/ERROR with
+CONTROL_INCOMPLETE, never a valid empty-source observation. Cleanup returns the
+guard's allowlisted literal status and a cached-sudo comparison; unknown command
+output remains hidden. If a used older kit hides the failure stage, the current
+repository helper supports `cleanup --kit-root KIT --private-run`. This validates
+the original kit's control hashes and runs its original exact-label cleanup guard,
+without changing the kit or reading records. `--kit-root` is forbidden for setup,
+capture and report. Do not replace files or rerun setup in the used kit.

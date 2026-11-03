@@ -37,6 +37,19 @@ type Error = Literal[
 SAFE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_LINE = 128 * 1024
+GUARD_LABELS = frozenset(
+    {
+        "REGISTERED",
+        "ACTIVATED",
+        "REMOVED",
+        "FILES_REMOVED",
+        "LOCATION_FAIL",
+        "REGISTRATION_FAIL",
+        "ACTIVATION_FAIL",
+        "REMOVAL_FAIL",
+        "FILES_FAIL",
+    }
+)
 MARKER = r"""#include <os/log.h>
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
@@ -71,7 +84,7 @@ class LabelMatches(Model):
 
 
 class Report(Model):
-    kit_version: Literal[1, 2] = 2
+    kit_version: Literal[1, 2, 3] = 3
     purpose: Literal["LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"] = "LAUNCHD_UNIFIED_LOG_DIAGNOSTIC"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
@@ -84,10 +97,22 @@ class Report(Model):
     job_removed: Check = "INCONCLUSIVE"
     temporary_files_removed: Check = "INCONCLUSIVE"
     collector_cleanup: Check = "INCONCLUSIVE"
+    sudo_credentials: Check = "INCONCLUSIVE"
+    job_control: Literal[
+        "NOT_EVALUATED",
+        "PASS",
+        "NO_STATUS",
+        "LOCATION_FAIL",
+        "REGISTRATION_FAIL",
+        "ACTIVATION_FAIL",
+        "REMOVAL_FAIL",
+        "FILES_FAIL",
+        "INCOMPLETE",
+    ] = "NOT_EVALUATED"
     retained_rows: int = Field(default=0, ge=0, le=256)
-    reference_result: Literal["NOT_EVALUATED", "NO_MATCHING_ROWS", "RECORDS_REQUIRE_REVIEW"] = (
-        "NOT_EVALUATED"
-    )
+    reference_result: Literal[
+        "NOT_EVALUATED", "CONTROL_INCOMPLETE", "NO_MATCHING_ROWS", "RECORDS_REQUIRE_REVIEW"
+    ] = "NOT_EVALUATED"
     label_matches: LabelMatches = Field(default_factory=LabelMatches)
     native_shapes: Check = "INCONCLUSIVE"
     launchd_writer: Check = "INCONCLUSIVE"
@@ -245,6 +270,25 @@ def _predicate(config: Config) -> str:
     )
 
 
+def _guard_flags(raw: bytes) -> set[str]:
+    """Keep only the compiled guard's literal status vocabulary, never command output."""
+    return {label for label in GUARD_LABELS if label.encode("ascii") in raw.splitlines()}
+
+
+def _guard_status(flags: set[str], *, complete: bool) -> str:
+    """A failed control is not evidence that a native source is quiet."""
+    for failure in (
+        "LOCATION_FAIL",
+        "REGISTRATION_FAIL",
+        "ACTIVATION_FAIL",
+        "REMOVAL_FAIL",
+        "FILES_FAIL",
+    ):
+        if failure in flags:
+            return failure
+    return "PASS" if complete else "INCOMPLETE" if flags else "NO_STATUS"
+
+
 def analyze(rows: list[dict], label: str, base: Report) -> Report:
     """Return fixed comparisons only; unknown strings never leave private memory."""
     if len(rows) > 256:
@@ -255,7 +299,13 @@ def analyze(rows: list[dict], label: str, base: Report) -> Report:
     base = base.model_copy(
         update={
             "retained_rows": len(rows),
-            "reference_result": "RECORDS_REQUIRE_REVIEW" if rows else "NO_MATCHING_ROWS",
+            "reference_result": (
+                "CONTROL_INCOMPLETE"
+                if base.error != "NONE"
+                else "RECORDS_REQUIRE_REVIEW"
+                if rows
+                else "NO_MATCHING_ROWS"
+            ),
             "label_matches": LabelMatches(
                 message_only=locations.count("message_only"),
                 category_only=locations.count("category_only"),
@@ -263,6 +313,8 @@ def analyze(rows: list[dict], label: str, base: Report) -> Report:
             ),
         }
     )
+    if base.error != "NONE":
+        return base
     parsed: list[UnifiedLogRecord] = []
     for row in rows:
         try:
@@ -346,6 +398,7 @@ def capture(root: Path) -> Report:
     collector: subprocess.Popen | None = None
     job: subprocess.Popen | None = None
     cleanup = True
+    job_returncode: int | None = None
     buffers: dict[str, bytes] = {"log": b"", "job": b""}
     total = 0
     try:
@@ -419,8 +472,7 @@ def capture(root: Path) -> Report:
                     while b"\n" in buffers[kind]:
                         line, buffers[kind] = buffers[kind].split(b"\n", 1)
                         if kind == "job":
-                            if line in {b"REGISTERED", b"ACTIVATED", b"REMOVED", b"FILES_REMOVED"}:
-                                flags.add(line.decode("ascii"))
+                            flags.update(_guard_flags(line))
                             continue
                         try:
                             row = json.loads(line)
@@ -444,7 +496,7 @@ def capture(root: Path) -> Report:
             if job.stdin is not None:
                 job.stdin.close()
             try:
-                job.wait(timeout=12)
+                job_returncode = job.wait(timeout=12)
             except subprocess.TimeoutExpired:
                 cleanup = False
             if job.stdout is not None:
@@ -459,13 +511,21 @@ def capture(root: Path) -> Report:
                 cleanup = False
             if collector.stdout is not None:
                 collector.stdout.close()
+    control_complete = (
+        job_returncode == 0
+        and {"REGISTERED", "ACTIVATED", "REMOVED", "FILES_REMOVED"} <= flags
+        and not any(flag.endswith("_FAIL") for flag in flags)
+    )
+    error = "CONTROL" if not control_complete else "COLLECTOR" if not cleanup else "NONE"
     base = Report(
-        stage="COMPLETE",
+        error=error,
+        stage="COMPLETE" if error == "NONE" else "ERROR",
         collector_ready="PASS" if ready else "FAIL",
         job_activated="PASS" if "ACTIVATED" in flags else "FAIL",
         job_removed="PASS" if "REMOVED" in flags else "FAIL",
         temporary_files_removed="PASS" if "FILES_REMOVED" in flags else "FAIL",
         collector_cleanup="PASS" if cleanup else "FAIL",
+        job_control=_guard_status(flags, complete=control_complete),
     )
     raw = b"".join((json.dumps(row) + "\n").encode() for row in rows)
     if len(raw) > MAX_BYTES:
@@ -480,6 +540,17 @@ def cleanup(root: Path) -> Report:
     """Human-only exact-label recovery; no collector, query or new job is started."""
     _platform()
     config = _config(root)
+    credentials = subprocess.run(
+        ["/usr/bin/sudo", "-n", "-v"],
+        env=SAFE_ENV,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if credentials.returncode:
+        return Report(error="CONTROL", sudo_credentials="FAIL", job_control="NO_STATUS")
     result = subprocess.run(
         ["/usr/bin/sudo", "-n", str(root / "job-guard"), "cleanup", config.nonce],
         env=SAFE_ENV,
@@ -489,13 +560,19 @@ def cleanup(root: Path) -> Report:
         timeout=30,
         check=False,
     )
-    labels = set(result.stdout.splitlines())
-    success = result.returncode == 0 and {b"REMOVED", b"FILES_REMOVED"} <= labels
+    labels = _guard_flags(result.stdout)
+    success = (
+        result.returncode == 0
+        and {"REMOVED", "FILES_REMOVED"} <= labels
+        and not any(flag.endswith("_FAIL") for flag in labels)
+    )
     return Report(
         stage="COMPLETE" if success else "ERROR",
         error="NONE" if success else "CONTROL",
-        job_removed="PASS" if b"REMOVED" in labels else "FAIL",
-        temporary_files_removed="PASS" if b"FILES_REMOVED" in labels else "FAIL",
+        sudo_credentials="PASS",
+        job_removed="PASS" if "REMOVED" in labels else "FAIL",
+        temporary_files_removed="PASS" if "FILES_REMOVED" in labels else "FAIL",
+        job_control=_guard_status(labels, complete=success),
     )
 
 
@@ -504,7 +581,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "setup", "capture", "report", "cleanup"))
     parser.add_argument("--private-run", action="store_true")
+    parser.add_argument("--kit-root", type=Path)
     args = parser.parse_args()
+    if args.kit_root is not None and args.operation != "cleanup":
+        parser.error("--kit-root is limited to exact-label cleanup; capture reuse is forbidden")
     if args.operation == "prepare":
         print(json.dumps({"kit": str(prepare()), "stage": "PREPARED"}))
         return 0
@@ -513,7 +593,7 @@ def main() -> int:
             "Native operations require explicit --private-run; preparation starts no collection"
         )
     try:
-        root = _root(Path(__file__).absolute().parent)
+        root = _root(args.kit_root or Path(__file__).absolute().parent)
         if args.operation == "setup":
             result = setup(root)
         elif args.operation == "capture":

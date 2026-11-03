@@ -3046,3 +3046,37 @@ launchd diagnostic file or invent templates. Final expanded ULF acceptance remai
 incomplete pending that evidence. No additional metadata/assessment phase was added.
 Tracked canonical skills and reference docs were updated, and ignored project-local
 ChatGPT/Codex skill copies were regenerated. No product version was changed.
+
+### Corrected launchd attempt: control failure and cleanup diagnosis
+
+The user ran the corrected selector and supplied only its fixed version-2 report.
+The own-process marker and collector cleanup PASS, but job activation, job removal
+and temporary-file removal FAIL. Zero retained rows is therefore inconclusive;
+it is not evidence that the tested launchd job produced no ULF. The original kit's
+exact-label cleanup subsequently returned CONTROL with removal/file checks failing.
+No agent read native records, queried the system job, ran sudo or started a probe.
+The used kit remains unchanged and cleanup is unverified.
+
+A concrete kit reporting defect was repaired: capture previously ignored the guard
+exit and could print COMPLETE/NONE despite failed controls. Version 3 requires all
+job success flags and zero exit, returns CONTROL/ERROR and CONTROL_INCOMPLETE on
+failure, and retains only the guard's known literal failure labels. Unknown native
+command output remains suppressed. Cleanup distinguishes a noninteractive cached-
+sudo failure from guard/control failure. A cleanup-only --kit-root override validates
+all original control hashes and invokes the original kit's exact-label guard; it
+cannot run setup/capture/report on that root and reads no native records. The root
+C guard and original kit's hash-bound code/binaries were not changed.
+
+All **31 kit tests** pass, including activation/removal/file/unknown-status failures,
+nonzero guard exit despite success-looking flags, cached-sudo rejection, unknown
+output suppression and cleanup-only root routing. Whole Ruff/format/diff checks and
+the revision-377 generation surface check pass. Production generation is unchanged;
+the passing combined recovery/evaluations were not repeated for this diagnostic-only
+fix. The SSH implementation is already pushed as d28f1f8c.
+
+The user has been given one grouped cleanup command using the repository helper
+against `/private/tmp/eforge-ulf-launchd-kit-cpmhqa3_`. It checks original controls
+and cached sudo, then returns the exact guard failure classification. Its fixed
+report is pending. No further collection is requested; keep the kit and do not
+rerun setup/capture. The delivery gate stays open and the system cleanup status
+must not be called successful until verified.
