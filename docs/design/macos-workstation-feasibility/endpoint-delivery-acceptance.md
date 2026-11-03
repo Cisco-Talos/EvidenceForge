@@ -8,9 +8,9 @@ stay outside Git and are never inspected by agents without specific permission.
 | Phase | Completion evidence | Current state |
 | --- | --- | --- |
 | 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete at revision 374. Primary: 33 forks/39 execs. Recovery companion: 45 forks/55 execs, 16 background execs, all 22 deterministic files identical. |
-| 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | Query completion and reconciliation are implemented; arbitrary GUI/SSH teardown still has no qualified result. The distinction is explicit and must remain in final acceptance. |
-| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, SSH authentication/session, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal and bounded PAM SSH-authentication success exist. SSH session-open/close messages remain unqualified. The first controlled launchd ULF test completed all controls but retained zero rows; message-only filtering limited that test. The category-filter correction is code-tested, with no native rerun requested. No launchd template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
-| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 376 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for the implemented families. Final acceptance of the full ULF scope still depends on the remaining phase 3 evidence. |
+| 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | Complete for the bounded outcome contract: 13 known native exits in each workload, with 13/32 explicit unknown observations. Query completion and reconciliation pass; arbitrary GUI/SSH teardown remains unknown, not successful. |
+| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, ordinary-verbosity SSH accepted authentication, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal, observed PAM success and source-derived plain-public-key success through the same qualified logger exist. On 2026-11-03 the user retained ordinary daemon verbosity and left VERBOSE session messages gated. The first controlled launchd ULF test completed all controls but retained zero rows; message-only filtering limited that test. The category-filter correction is code-tested. No launchd template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
+| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 377 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for the implemented families. Final acceptance of the full ULF scope still depends on the remaining phase 3 evidence. |
 
 The quiet thirty-minute primary is preserved as a quiet sampling case. The
 predeclared positive seed and longer same-seed recovery companion exercise background
@@ -53,5 +53,12 @@ it does not expand the ES metadata research scope. Its first fixed report retain
 successful keyboard-interactive/PAM authentication from root-owned sshd-session.
 The separately approved grouped comparison qualifies its static main-image callsite
 with PRIVATE_DATA flag and public %.500s format. That bounded PAM-success producer
-is now implemented. Other SSH/PAM session messages remain gated; no new capture
-is requested. See the same reference note for exact source and visibility limits.
+is now implemented. Plain public-key success reuses that qualified envelope through
+the common logger established by Apple's public OpenSSH code; its payload basis is
+source-derived, not a separate local observation. Canonical key type and SHA256
+fingerprint are required. Other SSH/PAM messages remain gated. The user explicitly
+chose ordinary verbosity on 2026-11-03, so VERBOSE session-start/close messages are
+outside this delivery scope; increasing collector verbosity cannot enable them.
+No capture is requested for those messages. See the same reference note for exact
+source and visibility limits. Launchd ULF remains the only unclosed minimum-family
+evidence gate; ES already covers the controlled job's process start and known exit.

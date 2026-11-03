@@ -5,7 +5,7 @@ and successful exec in the two-Mac acceptance matrix reconciles with native ES,
 with zero aggregate starts. The original thirty-minute source and seed are
 unchanged; quiet baseline sampling and positive companions remain separate.
 
-| Current revision 376 run | Forks / native | Execs / native | Native exits with known result | Unknown exit observations | Background execs |
+| Current revision 377 run | Forks / native | Execs / native | Native exits with known result | Unknown exit observations | Background execs |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Thirty-minute primary, seed 373 | 33 / 33 | 39 / 39 | 13 | 13 | 0 |
 | Three-hour recovery companion, seed 373 | 45 / 45 | 55 / 55 | 13 | 32 | 16 |
@@ -21,7 +21,7 @@ Both runs realize all authored activities and required executable/argument roles
 Apple Terminal, iTerm2, local queries, SSH with and without a PTY, Chrome main and
 renderer/GPU/network helpers, browsing and OS-inventory jobs. The original,
 predeclared supplemental seed 375 also exercises positive baseline activity;
-its revision-374 results remain historical and are not relabelled as revision 376.
+its revision-374 results remain historical and are not relabelled as revision 377.
 
 The recovery companion passes public suspension, read-only verification and exact
 resume with retained SSH continuations and live terminal/browser/helper work.
@@ -30,25 +30,38 @@ filtering preserves identical ES and ULF bytes. Neither source coverage nor reco
 made to pass by removing workload families or weakening the complete ES policy.
 
 Deterministic evaluation verifies both authoritative bundles and passes applicable
-hard gates: primary **88.9114/100**, recovery **88.7091/100**. These scores do not qualify
+hard gates: primary **88.9058/100**, recovery **88.7089/100**. These scores do not qualify
 unimplemented native templates. The small lab retains low noise-volume/diversity
 limitations. The independent whole-process census and required executable/argument checks pass.
-A bounded review of all three synthetic ULF rows confirms the workspace family and
-root sshd-session PAM writer, actual peer tuple, static/private callsite and modeled
-main-image frame. No new blind panel or assessment loop was started.
+A bounded review of all four synthetic ULF rows confirms the workspace family,
+root sshd-session writer, actual peer tuple, static callsite, sender/build identity
+and canonical public-key fingerprint. No new blind panel or assessment loop was started.
 
-**The endpoint delivery sequence is not fully complete.** This workload now emits
-three ULF rows: two loginwindow workspace entries and one successful keyboard-interactive/
-PAM authentication. Seed 373 selects password for non-PTY and public-key for PTY;
-public-key authentication is not assigned a false PAM-success row. A separate real-engine
-password-intent PTY check passes through the shared authentication producer. The
-separately qualified ASP policy-refusal source also remains available.
+The process-start and bounded lifecycle phases are complete. Known results render
+exactly; unknown GUI/SSH teardown outcomes remain explicit. The endpoint delivery
+sequence still has one minimum-family evidence gate: **launchd ULF**.
 
-PAM/session-open-close, disconnect, public-key success and launchd ULF messages remain
-unqualified. The launchd test retained zero rows; its narrower message-only selection
-has a code-tested correction but no native rerun or promoted template. Unknown GUI/SSH
-exit outcomes remain explicit lifecycle limits. Current deterministic acceptance covers
-the implemented families and does not close those remaining native evidence gates.
+This workload emits four ULF rows: two loginwindow workspace entries, one successful
+keyboard-interactive/PAM authentication and one plain-public-key authentication.
+Seed 373 selects password for non-PTY and public-key for PTY. Both use the same
+native-qualified Info/static-private logger envelope. The public-key payload is
+source-derived from Apple's common OpenSSH authentication/logger implementation,
+not a separate local public-key observation. Canonical type and complete SHA256
+fingerprint are required; certificates and incomplete keys produce no invented row.
+A separate real-engine password-intent PTY check also passes. The separately qualified
+ASP policy-refusal source remains available.
+
+On November 3 the user chose ordinary SSH daemon verbosity and left VERBOSE
+session-start/close messages gated. Collector verbosity alone cannot enable them.
+Other unqualified PAM/disconnect messages are not fabricated. No native records
+were read again for this source-derived extension.
+
+The first launchd test retained zero rows. Its message-only selector has a code-tested
+category-or-message correction; a fresh code-only kit is prepared for one bounded
+private test. No launchd message template or separate diagnostic-file source is
+promoted. If the corrected test is also empty, leave ULF gated rather than repeat
+collection for a positive result. Current exact recovery and evaluation cover the
+implemented families; they do not close that gate.
 
 See the finite [four-phase delivery plan](../../docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
 and [current machine-readable results](CURRENT-RESULTS.json). The previous

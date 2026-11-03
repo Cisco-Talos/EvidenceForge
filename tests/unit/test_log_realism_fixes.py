@@ -8,6 +8,7 @@ Covers: web_scan IDS alerts, Snort rev field, TLS cipher stability,
 SSH key fingerprint uniqueness, eCAR NAT-aware IPs, DC session exclusion.
 """
 
+import base64
 import random
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
@@ -452,6 +453,17 @@ class TestTlsCipherStability:
 
 
 class TestSshKeyFingerprint:
+    def test_fingerprints_encode_a_complete_sha256_digest_canonically(self) -> None:
+        for source_octet in range(10, 30):
+            for username in ("admin", "deploy"):
+                key_type, fingerprint = baseline_ssh_client_key(f"192.0.2.{source_octet}", username)
+                assert key_type in {"RSA", "ED25519", "ECDSA"}
+                assert fingerprint.startswith("SHA256:")
+                encoded = fingerprint.removeprefix("SHA256:")
+                digest = base64.b64decode(encoded + "=", validate=True)
+                assert len(digest) == 32
+                assert base64.b64encode(digest).decode().rstrip("=") == encoded
+
     def test_different_source_hosts_get_different_keys(self):
         keys = {
             baseline_ssh_client_key(src_ip, "admin")

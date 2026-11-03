@@ -1,4 +1,4 @@
-# SSH ULF: bounded PAM authentication qualified
+# SSH ULF: qualified envelope and bounded accepted-authentication methods
 
 The user supplied a fixed version-1 report with **38 retained records**, PASS for
 collector readiness/cleanup and execution binding, and no ring eviction. The
@@ -98,5 +98,33 @@ The production profile supplies explicit synthetic build offsets and a modeled
 main-image backtrace; it does not claim the private executable's call-stack
 contents or frame count. This models the reference's visible/unredacted Info
 collection, not every collector's privacy or persistence configuration. Other
-16 messages, PAM open/close, disconnect, public-key success and launchd lifecycle
+16 messages, PAM open/close, disconnect and launchd lifecycle
 ULF remain unqualified. No new native collection or unrelated log read occurred.
+
+## Public-source extension and ordinary daemon verbosity
+
+Apple's published [authentication implementation](https://github.com/apple-oss-distributions/OpenSSH/blob/main/openssh/auth.c)
+uses one accepted-authentication function for PAM and plain public keys, at Info,
+with key type/fingerprint supplied by the authentication owner. Its
+[logging implementation](https://github.com/apple-oss-distributions/OpenSSH/blob/main/openssh/log.c)
+uses the same `%.500s` syslog callsite. The
+[privilege-separation sequence](https://github.com/apple-oss-distributions/OpenSSH/blob/main/openssh/sshd-session.c)
+keeps this successful-authentication logging before the post-auth child privilege drop.
+This supports the explicit inference that plain public-key success can reuse the
+qualified envelope. Its text remains source-derived, not separately captured on
+the private system. Generation records `public_source_same_logger` as its semantic
+basis, preserves the canonical authentication method, and requires a complete plain
+RSA/ED25519/ECDSA type and canonical SHA256 fingerprint. Unknown keys and certificates
+remain unsupported; no fallback key is invented. Historical PAM-only profiles remain
+readable without acquiring a new message family.
+
+The same public source distinguishes daemon verbosity from collector selection.
+The [session implementation](https://github.com/apple-oss-distributions/OpenSSH/blob/main/openssh/session.c)
+marks session-start and close messages VERBOSE. Enabling Info in `log stream` does
+not enable messages already filtered by the daemon. The
+[PAM implementation](https://github.com/apple-oss-distributions/OpenSSH/blob/main/openssh/auth-pam.c)
+does not establish a generic successful PAM-open Info message from session creation
+alone. On 2026-11-03 the user chose to retain ordinary daemon verbosity and leave
+verbose session messages gated. No system setting is changed and no new capture is
+requested for those messages. The other sixteen existing native messages remain
+unclassified; none was read again or promoted by this source review.

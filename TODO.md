@@ -83,7 +83,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and
   evidence blockers are fixed in the [delivery plan](docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
   and the same worklog. New SSH/launchd ULF templates require bounded native references;
-  existing ES-only references do not close those gates.
+  existing ES-only references do not close those gates. Ordinary-verbosity SSH accepted
+  authentication is implemented; the user retained that verbosity and left VERBOSE
+  session messages gated on November 3. Launchd ULF remains unqualified after a
+  controlled zero-row reference; no diagnostic-file source is implicitly added.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native

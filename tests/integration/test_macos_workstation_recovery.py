@@ -161,11 +161,15 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
     accepted = [
         row for row in ulf if row["eventMessage"].startswith("Accepted keyboard-interactive/pam ")
     ]
-    # This fixed seed selects password/PAM for non-PTY and publickey for PTY.
-    assert len(ulf) == 3 and len(accepted) == 1
+    publickey = [row for row in ulf if row["eventMessage"].startswith("Accepted publickey ")]
+    # Authentication methods retain their actual distinct payloads through one logger.
+    assert len(ulf) == 4 and len(accepted) == len(publickey) == 1
     assert all(
-        row["userID"] == 0 and row["processImagePath"] == "/usr/libexec/sshd-session"
-        for row in accepted
+        row["userID"] == 0
+        and row["processImagePath"] == "/usr/libexec/sshd-session"
+        and row["messageType"] == "Info"
+        and row["formatString"] == "%.500s"
+        for row in (*accepted, *publickey)
     )
     measurements = [
         summarize(path, case, full=True, exit_code=0, text="") for path in (output, control)
@@ -184,6 +188,7 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
                 "native_filter_bytes_equal": True,
                 "ulf_rows": len(ulf),
                 "ssh_pam_success_rows": len(accepted),
+                "ssh_publickey_success_rows": len(publickey),
                 "deterministic_files_compared": len(resumed_files),
                 "checkpoint_hour": status["simulated_hour"],
                 "measurements": [item.model_dump(mode="json") for item in measurements],

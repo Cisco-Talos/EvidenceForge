@@ -2982,3 +2982,67 @@ No new native collection is authorized or implicitly requested by passing these
 engineering checks. Generic GUI/SSH final exit results remain explicit unknowns.
 No new hidden catalog, helper-metadata or repeated blind-review phase was added.
 No product release/version bump occurred.
+
+## 2026-11-03 — Ordinary-verbosity SSH completion and plain-key authentication
+
+The user chose to retain ordinary SSH daemon verbosity and leave VERBOSE session
+messages gated. Public Apple OpenSSH source explains the distinction: accepted
+methods share auth_log at Info and the same %.500s syslog callsite; session-start/
+close messages are daemon VERBOSE, which an Info-enabled collector cannot itself
+enable. Public PAM code does not establish a generic successful PAM-open Info row.
+The reference note links each primary source. No private capture, native diagnostic
+file or installed metadata was read, and no system configuration was changed.
+
+The existing native-qualified envelope now supports a separate plain public-key
+accepted message. Its method, key type and SHA256 fingerprint come from the shared
+SSH owner. MacosSshAuthentication records public_source_same_logger for this
+source-derived payload, separately from the locally observed PAM reference. The
+producer reuses the root receiver's exact audit-adoption occurrence, peer/session
+checks and retained eCAR/ULF publication journal. It does not derive an auth event
+from ES rows. Missing/noncanonical key facts, certificates and historical frozen
+PAM-only profiles cannot invent public-key output. No new authoring event or raw
+message path was added.
+
+A concrete shared fingerprint defect was fixed at the SSH client-identity owner:
+43 independently drawn Base64 characters could have invalid final pad bits. The
+owner now encodes 32 synthetic bytes canonically and supplies that same fingerprint
+to all sources. Per-client/user/seed identity remains deterministic and target-
+independent. No real key material is read or generated.
+
+All **232 selected routine tests** pass: 161 native SSH/profile/projection/shared
+realism checks, 51 receiver/syslog/behavior checks and 20 unchanged launchd-kit privacy
+checks. Added coverage includes all three plain key types, malformed/missing keys,
+source-basis separation, frozen PAM-only compatibility and public-key source lost-
+return recovery without duplicate publication. The existing combined slow test
+also passes: public suspension/status/read-only verification/exact resume agrees
+with uninterrupted generation across **22 deterministic files**, and filtering
+preserves identical ES and ULF bytes.
+
+Final revision-377 public generation preserves scenario sources, complete ES policy,
+seed 373, formats and baseline. Primary: **33 forks/39 execs**, 13 known native exits,
+13 unknown observations. Recovery companion: **45/55**, 16 background execs, 13 known
+exits, 32 unknown observations. Both pass the independent full-process census and
+all required image/argument/authored-role checks. Each has **four ULF rows**: two
+workspace entries, one PAM success and one plain-public-key success. Bounded
+synthetic checks verify the root writer, same main image/UUID, peer, Info/static
+format, zero activities and canonical public-key fingerprint. No new blind panel
+was started. The prior revision-376 bounded review remains historical metadata.
+
+One authoritative evaluation per final bundle verifies integrity and passes hard
+gates: primary **88.9058446346** (346 records), companion **88.7088659642** (2,819).
+Final synthetic roots are `/private/tmp/eforge-macos-377-primary` and
+`/private/tmp/eforge-macos-377-delivery/test_combined_macos_workstatio0/resumed`.
+Only aggregate measurements are tracked. Revision-377 surface digest:
+`3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8`.
+
+Phase 2 is complete under its explicit bounded-outcome contract; unknown GUI/SSH
+teardown is still unknown. Ordinary-verbosity accepted authentication is implemented.
+**Launchd ULF is the remaining minimum-family evidence gate.** A fresh code-only
+kit is prepared at `/private/tmp/eforge-ulf-launchd-kit-cpmhqa3_` with the already
+code-tested category-or-message selector. Setup/capture have NOT run. The user has
+been asked to run one bounded private test after closing agents. If still empty,
+leave it gated; do not repeat collection for positivity, inspect the separate
+launchd diagnostic file or invent templates. Final expanded ULF acceptance remains
+incomplete pending that evidence. No additional metadata/assessment phase was added.
+Tracked canonical skills and reference docs were updated, and ignored project-local
+ChatGPT/Codex skill copies were regenerated. No product version was changed.

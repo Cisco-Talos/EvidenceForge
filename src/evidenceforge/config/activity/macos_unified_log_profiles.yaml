@@ -28,11 +28,14 @@ policy_refusal:
   format_string_offset: 262144
   program_counter: 98304
 ssh_authentication:
-  profile: macos27-ssh-pam-accepted-v1
+  profile: macos27-ssh-accepted-v1
   writer_path: /usr/libexec/sshd-session
   message_type: Info
   format_string: "%.500s"
   message: "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
+  # Public auth.c routes successful methods through the same Info logger.
+  # Only the PAM payload was observed locally; plain-key text reuses public source.
+  public_key_message: "Accepted publickey for {username} from {source_ip} port {source_port} ssh2: {key_type} {key_hash}"
   has_private_data: true
   # Explicit synthetic build locations; these are not captured native offsets.
   format_string_offset: 327680

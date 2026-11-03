@@ -11,6 +11,8 @@ Explicit profiles may retain a private-argument flag
 and a modeled main-image backtrace without exposing any native private values.
 """
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
@@ -172,9 +174,25 @@ class MacosUnifiedLogObservation:
                 raise ValueError("Unified Log main-image frame requires arm64 alignment")
 
 
+def supported_ssh_public_key(key_type: str, fingerprint: str) -> bool:
+    """Recognize complete plain-key SHA256 metadata without inventing a key."""
+    if type(key_type) is not str or type(fingerprint) is not str:
+        return False
+    if key_type not in {"RSA", "ED25519", "ECDSA"} or not fingerprint.startswith("SHA256:"):
+        return False
+    encoded = fingerprint.removeprefix("SHA256:")
+    if len(encoded) != 43:
+        return False
+    try:
+        decoded = base64.b64decode(encoded + "=", validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    return len(decoded) == 32 and base64.b64encode(decoded).decode().rstrip("=") == encoded
+
+
 @dataclass(frozen=True, slots=True)
 class MacosSshAuthentication:
-    """Successful PAM authentication, distinct from session open or process exec."""
+    """Accepted authentication, distinct from session open or process exec."""
 
     session: SessionIdentity
     authenticated_at: datetime
@@ -182,6 +200,10 @@ class MacosSshAuthentication:
     source_ip: str
     source_port: int
     native: MacosUnifiedLogObservation | None
+    method: Literal["keyboard-interactive/pam", "publickey"] = "keyboard-interactive/pam"
+    public_key_type: str = ""
+    public_key_hash: str = ""
+    semantic_basis: Literal["native_reference", "public_source_same_logger"] = "native_reference"
 
     def __post_init__(self) -> None:
         _aware(self.authenticated_at, "SSH authentication")
@@ -202,6 +224,19 @@ class MacosSshAuthentication:
             or not 0 < self.source_port < 65536
         ):
             raise ValueError("SSH authentication requires its exact session, root writer and peer")
+        if (
+            self.method not in {"keyboard-interactive/pam", "publickey"}
+            or type(self.public_key_type) is not str
+            or type(self.public_key_hash) is not str
+            or self.semantic_basis
+            != ("public_source_same_logger" if self.method == "publickey" else "native_reference")
+            or self.method != "publickey"
+            and (self.public_key_type or self.public_key_hash)
+            or self.native is not None
+            and self.method == "publickey"
+            and not supported_ssh_public_key(self.public_key_type, self.public_key_hash)
+        ):
+            raise ValueError("SSH authentication requires its exact method and qualified key facts")
         if self.native is not None and (
             type(self.native) is not MacosUnifiedLogObservation
             or self.native.writer != self.writer

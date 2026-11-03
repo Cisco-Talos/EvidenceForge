@@ -4521,6 +4521,8 @@ class SshSessionActionBundle:
                 shell=environment.shell,
                 phase_times=phase_times,
                 auth_method=request.auth_method,
+                public_key_type=request.public_key_type,
+                public_key_hash=request.public_key_hash,
                 launcher=environment.launcher,
                 pty=request.pty,
                 service_label=(

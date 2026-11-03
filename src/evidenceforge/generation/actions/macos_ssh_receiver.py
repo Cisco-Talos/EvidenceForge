@@ -194,6 +194,8 @@ class MacosSshReceiverStartupRequest:
     service_label: str | None = None
     pty: bool = False
     auth_method: str = "password"
+    public_key_type: str = ""
+    public_key_hash: str = ""
 
     @property
     def audit_phase(self) -> int:
@@ -203,6 +205,11 @@ class MacosSshReceiverStartupRequest:
     def __post_init__(self) -> None:
         if type(self.auth_method) is not str or not self.auth_method or "\0" in self.auth_method:
             raise StateError("Mac receiver startup requires its explicit authentication method")
+        if any(
+            type(value) is not str or "\0" in value
+            for value in (self.public_key_type, self.public_key_hash)
+        ):
+            raise StateError("Mac receiver startup requires explicit NUL-free public key metadata")
         if type(self.pty) is not bool or (self.pty and self.launcher is None):
             raise StateError("SSH PTY startup requires its explicit native graph")
         if (

@@ -219,7 +219,7 @@ class MacosNativeSshReceiverStartup(MacosSshReceiverStartup):
                     integrity_level="System" if action == "audit_bind" else "Medium",
                 )
                 key = f"{kind}:{after.execution_id}"
-        if action == "audit_bind" and request.auth_method == "password":
+        if action == "audit_bind" and request.auth_method in {"password", "publickey"}:
             builder.patch_session_activity(session, at)
             live_session = state.get_session(session.logon_id)
             assert live_session is not None
@@ -232,6 +232,9 @@ class MacosNativeSshReceiverStartup(MacosSshReceiverStartup):
                 os_name=self._host.os,
                 source_ip=live_session.source_ip,
                 source_port=live_session.source_port,
+                auth_method=request.auth_method,
+                public_key_type=request.public_key_type,
+                public_key_hash=request.public_key_hash,
             )
             event.auth = AuthContext(
                 username=session.principal,

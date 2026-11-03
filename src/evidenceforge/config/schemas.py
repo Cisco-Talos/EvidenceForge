@@ -4095,15 +4095,21 @@ class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
 
 
 class MacosSshAuthenticationLogProfile(BaseModel, extra="forbid", frozen=True):
-    """Reviewed PAM success vocabulary with independently modeled build offsets."""
+    """Qualified native logging envelope and public-source authentication vocabulary."""
 
-    profile: Literal["macos27-ssh-pam-accepted-v1"]
+    profile: Literal["macos27-ssh-pam-accepted-v1", "macos27-ssh-accepted-v1"]
     writer_path: Literal["/usr/libexec/sshd-session"]
     message_type: Literal["Info"]
     format_string: Literal["%.500s"]
     message: Literal[
         "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
     ]
+    public_key_message: (
+        Literal[
+            "Accepted publickey for {username} from {source_ip} port {source_port} ssh2: {key_type} {key_hash}"
+        ]
+        | None
+    ) = None
     format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
     program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
     has_private_data: Literal[True]

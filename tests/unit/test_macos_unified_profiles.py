@@ -114,6 +114,8 @@ def test_old_inputs_need_no_native_profile_fields(tmp_path: Path) -> None:
         ("backtrace_offsets", []),
         ("backtrace_offsets", [3]),
         ("backtrace_offsets", [65536]),
+        ("public_key_message", "Accepted keyboard-interactive/pam for {username}"),
+        ("profile", "arbitrary-ssh-logger"),
     ],
 )
 def test_ssh_profile_cannot_change_the_qualified_source_shape(field: str, value: object) -> None:
@@ -121,3 +123,11 @@ def test_ssh_profile_cannot_change_the_qualified_source_shape(field: str, value:
     data["ssh_authentication"][field] = value
     with pytest.raises(ValidationError):
         MacosUnifiedLogProfilesConfig.model_validate(data)
+
+
+def test_frozen_pam_only_profile_does_not_gain_publickey_vocabulary() -> None:
+    data = _document()
+    data["ssh_authentication"]["profile"] = "macos27-ssh-pam-accepted-v1"
+    del data["ssh_authentication"]["public_key_message"]
+    profile = MacosUnifiedLogProfilesConfig.model_validate(data).ssh_authentication
+    assert profile is not None and profile.public_key_message is None

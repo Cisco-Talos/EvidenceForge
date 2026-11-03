@@ -16,6 +16,7 @@ from evidenceforge.events.macos_logging import (
     MacosWorkspaceRequest,
     UnifiedLogCallsite,
     kernel_writer_identity,
+    supported_ssh_public_key,
 )
 from evidenceforge.generation.activity.macos_unified_log_profiles import (
     load_macos_unified_log_profiles,
@@ -90,8 +91,13 @@ def prepare_ssh_authentication(
     os_name: str,
     source_ip: str,
     source_port: int,
+    auth_method: str = "password",
+    public_key_type: str = "",
+    public_key_hash: str = "",
 ) -> MacosSshAuthentication:
-    """Snapshot the root receiver's PAM success at the SSH owner's auth phase."""
+    """Snapshot accepted auth with method/key facts supplied by the SSH owner."""
+    if auth_method not in {"password", "publickey"}:
+        raise StateError("Native SSH authentication has no qualified logging method")
     live = state.get_session(session.logon_id)
     if (
         state.get_session_identity(session.logon_id) != session
@@ -104,10 +110,19 @@ def prepare_ssh_authentication(
     profiles = load_macos_unified_log_profiles()
     profile = profiles.ssh_authentication
     native = None
+    public_key = auth_method == "publickey"
+    template = (
+        (profile.public_key_message if public_key else profile.message)
+        if profile is not None
+        else None
+    )
+    key_available = not public_key or supported_ssh_public_key(public_key_type, public_key_hash)
     if (
         workspace_request_profile_available(os_name)
         and profile is not None
         and deployment is not None
+        and template is not None
+        and key_available
     ):
         if writer.image != profile.writer_path:
             raise StateError("SSH authentication requires its exact deployed session-worker image")
@@ -128,12 +143,27 @@ def prepare_ssh_authentication(
                 program_counter=profile.program_counter,
                 has_private_data=profile.has_private_data,
             ),
-            message=profile.message.format(
-                username=session.principal, source_ip=source_ip, source_port=source_port
+            message=template.format(
+                username=session.principal,
+                source_ip=source_ip,
+                source_port=source_port,
+                key_type=public_key_type,
+                key_hash=public_key_hash,
             ),
             backtrace_offsets=profile.backtrace_offsets,
         )
-    return MacosSshAuthentication(session, authenticated_at, writer, source_ip, source_port, native)
+    return MacosSshAuthentication(
+        session,
+        authenticated_at,
+        writer,
+        source_ip,
+        source_port,
+        native,
+        method="publickey" if public_key else "keyboard-interactive/pam",
+        public_key_type=public_key_type if public_key else "",
+        public_key_hash=public_key_hash if public_key else "",
+        semantic_basis="public_source_same_logger" if public_key else "native_reference",
+    )
 
 
 def workspace_request_profile_available(os_name: str) -> bool:

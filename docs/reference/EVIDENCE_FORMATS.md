@@ -672,8 +672,16 @@ build offsets/frames. The observed reference exported unredacted authentication 
 this profile models that collection visibility, not every collector's privacy policy.
 The emitter renders frozen facts without looking up a later PID or manufacturing an
 auth event from ES output. Exact publication includes eCAR and ULF in the same retry
-journal. Public-key success, PAM open/close, disconnect and other SSH messages remain
-unqualified; no such messages are inferred from session lifecycle alone.
+journal. Plain public-key intent uses a distinct `Accepted publickey ... ssh2: TYPE SHA256:...`
+message with its canonical type and complete SHA256 fingerprint. This payload is
+derived from Apple's public OpenSSH authentication function and reuses its common
+Info/`%.500s` logger and the qualified native envelope; public-key text was not
+separately observed locally. Missing/noncanonical fingerprints and certificates do
+not produce invented key metadata or native rows. Historical frozen PAM-only profiles
+remain PAM-only. The shared SSH client-identity owner supplies the same canonical
+Base64 fingerprint to all sources. PAM open/close, disconnect and launchd messages
+remain unqualified. Ordinary daemon verbosity is preserved; VERBOSE session-start/
+close messages are outside this profile, independently of the collector's Info setting.
 
 The import decoder also preserves optional macOS 27 `personaID`, `personaName`, `personaType`,
 `launchPersonaID`, `launchPersonaName` and `launchPersonaType` metadata. Private fixed-output

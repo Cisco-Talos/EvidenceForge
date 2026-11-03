@@ -3,6 +3,7 @@
 
 """The reviewed receiver stages use real canonical processes and native metadata owners."""
 
+import base64
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -23,6 +24,9 @@ def test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_childr
     tmp_path: Path,
     *,
     auth_method: str = "password",
+    public_key_type: str = "",
+    public_key_hash: str = "",
+    public_key_enabled: bool = True,
     formats: tuple[str, ...] = ("ecar", "macos_endpoint_security", "macos_unified_log"),
 ) -> None:
     scenario = _scenario()
@@ -97,6 +101,8 @@ def test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_childr
             ),
             service_label="com.openssh.sshd.00000000-0000-4000-8000-000000000001",
             auth_method=auth_method,
+            public_key_type=public_key_type,
+            public_key_hash=public_key_hash,
         )
         startup = MacosNativeSshReceiverStartup(
             request,
@@ -153,13 +159,24 @@ def test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_childr
         for path in tmp_path.rglob("macos_unified_log.ndjson")
         for line in path.read_text().splitlines()
     ]
-    assert len(logs) == int(auth_method == "password" and "macos_unified_log" in formats)
+    from evidenceforge.events.macos_logging import supported_ssh_public_key
+
+    supported = (
+        auth_method == "password"
+        or auth_method == "publickey"
+        and supported_ssh_public_key(public_key_type, public_key_hash)
+        and public_key_enabled
+    )
+    assert len(logs) == int(supported and "macos_unified_log" in formats)
     if not logs:
         return
     accepted = logs[0]
-    assert accepted["eventMessage"] == (
-        "Accepted keyboard-interactive/pam for alex from 192.0.2.80 port 51000 ssh2"
+    expected_message = (
+        f"Accepted publickey for alex from 192.0.2.80 port 51000 ssh2: {public_key_type} {public_key_hash}"
+        if auth_method == "publickey"
+        else "Accepted keyboard-interactive/pam for alex from 192.0.2.80 port 51000 ssh2"
     )
+    assert accepted["eventMessage"] == expected_message
     assert accepted["processID"] == result.privileged_receiver.pid
     assert accepted["processImagePath"] == "/usr/libexec/sshd-session"
     assert accepted["userID"] == 0 and accepted["messageType"] == "Info"
@@ -169,9 +186,78 @@ def test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_childr
     assert accepted["backtrace"]["frames"][0]["imageOffset"] == accepted["senderProgramCounter"]
 
 
-def test_public_key_authentication_does_not_claim_the_pam_reference(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key_type", ["RSA", "ED25519", "ECDSA"])
+def test_public_key_authentication_preserves_its_distinct_method(
+    tmp_path: Path, key_type: str
+) -> None:
     test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_children(
-        tmp_path, auth_method="publickey"
+        tmp_path,
+        auth_method="publickey",
+        public_key_type=key_type,
+        public_key_hash="SHA256:" + base64.b64encode(b"A" * 32).decode().rstrip("="),
+    )
+
+
+def test_frozen_pam_only_profile_cannot_invent_a_publickey_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.generation import macos_logging
+
+    profiles = macos_logging.load_macos_unified_log_profiles()
+    authentication = profiles.ssh_authentication.model_copy(update={"public_key_message": None})
+    frozen = profiles.model_copy(update={"ssh_authentication": authentication})
+    monkeypatch.setattr(macos_logging, "load_macos_unified_log_profiles", lambda: frozen)
+    test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_children(
+        tmp_path,
+        auth_method="publickey",
+        public_key_type="ED25519",
+        public_key_hash="SHA256:" + base64.b64encode(b"A" * 32).decode().rstrip("="),
+        public_key_enabled=False,
+    )
+
+
+def test_publickey_context_preserves_its_source_derived_basis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from evidenceforge.generation.actions import macos_ssh_native_startup as native
+
+    prepare = native.prepare_ssh_authentication
+    observed = False
+
+    def authenticated(*args: object, **kwargs: object) -> object:
+        nonlocal observed
+        context = prepare(*args, **kwargs)
+        assert context.method == "publickey"
+        assert context.semantic_basis == "public_source_same_logger"
+        with pytest.raises(ValueError, match="exact method and qualified key facts"):
+            replace(context, semantic_basis="native_reference")
+        with pytest.raises(ValueError, match="exact method and qualified key facts"):
+            replace(context, method="keyboard-interactive/pam", semantic_basis="native_reference")
+        observed = True
+        return context
+
+    monkeypatch.setattr(native, "prepare_ssh_authentication", authenticated)
+    test_public_key_authentication_preserves_its_distinct_method(tmp_path, "ED25519")
+    assert observed
+
+
+@pytest.mark.parametrize(
+    "key_type,key_hash",
+    [
+        ("", ""),
+        ("ED25519", ""),
+        ("ED25519-CERT", "SHA256:" + "A" * 43),
+        ("ED25519", "SHA256:" + "B" * 43),
+        ("RSA", "MD5:" + "ab:" * 16),
+    ],
+)
+def test_unknown_or_noncanonical_key_metadata_cannot_fabricate_a_publickey_row(
+    tmp_path: Path, key_type: str, key_hash: str
+) -> None:
+    test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_children(
+        tmp_path, auth_method="publickey", public_key_type=key_type, public_key_hash=key_hash
     )
 
 
@@ -234,9 +320,12 @@ def test_authentication_does_not_require_auth_collection_for_process_only_ecar(
     assert checked
 
 
-@pytest.mark.parametrize("failed_phase", [0, 4, 8, 10, 13, 14, 18])
+@pytest.mark.parametrize(
+    "failed_phase,auth_method",
+    [(phase, "password") for phase in (0, 4, 8, 10, 13, 14, 18)] + [(13, "publickey")],
+)
 def test_native_receiver_recovers_committed_source_failure_without_repeating_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_phase: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_phase: int, auth_method: str
 ) -> None:
     from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 
@@ -272,5 +361,14 @@ def test_native_receiver_recovers_committed_source_failure_without_repeating_sta
         return result
 
     monkeypatch.setattr(MacosNativeSshReceiverStartup, "advance", advance)
-    test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_children(tmp_path)
+    test_native_receiver_stages_publish_six_execs_and_only_real_fork_only_children(
+        tmp_path,
+        auth_method=auth_method,
+        public_key_type="ED25519" if auth_method == "publickey" else "",
+        public_key_hash=(
+            "SHA256:" + base64.b64encode(b"A" * 32).decode().rstrip("=")
+            if auth_method == "publickey"
+            else ""
+        ),
+    )
     assert injected

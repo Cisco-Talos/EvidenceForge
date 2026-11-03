@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generation_behavior_revision": 376,
+  "generation_behavior_revision": 377,
   "phase_1": "COMPLETE_BOUNDED_WORKLOAD",
   "phases_2_to_4": "NOT_ALL_COMPLETE",
   "measurements": [
@@ -18,7 +18,7 @@
       "missing_execution_roles": [],
       "unrealized_steps": [],
       "authored_phase_gaps": [],
-      "manifest_sha256": "5c2dab0d10bd03ca78bb407365808343fe96fd1877de9588317b75d1ab5fa5a8"
+      "manifest_sha256": "5e855abad2362b9c09bcd04203fcd4e08536ef740c7a3b24bf01d0c3339bfd3b"
     },
     {
       "run": "combined-recovery",
@@ -34,7 +34,7 @@
       "missing_execution_roles": [],
       "unrealized_steps": [],
       "authored_phase_gaps": [],
-      "manifest_sha256": "a91544d17d277528abc7f7d7c8bed10be18587fdf914a31ecd8b06f061ead5f2"
+      "manifest_sha256": "bc83416a020b671d66e4b2486bf439b3a8716385d33d74c4e9a2cfd7a1a408fe"
     }
   ],
   "combined_exact_resume_files_equal": true,
@@ -42,11 +42,12 @@
   "deterministic_files_compared": 22,
   "primary_evaluation": {
     "acceptance_passed": true,
-    "overall_score": 88.91142951075719,
+    "overall_score": 88.9058446346018,
+    "total_records": 346,
     "source_counts": {
       "ecar": 176,
       "macos_endpoint_security": 85,
-      "macos_unified_log": 3,
+      "macos_unified_log": 4,
       "zeek_conn": 35,
       "zeek_dns": 14,
       "zeek_files": 4,
@@ -57,18 +58,19 @@
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
-    "SSH public-key success, PAM/session open/close, disconnect and launchd ULF remain reference-gated.",
-    "Full expanded ULF acceptance remains incomplete; current exact recovery/evaluation covers implemented families."
+    "Launchd activation/completion ULF remains reference-gated; corrected category/message selector is prepared for one bounded private test.",
+    "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
+    "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
   ],
   "scope": "Synthetic engineering acceptance; no private records or observed native values are included.",
   "combined_evaluation": {
     "acceptance_passed": true,
-    "overall_score": 88.70907576770895,
-    "total_records": 2818,
+    "overall_score": 88.7088659642302,
+    "total_records": 2819,
     "source_counts": {
       "ecar": 912,
       "macos_endpoint_security": 113,
-      "macos_unified_log": 3,
+      "macos_unified_log": 4,
       "zeek_conn": 714,
       "zeek_dns": 352,
       "zeek_files": 203,
@@ -81,25 +83,34 @@
   },
   "bounded_current_code_review": {
     "es_records_reviewed": 0,
-    "ulf_records_reviewed": 3,
-    "scope": "Independent full-process census plus bounded review of the three synthetic ULF rows; no new blind panel.",
-    "result": "Root/session-worker, peer, static format/private flag, sender/build and modeled-frame checks pass for PAM; two workspace rows remain unchanged. Unqualified families remain gated."
+    "ulf_records_reviewed": 4,
+    "scope": "Independent full-process census plus bounded review of all four synthetic ULF rows in the primary; same assertions pass on the recovery companion. No new blind panel.",
+    "result": "Root/session-worker, actual canonical public-key fingerprint, peer, static format, same sender/build and activity checks pass for both authentication methods; two workspace entries remain. Public-key text is source-derived through the qualified common logger, not separately captured locally."
   },
-  "generation_behavior_sha256": "95ff84e02b780af5f98a78f993b13273520c5871366b68e5feda2f1c3b23452a",
+  "generation_behavior_sha256": "3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8",
   "native_filter_formats": [
     "macos_endpoint_security",
     "macos_unified_log"
   ],
   "ulf_coverage": {
-    "workload_rows": 3,
+    "workload_rows": 4,
     "pam_success_rows": 1,
+    "publickey_success_rows": 1,
     "non_pty_authentication": "password/PAM",
-    "pty_authentication": "publickey; no qualified ULF message",
-    "separate_password_pty_unit_gate": "PASS"
+    "pty_authentication": "plain publickey; source-derived payload with qualified common logger envelope",
+    "separate_password_pty_unit_gate": "PASS",
+    "daemon_verbosity": "ordinary; VERBOSE session messages remain gated by user choice on 2026-11-03"
   },
   "previous_bounded_review_revision_375": {
     "es_records_reviewed": 10,
     "ulf_records_reviewed": 2,
     "result": "No concrete identity, helper-argument or writer contradiction in this sample; expanded ULF acceptance remains pending."
-  }
+  },
+  "previous_bounded_review_revision_376": {
+    "es_records_reviewed": 0,
+    "ulf_records_reviewed": 3,
+    "scope": "Independent full-process census plus bounded review of the three synthetic ULF rows; no new blind panel.",
+    "result": "Root/session-worker, peer, static format/private flag, sender/build and modeled-frame checks pass for PAM; two workspace rows remain unchanged. Unqualified families remain gated."
+  },
+  "phase_2": "COMPLETE_BOUNDED_OUTCOME_CONTRACT_WITH_EXPLICIT_UNKNOWNS"
 }
