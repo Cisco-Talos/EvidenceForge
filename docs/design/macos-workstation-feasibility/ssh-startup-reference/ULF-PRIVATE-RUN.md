@@ -69,3 +69,12 @@ share just its compact fixed error JSON instead.
 Do not retry in a used kit or open/share native files. One Ctrl+C requests cleanup;
 the root guard also has an independent watchdog. Native collection or private-file
 review by an agent requires separate explicit authorization.
+
+## An existing capture with `native_shapes: FAIL`
+
+Do not collect again. The original analyzer stops at the first schema error;
+its empty classifications do not mean messages were absent. The prepared
+[offline review](ULF-REFERENCE.md) can identify all failing known fields and
+distinguish other event kinds using fixed labels from the saved capture.
+It requires separate local-log permission and runs as the normal user, with no
+sudo, collection, app launch, live query or writes. Keep the used kit unchanged.

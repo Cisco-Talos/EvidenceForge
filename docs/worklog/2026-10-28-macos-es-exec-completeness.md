@@ -2810,3 +2810,48 @@ Code-only preparation created `/private/tmp/eforge-ssh-startup-kit-9pmp5kku`.
 No setup, installed-code inspection, SSH connection, collector or private log reader
 was run. The next input is the human-run fixed SSH ULF JSON, with agents closed for
 collection. The used launchd kit and every older private capture remain untouched.
+
+## 2026-11-03 — SSH ULF captured; comprehensive offline review prepared
+
+The user supplied the fixed SSH ULF report: **38 retained rows**, readiness,
+cleanup and execution binding PASS, ring_evicted false, native_shapes FAIL.
+All source/message classifications remained empty. The original analyzer stops
+at its first failed logEvent validation; those zeros are therefore not evidence
+of absent SSH auth/session messages. No private capture, its metadata or raw
+records have been opened by the agent in this turn.
+
+Source inspection found the selector does not restrict eventType while the
+analyzer assumes every retained entry is a logEvent. Non-log entries can poison
+classification, as can genuine unsupported log shapes. The fixed report does not
+identify the actual cause. No native codec or generation contract was relaxed.
+
+A new offline-only reviewer diagnoses all log schema failures at once and counts
+other entry kinds separately. Only known field names and coarse type/string/
+integer-sentinel/object-key classes are returned. Unknown key names, validator
+messages/input/context, observed values and native text never leave private
+memory. It classifies the fully valid log subset with explicit subset counts and
+LOG_EVENT_ROWS_ONLY scope; overall native_shapes stays FAIL if any actual log
+entry fails. Non-log shapes are not silently qualified. Gate stays NOT_EVALUATED.
+
+The reader validates frozen code/guard/marker/opt-in provenance and original
+controls, re-proves the selected ES tree and all ULF PID/image/time bindings, and
+checks original row counts before classifying. It executes no captured code,
+starts no commands/collectors/apps/probes, queries no installed applications and
+writes nothing. ES source sequence continuity comes from the original full-stream
+control; it is not inferred from gaps in the deliberately filtered saved subset.
+Original collection code, used private kits and production generator inputs are
+unchanged.
+
+All **261 selected routine tests** pass, including **20** new offline/provenance/
+privacy tests. They cover all-field diagnostics, missing/null/numeric/unknown-field
+failures, non-log separation, unknown-key suppression, tampered controls/tree/
+counts, PID scope, symlinks, read-only file equality, no native/live operations and
+fixed CLI exception output. A PEP-695 alias introspection issue in the first draft
+was caught by these tests and corrected before preparation.
+
+Code-only preparation created `/private/tmp/eforge-ssh-startup-kit-5vrzrmhy`, whose
+entry point is `private_ssh_ulf_review.py`. The intended source is the existing
+`/private/tmp/eforge-ssh-startup-kit-9pmp5kku`. No new collection is needed. The next
+step requires explicit permission under the standing no-local-log-read rule;
+silence is not permission. This reviewer covers the schema defects together,
+rather than requesting one field at a time. No private input has yet been read.

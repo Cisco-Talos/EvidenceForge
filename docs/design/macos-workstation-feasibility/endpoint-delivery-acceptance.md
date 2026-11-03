@@ -46,4 +46,7 @@ The next launchd diagnostic is documented in
 After its unobserved result, the next human-run reference is the opt-in
 [SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reuses the existing
 controlled loopback connection and ES ancestry solely to authenticate ULF retention;
-it does not expand the ES metadata research scope. The prepared kit has not collected.
+it does not expand the ES metadata research scope. Its first fixed report retained
+38 bound rows with successful cleanup but failed the implemented schema. The next
+step is a separately authorized [offline shape review](ssh-startup-reference/ULF-REFERENCE.md)
+of those existing records, not another capture. No SSH ULF template is enabled yet.
