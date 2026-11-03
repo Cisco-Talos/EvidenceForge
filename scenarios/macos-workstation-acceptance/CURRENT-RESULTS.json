@@ -58,7 +58,7 @@
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
-    "Launchd ULF remains reference-gated. The corrected-selector attempt failed activation and cleanup controls; zero rows are inconclusive. Grouped exact-label cleanup diagnosis is pending human execution, with no new collection requested.",
+    "Launchd ULF remains reference-gated. The corrected-selector attempt failed activation controls; zero rows are inconclusive. A human-run grouped check verified both test directory and exact service absent; no cleanup or new collection is requested.",
     "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
     "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
   ],
@@ -112,5 +112,14 @@
     "scope": "Independent full-process census plus bounded review of the three synthetic ULF rows; no new blind panel.",
     "result": "Root/session-worker, peer, static format/private flag, sender/build and modeled-frame checks pass for PAM; two workspace rows remain unchanged. Unqualified families remain gated."
   },
-  "phase_2": "COMPLETE_BOUNDED_OUTCOME_CONTRACT_WITH_EXPLICIT_UNKNOWNS"
+  "phase_2": "COMPLETE_BOUNDED_OUTCOME_CONTRACT_WITH_EXPLICIT_UNKNOWNS",
+  "launchd_reference_cleanup": {
+    "basis": "Human-supplied fixed-output read-only check; no agent native-data access",
+    "controls": "PASS",
+    "directory": "ABSENT",
+    "exact_service": "ABSENT",
+    "cleanup_state": "ABSENCE_VERIFIED",
+    "cleanup_needed": false,
+    "qualifies_launchd_ulf": false
+  }
 }

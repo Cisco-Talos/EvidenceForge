@@ -41,10 +41,10 @@ of global absence.
 Reference-qualified generation still uses explicit synthetic build offsets and invented
 entity values; it does not claim byte identity with the private system's executable.
 
-The next launchd diagnostic is documented in
+The launchd diagnostic is documented in
 [launchd-ulf-reference/PRIVATE-RUN.md](launchd-ulf-reference/PRIVATE-RUN.md).
-After its unobserved result, the next human-run reference is the opt-in
-[SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reuses the existing
+After its initial unobserved result, the user ran the bounded
+[SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reused the existing
 controlled loopback connection and ES ancestry solely to authenticate ULF retention;
 it does not expand the ES metadata research scope. Its first fixed report retained
 38 bound rows with successful cleanup but failed the implemented schema. The approved
@@ -66,6 +66,9 @@ evidence gate; ES already covers the controlled job's process start and known ex
 The human-run corrected launchd selector subsequently returned failed job activation
 and removal/file controls. Its zero rows are inconclusive, not a qualified absence.
 Exact-label cleanup also failed its original fixed checks; a tested grouped cleanup
-diagnostic is pending human execution. No further collection is requested before
-verified cleanup, and no native files were opened by the agent. See the launchd
-reference note for this separate diagnostic failure and its reporting correction.
+diagnostic subsequently verified both test directory and exact service ABSENT.
+The temporary-resource concern is closed and no cleanup is needed. This does not
+establish activation or ULF visibility in the failed attempt. No further collection
+is requested, and no native files were opened by the agent. Launchd ULF remains
+gated; it is not silently removed from full-scope phase 3/4 acceptance. See the
+launchd reference note for the fixed reports and their limits.

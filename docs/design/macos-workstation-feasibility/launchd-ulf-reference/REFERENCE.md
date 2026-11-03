@@ -1,5 +1,10 @@
 # Launchd ULF: controlled test, no qualifying rows
 
+**Current cleanup status:** the human-run grouped check verified both the test
+directory and exact system service ABSENT on 2026-11-03. No cleanup is needed.
+Launchd ULF remains unqualified; verified absence does not establish job activation
+or native log visibility in the failed attempt.
+
 On 2026-11-03 the user supplied a fixed version-1 diagnostic report. The collector's
 own-process marker, job activation, job removal, temporary-file removal and collector
 cleanup all passed. The capture retained **zero** launchd rows. Native shapes,
@@ -28,7 +33,8 @@ No local diagnostic file, its metadata, or a broader native stream was inspected
 The launchd ULF generation gate remains unpassed. No template is enabled from this
 report, and no new native file source is silently added to the product scope.
 There is no recommendation to repeat collection merely to obtain a positive result.
-SSH ULF remains a separate planned family; launchd ES coverage is already implemented.
+Ordinary-verbosity SSH accepted-authentication ULF is implemented separately;
+launchd ES coverage is already implemented.
 
 ## Corrected-selector attempt: job controls did not pass
 
@@ -83,3 +89,19 @@ absence. A safe matching lease is reported separately from completed cleanup.
 The check starts no jobs/collectors, removes no test resources, and deletes only
 its own fresh temporary compilation directory. The user has been given one
 grouped command; no agent has run it on the original kit.
+
+## Grouped result: absence verified
+
+The user supplied the complete fixed check report with error NONE, controls PASS,
+cached sudo PASS, directory ABSENT, exact service ABSENT and
+cleanup_state ABSENCE_VERIFIED. Lease checks appropriately remain INCONCLUSIVE:
+there is no directory to inspect, rather than a failed or mismatched lease.
+No job or collector started, original-kit files were unchanged, and native record
+files were not opened. No agent repeated the check or inspected local native data.
+
+This closes the temporary-resource concern. Nothing needs removal and the used
+kit remains preserved. It does not identify why the earlier run failed to create
+or validate its controls, and does not convert that run's zero rows into a valid
+launchd ULF absence observation. No further capture or cleanup is requested.
+The missing product evidence is still a qualified launchd ULF message/envelope
+from an activated controlled job; current launchd process evidence remains in ES.

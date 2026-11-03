@@ -3117,3 +3117,26 @@ The user has been given `check-cleanup --kit-root` for the same original
 collection is requested and launchd ULF remains gated. Production generation remains
 revision 377; passing recovery/evaluations are unchanged and are not repeated for
 this diagnostic-only work. Only the test kit's control state needs human input now.
+
+## 2026-11-03 — Test directory and exact service absence verified
+
+The user supplied the grouped read-only check's fixed JSON: error NONE, original
+controls PASS, cached sudo PASS, directory ABSENT, exact service ABSENT and
+cleanup_state ABSENCE_VERIFIED. No native record files were opened, no collector
+or job started, and original-kit files were unchanged. The lease comparisons are
+correctly INCONCLUSIVE because the directory is absent. No agent repeated the
+check, inspected the directory or queried launchd.
+
+This closes the temporary-resource concern: no cleanup is needed. Keep the used
+kit preserved. Earlier LOCATION_FAIL did not prove leftover resources. The report
+does not identify why the original run's activation controls failed, and does not
+qualify its zero rows as a valid native-source absence observation. No further
+cleanup, capture, metadata query or assessment loop is requested.
+
+Current reference/acceptance documents and aggregate results now distinguish the
+verified resource absence from the still-open launchd ULF gate. Launchd process
+starts/known exits remain covered by ES. Full-scope phase 3/4 acceptance remains
+incomplete until a launchd ULF message/envelope is qualified; the family was not
+silently dropped from the plan. Production code, scenario inputs, behavior
+revision 377 and prior passing recovery/evaluation results are unchanged. This is
+a documentation-only reconciliation; no generation or behavioral tests are rerun.

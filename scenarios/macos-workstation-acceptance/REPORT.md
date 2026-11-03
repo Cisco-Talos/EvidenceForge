@@ -59,11 +59,13 @@ were read again for this source-derived extension.
 The first launchd test retained zero rows. Its message-only selector has a code-tested
 category-or-message correction. The corrected human-run attempt then failed job
 activation and cleanup controls; its zero rows are inconclusive. Exact-label cleanup
-also failed its original checks, so a tested grouped cleanup diagnostic is pending
-human execution. No further collection is requested. No launchd message template or separate diagnostic-file source is
-promoted. If the corrected test is also empty, leave ULF gated rather than repeat
-collection for a positive result. Current exact recovery and evaluation cover the
-implemented families; they do not close that gate.
+also failed its original checks, but the subsequent human-run grouped diagnostic
+verified both test directory and exact system service ABSENT. No cleanup is needed;
+the kit remains preserved. This does not establish job activation or native log
+visibility in the failed attempt. No further collection is requested. No launchd
+message template or separate diagnostic-file source is promoted. Current exact
+recovery and evaluation cover the implemented families; they do not close the
+launchd ULF gate or mark full-scope phases 3/4 complete.
 
 See the finite [four-phase delivery plan](../../docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
 and [current machine-readable results](CURRENT-RESULTS.json). The previous
