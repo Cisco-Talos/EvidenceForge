@@ -2519,3 +2519,115 @@ left its synthetic fixture unchanged. No private report or native record is
 committed. Production behavior revision 373 is unchanged. The full fixed
 workstation acceptance remains blocked on the Chrome canonical producer work;
 these reference fixes do not close P0 or claim generated Chrome acceptance.
+
+## November 2, revision 374: approved Chrome review and complete bounded workload
+
+The human approved the prepared offline reviewer in
+`/private/tmp/eforge-chrome-kit-lpxff5he` against
+`/private/tmp/eforge-chrome-kit-fdw97zzl`. It ran read-only and passed provenance,
+original collection controls, exact retained selection and original-report
+agreement. The identical command was repeated only to compact its already
+approved fixed output after the first tool output was truncated. Scope did not
+expand: no new comparisons, direct native-record read by the agent, installed
+code query, profile read, command/app/probe/collector launch or file write occurred.
+No additional review/collection is authorized by this completed operation.
+
+The fixed results confirm that the main transition preserved PID/birth and
+changed the global identity version with a gap. All retained transitions satisfy
+same-lifetime/changed-version semantics. The generic helper GPU role is confirmed;
+all retained seatbelt arguments refer to a pipe in the same descriptor inventory.
+Renderer, GPU and network roles have known installed security/entitlement
+agreement. A storage utility is also observed. An auxiliary image remains OTHER,
+another matches the public alerts layout without independent installed-code
+qualification, and a generic-helper role remains unclassified. The exited
+fork-only Crashpad intermediary and the separate child with no retained ending
+remain as previously described. Unknown environment names/values stay hidden;
+known public keys include OSLogRateLimit. No raw report, native record, captured
+identifier, version, path, environment value or code hash is committed.
+
+Production now consumes the bounded reference through canonical owners:
+
+- Chrome main has an explicit fresh LaunchServices/Finder bundle policy. It uses
+  the existing boot fork, root xpcproxy exec, GUI credential transition and main
+  exec journal. A baseline adapter bug is fixed at that boundary: catalog argv
+  is serialized once into its canonical shell-quoted display before the request.
+- Renderer and generic helper are independently signed placements installed with
+  Chrome, using the same frozen synthetic release. Vendor identifiers and public
+  entitlement templates are explicit data; a child never inherits main signer
+  metadata. Generic GPU/network share one actual helper image and null entitlement
+  state. Reviewed runtime flags/slices are separate validation policy. The private
+  installed build differs from the frozen catalog, so exact release parity is
+  expressly not claimed.
+- Exact renderer/generic-GPU/network invocations enter a bounded browser-helper
+  policy. They inherit authenticated GUI ownership and current directory and
+  publish actual fork and exec occurrences. A State-owned sandbox pipe and its
+  argv slot share one allocation. Slot, timing and clean environment additions
+  are explicit synthetic inputs, not exported capture values or modeled browser IPC.
+- The first retry test exposed duplicate births after a committed return was
+  lost. Helpers now reuse the retained Mac startup phase journal. A small base
+  extension selects the final app phase; existing Finder/PTY/system-job phases
+  retain their prior indexes. Pending helper startup uses the already-checkpoint-
+  guarded transient owner. Both fork and exec before-commit/lost-return faults
+  retain one process identity and one pipe allocation; shared source release
+  recovery is covered by the existing journal gates.
+- A direct request test exposed a pre-existing unexpected source_visible_by
+  keyword passed to Windows CLI spacing. That branch already requires the value
+  to be None; the unsupported keyword is removed at its call owner.
+
+The fixed workload's GPU image expectation was wrong: it demanded the unobserved
+JIT-capable dedicated GPU bundle. The source/catalog now select the observed
+GPU-on-generic-helper variant. All three operational roles remain required,
+including explicit argv checks so one generic helper cannot satisfy both GPU
+and network coverage. No activity family, time, seed, intensity or completeness
+policy was removed. Only the two explicitly conditional warmup cleanup logoffs
+may count their typed no_matching_session no-op; that exception cannot hide
+skipped process starts or other failures.
+
+The full thirty-minute two-Mac source now generates successfully:
+
+- Primary seed 373: **33 forks/39 execs**, all exact independent identities,
+  **zero aggregate starts**, **84 ES rows**, no missing executable/argv roles or
+  authored phase gaps. eCAR agrees on all fork identities and exec PID/version,
+  path and argv tuples. Native-only filtering is byte-identical across both hosts.
+- The primary still schedules **zero background execs**. The original positive
+  background acceptance bar remains unexercised; it is not lowered or replaced.
+- The previously predeclared supplemental seed 375 runs the same full source:
+  **37 forks/44 execs**, **93 ES rows**, **five background execs**, exact census,
+  no aggregate starts or missing authored/operational roles. It is separately
+  labeled and does not replace the quiet primary seed.
+- One deterministic evaluation verifies the primary authoritative bundle and
+  passes all applicable hard gates at **88.9227/100**. Behavioral diversity and
+  noise volume remain low. This is not a blind authenticity assessment.
+- The twelve-hour native browser-helper checkpoint gate passes suspend/status/
+  integrity verification/exact resume and deterministic bundle equivalence, with
+  live helpers retained at its checkpoint. The exact thirty-minute workload was
+  also attempted with checkpoints/test synchronization; it finished without
+  exposing the requested intermediate boundary. That attempt is preserved and
+  does not count as full-workload recovery acceptance. Source duration/times were
+  not changed to conceal this remaining condition.
+
+The first full-run attempt failed during warmup on the catalog quoting defect;
+its output is preserved. The corrected primary is `full-2` under
+`runs/macos-workstation-acceptance/2026-11-02-chrome-native-374/` (ignored), alongside
+native-only, supplemental and checkpoint diagnostics. Only summaries are tracked:
+`scenarios/macos-workstation-acceptance/CHROME-RESULTS.json` and the updated REPORT.
+The former report is retained as INITIAL-REPORT.md; original RESULTS.json is
+historical, not current capability.
+
+Validation passes with the same four expected warnings. All **193 focused routine
+checks** pass across the Chrome/canonical metadata/census/descriptor/catalog and
+shared application/deployment/process owners, including the Windows spacing case.
+All **10 selected extended recovery checks** pass (nine existing Finder fault
+cases plus the native helper checkpoint gate). Whole Ruff, format, diff and
+behavior checks pass. Revision **374** digest is
+`d20e1cafe315eaca2a79bb4840ca292ce2b35f2a576453d0ef0c0d457d31c6bc`.
+No feature-branch product version bump or release is made.
+
+The global P0 milestone remains open: primary positive-baseline and exact full-
+workload checkpoint conditions remain explicit, and other unqualified app/helper
+paths still reject under complete coverage. Dedicated-GPU, Crashpad/alerts graph,
+arbitrary helpers, app reuse/restoration, browser IPC, helper-attributed network
+traffic and general app-launch Unified Log evidence are not admitted by this
+bounded producer. No additional human data was requested and no assessment loop
+was started. The next work should use the measured workload/coverage conditions,
+not another open-ended reference or reviewer loop.

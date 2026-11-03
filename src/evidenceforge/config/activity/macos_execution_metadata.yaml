@@ -38,10 +38,33 @@ finder_launch_relationships: launchd_self
 finder_launch_execution: xpcproxy_app_exec
 finder_launch_images:
   - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+  - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 # Explicit invented bundle metadata, never inferred from a signing identifier.
 finder_applications:
   - image: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
     bundle_identifier: org.evidenceforge.Reference
+  - image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    bundle_identifier: com.google.Chrome
+# Bounded fresh LaunchServices browser and direct sandboxed helper roles.
+# Pipe slots and environment are explicit synthetic inputs, not copied host values.
+# The dedicated GPU bundle, Crashpad double-fork, alerts and other helper classes
+# remain outside this invocation contract. There is no automatic whole-graph claim.
+browser_helpers:
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+    arguments: [--type=renderer]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+    arguments: [--type=gpu-process]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+    arguments: [--type=utility, --utility-sub-type=network.mojom.NetworkService]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
 # Selected synthetic launcher input. The private reference classifies its native
 # value only as OTHER; this literal is not claimed to have been measured.
 finder_launcher_xpc_flags: "0x2"
@@ -205,3 +228,23 @@ code_validation:
     codesigning_flags: 536870915 # 0x20000003
     is_platform_binary: false
     validation_category: 10
+  # Reviewed macOS 27 Developer ID execution flags. This is a bounded synthetic
+  # successful validation policy, not exact installed-build parity or Gatekeeper.
+  - product_id: chrome
+    artifact_names: [Google Chrome]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: chrome
+    artifact_names: [Google Chrome Helper (Renderer)]
+    codesigning_flags: 0x22011b11
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: chrome
+    artifact_names: [Google Chrome Helper]
+    codesigning_flags: 0x22013b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0

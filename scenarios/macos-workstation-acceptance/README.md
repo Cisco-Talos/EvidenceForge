@@ -14,6 +14,14 @@ of what native generation currently accepts. Do not remove a failing family,
 substitute the reference app, change the seed, move target starts into warm-up or
 suppress background process activity to obtain a passing result.
 
+The Chrome reference corrected one physical-image expectation: GPU work used the
+generic Helper executable, which also runs the network role. The fixture now
+selects that observed variant, preserving all three required operational roles.
+Measurement checks each role's argument vector as well as file identity, so a
+network helper alone cannot satisfy GPU coverage. The unobserved dedicated-GPU
+variant remains outside the bounded native producer. No activity, time, seed,
+baseline requirement or completeness gate was removed by this correction.
+
 The first low-intensity diagnostic scheduled no user timestamps at this seed.
 During initial workload construction, intensity was raised to medium to exercise
 the background requirement. The seed, time window and all intended activities

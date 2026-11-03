@@ -4290,6 +4290,40 @@ class MacosFinderApplicationPolicy(BaseModel, extra="forbid", frozen=True):
     )
 
 
+class MacosBrowserHelperPolicy(BaseModel, extra="forbid", frozen=True):
+    """One bounded native helper invocation and its modeled sandbox pipe slot."""
+
+    parent_image: str = Field(min_length=1, max_length=4096)
+    image: str = Field(min_length=1, max_length=4096)
+    arguments: tuple[str, ...] = Field(min_length=1, max_length=16)
+    seatbelt_fd: int = Field(strict=True, ge=3, lt=2**15)
+    environment: tuple[str, ...] = Field(default=(), max_length=16)
+
+    @model_validator(mode="after")
+    def literal_scope(self) -> Self:
+        """Keep helper admission exact; runtime arguments cannot override file actions."""
+        if any(
+            not path.startswith("/") or "\0" in path or ".." in PurePosixPath(path).parts
+            for path in (self.parent_image, self.image)
+        ) or any(
+            not argument.startswith("--")
+            or "\0" in argument
+            or argument.split("=", 1)[0] == "--seatbelt-client"
+            for argument in self.arguments
+        ):
+            raise ValueError(
+                "Browser helpers require literal paths, switches and a separate pipe slot"
+            )
+        if len({argument.split("=", 1)[0] for argument in self.arguments}) != len(self.arguments):
+            raise ValueError("Browser helper switches must be unique")
+        if any(
+            "=" not in entry or not entry.split("=", 1)[0] or "\0" in entry
+            for entry in self.environment
+        ) or len({entry.split("=", 1)[0] for entry in self.environment}) != len(self.environment):
+            raise ValueError("Browser helper environment requires distinct literal assignments")
+        return self
+
+
 class MacosTerminalStartupPolicy(BaseModel, extra="forbid", frozen=True):
     """Explicit fresh terminal topology and public launch inputs, separate from app identity."""
 
@@ -4364,6 +4398,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     finder_launcher_xpc_flags: str | None = Field(
         default=None, max_length=32, pattern=r"^(?:0x[0-9a-fA-F]+|[0-9]+)$"
     )
+    browser_helpers: tuple[MacosBrowserHelperPolicy, ...] = Field(default=(), max_length=32)
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
     ssh_receiver_startup: Literal["launchd_non_pty_v11"] | None = None
     ssh_receiver_service_label: Literal["com.openssh.sshd"] | None = None
@@ -4425,6 +4460,15 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
             image not in self.finder_launch_images for image in finder_images
         ):
             raise ValueError("Finder bundle policies require distinct admitted app images")
+        helpers = [
+            (entry.parent_image, entry.image, entry.arguments) for entry in self.browser_helpers
+        ]
+        if len(helpers) != len(set(helpers)) or any(
+            entry.parent_image not in finder_images for entry in self.browser_helpers
+        ):
+            raise ValueError(
+                "Browser helper policies require distinct invocations and admitted GUI parents"
+            )
         shell_invocations = [(rule.image, rule.arguments) for rule in self.nested_command_shells]
         if len(shell_invocations) != len(set(shell_invocations)):
             raise ValueError("Nested Mac command shell policies must have distinct invocations")

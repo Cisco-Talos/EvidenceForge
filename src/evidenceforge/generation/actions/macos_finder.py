@@ -57,6 +57,7 @@ class MacosFinderStartup:
     """
 
     publication_source: str = "finder"
+    app_phase: int = 2
 
     def __init__(
         self,
@@ -158,8 +159,8 @@ class MacosFinderStartup:
 
     @property
     def complete(self) -> bool:
-        """Expose completion only when all three canonical phases reached their sinks."""
-        return self._phase == 3
+        """Expose completion only when all selected canonical phases reached their sinks."""
+        return self._phase == self.app_phase + 1
 
     def advance(self) -> None:
         """Publish or resume one exact phase without reforking or repeating an exec."""
@@ -190,7 +191,7 @@ class MacosFinderStartup:
         if self._phase == 0:
             self.birth = pending.birth
             self.fork_event = pending.events[0]
-        elif self._phase == 2:
+        elif self._phase == self.app_phase:
             self.app_event = pending.events[0]
         self._phase += 1
         self._pending = None

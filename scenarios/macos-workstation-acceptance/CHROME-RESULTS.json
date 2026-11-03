@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "generation_behavior_revision": 374,
+  "generation_behavior_sha256": "d20e1cafe315eaca2a79bb4840ca292ce2b35f2a576453d0ef0c0d457d31c6bc",
+  "source_sha256": "060a20cf3d834502f75eef0aa3527e6c08d45536f7e80a008838b776bfeb6d81",
+  "primary_seed": 373,
+  "primary_full_acceptance": "NOT_FULLY_EXERCISED",
+  "remaining_acceptance_conditions": [
+    "Primary seed schedules zero background process starts",
+    "Full 30-minute workload has no intermediate hourly checkpoint; separate 12-hour native helper checkpoint test passes"
+  ],
+  "physical_image_correction": "GPU role uses the observed generic Helper; exact renderer/GPU/network argv roles remain required",
+  "measurements": [
+    {
+      "run": "runs/macos-workstation-acceptance/2026-11-02-chrome-native-374/full-2",
+      "actual_seed": 373,
+      "activity_supported": true,
+      "census_complete": true,
+      "forks": 33,
+      "execs": 39,
+      "native_rows": 84,
+      "native_forks": 33,
+      "native_execs": 39,
+      "known_exits": 12,
+      "aggregate_births": 0,
+      "background_native_execs": 0,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "generation_manifest_sha256": "6dcc8c154bd7efe96fab7ec6ea4dd60502f4b30e97b3fd41ac688fd8bc4f8064"
+    },
+    {
+      "run": "runs/macos-workstation-acceptance/2026-11-02-chrome-native-374/supplemental-seed-375",
+      "actual_seed": 375,
+      "activity_supported": true,
+      "census_complete": true,
+      "forks": 37,
+      "execs": 44,
+      "native_rows": 93,
+      "native_forks": 37,
+      "native_execs": 44,
+      "known_exits": 12,
+      "aggregate_births": 0,
+      "background_native_execs": 5,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "generation_manifest_sha256": "a812e0337491b22fa18b4c3b2126aaffc56cb6dd8956275b92b699394f848c1f"
+    }
+  ],
+  "primary_native_filter_bytes_equal": true,
+  "primary_ecar_fork_and_exec_argv_epoch_agreement": true,
+  "native_helper_checkpoint_suspend_verify_resume_equivalence": "PASS",
+  "full_workload_checkpoint": "NOT_EXERCISED",
+  "deterministic_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 88.92269695769454,
+    "flags": [
+      "User Behavioral Diversity: 42/100 (Avg pairwise similarity: 0.73 across 2 users)",
+      "Volume Adequacy: 0/100 (Noise:signal 11:1 (target 2000:1 for medium))"
+    ]
+  },
+  "scope": "Bounded engineering acceptance; no universal macOS/Chrome authenticity claim. No private reference records are included."
+}

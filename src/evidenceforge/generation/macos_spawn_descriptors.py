@@ -78,11 +78,28 @@ def plan_spawn_descriptors(
             "Mac spawn file actions require complete inherited descriptors and membership"
         )
     is_server = intent.kind == "server_channels"
+    is_browser = intent.kind == "browser_sandbox"
     is_ssh = intent.kind in {"ssh_inetd", "ssh_session", "ssh_auth"}
-    if is_server or is_ssh:
+    if is_server or is_ssh or is_browser:
         if terminal != "absent":
             raise StateError("Mac server channels require explicitly absent controlling terminal")
-        if is_ssh:
+        if is_browser:
+            bindings = [binding for binding in inherited.bindings if binding.fd <= 2]
+            if (
+                tuple(binding.fd for binding in bindings) != (0, 1, 2)
+                or any(binding.kind != "file" or binding.close_on_exec for binding in bindings)
+                or process.arguments is None
+                or [
+                    arg
+                    for arg in process.arguments[1:]
+                    if arg.split("=", 1)[0] == "--seatbelt-client"
+                ]
+                != [f"--seatbelt-client={intent.descriptor_fd}"]
+            ):
+                raise StateError(
+                    "Mac browser sandbox requires vnode standards and its exact pipe argument"
+                )
+        elif is_ssh:
             bindings = _ssh_bindings(process, intent, inherited)
         else:
             bindings = [
@@ -116,7 +133,13 @@ def plan_spawn_descriptors(
             )
             bindings = [MacosDescriptorBinding(fd, "file", object_id, False) for fd in (0, 1, 2)]
     allocation = None
-    count = 2 if is_server else 1 if intent.kind in {"login_pipes", "ssh_auth"} else 0
+    count = (
+        2
+        if is_server
+        else 1
+        if intent.kind in {"login_pipes", "ssh_auth", "browser_sandbox"}
+        else 0
+    )
     if count:
         first = intent.first_pipe_id
         assert first is not None
@@ -132,7 +155,15 @@ def plan_spawn_descriptors(
         for offset in range(count):
             native_id = previous + offset + 1
             object_id = stable_uuid("macos-native-pipe", host, native_id)
-            fds = (2 + offset,) if is_server else (4,) if intent.kind == "ssh_auth" else (4, 5)
+            fds = (
+                (intent.descriptor_fd,)
+                if is_browser
+                else (2 + offset,)
+                if is_server
+                else (4,)
+                if intent.kind == "ssh_auth"
+                else (4, 5)
+            )
             bindings.extend(
                 MacosDescriptorBinding(fd, "pipe", object_id, False, native_id) for fd in fds
             )

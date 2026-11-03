@@ -366,6 +366,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
     if helpers:
         # Cross the normal GUI session close, not only the collection cutoff.
+        scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
         scenario_data["time_window"]["duration"] = "12h"
         # Exercise helper retention with the established high-intensity seed;
         # low-intensity baseline may legitimately start no browser before recovery.
@@ -710,6 +711,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
         cursor_ms = int(datetime(2026, 10, 19, 15, tzinfo=UTC).timestamp() * 1000)
         assert retained_helpers <= ends.keys()
         assert all(ends[object_id]["timestamp_ms"] > cursor_ms for object_id in retained_helpers)
+        native_helpers = [
+            row["event"]["exec"]
+            for name, content in resumed_files.items()
+            if name.endswith("macos_endpoint_security.ndjson")
+            for line in content.splitlines()
+            if (row := json.loads(line))["event_type"] == 9
+            and "/Helpers/" in row["event"]["exec"]["target"]["executable"]["path"]
+        ]
+        assert native_helpers
+        assert all("--seatbelt-client=3" in payload["args"] for payload in native_helpers)
+        assert all(
+            payload["fds"][-1]["fd"] == 3 and payload["fds"][-1]["fdtype"] == 6
+            for payload in native_helpers
+        )
     if start is not None:
         for index in range(2):
             assert any(

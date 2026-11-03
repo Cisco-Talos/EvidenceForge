@@ -17,7 +17,7 @@ from tests.unit.test_macos_metadata_producers import modeled as modeled
 
 
 @pytest.mark.parametrize(
-    "kind", ["login_standard", "login_pipes", "server_channels", "standard_only"]
+    "kind", ["login_standard", "login_pipes", "server_channels", "standard_only", "browser_sandbox"]
 )
 def test_spawn_table_pipe_counter_and_observation_commit_rollback_and_restore_together(
     modeled: _Fixture, kind: str
@@ -26,7 +26,7 @@ def test_spawn_table_pipe_counter_and_observation_commit_rollback_and_restore_to
     parent = _terminal(modeled)
     state.materialize_process(parent)
     before = parent.identity
-    if kind == "server_channels":
+    if kind in {"server_channels", "browser_sandbox"}:
         builder = state.begin_action_cohort_materialization()
         child = provider.plan_fork(builder, state, before, at=modeled.start + timedelta(seconds=2))
         state.materialize_action_cohort(builder.seal())
@@ -38,9 +38,11 @@ def test_spawn_table_pipe_counter_and_observation_commit_rollback_and_restore_to
             macos_terminal="absent",
         )
         state.materialize_action_cohort(builder.seal())
-    count = 2 if kind == "server_channels" else 1 if kind == "login_pipes" else 0
+    count = (
+        2 if kind == "server_channels" else 1 if kind in {"login_pipes", "browser_sandbox"} else 0
+    )
     first = provider.profile.first_pipe_id
-    intent = MacosSpawnIO(kind, first if count else None)
+    intent = MacosSpawnIO(kind, first if count else None, 3 if kind == "browser_sandbox" else None)
     at = modeled.start + timedelta(seconds=4)
     binary = provider._filesystem.deployed_binary(before.hostname, "/usr/bin/id", before.principal)
     builder = state.begin_action_cohort_materialization()
@@ -51,14 +53,18 @@ def test_spawn_table_pipe_counter_and_observation_commit_rollback_and_restore_to
         at=at,
         image="/usr/bin/id",
         requested_path="/usr/bin/id",
-        arguments=("/usr/bin/id",),
+        arguments=("/usr/bin/id", "--seatbelt-client=3")
+        if kind == "browser_sandbox"
+        else ("/usr/bin/id",),
         binary=binary,
         spawn_io=intent,
     )
     plan, digest = builder.seal(), state.materialization_digest()
     table = plan.process_executions[0].descriptors_after
     assert prepared.descriptors.table == table
-    assert table.native_last_fd == (4 if kind == "server_channels" else 5 if count else 2)
+    assert table.native_last_fd == (
+        3 if kind == "browser_sandbox" else 4 if kind == "server_channels" else 5 if count else 2
+    )
     pipes = [binding for binding in table.bindings if binding.kind == "pipe"]
     assert len({binding.native_pipe_id for binding in pipes}) == count
     if kind == "login_pipes":

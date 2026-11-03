@@ -22,6 +22,14 @@ from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 
 
+class RequiredExecution(BaseModel):
+    """Keep distinct operational roles when two helpers share one executable."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    image: str
+    arguments: tuple[str, ...]
+
+
 class Case(BaseModel):
     """An independently authored activity and its required executable roles."""
 
@@ -30,6 +38,8 @@ class Case(BaseModel):
     description: str
     steps: tuple[str, ...]
     required_images: tuple[str, ...]
+    required_executions: tuple[RequiredExecution, ...] = ()
+    allowed_noop_steps: tuple[str, ...] = ()
 
 
 class Workload(BaseModel):
@@ -44,6 +54,7 @@ class Workload(BaseModel):
     acceptance: dict[str, bool | str]
     common_steps: tuple[str, ...]
     cases: tuple[Case, ...]
+    allowed_noop_steps: tuple[str, ...] = ()
 
 
 class Measurement(BaseModel):
@@ -57,6 +68,7 @@ class Measurement(BaseModel):
     coverage: MacosNativeCoverage | None = None
     native_exec_images: dict[str, int] | None = None
     missing_images: tuple[str, ...] = ()
+    missing_execution_roles: tuple[int, ...] = ()
     unrealized_steps: tuple[str, ...] = ()
     authored_phase_gaps: tuple[str, ...] = ()
     background_native_execs: int | None = None
@@ -86,6 +98,36 @@ def _visible_execs(observations: Any) -> int:
     )
 
 
+def missing_execution_roles(
+    requirements: tuple[RequiredExecution, ...],
+    native_arguments: list[tuple[str, tuple[str, ...]]],
+) -> tuple[int, ...]:
+    """Require the operational invocation as well as its physical executable."""
+    return tuple(
+        index
+        for index, requirement in enumerate(requirements)
+        if not any(
+            image == requirement.image
+            and arguments[1 : 1 + len(requirement.arguments)] == requirement.arguments
+            for image, arguments in native_arguments
+        )
+    )
+
+
+def realized_step_ids(
+    events: tuple[Any, ...] | list[Any], allowed_noop_steps: tuple[str, ...]
+) -> set[str]:
+    """Count only explicit optional cleanup no-ops alongside evidence-producing steps."""
+    return {
+        event.storyline_id
+        for event in events
+        if event.emitted
+        or event.storyline_id in allowed_noop_steps
+        and event.kind == "logoff"
+        and event.skipped_reason == "no_matching_session"
+    }
+
+
 def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str) -> Measurement:
     """Require actual activity, native roles and the independent census separately."""
     base = {
@@ -109,6 +151,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
     coverage = truth.macos_native_coverage
     images: dict[str, int] = {}
     native_executions: set[tuple[str, int, str]] = set()
+    native_arguments: list[tuple[str, tuple[str, ...]]] = []
     for path in sorted((output / "data").rglob("macos_endpoint_security.ndjson")):
         with path.open() as stream:
             for line in stream:
@@ -116,6 +159,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
                 if record.event_type == 9:
                     image = record.event.exec.target.executable.path
                     images[image] = images.get(image, 0) + 1
+                    native_arguments.append((image, tuple(record.event.exec.args)))
                     owner = (
                         next(
                             (
@@ -134,7 +178,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
                             (owner, record.event.exec.target.audit_token.pid, image)
                         )
     intended = set(case.steps)
-    realized = {event.storyline_id for event in truth.events if event.emitted}
+    realized = realized_step_ids(truth.events, case.allowed_noop_steps)
     missing_steps = tuple(sorted(intended - realized))
     # Setup/registration and dormant unload intentionally have no source row.
     missing_steps = tuple(
@@ -143,6 +187,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
         if not step.startswith("setup-") and step != "inventory-unload"
     )
     missing = tuple(image for image in case.required_images if not images.get(image))
+    missing_roles = missing_execution_roles(case.required_executions, native_arguments)
     gaps: list[str] = []
     eligible_steps = {
         event.storyline_id
@@ -186,7 +231,13 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
                         and item.reason != "supported"
                         and item.status != "out_of_window"
                     )
-    supported = not missing and not missing_steps and not gaps and coverage is not None
+    supported = (
+        not missing
+        and not missing_roles
+        and not missing_steps
+        and not gaps
+        and coverage is not None
+    )
     if case.name == "baseline":
         supported = supported and bool(background) and complete
     return Measurement(
@@ -194,6 +245,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
         coverage=coverage,
         native_exec_images=images,
         missing_images=missing,
+        missing_execution_roles=missing_roles,
         unrealized_steps=missing_steps,
         authored_phase_gaps=tuple(sorted(set(gaps))),
         background_native_execs=background,
@@ -236,6 +288,10 @@ def main() -> None:
         description="Unchanged acceptance source",
         steps=steps,
         required_images=all_images,
+        required_executions=tuple(
+            requirement for case in spec.cases for requirement in case.required_executions
+        ),
+        allowed_noop_steps=spec.allowed_noop_steps,
     )
     chrome = next(case for case in spec.cases if case.name == "chrome")
     combined = Case(

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 373
+current_revision: 374
 history_start_revision: 1
-behavior_surface_sha256: 1112d76da93cf383cef734e563f7e3790a021e49d59a8a03ebb52704b0c40a72
+behavior_surface_sha256: d20e1cafe315eaca2a79bb4840ca292ce2b35f2a576453d0ef0c0d457d31c6bc
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3592,3 +3592,9 @@ changes:
       - launchd-system-job-targets
     formats: []
     summary: Restores final-pass Mac starts and terminal reuse, orders authored owners, admits OS-inventory jobs and aligns ground-truth visibility/precision with collection; rejects displaced post-window starts and records no-session logoffs as no-ops.
+  - revision: 374
+    id: macos-chrome-native-launch-and-sandbox-helpers
+    impact: localized
+    domains: [macos-process-lifecycle, macos-execution-metadata, application-catalog]
+    formats: [macos_endpoint_security, ecar]
+    summary: Adds native Chrome startup and exact renderer/generic-GPU/network helper fork-exec producers with independent signer metadata, canonical sandbox pipes and retained recovery; repairs optional launch spacing.

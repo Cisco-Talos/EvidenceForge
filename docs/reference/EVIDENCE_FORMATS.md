@@ -704,6 +704,20 @@ Exit requires an explicit canonical completed status or
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
 
+The bounded Chrome profile supports a fresh LaunchServices main startup through
+launchd/xpcproxy and exact direct renderer, generic-helper GPU and network-service
+invocations. Helpers publish real canonical fork/exec phases through the retained
+Mac startup journal, including commit/release recovery. Their sandbox descriptor
+argument and native pipe observation share one State-owned allocation. Renderer
+and generic helpers have independently declared vendor metadata; the generic GPU
+does not inherit the dedicated GPU bundle's JIT entitlement. The model uses the
+frozen catalog release with explicit synthetic environment/timing/pipe choices;
+the reference does not establish exact installed-build parity. Dedicated-GPU,
+Crashpad, alerts and arbitrary helper invocations remain outside this bounded
+producer. Unknown native exit outcomes still remain unknown. Browser IPC and
+helper-owned traffic are not inferred, and no general app-launch Unified Log
+family is added.
+
 Qualified local-terminal and non-PTY SSH commands use canonical fork/exec with the same argv,
 image, identity and timestamp in eCAR and ES. The current terminal policy explicitly assigns
 its app lifetime as the owner of login/shell/command descendants; older or already-unknown

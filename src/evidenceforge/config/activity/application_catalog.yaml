@@ -29,6 +29,30 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+        executable_format: mach_o
+        # Public vendor templates, confirmed by fixed reference comparisons.
+        # Content hashes/UUIDs remain synthetic release-owned identities.
+        code_signature:
+          signing_id: com.google.Chrome
+          team_id: EQHXZ8M8AV
+          entitlements:
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.developer.associated-domains.applinks.read-write: true
+            com.apple.developer.web-browser.public-key-credential: true
+            com.apple.application-identifier: EQHXZ8M8AV.com.google.Chrome
+            keychain-access-groups:
+              - EQHXZ8M8AV.com.google.common.folsom
+              - EQHXZ8M8AV.com.google.Chrome.devicetrust
+              - EQHXZ8M8AV.com.google.Chrome.secure-payment-confirmation
+              - EQHXZ8M8AV.com.google.Chrome.unexportable-keys
+              - EQHXZ8M8AV.com.google.Chrome.webauthn
+              - EQHXZ8M8AV.com.google.Chrome.webauthn-uvk
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -40,10 +64,10 @@ applications:
           - arm64
         command_templates:
         - '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --new-window {internal_url}'
-        # Minimal role arguments; runtime IPC/sandbox switches remain unmodeled.
+        # The native producer adds its canonical sandbox-pipe argument.
         children:
         - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)" --type=renderer'
-        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU)" --type=gpu-process'
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=gpu-process'
         - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
       windows:
         image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
@@ -3725,5 +3749,56 @@ applications:
         command_templates:
         - /usr/bin/plutil -help
     categories: [macos_administration]
+    personas: []
+    system_types: [workstation]
+
+  # Independently signed placements within the same Chrome installation/release.
+  # Operational GPU and network roles can share the generic helper executable.
+  - id: macos-chrome-renderer
+    display_name: Google Chrome renderer helper
+    installed_with: chrome
+    platforms:
+      macos:
+        available_from: '2026-10-15'
+        image_path: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.google.Chrome.helper.renderer
+          team_id: EQHXZ8M8AV
+          entitlements: {com.apple.security.cs.allow-jit: true}
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)" --type=renderer'
+    categories: [browser_helper]
+    personas: []
+    system_types: [workstation]
+  - id: macos-chrome-helper
+    display_name: Google Chrome generic helper
+    installed_with: chrome
+    platforms:
+      macos:
+        available_from: '2026-10-15'
+        image_path: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.google.Chrome.helper
+          team_id: EQHXZ8M8AV
+          entitlements: absent
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
+    categories: [browser_helper]
     personas: []
     system_types: [workstation]

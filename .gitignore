@@ -131,6 +131,8 @@ sample_data/
 # Current-profile synthetic acceptance source and derived review reports.
 !scenarios/macos-workstation-acceptance/
 scenarios/macos-workstation-acceptance/*
+!scenarios/macos-workstation-acceptance/CHROME-RESULTS.json
+!scenarios/macos-workstation-acceptance/INITIAL-REPORT.md
 !scenarios/macos-workstation-acceptance/draft.json
 !scenarios/macos-workstation-acceptance/source/
 !scenarios/macos-workstation-acceptance/WORKLOAD.yaml

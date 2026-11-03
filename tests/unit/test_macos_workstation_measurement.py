@@ -7,7 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from scripts.measure_macos_workstation import Case, slice_document, summarize
+from scripts.measure_macos_workstation import (
+    Case,
+    RequiredExecution,
+    missing_execution_roles,
+    realized_step_ids,
+    slice_document,
+    summarize,
+)
 
 from evidenceforge.generation.engine.typed_handlers.authentication import handle_logoff
 from evidenceforge.models.scenario import LogoffEventSpec
@@ -66,3 +73,48 @@ def test_logoff_without_matching_session_is_reported_as_unemitted_noop() -> None
     result = handle_logoff(runtime, LogoffEventSpec(), context)
     assert result["skipped_reason"] == "no_matching_session"
     runtime.activity_generator.generate_logoff.assert_not_called()
+
+
+def test_shared_helper_image_requires_both_gpu_and_network_invocations() -> None:
+    image = "/invented/Chrome Helper"
+    requirements = (
+        RequiredExecution(image=image, arguments=("--type=gpu-process",)),
+        RequiredExecution(
+            image=image,
+            arguments=("--type=utility", "--utility-sub-type=network.mojom.NetworkService"),
+        ),
+    )
+    network = (
+        image,
+        (
+            image,
+            "--type=utility",
+            "--utility-sub-type=network.mojom.NetworkService",
+            "--seatbelt-client=3",
+        ),
+    )
+    assert missing_execution_roles(requirements, [network]) == (0,)
+    assert (
+        missing_execution_roles(
+            requirements, [network, (image, (image, "--type=gpu-process", "--seatbelt-client=3"))]
+        )
+        == ()
+    )
+    assert missing_execution_roles(requirements, [("/different/helper", network[1])]) == (0, 1)
+
+
+def test_optional_empty_session_cleanup_does_not_hide_skipped_processes_or_other_failures() -> None:
+    events = [
+        SimpleNamespace(storyline_id=name, kind=kind, skipped_reason=reason, emitted=emitted)
+        for name, kind, reason, emitted in (
+            ("cleanup", "logoff", "no_matching_session", False),
+            ("unapproved-cleanup", "logoff", "no_matching_session", False),
+            ("failed-cleanup", "logoff", "other", False),
+            ("process", "process", "no_matching_session", False),
+            ("actual-start", "process", None, True),
+        )
+    ]
+    assert realized_step_ids(events, ("cleanup", "failed-cleanup", "process")) == {
+        "cleanup",
+        "actual-start",
+    }

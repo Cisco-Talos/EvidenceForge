@@ -41,6 +41,7 @@ from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
 from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_spawn_io import MacosSpawnIO
 from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -61,6 +62,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedFileEffectPayload,
     PreparedProcessEffectActor,
 )
+from evidenceforge.generation.actions.macos_browser_helper import MacosBrowserHelperStartup
 from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
 from evidenceforge.generation.actions.macos_pty_command import MacosPtyCommandStartup
 from evidenceforge.generation.actions.posix_process import (
@@ -458,6 +460,18 @@ class ProcessExecutionService:
             is MacosTerminalObservation
         ):
             retained = self._prepare_pty_command(request, admission, launch, parent)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and parent is not None
+            and self.identity.macos_execution_metadata is not None
+            and any(
+                rule.parent_image == parent.image
+                for rule in self.identity.macos_execution_metadata.profile.browser_helpers
+            )
+        ):
+            retained = self._prepare_browser_helper(request, admission, launch, parent)
             self.finder_startups[request.stable_id] = retained
             return self._continue_finder(request.stable_id, retained)
         root = self._prepare_root(request, admission, launch)
@@ -1007,7 +1021,6 @@ class ProcessExecutionService:
                 process_name=actor.image,
                 command_line=actor.command_line,
                 time=time,
-                source_visible_by=request.source_visible_by,
             )
             if spaced_time != time:
                 time = spaced_time
@@ -1392,6 +1405,130 @@ class ProcessExecutionService:
             parent_identity,
             binary,
         )
+
+    def _prepare_browser_helper(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        parent: ProcessIdentity,
+    ) -> RetainedFinderLaunch:
+        """Prepare exact helper inputs before entering the retained fork/exec journal."""
+        provider = self.identity.macos_execution_metadata
+        assert provider is not None
+        if len(self.finder_startups) >= 128:
+            raise StateError("Finish pending Mac startups before admitting another helper")
+        binary = self.dispatcher.resolve_process_binary_identity(
+            parent.hostname, parent.principal, launch.actor.image, "macos"
+        )
+        arguments = request.arguments or literal_shell_child_arguments(
+            launch.actor.image, launch.actor.command_line
+        )
+        rule = next(
+            (
+                rule
+                for rule in provider.profile.browser_helpers
+                if rule.parent_image == parent.image
+                and rule.image == launch.actor.image
+                and arguments == (rule.image, *rule.arguments)
+            ),
+            None,
+        )
+        if rule is None:
+            raise StateError(
+                "Mac browser child requires a qualified exact helper image and invocation"
+            )
+        session = self.state_manager.get_session_at(parent.logon_id, launch.time)
+        parent_binary = self.dispatcher.resolve_loaded_process_binary_identity(parent)
+        if (
+            request.macos_launch_kind is not None
+            or request.new_posix_session
+            or request.exec_script is not None
+            or request.requested_endpoint_effects
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or parent.principal != launch.actor.username
+            or parent.logon_id != launch.actor.logon_id
+            or parent.credentials is None
+            or parent.credentials.audit_uid is None
+            or parent.credentials.audit_session_id is None
+            or parent.responsibility is None
+            or parent.job_control is None
+            or parent.environment is None
+            or parent.parent_pid != 1
+            or parent.execution_ordinal != 2
+            or parent.initial_image != "/sbin/launchd"
+            or parent.image_security is None
+            or parent.image_security.validation_category is None
+            or session is None
+            or session.session_kind != "interactive"
+            or type(binary) is not BinaryReleaseIdentity
+            or type(parent_binary) is not BinaryReleaseIdentity
+            or binary.code_signature is None
+            or binary.code_signature.entitlements is None
+            or binary.mach_o_image is None
+            or provider.image_security(binary) is None
+            or binary.key.product_id != parent_binary.key.product_id
+            or binary.key.version != parent_binary.key.version
+            or binary.key.build != parent_binary.key.build
+            or self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
+            != "absent"
+        ):
+            raise StateError(
+                "Mac browser helper requires its qualified GUI parent, installed release and empty effects"
+            )
+        forked_at = ensure_utc(launch.time)
+        executed_at = forked_at + self.activity_timing.sample_profile_gap(
+            "macos.browser_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="browser_helper",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        if forked_at <= parent.execution_started_at:
+            raise StateError("Mac browser helper must follow its parent exec readiness")
+        directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
+        if directory is None:
+            raise StateError("Mac browser helper requires its parent's current working directory")
+        arguments = (*arguments, f"--seatbelt-client={rule.seatbelt_fd}")
+        overrides = {entry.split("=", 1)[0] for entry in rule.environment}
+        environment = (
+            tuple(entry for entry in parent.environment if entry.split("=", 1)[0] not in overrides)
+            + rule.environment
+        )
+        if request.source_visible_by is not None and executed_at > ensure_utc(
+            request.source_visible_by
+        ):
+            raise StateError("Mac browser helper cannot meet its source readiness deadline")
+        session_identity = self.state_manager.get_session_identity(parent.logon_id)
+        if session_identity is None:
+            raise StateError("Mac browser helper lost its GUI session identity")
+        startup = MacosBrowserHelperStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            session=session_identity,
+            app=binary,
+            arguments=arguments,
+            environment=environment,
+            spawn_io=MacosSpawnIO(
+                "browser_sandbox", provider.profile.first_pipe_id, rule.seatbelt_fd
+            ),
+            times=(forked_at, executed_at),
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
 
     def _prepare_macos_shell_root(
         self,

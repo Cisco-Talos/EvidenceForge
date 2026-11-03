@@ -26,6 +26,22 @@ conditional on those independently owned process facts.
 
 Application availability and implemented variants are distinct. Unresolved Mac variants are unavailable rather than substituted with Linux/Windows paths. Initial managed variants have a conservative 2026-10-15 catalog-snapshot availability floor; host-bundled entries follow the modeled OS build. Paths and command pools come from catalog data, never the generator host or personal inventories. Chrome’s profiled renderer/GPU/utility helpers use existing application `children` and spawn-rule fields. The GUI baseline binds a modeled subset to the installed browser and owning session; counts/delays are synthetic profile values. Release overrides must also update versioned helper paths. Browser IPC and helper-attributed network traffic are not inferred.
 
+The bounded native Chrome producer accepts a fresh `launch_method: finder` main
+and exact direct children with `parent_ref` naming that browser and
+`supplementary: none`. The qualified child invocations are renderer
+(`--type=renderer`), generic-helper GPU (`--type=gpu-process`) and generic-helper
+network service (`--type=utility --utility-sub-type=network.mojom.NetworkService`).
+Use the frozen catalog's exact paths. The producer adds its modeled
+`--seatbelt-client` argument and supplies the matching canonical pipe; do not
+invent descriptor numbers in authored command text. Each helper has native fork
+and exec evidence and shares eCAR's identities. Its signer/entitlements come from
+the independently declared helper release, not the main app. Unknown child
+invocations reject. This is a bounded helper model: it does not infer Crashpad,
+alerts, the dedicated GPU executable, every Chrome-created auxiliary process,
+browser IPC, helper-attributed connections or native Unified Log app messages.
+The macOS 27 reference's private installed build differed from the frozen catalog;
+no exact release parity or universal browser fidelity is claimed.
+
 Optional application-platform `code_signature` records explicit main-executable `signing_id` and optional/null `team_id`; existing architecture/deployment fields still apply. Unknown signing metadata stays absent, and helpers do not inherit their owner's signer. CodeDirectory hashes are independently modeled per release/architecture, separate from content hashes. Optional `executable_format: mach_o` independently identifies a known main image under the existing explicit arm64 deployment; it derives a synthetic release-scoped UUID without inferring format from signing or paths. Missing format stays unknown and helpers do not inherit image metadata. The native audit PID version is owned by process state across creation, exec and checkpoint recovery; it is not the PID or execution ordinal. These foundations do not establish complete native ES process metadata or trust-policy outcomes.
 
 Mac-local file populations use existing `environment.storage.file_sets` with an absolute POSIX `root`, for example `/Users/alex/Documents`. This supplies synthetic file metadata and does not make the Mac an SMB server. APFS aliases/case policy remain pending. Experimental mounted SMB clients reuse `environment.storage.mappings`: select `client_access: auto` and `path_style: auto` or `mounted`, with an eligible mapping. Automatic Mac mount presentation is `/Volumes/<mapping-id>`; this is a synthetic allocation policy, not a claim about Finder naming. A mapping shared by Linux and Mac clients needs an explicit common `mount` or separate audience mappings. Native per-operation actors produce eCAR file evidence; the SMB transport has no invented user-process owner. Windows and Samba servers retain their own evidence. Native Mac SMB log messages remain unavailable.

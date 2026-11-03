@@ -3,6 +3,7 @@ source: source/scenario.yaml
 purpose: Fixed workstation capability measurement, not a blind authenticity assessment
 duration: 30m
 seed: 373
+allowed_noop_steps: [close-warmup-mac-apple, close-warmup-mac-iterm]
 acceptance:
   policy: complete
   require_all_authored_processes: true
@@ -40,8 +41,16 @@ cases:
     required_images:
       - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
       - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
-      - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU)
       - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+      - /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+    # Physical image identity alone cannot distinguish GPU and network work.
+    required_executions:
+      - image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+        arguments: [--type=renderer]
+      - image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+        arguments: [--type=gpu-process]
+      - image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+        arguments: [--type=utility, --utility-sub-type=network.mojom.NetworkService]
   - name: system-job
     description: Two in-window OS-inventory job activations and explicit exits
     steps: [setup-provisioner, setup-job-file, setup-job-registration, inventory-first, inventory-first-exit, inventory-second, inventory-second-exit, inventory-unload]
