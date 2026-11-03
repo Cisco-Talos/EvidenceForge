@@ -3220,7 +3220,10 @@ class CausalityScorer(DimensionScorer):
         failures: list[str] = []
         prev_expected: datetime | None = None
 
-        for event in resolved:
+        # Authors may group lifecycle steps in the YAML independently of their
+        # timestamps. Compare chronological neighbors, retaining original indices
+        # in diagnostics and leaving the resolved list available to other scorers.
+        for event in sorted(resolved, key=lambda item: _normalize_ts(item.time)):
             if not event.traces:
                 if self._event_observation_exempt(event, context):
                     excluded += 1

@@ -3,6 +3,7 @@
 
 """Invented refusal attempts; never execute a native app or inspect captured records."""
 
+import json
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from evidenceforge.evaluation.engine import EvaluationEngine
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.evaluation.storyline import ResolvedEvent
@@ -450,6 +452,49 @@ def test_evaluation_requires_bounded_refusal_without_claiming_process_success(
         damage is None
     )
     assert not CausalityScorer()._record_matches(record, "ecar", resolved, "process")
+
+
+@pytest.mark.parametrize(
+    "source_directory,expected",
+    [
+        ("MAC-01", True),
+        ("MAC-01.example.test/2026", True),
+        ("mac-01.EXAMPLE.test/2026", True),
+        ("MAC-01.other.test/2026", False),
+        ("unknown-sensor/2026", False),
+        ("", False),
+    ],
+)
+def test_refusal_trace_survives_native_ingestion_with_declared_host_provenance(
+    tmp_path: Path, scenarios_dir: Path, source_directory: str, expected: bool
+) -> None:
+    _, event = _event(scenarios_dir)
+    fields = project_kernel_log_observation(
+        event.macos_policy_refusal.native, wall_time=event.timestamp, timezone_name="UTC"
+    ).model_dump(mode="json", by_alias=True, exclude_unset=True)
+    directory = tmp_path / source_directory
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "macos_unified_log.ndjson").write_text(json.dumps(fields) + "\n")
+    scenario = _scenario()
+    records, counts = EvaluationEngine(tmp_path, scenario)._parse_all_logs()
+    assert counts == {"macos_unified_log": 1}
+    record = records["macos_unified_log"][0]
+    assert not record.parse_errors and record.fields == fields
+    assert "hostname" not in record.fields
+    assert record.source_host == ("MAC-01" if expected else None)
+    resolved = ResolvedEvent(
+        index=0,
+        time=event.timestamp,
+        actor="alex",
+        system="MAC-01",
+        system_ip="192.0.2.10",
+        activity="Invented policy refusal",
+        details={"process_name": _IMAGE, "outcome": "policy_refused"},
+        event_types=["process"],
+    )
+    scorer = CausalityScorer()
+    scorer._find_traces([resolved], records, scorer._build_host_time_index(records))
+    assert resolved.traces == ([record] if expected else [])
 
 
 def test_schema9_ssh_command_streams_survive_new_state_head() -> None:

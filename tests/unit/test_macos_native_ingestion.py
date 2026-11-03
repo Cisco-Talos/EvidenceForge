@@ -202,3 +202,18 @@ def test_native_only_cli_evaluation_counts_events_and_keeps_ingestion_boundary(
     )
     co_occurrence = PlausibilityScorer()._score_co_occurrence({"macos_unified_log": records})
     assert co_occurrence.skipped and co_occurrence.score is None
+
+
+def test_native_es_bundle_host_attribution_does_not_modify_exported_fields(tmp_path: Path) -> None:
+    from evidenceforge.evaluation.engine import EvaluationEngine
+    from tests.unit.test_macos_policy_refusal import _scenario
+
+    directory = tmp_path / "MAC-01.example.test" / "2026"
+    directory.mkdir(parents=True)
+    fields = _record()
+    _write(directory, "macos_endpoint_security", [fields])
+    records, _ = EvaluationEngine(tmp_path, _scenario())._parse_all_logs()
+    record = records["macos_endpoint_security"][0]
+    assert record.source_host == "MAC-01"
+    assert record.source_instance == "MAC-01.example.test"
+    assert record.fields == fields and not record.parse_errors
