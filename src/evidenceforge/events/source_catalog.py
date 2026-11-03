@@ -388,6 +388,7 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             "macos_unified_log",
             "macos_unified_log",
             CollectionCapability.SESSION
+            | CollectionCapability.AUTHENTICATION
             | CollectionCapability.PROCESS
             | CollectionCapability.COHERENT_ACTOR,
             frozenset({"macos"}),

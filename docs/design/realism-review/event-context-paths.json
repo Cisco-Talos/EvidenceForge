@@ -16684,6 +16684,12 @@
         "default": "None",
         "line": 134,
         "name": "macos_workspace"
+      },
+      {
+        "annotation": "MacosSshAuthentication | None",
+        "default": "None",
+        "line": 140,
+        "name": "macos_ssh_authentication"
       }
     ],
     "file": "src/evidenceforge/events/base.py",
@@ -16706,6 +16712,7 @@
       "kerberos",
       "lifecycle",
       "macos_policy_refusal",
+      "macos_ssh_authentication",
       "macos_workspace",
       "nat",
       "network",

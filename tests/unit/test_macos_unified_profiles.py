@@ -102,3 +102,22 @@ def test_old_inputs_need_no_native_profile_fields(tmp_path: Path) -> None:
         assert profile.mach_timebase.denominator == 3
         assert workspace_request_callsite().trace_id & 255 == 4
     assert not (tmp_path / ".eforge").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("writer_path", "/usr/sbin/sshd"),
+        ("format_string", "%s"),
+        ("message_type", "Default"),
+        ("has_private_data", False),
+        ("backtrace_offsets", []),
+        ("backtrace_offsets", [3]),
+        ("backtrace_offsets", [65536]),
+    ],
+)
+def test_ssh_profile_cannot_change_the_qualified_source_shape(field: str, value: object) -> None:
+    data = _document()
+    data["ssh_authentication"][field] = value
+    with pytest.raises(ValidationError):
+        MacosUnifiedLogProfilesConfig.model_validate(data)

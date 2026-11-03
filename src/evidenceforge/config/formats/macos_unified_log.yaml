@@ -1,8 +1,8 @@
 # Nested native validation is owned by the explicit native_codec route.
 name: macos_unified_log
 version: '1.0'
-description: 'Experimental macOS 27 arm64 Unified Log NDJSON: workspace request entry
-  only (UTC export)'
+description: 'Experimental macOS 27 arm64 Unified Log NDJSON: workspace entry,
+  bounded app-policy refusal and PAM SSH authentication (UTC export)'
 category: host
 fields:
 - name: eventType

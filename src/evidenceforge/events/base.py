@@ -82,7 +82,11 @@ from evidenceforge.events.cryptography import (
 )
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
-from evidenceforge.events.macos_logging import MacosPolicyRefusal, MacosWorkspaceRequest
+from evidenceforge.events.macos_logging import (
+    MacosPolicyRefusal,
+    MacosSshAuthentication,
+    MacosWorkspaceRequest,
+)
 from evidenceforge.events.network import (
     NetworkEndpointObservationPlan,
     NetworkSensorObservation,
@@ -133,6 +137,7 @@ class OccurrenceBuilder:
     syslog: SyslogContext | None = None
     macos_workspace: MacosWorkspaceRequest | None = None
     macos_policy_refusal: MacosPolicyRefusal | None = None
+    macos_ssh_authentication: MacosSshAuthentication | None = None
     weird: WeirdContext | None = None
     kerberos: KerberosContext | None = None
     shell: ShellContext | None = None
@@ -287,6 +292,7 @@ class CanonicalOccurrence:
     syslog: SyslogContext | None = None
     macos_workspace: MacosWorkspaceRequest | None = None
     macos_policy_refusal: MacosPolicyRefusal | None = None
+    macos_ssh_authentication: MacosSshAuthentication | None = None
     weird: WeirdContext | None = None
     kerberos: KerberosContext | None = None
     shell: ShellContext | None = None

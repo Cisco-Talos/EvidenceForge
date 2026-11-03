@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generation_behavior_revision": 375,
+  "generation_behavior_revision": 376,
   "phase_1": "COMPLETE_BOUNDED_WORKLOAD",
   "phases_2_to_4": "NOT_ALL_COMPLETE",
   "measurements": [
@@ -18,7 +18,7 @@
       "missing_execution_roles": [],
       "unrealized_steps": [],
       "authored_phase_gaps": [],
-      "manifest_sha256": "bc6e8b1a145832765e6f1872d93c782010f8c7f5dba6353ebdfeb895946b4bd4"
+      "manifest_sha256": "5c2dab0d10bd03ca78bb407365808343fe96fd1877de9588317b75d1ab5fa5a8"
     },
     {
       "run": "combined-recovery",
@@ -34,7 +34,7 @@
       "missing_execution_roles": [],
       "unrealized_steps": [],
       "authored_phase_gaps": [],
-      "manifest_sha256": "580aaab3f00988989edebf36b320730b422b68d5e85e9f4677cfa884810cfd04"
+      "manifest_sha256": "a91544d17d277528abc7f7d7c8bed10be18587fdf914a31ecd8b06f061ead5f2"
     }
   ],
   "combined_exact_resume_files_equal": true,
@@ -42,11 +42,11 @@
   "deterministic_files_compared": 22,
   "primary_evaluation": {
     "acceptance_passed": true,
-    "overall_score": 88.91704685712276,
+    "overall_score": 88.91142951075719,
     "source_counts": {
       "ecar": 176,
       "macos_endpoint_security": 85,
-      "macos_unified_log": 2,
+      "macos_unified_log": 3,
       "zeek_conn": 35,
       "zeek_dns": 14,
       "zeek_files": 4,
@@ -56,17 +56,48 @@
     }
   },
   "remaining": [
-    "Known results do not cover arbitrary GUI or SSH teardown; unknown results are reported and not rendered as successful exits.",
-    "SSH authentication/session and launchd activation/completion Unified Log messages require bounded references before implementation.",
-    "Final acceptance of those new families follows their implementation; current deterministic acceptance cannot qualify missing templates."
+    "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
+    "SSH public-key success, PAM/session open/close, disconnect and launchd ULF remain reference-gated.",
+    "Full expanded ULF acceptance remains incomplete; current exact recovery/evaluation covers implemented families."
   ],
   "scope": "Synthetic engineering acceptance; no private records or observed native values are included.",
   "combined_evaluation": {
     "acceptance_passed": true,
-    "overall_score": 88.70928572014297,
-    "total_records": 2817
+    "overall_score": 88.70907576770895,
+    "total_records": 2818,
+    "source_counts": {
+      "ecar": 912,
+      "macos_endpoint_security": 113,
+      "macos_unified_log": 3,
+      "zeek_conn": 714,
+      "zeek_dns": 352,
+      "zeek_files": 203,
+      "zeek_http": 15,
+      "zeek_ocsp": 15,
+      "zeek_ssl": 313,
+      "zeek_x509": 170,
+      "zsh_history": 8
+    }
   },
   "bounded_current_code_review": {
+    "es_records_reviewed": 0,
+    "ulf_records_reviewed": 3,
+    "scope": "Independent full-process census plus bounded review of the three synthetic ULF rows; no new blind panel.",
+    "result": "Root/session-worker, peer, static format/private flag, sender/build and modeled-frame checks pass for PAM; two workspace rows remain unchanged. Unqualified families remain gated."
+  },
+  "generation_behavior_sha256": "95ff84e02b780af5f98a78f993b13273520c5871366b68e5feda2f1c3b23452a",
+  "native_filter_formats": [
+    "macos_endpoint_security",
+    "macos_unified_log"
+  ],
+  "ulf_coverage": {
+    "workload_rows": 3,
+    "pam_success_rows": 1,
+    "non_pty_authentication": "password/PAM",
+    "pty_authentication": "publickey; no qualified ULF message",
+    "separate_password_pty_unit_gate": "PASS"
+  },
+  "previous_bounded_review_revision_375": {
     "es_records_reviewed": 10,
     "ulf_records_reviewed": 2,
     "result": "No concrete identity, helper-argument or writer contradiction in this sample; expanded ULF acceptance remains pending."

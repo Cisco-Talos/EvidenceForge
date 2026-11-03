@@ -2896,3 +2896,89 @@ review tests and **22** ULF capture tests. Whole Ruff/format checks pass. Produc
 generation behavior remains revision 375; no unchanged generation or blind panel
 was repeated. Expanded ULF and final acceptance remain incomplete. Launchd's
 separate zero-row reference remains unqualified and unchanged.
+
+## 2026-11-03 — PAM SSH authentication source implemented after approved review
+
+The user explicitly approved version 3 of the same bounded offline reviewer. It
+ran once against the authorized capture and returned only fixed labels. Provenance,
+original controls and execution bindings PASS. The accepted authentication row has
+log/Info agreement, MAIN_IMAGE PC style, PRIVATE_DATA as its only flag, static public
+`%.500s`, bounded/aligned PC, absent source metadata and present backtrace. Dynamic
+format is absent. This explains the earlier narrow-callsite mismatch. Native
+text/identifiers/offsets/addresses/frame contents were not exposed, copied or committed.
+No additional collector, app, command, probe, live query or unrelated log read occurred.
+
+The bounded PAM-success source now shares the native receiver's existing successful-
+authentication/audit-adoption occurrence. Its context freezes the actual root
+sshd-session execution, SSH session, user and transport peer; its State cohort
+requires the exact matching audit binding and session activity owner. eCAR retains
+its process before/after roles and process-only collection requirements. ULF requires
+process/authentication/session collection and renders the reference-qualified source
+view. The producer supports either PTY mode for password intent. Public-key intent
+cannot be misreported as PAM. No new authored event type or raw-message path exists.
+
+The callsite has an explicit private-data flag, and the build profile supplies an
+explicit synthetic main-image backtrace and offsets. These are modeled build facts,
+not the private system's addresses, frame count or call stack. The profile models
+observed visible Info collection; it does not claim every endpoint collector exposes
+private arguments or persists Info messages. The emitter uses frozen native writer,
+thread, image UUID and uptime; it neither allocates identities nor re-queries a PID.
+Exact eCAR/ULF publication shares the retained startup journal, including filtered
+output, post-commit source failure and lost-return recovery without duplicate auth.
+
+The original seed-373 workload chooses password for non-PTY and public-key for PTY.
+It therefore produces **three ULF records: two workspace entries and one PAM success**.
+The initial four-row test expectation was corrected after inspecting the selected
+canonical authentication policy; no source was changed to force another message.
+A separate real-engine test verifies the same PAM source on a password-intent PTY.
+SSH PAM-open/close, disconnect, public-key success and launchd ULF remain unqualified.
+The sixteen other bound messages were not promoted or privately inspected further.
+
+A broad Mac/contract run passed 4,607 tests and exposed 12 older fixture/expectation
+failures. Every one reproduced on the pre-feature commit in an isolated tracked-code
+snapshot. They concerned direct-test chronology/final delivery, historical terminal
+profiles, fresh-app-only admission, now-supported in-window terminal starts, launchd
+signing and integer entitlements. Tests now reflect those already implemented contracts;
+production admission was not relaxed. A separate Chrome regression now recognizes the
+two physical helper binaries serving three roles, retaining distinct role arguments
+and shared generic-image identity. No blind assessment or metadata collection loop
+was started. Final current-code measurement and checks follow below.
+
+### Final revision-376 acceptance and remaining gates
+
+The final source snapshot passes public generation and independent census checks:
+primary 33 forks/39 execs, companion 45 forks/55 execs with 16 background execs,
+zero aggregate births, no missing image/argument roles, no unrealized authored steps
+or missing phases. Known native exits remain 13 per workload; unknown observations
+remain 13/32. No unknown outcome was converted to success.
+
+The combined public suspend/status/read-only-verify/exact-resume test passes with
+all **22 deterministic files** equal to uninterrupted generation. Its native filter
+now selects and compares **both ES and ULF**. Both bundles have three ULF rows, one
+PAM success; the fixed seed's PTY is public-key, so a second PAM message would be
+wrong. The final primary and companion authoritative evaluations pass their hard
+gates at **88.9114295108** and **88.7090757677**, respectively (345/2,818 records).
+Source profile, writer, peer, static-private header and modeled-frame checks pass.
+
+Selected regression checks pass, including non-PTY/PTY password authentication,
+public-key exclusion, peer mismatch rejection, eCAR process-only versus ULF auth
+collection, missingness/filtering and post-commit lost-return recovery. The 12
+reproduced stale regression expectations and Chrome helper-identity expectation
+have been corrected without changing their production gates. The registry's
+payload inventory gained the new typed context; the historical full path census
+was not republished or passed off as a new architecture assessment.
+
+Whole Ruff/format/diff/behavior checks pass. Revision 376 digest:
+`95ff84e02b780af5f98a78f993b13273520c5871366b68e5feda2f1c3b23452a`.
+Final synthetic bundles are `/private/tmp/eforge-macos-376-primary` and
+`/private/tmp/eforge-macos-376-delivery/test_combined_macos_workstatio0/resumed`.
+Only aggregate acceptance metadata is tracked; all generated/native records remain
+outside Git. The scenario sources, seed, baseline and complete ES policy are unchanged.
+
+The finite sequence is **not marked fully complete**. Remaining ULF requirements are
+SSH session-open/close and launchd activation/completion; related public-key/PAM/
+disconnect messages remain unqualified. Launchd's zero-row result is unchanged.
+No new native collection is authorized or implicitly requested by passing these
+engineering checks. Generic GUI/SSH final exit results remain explicit unknowns.
+No new hidden catalog, helper-metadata or repeated blind-review phase was added.
+No product release/version bump occurred.

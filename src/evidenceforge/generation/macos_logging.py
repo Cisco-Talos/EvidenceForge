@@ -11,6 +11,7 @@ from evidenceforge.events.macos_logging import (
     KernelLogCallsite,
     MacosKernelLogObservation,
     MacosPolicyRefusal,
+    MacosSshAuthentication,
     MacosUnifiedLogObservation,
     MacosWorkspaceRequest,
     UnifiedLogCallsite,
@@ -35,6 +36,7 @@ def prepare_unified_log_observation(
     timebase: MachTimebase,
     callsite: UnifiedLogCallsite,
     message: str,
+    backtrace_offsets: tuple[int, ...] = (),
 ) -> MacosUnifiedLogObservation:
     """Freeze the exact live writer, primary thread, build image and boot clock.
 
@@ -72,9 +74,66 @@ def prepare_unified_log_observation(
             mach_timestamp=clock.ticks_at(canonical_time),
             callsite=callsite,
             message=message,
+            backtrace_offsets=backtrace_offsets,
         )
     except ValueError as error:
         raise StateError(f"Invalid Unified Log writer facts: {error}") from error
+
+
+def prepare_ssh_authentication(
+    state: StateManager,
+    deployment: DeploymentContentRegistry | None,
+    *,
+    session: SessionIdentity,
+    writer: ProcessIdentity,
+    authenticated_at: datetime,
+    os_name: str,
+    source_ip: str,
+    source_port: int,
+) -> MacosSshAuthentication:
+    """Snapshot the root receiver's PAM success at the SSH owner's auth phase."""
+    live = state.get_session(session.logon_id)
+    if (
+        state.get_session_identity(session.logon_id) != session
+        or live is None
+        or live.source_ip != source_ip
+        or live.source_port != source_port
+        or live.transport_pid != writer.pid
+    ):
+        raise StateError("SSH authentication lost its canonical peer/session/receiver ownership")
+    profiles = load_macos_unified_log_profiles()
+    profile = profiles.ssh_authentication
+    native = None
+    if (
+        workspace_request_profile_available(os_name)
+        and profile is not None
+        and deployment is not None
+    ):
+        if writer.image != profile.writer_path:
+            raise StateError("SSH authentication requires its exact deployed session-worker image")
+        native = prepare_unified_log_observation(
+            state,
+            deployment,
+            writer=writer,
+            canonical_time=authenticated_at,
+            timebase=MachTimebase(
+                profiles.mach_timebase.numerator, profiles.mach_timebase.denominator
+            ),
+            callsite=UnifiedLogCallsite(
+                message_type=profile.message_type,
+                subsystem="",
+                category="",
+                format_string=profile.format_string,
+                format_string_offset=profile.format_string_offset,
+                program_counter=profile.program_counter,
+                has_private_data=profile.has_private_data,
+            ),
+            message=profile.message.format(
+                username=session.principal, source_ip=source_ip, source_port=source_port
+            ),
+            backtrace_offsets=profile.backtrace_offsets,
+        )
+    return MacosSshAuthentication(session, authenticated_at, writer, source_ip, source_port, native)
 
 
 def workspace_request_profile_available(os_name: str) -> bool:

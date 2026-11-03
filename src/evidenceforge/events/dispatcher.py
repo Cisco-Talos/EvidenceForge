@@ -6674,6 +6674,31 @@ class EventDispatcher:
             raise EventContractError(
                 "Action-cohort projection references a process/session outside its State plan"
             )
+        for dispatch in dispatches:
+            authentication = dispatch._occurrence.macos_ssh_authentication
+            if authentication is None:
+                continue
+            session = self.state_manager.get_session(authentication.session.logon_id)
+            bindings = [
+                patch
+                for patch in state_plan.process_activity_patches
+                if patch.target == authentication.writer
+                and patch.audit_binding is not None
+                and patch.audit_binding.bound_at == authentication.authenticated_at
+            ]
+            if (
+                len(bindings) != 1
+                or session is None
+                or self.state_manager.get_session_identity(session.logon_id)
+                != authentication.session
+                or session.audit_origin != bindings[0].audit_binding.origin
+                or session.transport_pid != authentication.writer.pid
+                or session.source_ip != authentication.source_ip
+                or session.source_port != authentication.source_port
+            ):
+                raise EventContractError(
+                    "Mac SSH authentication requires its exact receiver audit-binding cohort"
+                )
         # Adoption is a canonical consequence of the exact parent exit, not a
         # separately invented source observation. State authenticates both owners.
         adoption_ids: set[str] = set()
@@ -7940,10 +7965,17 @@ class EventDispatcher:
         """Fail closed before rendering unless the concrete sink has exact admission."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
         from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
         from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 
         if format_name == "ecar" and type(emitter) is EcarEmitter:
+            return
+        if (
+            format_name == "macos_unified_log"
+            and type(emitter) is MacosUnifiedLogEmitter
+            and emitter.supports_exact_projection_publication is True
+        ):
             return
         if (
             format_name == "windows_event_security"
@@ -8450,6 +8482,14 @@ class EventDispatcher:
         event = record.trusted_projections[0].occurrence
         before, after = process_credential_identities(event)
         plan = record.state_plan
+        authentication = event.macos_ssh_authentication
+        session_activity = plan.session_activity_patches
+        if authentication is not None and (
+            len(session_activity) != 1
+            or session_activity[0].target != authentication.session
+            or session_activity[0].activity_time != event.timestamp
+        ):
+            raise EventContractError("Exact SSH authentication lost its session activity owner")
         if (
             record.root_action_id != f"{event.event_type}:{after.execution_id}"
             or len(plan.process_activity_patches) != 1
@@ -8460,7 +8500,7 @@ class EventDispatcher:
                     plan.processes,
                     plan.live_session_process_role_patches,
                     plan.session_metadata_patches,
-                    plan.session_activity_patches,
+                    plan.session_activity_patches if authentication is None else (),
                     plan.process_executions,
                     plan.process_terminations,
                     plan.session_terminalizations,
@@ -9182,11 +9222,28 @@ class EventDispatcher:
         """Require one built-in eCAR sink or an authenticated exact omission."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
 
         if self._ecar_projection_is_exact_omission(projection):
             return ()
         participants = self._exact_projection_participants(projection)
         targets = self._exact_projection_targets(projection)
+        if projection.occurrence.macos_ssh_authentication is not None:
+            allowed = {"ecar": EcarEmitter, "macos_unified_log": MacosUnifiedLogEmitter}
+            if (
+                projection.occurrence.event_type is not EventKind.PROCESS_AUDIT_BIND
+                or not 1 <= len(targets) <= 2
+                or len({name for name, _emitter in targets}) != len(targets)
+                or any(type(emitter) is not allowed.get(name) for name, emitter in targets)
+                or len(participants) != len(targets)
+                or any(
+                    not any(item is emitter for item in participants) for _name, emitter in targets
+                )
+            ):
+                raise EventContractError(
+                    "Exact SSH authentication requires built-in eCAR/ULF targets"
+                )
+            return participants
         if (
             len(targets) != 1
             or targets[0][0] != "ecar"
@@ -9204,21 +9261,31 @@ class EventDispatcher:
         """Authenticate an eCAR occurrence omitted by warm-up, filtering, or no sink."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
+
+        allowed = {"ecar": EcarEmitter}
+        if (
+            projection.occurrence.event_type is EventKind.PROCESS_AUDIT_BIND
+            and projection.occurrence.macos_ssh_authentication is not None
+        ):
+            allowed["macos_unified_log"] = MacosUnifiedLogEmitter
 
         if self._projection_is_exact_warmup_suppressed(projection):
             return True
         if self._exact_projection_targets(projection):
             return False
         if any(
-            type(item) is not tuple or len(item) != 2 or item[0] != "ecar" or item[1] != "filtered"
+            type(item) is not tuple
+            or len(item) != 2
+            or item[0] not in allowed
+            or item[1] != "filtered"
             for item in projection.initial_statuses
         ):
             return False
         if projection.mode == "legacy":
             return all(
                 type(target) is _LegacyProjectionTarget
-                and target.format_name == "ecar"
-                and type(target.emitter) is EcarEmitter
+                and type(target.emitter) is allowed.get(target.format_name)
                 and target.status in {"dropped", "out_of_window"}
                 and target.occurrence is None
                 for target in projection.legacy_targets
@@ -9226,8 +9293,7 @@ class EventDispatcher:
         if projection.mode == "compiled":
             return all(
                 type(target) is _ProjectionTarget
-                and target.format_name == "ecar"
-                and type(target.emitter) is EcarEmitter
+                and type(target.emitter) is allowed.get(target.format_name)
                 and self._action_cohort_compiled_projection_status(
                     projection.occurrence,
                     target,
@@ -17768,7 +17834,7 @@ class EventDispatcher:
             "logoff",
             "failed_logon",
             "ssh_session",
-        }:
+        } or (format_name == "macos_unified_log" and event.macos_ssh_authentication is not None):
             required |= CollectionCapability.AUTHENTICATION
         if event_type in {
             "logon",
@@ -17776,7 +17842,7 @@ class EventDispatcher:
             "logoff",
             "ssh_session",
             "macos_workspace_request",
-        }:
+        } or (format_name == "macos_unified_log" and event.macos_ssh_authentication is not None):
             required |= CollectionCapability.SESSION
         if event.file is not None or event_type.startswith("smb_file_"):
             required |= CollectionCapability.FILE

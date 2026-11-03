@@ -27,3 +27,14 @@ policy_refusal:
   # Independently modeled offsets, never private kernel addresses or captured values.
   format_string_offset: 262144
   program_counter: 98304
+ssh_authentication:
+  profile: macos27-ssh-pam-accepted-v1
+  writer_path: /usr/libexec/sshd-session
+  message_type: Info
+  format_string: "%.500s"
+  message: "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
+  has_private_data: true
+  # Explicit synthetic build locations; these are not captured native offsets.
+  format_string_offset: 327680
+  program_counter: 114688
+  backtrace_offsets: [114688]

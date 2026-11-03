@@ -6,8 +6,9 @@
 These facts describe the process doing the logging, not the user or session that
 its message concerns. Producers supply modeled image locations and clock facts;
 renderers never inspect the host, allocate identities, or infer a Mach-O image
-from a path. This first profile uses a main-image callsite without an activity,
-private arguments, oversize data, or a backtrace.
+from a path. The bounded main-image profile excludes activities and oversize data.
+Explicit profiles may retain a private-argument flag
+and a modeled main-image backtrace without exposing any native private values.
 """
 
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ class UnifiedLogCallsite:
     format_string_offset: int
     program_counter: int
     has_rules: bool = False
+    has_private_data: bool = False
 
     def __post_init__(self) -> None:
         """Reject unsupported wire shapes before a renderer receives them."""
@@ -78,6 +80,8 @@ class UnifiedLogCallsite:
             raise ValueError("Native arm64 program counter must be instruction-aligned")
         if type(self.has_rules) is not bool:
             raise ValueError("Unified Log callsite rules flag requires a boolean")
+        if type(self.has_private_data) is not bool:
+            raise ValueError("Unified Log private-data flag requires a boolean")
 
     @property
     def trace_id(self) -> int:
@@ -87,6 +91,8 @@ class UnifiedLogCallsite:
             flags |= 0x0200
         if self.has_rules:
             flags |= 0x0400
+        if self.has_private_data:
+            flags |= 0x0100
         return (
             (self.format_string_offset << 32)
             | (flags << 16)
@@ -112,6 +118,7 @@ class MacosUnifiedLogObservation:
     mach_timestamp: int
     callsite: UnifiedLogCallsite
     message: str
+    backtrace_offsets: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         """Bind writer, thread, image and clock facts without filling unknowns."""
@@ -157,6 +164,50 @@ class MacosUnifiedLogObservation:
         object.__setattr__(self, "boot_uuid", str(boot_uuid).upper())
         if type(self.message) is not str or "\x00" in self.message:
             raise ValueError("Unified Log message requires a NUL-free string")
+        if type(self.backtrace_offsets) is not tuple or len(self.backtrace_offsets) > 16:
+            raise ValueError("Unified Log modeled main-image backtrace requires a bounded tuple")
+        for offset in self.backtrace_offsets:
+            _unsigned(offset, 32, "Unified Log main-image frame", positive=True)
+            if offset % 4:
+                raise ValueError("Unified Log main-image frame requires arm64 alignment")
+
+
+@dataclass(frozen=True, slots=True)
+class MacosSshAuthentication:
+    """Successful PAM authentication, distinct from session open or process exec."""
+
+    session: SessionIdentity
+    authenticated_at: datetime
+    writer: ProcessIdentity
+    source_ip: str
+    source_port: int
+    native: MacosUnifiedLogObservation | None
+
+    def __post_init__(self) -> None:
+        _aware(self.authenticated_at, "SSH authentication")
+        if (
+            type(self.session) is not SessionIdentity
+            or self.session.session_kind != "ssh"
+            or type(self.writer) is not ProcessIdentity
+            or self.writer.hostname != self.session.hostname
+            or self.writer.logon_id != self.session.logon_id
+            or self.writer.credentials is None
+            or self.writer.credentials.effective_uid != 0
+            or self.writer.execution_started_at > self.authenticated_at
+            or self.session.started_at > self.authenticated_at
+            or type(self.source_ip) is not str
+            or not self.source_ip
+            or any(char.isspace() or char == "\0" for char in self.source_ip)
+            or type(self.source_port) is not int
+            or not 0 < self.source_port < 65536
+        ):
+            raise ValueError("SSH authentication requires its exact session, root writer and peer")
+        if self.native is not None and (
+            type(self.native) is not MacosUnifiedLogObservation
+            or self.native.writer != self.writer
+            or self.native.canonical_time != self.authenticated_at
+        ):
+            raise ValueError("SSH authentication observation crossed its exact writer or time")
 
 
 @dataclass(frozen=True, slots=True)

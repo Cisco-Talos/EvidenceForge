@@ -110,6 +110,7 @@ class ContextKind(StrEnum):
     LIFECYCLE = "lifecycle"
     MACOS_WORKSPACE = "macos_workspace"
     MACOS_POLICY_REFUSAL = "macos_policy_refusal"
+    MACOS_SSH_AUTHENTICATION = "macos_ssh_authentication"
     NAT = "nat"
     NETWORK = "network"
     NETWORK_ENDPOINT = "network_endpoint"
@@ -1020,13 +1021,20 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_AUDIT_BIND: _contract(
         EventKind.PROCESS_AUDIT_BIND,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        optional=_contexts(ContextKind.AUTH, ContextKind.MACOS_SSH_AUTHENTICATION),
         forbidden=frozenset(ContextKind)
-        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        - _contexts(
+            ContextKind.PROCESS,
+            ContextKind.SRC_HOST,
+            ContextKind.LIFECYCLE,
+            ContextKind.AUTH,
+            ContextKind.MACOS_SSH_AUTHENTICATION,
+        ),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
         state=StateEffect.WRITE,
-        emitters=_formats(FormatKind.ECAR),
+        emitters=_formats(FormatKind.ECAR, FormatKind.MACOS_UNIFIED_LOG),
     ),
     EventKind.PROCESS_PRIVILEGE_DROP: _contract(
         EventKind.PROCESS_PRIVILEGE_DROP,
@@ -1277,6 +1285,44 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                     code=ContractViolationCode.INVALID_IDENTITY,
                     event_type=event.event_type,
                     message=str(exc),
+                )
+            )
+
+    if getattr(event, "macos_ssh_authentication", None) is not None:
+        from evidenceforge.events.identity import ProcessIdentity
+        from evidenceforge.events.macos_logging import MacosSshAuthentication
+
+        authentication = getattr(event, "macos_ssh_authentication", None)
+        host, auth = getattr(event, "src_host", None), getattr(event, "auth", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(authentication) is not MacosSshAuthentication
+            or host is None
+            or host.os_category != "macos"
+            or authentication.session.hostname != host.hostname
+            or authentication.authenticated_at != event.timestamp
+            or auth is None
+            or auth.username != authentication.session.principal
+            or auth.logon_id != authentication.session.logon_id
+            or auth.source_ip != authentication.source_ip
+            or auth.source_port != authentication.source_port
+            or identities is None
+            or contract.kind is not EventKind.PROCESS_AUDIT_BIND
+            or type(identities.subject) is not ProcessIdentity
+            or identities.subject.object_id != authentication.writer.object_id
+            or identities.session != authentication.session
+            or identities.actor != authentication.writer
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != authentication.writer.lifecycle_group_id
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac SSH authentication must preserve its exact peer, session and root writer",
                 )
             )
 

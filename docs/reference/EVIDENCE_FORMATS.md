@@ -658,9 +658,22 @@ The experimental Mac SSH receiver projects canonical login/logout, flow and help
 
 ### Experimental macOS Unified Log NDJSON
 
-`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]` and explicit app-policy refusals. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
+`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]` and explicit app-policy refusals. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not request a workspace entry. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
 
-The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Optional source/backtrace fields stay absent; no completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
+The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Source/backtrace fields stay absent for workspace/policy observations; the SSH profile below supplies an explicit modeled main-image backtrace. No completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
+
+Successful password-intent SSH authentication on the qualified native receiver also
+renders `Accepted keyboard-interactive/pam for ... from ... port ... ssh2`. The SSH
+action owns the actual peer tuple, local user and root `sshd-session` writer at its
+authenticated audit transition; this is distinct from shell readiness and session
+close. Both PTY modes share this path. The record uses Info, empty subsystem/category,
+static `%.500s`, the native private-data flag, zero activities and explicit synthetic
+build offsets/frames. The observed reference exported unredacted authentication text;
+this profile models that collection visibility, not every collector's privacy policy.
+The emitter renders frozen facts without looking up a later PID or manufacturing an
+auth event from ES output. Exact publication includes eCAR and ULF in the same retry
+journal. Public-key success, PAM open/close, disconnect and other SSH messages remain
+unqualified; no such messages are inferred from session lifecycle alone.
 
 The import decoder also preserves optional macOS 27 `personaID`, `personaName`, `personaType`,
 `launchPersonaID`, `launchPersonaName` and `launchPersonaType` metadata. Private fixed-output

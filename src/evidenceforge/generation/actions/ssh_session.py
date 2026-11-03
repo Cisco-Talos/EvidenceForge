@@ -4520,6 +4520,7 @@ class SshSessionActionBundle:
                 authentication_worker=environment.authentication_worker,
                 shell=environment.shell,
                 phase_times=phase_times,
+                auth_method=request.auth_method,
                 launcher=environment.launcher,
                 pty=request.pty,
                 service_label=(

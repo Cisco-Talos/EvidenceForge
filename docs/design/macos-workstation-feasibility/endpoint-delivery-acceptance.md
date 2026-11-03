@@ -9,8 +9,8 @@ stay outside Git and are never inspected by agents without specific permission.
 | --- | --- | --- |
 | 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete at revision 374. Primary: 33 forks/39 execs. Recovery companion: 45 forks/55 execs, 16 background execs, all 22 deterministic files identical. |
 | 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | Query completion and reconciliation are implemented; arbitrary GUI/SSH teardown still has no qualified result. The distinction is explicit and must remain in final acceptance. |
-| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, SSH authentication/session, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | First two exist. SSH ULF remains unqualified. The first controlled launchd ULF test completed all controls but retained zero rows; message-only filtering limited that test. The category-filter correction is code-tested, with no native rerun requested. No launchd template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
-| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | The recovery gate and evaluation are reusable. Final acceptance of the expanded ULF scope depends on phase 3's evidence and implementation. |
+| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, SSH authentication/session, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal and bounded PAM SSH-authentication success exist. SSH session-open/close messages remain unqualified. The first controlled launchd ULF test completed all controls but retained zero rows; message-only filtering limited that test. The category-filter correction is code-tested, with no native rerun requested. No launchd template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
+| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 376 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for the implemented families. Final acceptance of the full ULF scope still depends on the remaining phase 3 evidence. |
 
 The quiet thirty-minute primary is preserved as a quiet sampling case. The
 predeclared positive seed and longer same-seed recovery companion exercise background
@@ -51,6 +51,7 @@ it does not expand the ES metadata research scope. Its first fixed report retain
 [offline shape review](ssh-startup-reference/ULF-REFERENCE.md) resolved that failure:
 17 valid ordinary logs and 21 activity-creation entries. One ordinary log records
 successful keyboard-interactive/PAM authentication from root-owned sshd-session.
-Its callsite differs from the existing static-main-image generation profile. The
-remaining grouped callsite comparison uses the same capture and requires separate
-permission; no new capture is requested. No SSH ULF template is enabled yet.
+The separately approved grouped comparison qualifies its static main-image callsite
+with PRIVATE_DATA flag and public %.500s format. That bounded PAM-success producer
+is now implemented. Other SSH/PAM session messages remain gated; no new capture
+is requested. See the same reference note for exact source and visibility limits.

@@ -139,7 +139,7 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         "--output",
         filtered,
         "--formats",
-        "macos_endpoint_security",
+        "macos_endpoint_security,macos_unified_log",
         "--checkpoint-hours",
         "1",
     )
@@ -148,10 +148,25 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         return {
             str(path.relative_to(root / "data")): path.read_bytes()
             for path in (root / "data").rglob("*")
-            if path.is_file() and "endpoint_security" in path.name
+            if path.is_file()
+            and path.name in {"macos_endpoint_security.ndjson", "macos_unified_log.ndjson"}
         }
 
     assert native(output) and native(output) == native(filtered)
+    ulf = [
+        json.loads(line)
+        for path in (output / "data").rglob("macos_unified_log.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    accepted = [
+        row for row in ulf if row["eventMessage"].startswith("Accepted keyboard-interactive/pam ")
+    ]
+    # This fixed seed selects password/PAM for non-PTY and publickey for PTY.
+    assert len(ulf) == 3 and len(accepted) == 1
+    assert all(
+        row["userID"] == 0 and row["processImagePath"] == "/usr/libexec/sshd-session"
+        for row in accepted
+    )
     measurements = [
         summarize(path, case, full=True, exit_code=0, text="") for path in (output, control)
     ]
@@ -167,6 +182,8 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
             {
                 "exact_resume_files_equal": True,
                 "native_filter_bytes_equal": True,
+                "ulf_rows": len(ulf),
+                "ssh_pam_success_rows": len(accepted),
                 "deterministic_files_compared": len(resumed_files),
                 "checkpoint_hour": status["simulated_hour"],
                 "measurements": [item.model_dump(mode="json") for item in measurements],

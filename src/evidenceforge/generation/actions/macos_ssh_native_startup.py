@@ -4,7 +4,8 @@
 """Reviewed non-PTY SSH graph through the existing exact startup publication owner."""
 
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
-from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.contexts import AuthContext
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
 from evidenceforge.events.macos_spawn_io import MacosSpawnIO
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
@@ -20,6 +21,7 @@ from evidenceforge.generation.actions.posix_process import (
     process_fork_occurrence,
     process_job_control_occurrence,
 )
+from evidenceforge.generation.macos_logging import prepare_ssh_authentication
 from evidenceforge.models.exceptions import StateError
 
 
@@ -217,5 +219,28 @@ class MacosNativeSshReceiverStartup(MacosSshReceiverStartup):
                     integrity_level="System" if action == "audit_bind" else "Medium",
                 )
                 key = f"{kind}:{after.execution_id}"
+        if action == "audit_bind" and request.auth_method == "password":
+            builder.patch_session_activity(session, at)
+            live_session = state.get_session(session.logon_id)
+            assert live_session is not None
+            authentication = prepare_ssh_authentication(
+                state,
+                self._dispatcher.deployment_registry,
+                session=session,
+                writer=before,
+                authenticated_at=at,
+                os_name=self._host.os,
+                source_ip=live_session.source_ip,
+                source_port=live_session.source_port,
+            )
+            event.auth = AuthContext(
+                username=session.principal,
+                source_ip=authentication.source_ip,
+                source_port=authentication.source_port,
+                logon_id=session.logon_id,
+                logon_type=10,
+            )
+            event.macos_ssh_authentication = authentication
+            event.identity_plan = EventIdentityPlan(subject=after, actor=before, session=session)
         batch = self._prepare_publication(builder.seal(), event, key)
         return _PendingStartupPhase(batch, after)

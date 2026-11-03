@@ -63,7 +63,7 @@ PTY effects, pipelines/redirections, nested execution plans, background jobs and
 login shells remain unsupported; unsupported commands reject before a child is allocated.
 No additional Unified Log family or generic successful teardown result is inferred.
 
-Select `macos_unified_log` for modeled loginwindow workspace-method entry only; method entry does
+Select `macos_unified_log` for modeled loginwindow workspace-method entry, bounded ASP refusal and qualified PAM SSH authentication. Workspace method entry does
 not establish desktop completion. Select `macos_endpoint_security` for qualified v11 fork,
 exec and known exit phases. Complete canonical metadata is required. Exec additionally needs
 explicit known entitlements and complete descriptors. Qualified external SSH commands without
@@ -162,3 +162,5 @@ Plain nested `/bin/zsh` and `/bin/bash` invocations may own later direct externa
 metadata gates are required. This adds no authoring field and does not qualify `-c` strings,
 scripts, PTYs, GUI responsibility or effect-bearing commands. A nested qualified query can retain
 the same declared nominal result as a direct query; successful exec alone still supplies no result.
+
+The PAM-success ULF source is owned by the successful-authentication/audit-adoption occurrence. It uses the actual root sshd-session execution, user and transport peer tuple, an Info/static %.500s callsite with private-data flag, empty subsystem/category, zero activities and explicit synthetic main-image offsets/frames. The observed reference exported visible text; generation models that visibility without claiming every collector exposes private arguments. No emitter allocates a writer, looks up a later reused PID or derives an authentication event from ES output. Exact eCAR/ULF publication and filtered output share the retained startup journal. This adds no new authored event type or raw-message requirement.

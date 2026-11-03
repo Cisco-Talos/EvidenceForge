@@ -226,6 +226,25 @@ def test_projection_preserves_redaction_and_json_escapes_without_filling_private
     assert json.loads(record.to_ndjson())["eventMessage"] == observation.message
 
 
+def test_explicit_private_argument_flag_and_build_owned_backtrace_round_trip() -> None:
+    original = _observation()
+    callsite = replace(original.callsite, has_private_data=True)
+    observation = replace(original, callsite=callsite, backtrace_offsets=(65536, 65600))
+    record = project_unified_log_observation(observation, wall_time=_START, timezone_name="UTC")
+    assert record.trace_id == original.callsite.trace_id | (0x0100 << 16)
+    assert [frame.image_offset for frame in record.backtrace.frames] == [65536, 65600]
+    assert all(frame.image_uuid == record.sender_image_uuid for frame in record.backtrace.frames)
+    assert decode_unified_log_record(record.to_ndjson()) == record
+    # Flag presence does not instruct a renderer to redact or reveal message arguments.
+    assert record.event_message == original.message
+
+
+@pytest.mark.parametrize("offsets", [(True,), (3,), (-4,), (2**32,), [65536], (4,) * 17])
+def test_backtrace_requires_explicit_bounded_aligned_main_image_offsets(offsets: object) -> None:
+    with pytest.raises(ValueError):
+        replace(_observation(), backtrace_offsets=offsets)
+
+
 def _owned_writer(
     scenarios_dir: Path,
 ) -> tuple[StateManager, DeploymentContentRegistry, ProcessIdentity]:

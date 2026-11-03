@@ -27,7 +27,7 @@ def _native_sort_key(line: str) -> tuple[str, int, int, int, str]:
 
 
 class MacosUnifiedLogEmitter(HostMultiplexEmitter):
-    """Render bounded workspace and app-policy observations as UTC NDJSON.
+    """Render bounded workspace, app-policy and SSH-auth observations as UTC NDJSON.
 
     This is not a login success, complete GUI lifecycle or native archive. The
     standard host writer owns threading, sorting, publication and checkpoints.
@@ -40,7 +40,11 @@ class MacosUnifiedLogEmitter(HostMultiplexEmitter):
     _defer_sorted_flush_until_close = True
     _external_sorting = True
     supports_exact_projection_publication = True
-    _supported_types: set[str] = {"macos_workspace_request", "macos_policy_refusal"}
+    _supported_types: set[str] = {
+        "macos_workspace_request",
+        "macos_policy_refusal",
+        "process_audit_bind",
+    }
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Require the supported stage and an available native writer snapshot."""
@@ -54,15 +58,17 @@ class MacosUnifiedLogEmitter(HostMultiplexEmitter):
                     event.macos_policy_refusal is not None
                     and event.macos_policy_refusal.native is not None
                 )
+                or (
+                    event.macos_ssh_authentication is not None
+                    and event.macos_ssh_authentication.native is not None
+                )
             )
         )
 
     def emit(self, event: CanonicalOccurrence) -> None:
         """Project supplied identities and the already planned source time."""
         if not self.can_handle(event):
-            raise ValueError(
-                "Unified Log emitter requires a supported native workspace observation"
-            )
+            raise ValueError("Unified Log emitter requires a supported native writer observation")
         host = event.src_host
         assert host is not None
         refusal = event.macos_policy_refusal
@@ -72,7 +78,7 @@ class MacosUnifiedLogEmitter(HostMultiplexEmitter):
                 refusal.native, wall_time=event.timestamp.astimezone(UTC), timezone_name="UTC"
             )
         else:
-            request = event.macos_workspace
+            request = event.macos_ssh_authentication or event.macos_workspace
             assert request is not None and request.native is not None
             record = project_unified_log_observation(
                 request.native, wall_time=event.timestamp.astimezone(UTC), timezone_name="UTC"

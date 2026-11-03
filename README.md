@@ -421,7 +421,7 @@ output selection. The catalog can hold multiple profiles; historical wire decode
 available independently of generation admission.
 
 The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
-and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
+and Unified Log workspace-method entry, bounded app-policy refusal and PAM SSH authentication. Native Endpoint Security uses the qualified v11 process
 profile. Exec needs explicit null or bounded Boolean/integer/string/string-array entitlements and complete descriptors; exit needs an explicit
 completed result. Qualified literal local-terminal and non-PTY SSH commands share canonical
 fork/exec production, including the exec of a shell receiving a quoted command argument.

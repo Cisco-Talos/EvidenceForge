@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 375
+current_revision: 376
 history_start_revision: 1
-behavior_surface_sha256: 569998740598b3b228f4bc1b06408bfe1d765efeb9e6bcfbffdca72a7f147e7f
+behavior_surface_sha256: 95ff84e02b780af5f98a78f993b13273520c5871366b68e5feda2f1c3b23452a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3604,3 +3604,9 @@ changes:
     domains: [macos-process-lifecycle]
     formats: [macos_endpoint_security]
     summary: Declares a nominal successful result for the exact uname -a invocation when its owning natural completion is untruncated; unknown or forced session teardown results remain unknown.
+  - revision: 376
+    id: macos-native-ssh-pam-authentication-ulf
+    impact: localized
+    domains: [macos-ssh-authentication, native-source-publication]
+    formats: [macos_unified_log]
+    summary: Adds reference-qualified PAM success from the canonical root SSH receiver with an explicit private-data flag and modeled backtrace; preserves exact eCAR/ULF recovery and rejects unrelated peer or audit-binding ownership.

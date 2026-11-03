@@ -206,7 +206,7 @@ def project_unified_log_observation(
     credentials = writer.credentials
     assert image is not None and credentials is not None
     callsite = observation.callsite
-    return UnifiedLogRecord(
+    record = UnifiedLogRecord(
         eventType="logEvent",
         messageType=callsite.message_type,
         timezoneName=timezone_name,
@@ -229,6 +229,18 @@ def project_unified_log_observation(
         formatString=callsite.format_string,
         eventMessage=observation.message,
     )
+    if observation.backtrace_offsets:
+        record = record.model_copy(
+            update={
+                "backtrace": UnifiedLogBacktrace(
+                    frames=tuple(
+                        UnifiedLogFrame(imageOffset=offset, imageUUID=image.build_uuid)
+                        for offset in observation.backtrace_offsets
+                    )
+                )
+            }
+        )
+    return record
 
 
 def project_kernel_log_observation(

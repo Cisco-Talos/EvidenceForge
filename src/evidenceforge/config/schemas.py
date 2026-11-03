@@ -19,7 +19,7 @@ from copy import deepcopy
 from datetime import date
 from pathlib import PurePosixPath
 from string import Formatter
-from typing import Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -4091,6 +4091,41 @@ class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
     mach_timebase: MacosMachTimebaseConfig
     workspace_request: MacosWorkspaceLogProfile
     policy_refusal: MacosPolicyRefusalLogProfile | None = None
+    ssh_authentication: MacosSshAuthenticationLogProfile | None = None
+
+
+class MacosSshAuthenticationLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Reviewed PAM success vocabulary with independently modeled build offsets."""
+
+    profile: Literal["macos27-ssh-pam-accepted-v1"]
+    writer_path: Literal["/usr/libexec/sshd-session"]
+    message_type: Literal["Info"]
+    format_string: Literal["%.500s"]
+    message: Literal[
+        "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
+    ]
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+    has_private_data: Literal[True]
+    # Build-owned frames in this modeled main image, not a captured call stack.
+    backtrace_offsets: tuple[
+        Annotated[int, Field(strict=True, gt=0, lt=2**32, multiple_of=4)], ...
+    ] = Field(min_length=1, max_length=16)
+
+    @field_validator("has_private_data", mode="before")
+    @classmethod
+    def strict_private_flag(cls, value: object) -> object:
+        """Keep the native Boolean profile field distinct from integer one."""
+        if type(value) is not bool:
+            raise ValueError("SSH private-data profile flag requires a Boolean")
+        return value
+
+    @model_validator(mode="after")
+    def modeled_frames(self) -> Self:
+        """Tie the first modeled main-image frame to the explicit callsite."""
+        if self.backtrace_offsets[0] != self.program_counter:
+            raise ValueError("SSH logging backtrace must start at its modeled callsite")
+        return self
 
 
 class MacosPolicyRefusalLogProfile(BaseModel, extra="forbid", frozen=True):

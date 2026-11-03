@@ -72,13 +72,15 @@ def test_pty_checkpoint_tag_is_distinct_and_legacy_auth_rows_keep_their_mode() -
         _decode_ssh_auth(row)
 
 
-def _engine(tmp_path: Path, *, native: bool = True) -> GenerationEngine:
+def _engine(tmp_path: Path, *, native: bool = True, unified: bool = False) -> GenerationEngine:
     scenario = _scenario()
     scenario.environment.systems[0].services = ["ssh"]
     scenario.macos_process_coverage = "complete" if native else "partial"
     scenario.output.logs = [{"format": "ecar"}] + (
         [{"format": "macos_endpoint_security"}] if native else []
     )
+    if unified:
+        scenario.output.logs.append({"format": "macos_unified_log"})
     engine = GenerationEngine(scenario, tmp_path, generation_seed=370)
     engine._chronological_es_delivery = True
     engine._initialize()
@@ -94,6 +96,25 @@ def _engine(tmp_path: Path, *, native: bool = True) -> GenerationEngine:
         pty=True,
     )
     return engine
+
+
+def test_pty_password_intent_uses_the_same_root_pam_authentication_source(tmp_path: Path) -> None:
+    engine = _engine(tmp_path, unified=True)
+    try:
+        engine._finalize_macos_process_coverage()
+    finally:
+        engine._close_emitters()
+    rows = [
+        json.loads(line)
+        for path in tmp_path.rglob("macos_unified_log.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["eventMessage"] == (
+        "Accepted keyboard-interactive/pam for alex from 192.0.2.80 port 51000 ssh2"
+    )
+    assert rows[0]["userID"] == 0
+    assert rows[0]["processImagePath"] == "/usr/libexec/sshd-session"
 
 
 def test_pty_canonical_terminal_and_foreground_group_do_not_require_native_output(
