@@ -23,7 +23,9 @@ def test_every_accepted_ordinary_command_has_one_native_exec(
     tmp_path: Path, scenarios_dir: Path, native: bool, launch: str
 ) -> None:
     expected: list[tuple[ProcessIdentity, tuple[str, ...]]] = []
-    with _engine(tmp_path, scenarios_dir, native=native) as fixture:
+    with _engine(
+        tmp_path, scenarios_dir, native=native, chronological=launch == "local"
+    ) as fixture:
         engine, target, user, session = fixture
         generator = engine.activity_generator
         terminal: ProcessIdentity | None = None
@@ -88,7 +90,15 @@ def test_every_accepted_ordinary_command_has_one_native_exec(
         )
     ]
     assert not missing, f"Accepted commands missing native ES exec: {missing}"
-    assert len(records) == len(expected) == len(MACOS_NATIVE_QUERY_COMMANDS)
+    command_records = [
+        record
+        for record in records
+        if any(
+            process.pid == record.event.exec.target.audit_token.pid
+            for process, _arguments in expected
+        )
+    ]
+    assert len(command_records) == len(expected) == len(MACOS_NATIVE_QUERY_COMMANDS)
     for process, arguments in expected:
         matches = [
             record
@@ -119,6 +129,7 @@ def test_legacy_terminal_profile_preserves_unknown_responsibility(
         provider = engine.macos_execution_metadata
         raw = provider.profile.model_dump()
         del raw["terminal_responsibility"]
+        del raw["terminal_startups"]
         provider.profile = type(provider.profile).model_validate(raw)
         at = engine.start_time + timedelta(minutes=1)
         logon = engine.activity_generator.generate_logon(
@@ -136,7 +147,7 @@ def test_legacy_terminal_profile_preserves_unknown_responsibility(
 def test_local_logoff_uses_current_exec_without_rewriting_lifetime_birth(
     tmp_path: Path, scenarios_dir: Path
 ) -> None:
-    with _engine(tmp_path, scenarios_dir) as fixture:
+    with _engine(tmp_path, scenarios_dir, chronological=True) as fixture:
         engine, target, user, _ssh_session = fixture
         generator = engine.activity_generator
         logon = generator.generate_logon(

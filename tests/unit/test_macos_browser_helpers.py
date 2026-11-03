@@ -16,7 +16,7 @@ from evidenceforge.generation.world_model import WorldModel
 from tests.support.macos_ssh import macos_ssh_scenario
 
 
-def test_chrome_mac_helpers_have_distinct_images_and_minimal_role_arguments() -> None:
+def test_chrome_mac_helpers_have_distinct_roles_and_share_only_the_generic_image() -> None:
     app = ApplicationEntry.model_validate(application_descriptor("chrome"))
     platform = app.platforms["macos"]
     children = get_child_processes("macos", "Google Chrome")
@@ -27,7 +27,10 @@ def test_chrome_mac_helpers_have_distinct_images_and_minimal_role_arguments() ->
         "--type=utility",
     }
     images = {row["image"] for row in children}
-    assert len(images) == 3 and platform.image_path not in images
+    assert len(images) == 2 and platform.image_path not in images
+    by_role = {shlex.split(row["command_line"])[1]: row["image"] for row in children}
+    assert by_role["--type=gpu-process"] == by_role["--type=utility"]
+    assert by_role["--type=renderer"] != by_role["--type=utility"]
     for row in children:
         assert shlex.split(row["command_line"])[0] == row["image"]
         assert f"/Versions/{platform.deployment.version}/Helpers/" in row["image"]
@@ -50,6 +53,7 @@ def test_chrome_helpers_compile_as_distinct_binaries_in_same_installed_release(
     main = registry.resolve_binary("TEST-01", app.platforms["macos"].image_path, "macos")
     assert main is not None
     content_ids = {main.content_id}
+    helpers: dict[str, object] = {}
     for row in get_child_processes("macos", "Google Chrome"):
         helper = registry.resolve_binary("TEST-01", row["image"], "macos")
         assert helper is not None
@@ -57,8 +61,13 @@ def test_chrome_helpers_compile_as_distinct_binaries_in_same_installed_release(
         assert helper.key.version == main.key.version
         assert helper.key.build == main.key.build
         assert helper.key.architecture == "arm64"
-        assert helper.content_id not in content_ids
+        if row["image"] in helpers:
+            assert helpers[row["image"]] == helper
+        else:
+            assert helper.content_id not in content_ids
+            helpers[row["image"]] = helper
         content_ids.add(helper.content_id)
+        # This general compiler intentionally omits the separate native deployment profile.
         assert helper.mach_o_image is None and helper.code_signature is None
         assert registry.resolve_binary("SSH-TEST", row["image"], "linux") is None
-    assert len(content_ids) == 4
+    assert len(content_ids) == 3

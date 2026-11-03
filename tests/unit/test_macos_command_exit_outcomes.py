@@ -33,7 +33,12 @@ from tests.support.macos_ssh import macos_ssh_scenario
 
 @contextmanager
 def _engine(
-    tmp_path: Path, scenarios_dir: Path, *, native: bool = True, complete: bool = False
+    tmp_path: Path,
+    scenarios_dir: Path,
+    *,
+    native: bool = True,
+    complete: bool = False,
+    chronological: bool = False,
 ) -> Iterator[tuple[GenerationEngine, System, User, ActiveSession]]:
     scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True)
     scenario.macos_process_coverage = "complete" if complete else "partial"
@@ -43,7 +48,7 @@ def _engine(
     with generation_seed_scope(336):
         reset_thread_rng()
         engine = GenerationEngine(scenario, tmp_path)
-        if complete:
+        if complete or chronological:
             engine._chronological_es_delivery = True
         try:
             engine._initialize()
@@ -65,6 +70,8 @@ def _engine(
                 if s.system == target.hostname and s.session_kind == "ssh"
             )
             yield engine, target, user, session
+            if chronological:
+                engine._finalize_macos_process_coverage()
         finally:
             engine._close_emitters()
 

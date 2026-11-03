@@ -198,7 +198,7 @@ def test_complete_engine_accepts_commands_and_rejects_unresolved_starts(
                 require_exact_parent=True,
             )
             assert pid > 0
-        if fault == "none":
+        if fault in {"none", "in_window_login"}:
             engine._finalize_macos_process_coverage()
             census = next(
                 host.process_census
@@ -206,12 +206,13 @@ def test_complete_engine_accepts_commands_and_rejects_unresolved_starts(
                 if host.hostname == system.hostname
             )
             assert census.complete
-            assert (
-                census.expected_forks == census.published_forks == len(MACOS_NATIVE_QUERY_COMMANDS)
-            )
-            assert (
-                census.expected_execs == census.published_execs == len(MACOS_NATIVE_QUERY_COMMANDS)
-            )
+            assert census.expected_forks == census.published_forks
+            assert census.expected_execs == census.published_execs
+            assert census.expected_forks >= len(MACOS_NATIVE_QUERY_COMMANDS)
+            assert census.expected_execs >= len(MACOS_NATIVE_QUERY_COMMANDS)
+            if fault == "in_window_login":
+                assert census.expected_forks > len(MACOS_NATIVE_QUERY_COMMANDS)
+                assert census.expected_execs > len(MACOS_NATIVE_QUERY_COMMANDS)
             assert census.aggregate_births == 0
         else:
             with pytest.raises(

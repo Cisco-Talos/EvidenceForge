@@ -105,4 +105,8 @@ def test_catalog_boot_image_facts_reach_compiled_host_identity(
     binary = registry.resolve_binary("TEST-01", image, "macos")
     assert binary is not None and binary.mach_o_image is not None
     assert binary.mach_o_image == MachOImageIdentity.derive(binary.key)
-    assert binary.code_signature is None
+    if image == "/sbin/launchd":
+        assert binary.code_signature is not None
+        assert binary.code_signature.signing_id == "com.apple.xpc.launchd"
+    else:
+        assert binary.code_signature is None

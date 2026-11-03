@@ -127,7 +127,7 @@ def test_mac_storyline_execution_does_not_invent_its_own_file_create(
 
 @pytest.mark.parametrize("future", [False, True])
 @pytest.mark.parametrize("application", ["macos-terminal", "macos-iterm2"])
-def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
+def test_native_shell_bootstrap_rejects_unqualified_existing_terminal_reuse(
     tmp_path: Path,
     future: bool,
     application: str,
@@ -151,14 +151,14 @@ def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
             image,
             parent_pid=1,
         )
-        shell = generator.ensure_macos_session_shell(
-            user, system, logon, at, terminal_application_id=application
-        )
+        from evidenceforge.models.exceptions import StateError
+
+        with pytest.raises(StateError, match="requires a fresh app"):
+            generator.ensure_macos_session_shell(
+                user, system, logon, at, terminal_application_id=application
+            )
         session = engine.state_manager.get_session(logon)
-        if future:
-            assert shell is None and session.session_shell_pid is None
-        else:
-            assert shell is not None and session.process_tree_root == terminal
+        assert session.session_shell_pid is None
         terminals = [
             p for p in engine.state_manager.get_processes_for_session(logon) if p.image == image
         ]

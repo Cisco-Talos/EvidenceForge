@@ -201,7 +201,9 @@ def test_engine_gui_origin_binds_explicit_launches_and_child_inheritance(
         generator = engine.activity_generator
         provider = engine.macos_execution_metadata
         if legacy_profile:
-            provider.profile = provider.profile.model_copy(update={"gui_audit_origin": None})
+            provider.profile = provider.profile.model_copy(
+                update={"gui_audit_origin": None, "terminal_startups": ()}
+            )
         system = next(s for s in engine.scenario.environment.systems if s.hostname == "MAC-01")
         user = next(u for u in engine.scenario.environment.users if u.username == "alex")
         at = engine.start_time + timedelta(minutes=10)

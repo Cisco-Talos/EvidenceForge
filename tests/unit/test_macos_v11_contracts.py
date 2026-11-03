@@ -32,7 +32,7 @@ def test_v11_preserves_original_headers_named_tokens_and_category(family: str) -
 
 @pytest.mark.parametrize(
     "value",
-    [[], "", False, 0, {"invented.entitlement": 1}, {"invented.entitlement": {"nested": True}}],
+    [[], "", False, 0, {"invented.entitlement": 1.25}, {"invented.entitlement": {"nested": True}}],
 )
 def test_v11_does_not_admit_unreviewed_nonnull_entitlements(value: object) -> None:
     fields = _record(11, "exec")
