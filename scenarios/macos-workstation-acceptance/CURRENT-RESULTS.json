@@ -23,18 +23,19 @@
     {
       "run": "combined-recovery",
       "seed": 373,
-      "forks": 45,
-      "execs": 55,
-      "background_native_execs": 16,
+      "forks": 63,
+      "execs": 78,
+      "background_native_execs": 39,
       "native_exit_rows": 13,
-      "unknown_exit_observations": 32,
+      "unknown_exit_observations": 51,
       "census_complete": true,
       "activity_supported": true,
       "missing_images": [],
       "missing_execution_roles": [],
       "unrealized_steps": [],
       "authored_phase_gaps": [],
-      "manifest_sha256": "bc83416a020b671d66e4b2486bf439b3a8716385d33d74c4e9a2cfd7a1a408fe"
+      "manifest_sha256": "85cca300843c2bceeb64b65e01399c7520a9b75f873aed86c0de5418da062e91",
+      "acceptance_control": "Explicit policy refusal; no successful target process or command effects"
     }
   ],
   "combined_exact_resume_files_equal": true,
@@ -54,7 +55,8 @@
       "zeek_ssl": 16,
       "zeek_x509": 4,
       "zsh_history": 8
-    }
+    },
+    "hard_gate_failures": []
   },
   "remaining": [
     "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
@@ -65,27 +67,28 @@
   "scope": "Synthetic engineering acceptance; no private records or observed native values are included.",
   "combined_evaluation": {
     "acceptance_passed": true,
-    "overall_score": 88.7088659642302,
-    "total_records": 2819,
+    "overall_score": 89.57687922297386,
+    "total_records": 3118,
     "source_counts": {
-      "ecar": 912,
-      "macos_endpoint_security": 113,
-      "macos_unified_log": 4,
-      "zeek_conn": 714,
-      "zeek_dns": 352,
-      "zeek_files": 203,
-      "zeek_http": 15,
-      "zeek_ocsp": 15,
-      "zeek_ssl": 313,
-      "zeek_x509": 170,
+      "ecar": 1055,
+      "macos_endpoint_security": 154,
+      "macos_unified_log": 5,
+      "zeek_conn": 785,
+      "zeek_dns": 389,
+      "zeek_files": 185,
+      "zeek_http": 19,
+      "zeek_ocsp": 18,
+      "zeek_ssl": 344,
+      "zeek_x509": 156,
       "zsh_history": 8
-    }
+    },
+    "hard_gate_failures": []
   },
   "bounded_current_code_review": {
     "es_records_reviewed": 0,
-    "ulf_records_reviewed": 4,
-    "scope": "Independent full-process census plus bounded review of all four synthetic ULF rows in the primary; same assertions pass on the recovery companion. No new blind panel.",
-    "result": "Root/session-worker, actual canonical public-key fingerprint, peer, static format, same sender/build and activity checks pass for both authentication methods; two workspace entries remain. Public-key text is source-derived through the qualified common logger, not separately captured locally."
+    "ulf_records_reviewed": 5,
+    "scope": "Independent full-process census and bounded assertions on all five synthetic ULF rows in the final recovery companion; original primary retains its four rows. No new blind panel.",
+    "result": "Workspace, root SSH writer, peer, callsite, canonical public-key fingerprint and ASP kernel/sender/target checks pass. Refused target has no process or command effects. Plain-key payload remains source-derived, not a separate local observation."
   },
   "generation_behavior_sha256": "3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8",
   "native_filter_formats": [
@@ -93,13 +96,17 @@
     "macos_unified_log"
   ],
   "ulf_coverage": {
-    "workload_rows": 4,
+    "workload_rows": 5,
     "pam_success_rows": 1,
     "publickey_success_rows": 1,
     "non_pty_authentication": "password/PAM",
     "pty_authentication": "plain publickey; source-derived payload with qualified common logger envelope",
     "separate_password_pty_unit_gate": "PASS",
-    "daemon_verbosity": "ordinary; VERBOSE session messages remain gated by user choice on 2026-11-03"
+    "daemon_verbosity": "ordinary; VERBOSE session messages remain gated by user choice on 2026-11-03",
+    "primary_workload_rows": 4,
+    "workspace_rows": 2,
+    "asp_refusal_rows": 1,
+    "refused_target_has_no_process_or_command_effects": true
   },
   "previous_bounded_review_revision_375": {
     "es_records_reviewed": 10,
@@ -147,5 +154,76 @@
     "qualifies_launchd_ulf": false,
     "global_absence_established": false,
     "further_collection_requested": false
+  },
+  "previous_companion_before_asp_control_revision_377": {
+    "measurement": {
+      "run": "combined-recovery",
+      "seed": 373,
+      "forks": 45,
+      "execs": 55,
+      "background_native_execs": 16,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 32,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "bc83416a020b671d66e4b2486bf439b3a8716385d33d74c4e9a2cfd7a1a408fe"
+    },
+    "evaluation": {
+      "acceptance_passed": true,
+      "overall_score": 88.7088659642302,
+      "total_records": 2819,
+      "source_counts": {
+        "ecar": 912,
+        "macos_endpoint_security": 113,
+        "macos_unified_log": 4,
+        "zeek_conn": 714,
+        "zeek_dns": 352,
+        "zeek_files": 203,
+        "zeek_http": 15,
+        "zeek_ocsp": 15,
+        "zeek_ssl": 313,
+        "zeek_x509": 170,
+        "zsh_history": 8
+      }
+    },
+    "scope": "Historical companion before the explicit ASP negative control was added; original quiet primary unchanged."
+  },
+  "final_evaluation_repairs": {
+    "native_provenance": "Associate ES/ULF directory provenance only with declared hostname or same-domain FQDN; direct and unknown-source exports remain unattributed.",
+    "temporal_integrity": "Compare timestamp-ordered storyline neighbors without reordering authored input or loosening timing tolerance.",
+    "before_fix": {
+      "acceptance_passed": false,
+      "temporal_integrity": 79.16666666666667,
+      "missing_visible_events": 1
+    },
+    "after_fix": {
+      "acceptance_passed": true,
+      "temporal_integrity": 91.66666666666667,
+      "event_presence": 100.0,
+      "storyline_trace_coverage": 100.0
+    },
+    "preserved_bundle_reevaluated": true,
+    "generation_changed": false,
+    "remaining_nonblocking_findings": [
+      "Two eCAR inventory-exit temporal-order warnings",
+      "Three inferred pivots do not expose a shared rendered identity on the kernel refusal row"
+    ]
+  },
+  "validation": {
+    "errors": 0,
+    "warnings": 4,
+    "intentional_warnings": "Three pre-window setup steps and absent firewall sensor"
+  },
+  "verification": {
+    "evaluation_and_related_unit_tests": 496,
+    "skill_installer_unit_tests": 51,
+    "combined_slow_recovery_test": "PASS",
+    "whole_repository_ruff_check": "PASS",
+    "whole_repository_ruff_format_check": "PASS",
+    "generation_behavior_manifest": "UNCHANGED_AND_CURRENT"
   }
 }

@@ -1,7 +1,7 @@
 # Synthetic recovery companion. The thirty-minute acceptance source is unchanged.
 name: macos-workstation-recovery
 description: Three-hour companion to the fixed two-Mac acceptance workload; live Chrome
-  and SSH work across exact recovery
+  and SSH work across exact recovery, with an app-policy refusal negative control
 status: draft
 draft_id: e58b1160-9cce-4556-9680-c141ba36b9ae
 publisher: davidjbianco
@@ -314,6 +314,18 @@ storyline:
       Chrome Helper'' --type=utility --utility-sub-type=network.mojom.NetworkService'
     supplementary: none
     parent_ref: chrome
+- id: policy-refusal
+  time: +10m8s
+  actor: alex
+  system: MAC-APPLE
+  activity: Observe the bounded ASP refusal without allocating a running child
+  events:
+  - type: process
+    process_name: /Applications/ExampleRefused.app/Contents/MacOS/ExampleRefused
+    command_line: /Applications/ExampleRefused.app/Contents/MacOS/ExampleRefused https://never-executed.example.test/payload
+    parent_ref: chrome
+    outcome: policy_refused
+    supplementary: none
 - id: chrome-browse
   time: +11m
   actor: alex

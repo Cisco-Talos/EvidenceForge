@@ -162,8 +162,10 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         row for row in ulf if row["eventMessage"].startswith("Accepted keyboard-interactive/pam ")
     ]
     publickey = [row for row in ulf if row["eventMessage"].startswith("Accepted publickey ")]
+    refused_image = "/Applications/ExampleRefused.app/Contents/MacOS/ExampleRefused"
+    refusals = [row for row in ulf if refused_image in row["eventMessage"]]
     # Authentication methods retain their actual distinct payloads through one logger.
-    assert len(ulf) == 4 and len(accepted) == len(publickey) == 1
+    assert len(ulf) == 5 and len(accepted) == len(publickey) == len(refusals) == 1
     assert all(
         row["userID"] == 0
         and row["processImagePath"] == "/usr/libexec/sshd-session"
@@ -171,6 +173,42 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         and row["formatString"] == "%.500s"
         for row in (*accepted, *publickey)
     )
+    truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+    attempt = next(event for event in truth["events"] if event["storyline_id"] == "policy-refusal")
+    assert attempt["emitted"] is True
+    attributes = attempt["attributes"]
+    assert attributes["outcome"] == "policy_refused"
+    assert attributes["refusal_cause"] == attributes["execution_stage"] == "unclassified"
+    target_pid = attributes["refused_target_pid"]
+    refused = refusals[0]
+    assert refused["eventMessage"] == (
+        f"ASP: Security policy would not allow process: {target_pid}, {refused_image}\n"
+    )
+    assert refused["processID"] == refused["userID"] == 0
+    assert refused["processImagePath"] == "/kernel"
+    assert refused["senderImagePath"].endswith("/AppleSystemPolicy")
+    assert refused["processImageUUID"] != refused["senderImageUUID"]
+    host_native_records_checked = 0
+    for path in (output / "data").rglob("*"):
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        assert b"never-executed.example.test" not in content
+        if path.name != "macos_unified_log.ndjson":
+            assert refused_image.encode() not in content
+        if path.name == "macos_endpoint_security.ndjson" and (
+            path.parent.name == "MAC-APPLE" or path.parent.name.startswith("MAC-APPLE.")
+        ):
+            for line in content.splitlines():
+                host_native_records_checked += 1
+                record = json.loads(line)
+                processes = [record["process"]]
+                if record["event_type"] == 9:
+                    processes.append(record["event"]["exec"]["target"])
+                elif record["event_type"] == 11:
+                    processes.append(record["event"]["fork"]["child"])
+                assert all(process["audit_token"]["pid"] != target_pid for process in processes)
+    assert host_native_records_checked > 0
     measurements = [
         summarize(path, case, full=True, exit_code=0, text="") for path in (output, control)
     ]
@@ -189,6 +227,8 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
                 "ulf_rows": len(ulf),
                 "ssh_pam_success_rows": len(accepted),
                 "ssh_publickey_success_rows": len(publickey),
+                "asp_refusal_rows": len(refusals),
+                "refused_target_has_no_process_or_command_effects": True,
                 "deterministic_files_compared": len(resumed_files),
                 "checkpoint_hour": status["simulated_hour"],
                 "measurements": [item.model_dump(mode="json") for item in measurements],

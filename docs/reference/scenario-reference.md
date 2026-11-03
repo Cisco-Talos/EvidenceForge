@@ -2047,22 +2047,31 @@ This typed event supports explicit root-owned stages on modeled macOS 27 arm64 w
 A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. The selected native preset adds one launchd fork, xpcproxy exec, setsid and target exec per activation, preserving root credentials, boot audit origin, self responsibility and three non-TTY vnode standards. Its loaded definition retains the frozen environment after file removal/replacement. An example is in `scenarios/macos-persistence-example/native-system-job.yaml`; its provisioning caller starts explicitly during warm-up, outside collection. Authored warm-up entries execute before collection and have no retrospective evidence. Definitions without the preset retain the partial aggregate workflow in `scenarios/macos-persistence-example/scenario.yaml`. GUI agents, other target images, automatic activation/respawn and native launchd Unified Log messages remain outside this preset.
 
 Experimental `output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
-v11 fork/exec/known-exit profile. Complete canonical facts are required; missing entitlements,
-descriptors or exit results omit the affected phase without padding. Existing collection settings
-still govern source visibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
+v11 fork/exec/known-exit profile. Selecting ES defaults `macos_process_coverage` to `complete`:
+every eligible in-window canonical fork/exec must reconcile with native output or generation
+fails with the missing requirements. Missing signing, entitlement or descriptor facts cannot
+silently omit a required start. Explicit `macos_process_coverage: partial` admits a narrower
+diagnostic/lossy request without that guarantee; output filtering cannot silently remove a
+complete request. Exit has its own requirement: unknown completed results remain reported
+limitations and omit native exit without becoming success. Existing collection settings govern
+eligibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
 for remaining gaps and the distinction between decoding and generation admission.
 
 Existing `process` events for qualified literal local-terminal and non-PTY SSH commands can
 produce native fork/exec records without a new authoring field. A quoted shell command argument
 can produce the shell's own exec, but its inner commands are not automatically expanded into
 child events. Author those activities explicitly when needed. Baseline activity uses the same
-process owner; the complete all-process coverage contract remains in progress.
+process owner. The fixed two-Mac workload and its positive-background recovery companion
+pass independent State/native census reconciliation for all modeled starts; this is bounded
+acceptance, not qualification of every application or launch mechanism.
 
 For a fresh regular-app launch on a supported Mac, `process.launch_method: finder` selects the
-bounded xpcproxy-to-app producer. Supply the absolute `.app/Contents/MacOS/<executable>` path
-and a literal command vector; `parent_ref` and unsuccessful outcomes are incompatible. The
-existing local GUI login owns the app's audit identity. Its xpcproxy preimage and app exec share
-one PID/lifetime and one canonical transaction. No native fork is inferred. Native app exec
+bounded complete startup producer. Supply the absolute `.app/Contents/MacOS/<executable>` path,
+a literal command line and `supplementary: none`; `parent_ref` and unsuccessful outcomes are
+incompatible. The existing local GUI login owns the app's audit identity. The producer owns
+the launchd fork, root xpcproxy exec, GUI credential/audit binding and app exec through retained
+phased publication. The launcher/app replacements share one PID/lifetime; the app is not a
+new child of xpcproxy. Native fork comes from the actual canonical fork. Native app exec
 requires complete deployed launcher/app, image-security, descriptor and other source facts;
 unknown signing/entitlement classes stay unavailable.
 
@@ -2071,6 +2080,7 @@ workload. Its narrow image selector also routes baseline launches through the sa
 owner. Ordinary personas are not assigned this test app; a baseline acceptance workload must
 explicitly select it in its effective catalog. Its identifiers, clean environment, timing, installed stat and opaque vnode
 objects are declared model inputs, not private captured values or another application's facts.
-The launcher's own initial activation remains an aggregate coverage obligation. This producer
-does not establish complete coverage for that activation, Dock/Spotlight, arbitrary apps, or
-GUI Unified Log messages. Unselected GUI paths retain their explicit coverage limitations.
+The qualified producer includes the launcher's initial activation; it has no unresolved
+aggregate start in that path. Dock/Spotlight attribution, arbitrary app/signing classes and
+generic GUI Unified Log messages remain outside qualification. Unselected GUI paths retain
+their explicit limits and cannot quietly bypass a complete ES request.

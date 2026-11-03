@@ -210,6 +210,7 @@ def summarize(output: Path, case: Case, *, full: bool, exit_code: int, text: str
             event.storyline_id in intended & eligible_steps
             and event.kind == "process"
             and event.emitted
+            and event.attributes.outcome in {None, "success"}
         ):
             if (
                 event.system,

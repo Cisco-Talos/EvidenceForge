@@ -15,9 +15,14 @@ explicit credentials · workstation state · raw escape hatch
 ## `process`
 
 Fields: `type`, required `process_name`, optional `command_line`, `process_ref`, `parent_ref`,
-`outcome`, `supplementary`, `technique`, and `description`. `command_line` defaults to the process name at
+`outcome`, `launch_method`, `supplementary`, `technique`, and `description`. `command_line` defaults to the process name at
 generation time. Use unique `process_ref` values only when later children need exact lineage;
 `parent_ref` names an earlier durable reference. `supplementary` is `auto` (default) or `none`.
+
+For a qualified fresh Mac app, `launch_method: finder` selects the canonical launchd/
+xpcproxy/app startup with an existing GUI login. It is incompatible with `parent_ref`
+and unsuccessful outcomes. Use the bounded application and metadata requirements in
+the Mac evidence reference; it does not qualify arbitrary applications or launch methods.
 
 ```yaml
 - type: process

@@ -6,6 +6,9 @@ description: "Exact time-window, baseline shaping, observation profile, and outp
 
 Read this reference when the run window, baseline traffic, observation profile, or output changes.
 
+Contents: [time and controls](#time-and-top-level-controls) ·
+[baseline activity](#baseline-activity) · [output](#output)
+
 ## Time and top-level controls
 
 `time_window` supports required `start`, exactly one of `end` or `duration`, and optional `warmup`
@@ -20,8 +23,9 @@ defaults to `30m`.
 `macos_endpoint_security` selection defaults to complete, and runtime format filtering retains
 that request. Complete mode requires lossless process collection over the full simulation
 window and reconciles all canonical Mac starts/execs with native receipts and exported records.
-Unknown metadata or unresolved aggregate starts fail generation. Use `partial` explicitly for
-bounded diagnostic workloads, including current in-window terminal/service/xpcproxy startup;
+Unknown metadata or unresolved aggregate starts fail generation. Qualified in-window
+Terminal/iTerm2, Finder, SSH and selected system-job startup supports complete mode. Use
+`partial` explicitly for a narrower diagnostic/lossy request or legacy aggregate workflow;
 the independent census remains in `GROUND_TRUTH.json` without a complete-coverage claim.
 
 ## Baseline activity

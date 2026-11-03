@@ -8,7 +8,12 @@ unchanged; quiet baseline sampling and positive companions remain separate.
 | Current revision 377 run | Forks / native | Execs / native | Native exits with known result | Unknown exit observations | Background execs |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Thirty-minute primary, seed 373 | 33 / 33 | 39 / 39 | 13 | 13 | 0 |
-| Three-hour recovery companion, seed 373 | 45 / 45 | 55 / 55 | 13 | 32 | 16 |
+| Final three-hour recovery companion, seed 373 | 63 / 63 | 78 / 78 | 13 | 51 | 39 |
+
+The final companion adds the already-supported ASP refusal negative control. It
+is a revised authored fixture; its scoped deterministic workload differs from the
+earlier companion's 45/55 result. That result remains historical in CURRENT-RESULTS.json.
+The quiet primary's source, seed, output and measurements are unchanged.
 
 Unknown counts are ingress coverage observations, not a universal census of
 all terminal results. Start completeness does not imply exit-result completeness.
@@ -30,26 +35,37 @@ filtering preserves identical ES and ULF bytes. Neither source coverage nor reco
 made to pass by removing workload families or weakening the complete ES policy.
 
 Deterministic evaluation verifies both authoritative bundles and passes applicable
-hard gates: primary **88.9058/100**, recovery **88.7089/100**. These scores do not qualify
+hard gates: primary **88.9058/100**, recovery **89.5769/100**. These scores do not qualify
 unimplemented native templates. The small lab retains low noise-volume/diversity
 limitations. The independent whole-process census and required executable/argument checks pass.
-A bounded review of all four synthetic ULF rows confirms the workspace family,
+A bounded review of all five synthetic ULF rows in the final companion confirms the workspace family,
 root sshd-session writer, actual peer tuple, static callsite, sender/build identity
-and canonical public-key fingerprint. No new blind panel or assessment loop was started.
+and canonical public-key fingerprint, plus the ASP kernel writer and distinct sender.
+The refused target has no process, command effects or shell history. No new blind
+panel or assessment loop was started.
+
+The final evaluation exposed two concrete evaluator defects: native source-directory
+provenance was not associated with its declared host, and temporal ordering used
+YAML list order instead of timestamp order. Both are repaired with regression tests,
+without changing source rows, thresholds or timing tolerances. Re-evaluation of the
+same preserved bundle finds all 24 expected-visible events and all 26 source traces.
+Two inventory-exit temporal warnings and three inferred refusal-pivot limitations
+remain nonblocking; the evaluation is not represented as a perfect score.
 
 The process-start and bounded lifecycle phases are complete. Known results render
 exactly; unknown GUI/SSH teardown outcomes remain explicit. The endpoint delivery
 sequence still has one minimum-family evidence gate: **launchd ULF**.
 
-This workload emits four ULF rows: two loginwindow workspace entries, one successful
+The quiet primary emits four ULF rows: two loginwindow workspace entries, one successful
 keyboard-interactive/PAM authentication and one plain-public-key authentication.
+The final recovery companion emits those four rows plus one ASP refusal.
 Seed 373 selects password for non-PTY and public-key for PTY. Both use the same
 native-qualified Info/static-private logger envelope. The public-key payload is
 source-derived from Apple's common OpenSSH authentication/logger implementation,
 not a separate local public-key observation. Canonical type and complete SHA256
 fingerprint are required; certificates and incomplete keys produce no invented row.
-A separate real-engine password-intent PTY check also passes. The separately qualified
-ASP policy-refusal source remains available.
+A separate real-engine password-intent PTY check also passes. The ASP refusal does
+not classify the policy cause or fork/exec stage and never becomes a successful exec.
 
 On November 3 the user chose ordinary SSH daemon verbosity and left VERBOSE
 session-start/close messages gated. Collector verbosity alone cannot enable them.

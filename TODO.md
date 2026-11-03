@@ -86,7 +86,8 @@ without turning `TODO.md` back into a high-conflict work journal.
   existing ES-only references do not close those gates. Ordinary-verbosity SSH accepted
   authentication is implemented; the user retained that verbosity and left VERBOSE
   session messages gated on November 3. Launchd ULF remains unqualified after a
-  controlled zero-row reference; no diagnostic-file source is implicitly added.
+  final corrected capture with passing controls/cleanup and zero qualifying rows.
+  The finite collection sequence has ended; no diagnostic-file source is implicitly added.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
@@ -585,10 +586,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - The active generation target has moved to **macOS 27 arm64** through a selectable
   profile catalog; all unqualified Mac targets fail validation independently of selected sources.
   Human-reviewed private shape evidence admits bounded v11 fork/exec/known-exit projection.
-  Unknown SSH helper tables, PTY command generation, GUI launch relationships and unspecified terminal outcomes still
-  limit ordinary native command coverage; expanding those canonical producers is follow-up
-  work, not an implicit claim of complete native ES coverage. See the
-  [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
+  The fixed local/Terminal/iTerm2/Finder/Chrome/SSH/selected-system-job workload now passes
+  complete independent process-start census, filtering and exact recovery. Unknown terminal
+  outcomes, unqualified app/launch families and launchd ULF remain explicit limits. See the
+  [current delivery results](scenarios/macos-workstation-acceptance/REPORT.md) and
+  [profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
 - [x] Implement bounded macOS 27 native app-policy refusal through explicit
   `process.outcome: policy_refused`, with canonical target PID, boot-owned kernel writer and
   distinct sender facts. Existing pre-child/returning-exec semantics remain intact. Exact

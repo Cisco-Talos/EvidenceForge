@@ -450,5 +450,14 @@ reference records remain private and are never repository fixtures.
 
 The internal Finder relationship and authenticated xpcproxy-to-app exec contracts now preserve
 GUI audit adoption and process-group changes through canonical state and native publication.
-They do not yet convert generic authored/baseline GUI births into complete native executions.
+The qualified fresh Finder, terminal and Chrome producers own their complete startup phases;
+other app shapes, Dock/Spotlight attribution and existing-app new windows remain gated.
 See the [bounded Finder reference and remaining scope](docs/design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).
+
+ES is the process-start source; ULF contains selected message families and is not a
+process inventory. Complete ES coverage requires every eligible in-window canonical fork/exec
+to reconcile or generation fails. The [current delivery results](scenarios/macos-workstation-acceptance/REPORT.md)
+record 33 forks/39 execs in the quiet primary and 63/78 in the positive-background recovery
+companion, with all 22 deterministic files equal through exact resume. Unknown exit results
+remain explicit. Launchd ULF stays gated after a controlled valid-empty reference; its process
+evidence remains in ES, and native collection has stopped under the agreed finite plan.

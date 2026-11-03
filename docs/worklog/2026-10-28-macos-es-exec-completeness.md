@@ -3246,3 +3246,81 @@ Production code, revision 377, scenario inputs and generated acceptance bundles
 are unchanged. This documentation-only reconciliation needs no new behavioral
 suite, generation, evaluation or assessment loop. Prior 161 diagnostic tests and
 combined exact recovery/evaluations retain their stated evidence and limits.
+
+## 2026-11-03 — Final supported-family acceptance and current authoring guidance
+
+Following the user's instruction to continue, the remaining independent delivery
+work is complete. No private kit, native record, installed application or live
+system service was inspected. No collector, probe, app, sudo command, native job,
+new blind panel or reference research was started. The final launchd valid-empty
+result and its stopping rule remain closed; launchd ULF is still unqualified.
+
+Current authoring guidance had concrete contradictions: it still described Mac
+SSH ULF and PTY generation as unavailable, required partial coverage for qualified
+startup, and described the qualified Finder launcher's initial activation as an
+unresolved aggregate. The canonical Mac skill reference now describes the actual
+source IDs, complete/partial coverage, native terminal/Finder/Chrome/SSH/job
+producers, explicit outcomes and source limits. Scenario/baseline references,
+format/scenario documentation, README and capability summary agree. Dated
+engineering history remains explicitly historical. Only the project's generated
+ChatGPT skills were refreshed through the installer; global skills were untouched.
+
+The combined recovery companion had omitted the already-supported ASP refusal
+family from the minimum-ULF acceptance. It now has one explicit negative control
+under the live Chrome initiator. Its reserved target PID must have no process,
+fork, exec or exit; the attempted image/URL must produce no eCAR process, history
+or command effects. The single ULF row has kernel PID/UID zero, the distinct
+AppleSystemPolicy sender and the exact canonical target path/PID. Cause and
+execution stage remain unclassified. The measurement oracle now requires an exec
+only for successful process intent, with regressions for denied, failed-exec and
+policy-refused attempts. It still rejects missing successful starts.
+
+The original thirty-minute primary is unchanged. The revised three-hour companion
+is explicitly a different authored input, not a relabelled old measurement. Its
+scoped deterministic activity yields **63 forks/78 execs**, including **39 background
+execs**, all matched to independent State/native identities with no aggregate
+births, missing image/argument roles, unrealized steps or authored phase gaps.
+There are 13 known native exits and 51 explicit unknown-exit observations; those
+unknown results are not promoted to success. All **22 deterministic files** match
+uninterrupted generation after public suspension/verification/exact resume, and
+native ES/ULF filtering preserves identical bytes. Five ULF rows cover workspace
+entry, PAM/plain-key acceptance and ASP refusal. Launchd ULF is not fabricated.
+
+The final deterministic evaluation exposed two actual evaluator defects. First,
+the ingestion engine retained source_instance but never associated host-scoped
+native exports with their declared system, so the correct actorless kernel
+refusal could not enter the host/time trace index. The fix accepts only exact
+declared hostname or its scenario-domain FQDN, case-insensitively; direct exports,
+unknown/sensor folders and a same-prefix host in a different domain remain
+unattributed. Native fields are unchanged. Parser-to-index regressions retain
+host/target/writer/format/parse negative controls and cover both native formats.
+Second, temporal integrity imposed YAML list order even when lifecycle-grouped
+entries declared a different timestamp order. Only that scorer now compares
+chronological neighbors, preserves original diagnostic indices/input order, and
+retains the existing time tolerance and premature-evidence failure. All six
+permutations of a timed three-event list pass, while real early evidence fails.
+
+The first final-companion evaluation failed temporal integrity at 79.1667 and
+missed the ASP trace. After these code fixes, re-evaluation of the **same preserved
+bundle** passes every hard gate at **89.5769/100**, with **24/24 expected-visible
+events**, **26/26 source traces**, 408/408 causal pairs and 30/30 reconciliation
+assertions. Temporal integrity is 22/24 (91.6667); two inventory-exit order warnings
+and three refusal-pivot limitations remain nonblocking and are reported, not
+hidden by timing/threshold changes. The original primary also re-evaluates with
+the fixed evaluator: PASS, unchanged **88.9058/100**, 346 records and 33/39 starts.
+The old pre-control companion's 45/55 measurement and evaluation remain historical
+in CURRENT-RESULTS.json. No generated bundle or native records are committed.
+
+Verification: **496 evaluation/related unit tests**, **51 skill-installer tests**
+and the **combined slow recovery test** pass. Scenario validation has zero errors
+and the same four intentional warnings (three pre-window setup steps and no
+firewall sensor). Whole-repository Ruff check/format and diff checks pass. The
+generation surface is unchanged: revision **377**, digest
+`3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8`.
+No product-version bump or repeat generation was needed for evaluator repairs.
+
+Phases 1 and 2 are complete for the agreed bounded workload. Phase 3's implemented
+families and phase 4's supported-family acceptance are complete. Original full-scope
+phases 3/4 remain explicitly incomplete solely because launchd ULF has no qualified
+message/envelope. The user has not waived that family; it remains gated without
+another collection request, alternative source, catalog expansion or assessment loop.

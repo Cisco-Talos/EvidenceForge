@@ -1,6 +1,27 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-11-01)
+## Current generation admission (2026-11-03, revision 377)
+
+This table describes current capabilities. The dated implementation history below
+retains earlier gates as history; it must not override this summary or the current
+[delivery results](../../../scenarios/macos-workstation-acceptance/REPORT.md).
+
+| Area | Current supported scope | Explicit limit |
+| --- | --- | --- |
+| Generation target | Explicit macOS 27 arm64 workstation | All other unqualified Mac targets reject independently of output; historical decoding is separate. |
+| Complete process starts | Independent State/native census with actionable rejection, lossless collection and output/recovery equivalence | Bounded workload acceptance; arbitrary app/launch mechanisms are not implicitly qualified. Primary 33 forks/39 execs; positive-background companion 63/78, with 39 background execs. |
+| Native startup producers | Fresh Finder reference/Chrome, Apple Terminal, iTerm2 3.7.6, SSH client/non-PTY and PTY receiver/commands, selected root/system jobs | Existing-app new windows/restoration, Dock/Spotlight attribution, additional helpers and complex shell plans retain gates. |
+| ES events | v11 fork, exec and explicit known exit; exact signing/audit/job-control/argv/environment/FD ownership | Unknown facts are not padded; generic GUI/SSH terminal results remain unknown. Native file-event generation is not enabled by historical file-event decoders. |
+| Chrome | Fresh main and renderer, generic GPU and network helper roles with independent deployments | Not every auxiliary helper, exact private-build parity, browser IPC or helper-owned network attribution. |
+| Unified Log | Workspace-method entry, bounded ASP refusal, observed SSH PAM success and source-derived plain-key success through the qualified common logger | No generic app/service ULF. Launchd's final bounded capture passed controls/cleanup with zero rows; collection has ended and the source stays gated. VERBOSE SSH session messages remain gated under ordinary daemon verbosity. |
+| Other correlated evidence | eCAR, explicit Bash/zsh interactive history and eligible existing network/server sources | No Mac SMB server, native archives/APFS image, OpenBSM or validated native SIEM mapping. |
+| Acceptance | All 22 deterministic files match through combined exact resume; native ES/ULF filtering agrees; both authoritative evaluations pass | Original full ULF scope remains incomplete due to launchd qualification. No repeated collection/panel loop or general authenticity claim. |
+
+The [finite delivery plan](endpoint-delivery-acceptance.md) and
+[current worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md) distinguish
+implemented families from unqualified sources and preserve the evidence basis.
+
+## Historical generation-admission notes (through 2026-11-01)
 
 November 1, revision 370: the human's successful v3 PTY fixed report establishes the shared
 receiver prefix plus controlling-terminal shell startup and genuine foreground command fork,

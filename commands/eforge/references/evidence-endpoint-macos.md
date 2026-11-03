@@ -1,166 +1,209 @@
 ---
-description: "Experimental modeled macOS workstation coverage and evidence boundaries"
+description: "Current macOS 27 workstation sources, authoring contracts and evidence limits"
 ---
 
-# macOS workstation evidence
+# Modeled macOS workstation evidence
 
-**Contents:** Platform and collection limits · shell history · native process metadata ·
-[system launch-item stages](#explicit-system-launch-item-stages) · app-policy refusal ·
-native process coverage
+Contents: [sources](#select-sources-by-the-evidence-needed) ·
+[complete process starts](#complete-process-starts-and-explicit-limits) ·
+[launch families](#supported-launch-families) · [SSH](#ssh-clients-receivers-and-commands) ·
+[system launch items](#explicit-system-launch-item-stages) ·
+[Unified Log and outcomes](#unified-log-families-and-policy-outcomes) ·
+[other evidence](#other-evidence-and-interpretation)
 
-This branch is implementing macOS 27 arm64 workstation evidence. Running EvidenceForge or Studio on a Mac is a separate capability. The foundation and bounded history profile are experimental; complete Mac-native investigation coverage is not yet available.
+The active generation target is **macOS 27, arm64, workstation**. Use existing system
+fields (`os`, optional `os_build`, `architecture`, `type`), user placement, software
+deployment and collection settings. Every other unqualified Mac target fails validation,
+including macOS 26, independently of selected output formats. The profile catalog can
+support more targets later; historical decoder support does not enable generation.
 
-Use existing `environment.systems` values: `os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`, user placement, roles/services and software deployment. Use existing source deployment, collection, observation/timing and application overlay semantics. There is no parallel Mac configuration block. Preserve older scenarios and published packs; add new pack versions for changed defaults.
+Running EvidenceForge or Studio on a Mac is a separate capability. Generation uses
+invented catalog/state values and never queries the generator host's applications,
+processes, accounts or logs. No collector runs on that host during generation.
 
-Select eCAR for modeled endpoint process/session/flow evidence. Existing network, firewall, IDS, proxy, mail and server evidence can describe Mac interactions only when routing and sensor visibility permit it. Windows Security/Sysmon and Linux syslog remain local to their actual owners. Native Mac `logind` is not Linux `systemd-logind`.
+## Select sources by the evidence needed
 
-The current frozen launch policy gives each modeled normal-user local GUI login one canonical
-audit origin, separate from terminal POSIX sessions/groups. Explicit GUI user launches consume
-that origin and child fork/exec inherits it; a fresh GUI login gets a new audit session. Older
-policies and unknown existing sessions retain unknown audit facts. Bounded human-reviewed
-iTerm2 identity comparisons support these relationships; they do not qualify GUI startup log
-messages or responsible-process relationships. Complete native GUI command export remains
-conditional on those independently owned process facts.
+| Source ID | Current generated evidence | Important boundary |
+| --- | --- | --- |
+| `macos_endpoint_security` | Message-v11 fork, exec and known exit records | The process-start source. Complete canonical metadata and eligible collection are required. |
+| `macos_unified_log` | Loginwindow workspace-method entry, bounded ASP policy refusal, accepted SSH PAM/plain-public-key authentication | Selected message families, not a process inventory. Launching an app or service does not automatically produce ULF. |
+| `ecar` | Correlated process, credential, session, flow and file observations | Shared modeled endpoint facts; do not describe this as Apple's native ES export. |
+| `zsh_history` | Live interactive zsh command submissions | Extended incremental history, single-line ASCII, zero duration; submission does not prove command success or a child process. |
+| `bash_history` | Submissions from an explicitly modeled interactive Bash shell | Not a substitute for zsh or noninteractive process logging. |
 
-`zsh_history` writes `<host>/zsh_history/<username>.zsh_history` as `: epoch:0;command`. Its initial collection profile models EXTENDED_HISTORY with incremental append at interactive command submission; zero duration is not measured execution time. Only a live, explicitly interactive `/bin/zsh` shell in the owning session can submit history. Process creation alone does not imply history. Mac Bash uses the existing `bash_history` format only for an explicitly modeled interactive `/bin/bash` session. Noninteractive commands, multiline/metafied zsh records, history erasure and delayed session-exit history persistence remain outside this profile. [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History) describe the native semantics.
+Existing network, firewall, IDS, proxy, mail and server sources describe Mac interactions
+only with the corresponding routing, deployment and sensor visibility. Windows Security/
+Sysmon and Linux syslog remain local to their actual owners. No OpenBSM, native logarchive,
+APFS image, general native filesystem-event or Mac SMB-server source is implemented.
 
-Application availability and implemented variants are distinct. Unresolved Mac variants are unavailable rather than substituted with Linux/Windows paths. Initial managed variants have a conservative 2026-10-15 catalog-snapshot availability floor; host-bundled entries follow the modeled OS build. Paths and command pools come from catalog data, never the generator host or personal inventories. Chrome’s profiled renderer/GPU/utility helpers use existing application `children` and spawn-rule fields. The GUI baseline binds a modeled subset to the installed browser and owning session; counts/delays are synthetic profile values. Release overrides must also update versioned helper paths. Browser IPC and helper-attributed network traffic are not inferred.
+Use `eforge info formats --json` to inspect the CLI actually being used. The current
+checkout exposes both native Mac format IDs above and `zsh_history`. Do not conclude
+that an older installed CLI has this branch's capabilities from its product version alone.
+Selecting a format or output target does not establish SOF-ELK or Splunk ingestion support.
 
-The bounded native Chrome producer accepts a fresh `launch_method: finder` main
-and exact direct children with `parent_ref` naming that browser and
-`supplementary: none`. The qualified child invocations are renderer
-(`--type=renderer`), generic-helper GPU (`--type=gpu-process`) and generic-helper
-network service (`--type=utility --utility-sub-type=network.mojom.NetworkService`).
-Use the frozen catalog's exact paths. The producer adds its modeled
-`--seatbelt-client` argument and supplies the matching canonical pipe; do not
-invent descriptor numbers in authored command text. Each helper has native fork
-and exec evidence and shares eCAR's identities. Its signer/entitlements come from
-the independently declared helper release, not the main app. Unknown child
-invocations reject. This is a bounded helper model: it does not infer Crashpad,
-alerts, the dedicated GPU executable, every Chrome-created auxiliary process,
-browser IPC, helper-attributed connections or native Unified Log app messages.
-The macOS 27 reference's private installed build differed from the frozen catalog;
-no exact release parity or universal browser fidelity is claimed.
+## Complete process starts and explicit limits
 
-Optional application-platform `code_signature` records explicit main-executable `signing_id` and optional/null `team_id`; existing architecture/deployment fields still apply. Unknown signing metadata stays absent, and helpers do not inherit their owner's signer. CodeDirectory hashes are independently modeled per release/architecture, separate from content hashes. Optional `executable_format: mach_o` independently identifies a known main image under the existing explicit arm64 deployment; it derives a synthetic release-scoped UUID without inferring format from signing or paths. Missing format stays unknown and helpers do not inherit image metadata. The native audit PID version is owned by process state across creation, exec and checkpoint recovery; it is not the PID or execution ordinal. These foundations do not establish complete native ES process metadata or trust-policy outcomes.
+Selecting native ES defaults `macos_process_coverage` to `complete`. With eligible,
+lossless collection, every modeled in-window fork and successful image activation must
+reconcile with independently retained canonical State and native output, or generation
+fails with the missing requirements. Multiple execs in one PID remain distinct records.
+Unsupported launches cannot quietly succeed with missing native process output.
 
-Mac-local file populations use existing `environment.storage.file_sets` with an absolute POSIX `root`, for example `/Users/alex/Documents`. This supplies synthetic file metadata and does not make the Mac an SMB server. APFS aliases/case policy remain pending. Experimental mounted SMB clients reuse `environment.storage.mappings`: select `client_access: auto` and `path_style: auto` or `mounted`, with an eligible mapping. Automatic Mac mount presentation is `/Volumes/<mapping-id>`; this is a synthetic allocation policy, not a claim about Finder naming. A mapping shared by Linux and Mac clients needs an explicit common `mount` or separate audience mappings. Native per-operation actors produce eCAR file evidence; the SMB transport has no invented user-process owner. Windows and Samba servers retain their own evidence. Native Mac SMB log messages remain unavailable.
+Use `macos_process_coverage: partial` only for an explicitly narrower diagnostic or
+lossy collection request. It does not claim the complete guarantee. Runtime filtering
+must preserve a complete request rather than silently removing required ES output.
+Processes already running before collection do not get retrospective start records.
+Builtins, reuse of an existing process, failed exec and policy refusal retain their
+distinct semantics; none should acquire a fabricated successful exec.
 
-Mac clients can use the shared `ssh_session` bundle against a modeled Linux or Mac receiver. The existing `source_ip` identifies the Mac; the event's `system` remains the receiver. An already active local GUI session can own the catalog-backed `/usr/bin/ssh` client, its Terminal/login/zsh ancestry and interactive history. Both terminal variants support complete native client coverage, including the verified integer entitlement and runtime metadata. Client evidence must fit before transport and remain alive through its close. Missing session/readiness or an unsupported executable leaves transport unattributed; it does not invent a login or convert SCP into SSH. Experimental Mac receivers use the same `ssh_session` event on an `architecture: arm64`, `type: workstation` target with `services: [ssh]`. Place the actor locally through existing `assigned_user` or `primary_system`; root/service-account login is unavailable. The bundle owns helper startup, audit credentials, shell readiness, transport and close. An existing paired `logoff` can set the receiver close time; the retained SSH continuation executes the close and survives checkpoint recovery. The current non-PTY receiver supports complete native startup: six actual forks, six execs and three known short-helper exits, including launchd/xpcproxy and the distinct fork-only children. Complete Mac-to-Mac CLI, output filtering and checkpoint/resume pass. Generic final worker exit results remain unknown. Type 10 `logon` is not the Mac authoring interface. The qualified PTY extension is described below; SCP/SFTP receiver helpers and native Mac SSH Unified Log messages remain unavailable.
+`GROUND_TRUTH.json.macos_native_coverage` and its Markdown summary distinguish the
+independent process census, qualification blockers, filtered/dropped/out-of-window
+observations and authored activity. Exit has a separate obligation: an explicit completed
+result is required. Unknown GUI/SSH teardown is reported and omits native exit; it never
+becomes success. The current fixed workload reconciles 33 forks/39 execs, and its positive
+background recovery companion 63/78. This is bounded workload acceptance, not every app.
 
-The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
-build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
-output selection. The catalog can hold multiple profiles; historical wire decoders remain
-available independently of generation admission.
+Complete native facts include the exact execution, parent/responsible/audit identities,
+installed image/signature, runtime security, thread, cwd, argv, ordered environment and
+FD table. The v11 entitlement profile admits explicit null or bounded flat objects with
+Boolean, signed-64-bit integer, string or string-array values, including an explicit empty
+object. Unknown is distinct from empty/null. Old frozen profiles retain their narrower
+capabilities. Public source rows must render supplied canonical facts rather than invent
+missing descriptors, metadata, outcomes or identities.
 
-Set `pty: true` on the receiver's `ssh_session` for the qualified initial zsh PTY. The shared
-startup allocates one controlling terminal; three standard vnodes belong to that terminal.
-Later literal installed `process` commands with `supplementary: none` use actual fork,
-foreground setpgid and exec, preserving the shell's POSIX session, audit origin and receiver
-responsibility. Both local terminal apps can own the source client. Complete CLI/filtering,
-fault recovery and checkpoint/resume are verified. Omission retains non-PTY channel pipes.
-PTY effects, pipelines/redirections, nested execution plans, background jobs and alternate
-login shells remain unsupported; unsupported commands reject before a child is allocated.
-No additional Unified Log family or generic successful teardown result is inferred.
+## Supported launch families
 
-Select `macos_unified_log` for modeled loginwindow workspace-method entry, bounded ASP refusal and bounded SSH PAM/plain-public-key authentication. Workspace method entry does
-not establish desktop completion. Select `macos_endpoint_security` for qualified v11 fork,
-exec and known exit phases. Complete canonical metadata is required. Exec additionally needs
-explicit known entitlements and complete descriptors. Qualified external SSH commands without
-a PTY receive three channel-owned pipes at exec; the qualified non-PTY receiver supplies its
-shell/helper descriptor tables. Frozen legacy profiles retain their unknown tables and omit
-unqualified native exec rows. Known forks and eCAR image replacement remain available. Unknown exit outcomes
-omit native exit. Natural completion of the exact modeled invocations `/usr/bin/id`,
-`/usr/bin/sw_vers`, and `/usr/bin/sw_vers -productVersion` supplies a declared nominal zero result.
-Session teardown, deadline truncation, additional arguments and unlisted commands do not inherit
-that result. Explicit completed normal/signal results can also use the canonical termination
-owner; a signal request or successful launch alone does not establish terminal status.
-No native host collector runs. Unqualified entitlement shapes and full hashes remain unavailable.
-Explicit `process.outcome: policy_refused` supports the bounded kernel app-policy refusal in Unified Log; its cause and target execution stage remain unclassified. Other Unified Log families remain unavailable. See the current format contract and profile worklog.
+Apple Terminal (`macos-terminal`) and iTerm2 (`macos-iterm2`) share a retained native
+startup/command owner, with independent signing and helper metadata. Both include the
+launchd fork, xpcproxy exec, GUI audit adoption and same-PID app exec. Terminal then forks
+login and initial zsh: three forks/four execs in total. iTerm2 3.7.6 adds iTermServer and
+ShellLauncher: four forks/six execs. Login's setuid/drop, controlling terminal, job control
+and app-specific descriptor layouts are explicit. Existing active shells are reused.
+New windows/restored jobs in an already running app remain separately unsupported.
 
+Select the terminal through existing `environment.deployment_overrides.user_applications`
+assignments. If both are eligible, Apple Terminal is the stable default. Profiled literal
+local commands use the same canonical process owner and can emit ES, eCAR and history.
+Quoted shell command text may qualify the shell's own exec; inner commands are not
+automatically expanded. Explicitly author the child activity when supported. Pipelines,
+redirections, substitutions, scripts and effect-bearing commands need their own qualified
+execution/descriptor plans; command text alone is not one.
 
-The internal parser recognizes the bounded history profile and selected native exports. `eforge eval` discovers explicitly named `macos_unified_log.ndjson` and `macos_endpoint_security.ndjson` files, including per-host directories. Valid Unified Log completion objects are excluded from event counts. The ES reader admits historical v6 fork/exec/create/rename, v9 exec/exit, v10 fork and qualified v11 fork/exec/exit; unsupported pairs fail validation. Native roles, IDs, nanosecond text and privacy markers remain intact; normalized evaluation timestamps use microseconds. Directory provenance does not establish a native hostname or username. These readers validate structure and timestamps; complete native lifecycle and external ingestion checks remain open. The bounded Unified Log workspace-entry and qualified modeled v11 process sources are registered; complete nonempty CLI acceptance remains separate. Selecting an output target does not establish SOF-ELK® or Splunk ingestion compatibility; no native Mac SIEM mapping is validated yet. Keep third-party records/derived exports ignored and author synthetic examples independently. Personal findings are not templates or fixtures.
+A fresh supported GUI app can use `process.launch_method: finder`, its installed absolute
+`.app/Contents/MacOS/<executable>` path, a literal command line and `supplementary: none`.
+An existing local GUI login owns audit identity. This producer owns the launchd fork,
+root xpcproxy exec, GUI credential/audit transition and app exec. The latter phases share
+one PID/lifetime; the app is not an invented child of xpcproxy. `parent_ref` and unsuccessful
+outcomes are incompatible with this fresh-launch contract. Qualified reference-app and
+Chrome producers use it; arbitrary apps/signing classes and Dock/Spotlight attribution
+remain outside qualification. Every accepted start still has to satisfy complete coverage.
 
-Internal POSIX exec publication now has an eCAR `PROCESS/MODIFY` extension (`operation=exec`) preserving one PID/lifetime and previous/current execution IDs. This is not an upstream CAR action or a new authored event. Do not add `process_exec` to scenario YAML or infer native ES output from this capability; Native-source integration remains independently gated.
+Chrome supports a fresh Finder main and three bounded direct helper roles: renderer
+(`--type=renderer`), generic-helper GPU (`--type=gpu-process`) and generic-helper network
+service (`--type=utility --utility-sub-type=network.mojom.NetworkService`). Use the frozen
+catalog's exact executable paths and `parent_ref` naming the browser, with
+`supplementary: none`. The producer owns the matching seatbelt argument and canonical
+pipe; do not invent FD numbers in command text. Helpers have their own deployed
+signer/entitlements. Crashpad, alerts, the dedicated GPU image, arbitrary helpers, browser
+IPC and helper-attributed connections remain outside this model. The private reference's
+installed release differed from the frozen catalog; exact build parity is not claimed.
 
-`process_audit_bind`, `process_privilege_drop` and `process_service_drop` are internal authenticated credential transitions, also rendered through the EvidenceForge eCAR `PROCESS/MODIFY` extension. They preserve execution identity and distinguish privileged audit adoption, authenticated-user credentials and pre-authentication `_sshd` service credentials. Service drops retain unknown audit origin. Do not author these event types or interpret them as native Endpoint Security callbacks. The bounded SSH bundle owns these transitions; they cannot be authored separately.
+## SSH clients, receivers and commands
 
-Internal `process_fork` renders eCAR `PROCESS/CREATE` with `operation=fork` and explicit parent/child execution IDs. It requires a State-owned fork; generic launches do not imply this operation. Do not author `process_fork` or infer native ES support from it.
+Use `ssh_session` on the receiver with the existing `source_ip` to identify a modeled
+client. A live Mac GUI/terminal session can own catalog `/usr/bin/ssh`, ancestry and
+interactive history, including either terminal variant. Client observation fits before
+authentication and remains alive through transport close. Missing source ownership must
+not invent a session or PID. Mac receivers require `services: [ssh]` and a local actor
+placed through existing `assigned_user` or `primary_system`; root/service-account login
+and SCP/SFTP receiver helpers are unavailable. Type-10 `logon` is not the authoring interface.
 
-Internal POSIX termination can retain an explicit exit code or termination signal/core indication. This is a terminal result, not proof inferred from a signal request, and it introduces no scenario field. Existing callers retain unknown outcomes. Bounded Darwin wait-status conversion does not itself establish a completed outcome; only explicit known results qualify for the active v11 exit profile.
+The shared bundle owns transport, authentication, helper/credential transitions, readiness,
+commands and close. Non-PTY startup has six real forks, six execs and three known short-
+helper exits, including the launchd/xpcproxy prefix and distinct fork-only children.
+An existing paired `logoff` can set the close deadline; the retained SSH continuation
+performs closure through interruption and checkpoint recovery.
 
-Internal process planning can retain an exact POSIX argument vector. Unqualified scenario or catalog command text does not imply that vector. The qualified direct-shell command producer parses admitted literal arguments once and canonicalizes their display quoting; unresolved shell expansion retains aggregate semantics. Fork inherits known arguments; exec replaces them, and missing new arguments remain unknown. Launchd activation requires the existing loaded definition's vector. No new authoring field or native ES exec profile is enabled.
-
-Internal POSIX job control now owns explicit process-group and session lifetimes separately from login/audit IDs. Fork inherits known membership, exec preserves it, and groups/sessions can outlive their leaders. Authenticated membership transitions have an eCAR `PROCESS/MODIFY` extension (`operation=job_control`) with distinct actor/target roles and previous/current PGID/SID. This is not a scenario event or a new configuration field. Mac terminal login now creates an explicit POSIX session/group; its shell and child commands inherit it. The bounded modeled boot profile now establishes separate POSIX sessions/groups for PID 1 and its direct boot jobs. New SSH receiver startup separates shell session creation from exec; monitor/helper and shell sessions remain distinct from audit/login identity. This is modeled ownership, not native macOS 26 capture validation. Internal launchd unload can atomically close an exact known group in child-first order; unknown membership retains its rejection guard; known outside-group children survive through exact same-transaction system-parent adoption. Loaded jobs retain their exact group after leader exit and binding expiry, including recovery. The internal bound-leader exit adapter preserves the loaded job and surviving same/outside-group children; later unload still selects only the retained group. It does not schedule respawn. An internal loaded-job launch adapter consumes the registered argument vector and creates a distinct group/session; it does not infer activation or restart. The bounded authored system-job workflow is described below. Do not infer membership from ancestry or advertise native ES metadata from this capability.
-
-Internal POSIX process plans can also carry an explicit ordered launch environment. Fork inherits it; exec replaces it; missing values remain unknown and an empty vector means explicitly empty. Values are not expanded, converted to a mapping, or copied from the generator host. This metadata primitive adds no scenario field, mutable environment model, or native ES output capability.
-
-Internal POSIX identities retain exact original/current parent lifetime references, separate from numeric PPIDs. Fork identifies its immediate parent and exec preserves these facts; old records remain unknown. Exact parent-exit adoption preserves the birth parent and historical observations while moving current ownership to an explicitly modeled live same-host PID-1 process. Group unload adopts surviving outside-group children without changing their group/session or credentials. Unknown parentage remains unsupported. Internal State snapshots now freeze exact parent and responsible executions together. The bounded native identity projection requires complete audit/parent/group facts; it does not complete a native ES process record. Responsibility is explicit and separate from ancestry, with self fallback only for known absence or proven exit; missing or expired facts cannot be filled from a reused PID. No authored field is added.
-
-Internal runtime artifact publication can retain explicit regular-file stat metadata and Mach-O signer/image identity. Runtime image-security flags belong to each execution, independently of static signing; missing facts remain unknown. The dispatcher checkpoints explicit collector connections, counters, kernel loss and export decisions. These internal owners do not enable native ES generation or infer metadata from the generator host.
-
-The bounded authored policy interface is `process` with `outcome: denied`, an absolute `process_name`, and `parent_ref` naming an earlier same-host/actor caller. It rejects before allocating a child and suppresses automatic command effects; existing precursor activity remains. No child `process_ref` is allowed. Ground truth identifies the modeled denial, with no native Gatekeeper/ES evidence. Use `outcome: exec_failed` for an exec call returning failure in the referenced existing process. It preserves the original image/lifetime/credentials/threads/descriptors, leaves errno unknown, and suppresses successful execution effects. Its ground-truth reason is `exec_failed_caller_preserved`; a later exit remains separate. Neither form models a prompt or irreversible post-replacement failure. Ordinary process events retain their existing success default. The bounded authored system-job workflow is described below.
+`pty: true` qualifies initial zsh startup and literal installed foreground commands.
+One controlling terminal owns its standard vnodes; command groups remain distinct from
+the shell's POSIX session and audit origin. Non-PTY commands use channel-owned pipes.
+Use later `process` events with `supplementary: none`. Additional login shells, complex
+shell plans, background jobs and unsupported helper families remain gated; unsupported
+commands reject before allocating a child. Generic final-worker results remain unknown.
 
 ## Explicit system launch-item stages
-For native ES startup, select write-stage `launch_profile: root_xpcproxy_v11`, installed
-`/usr/bin/true` or `/usr/bin/sw_vers` and RunAtLoad false. This explicit root/system preset freezes its configured
-clean environment into the loaded definition and publishes launchd fork, xpcproxy exec,
-setsid and target exec through the shared phase owner. Known exit is explicit. Other images,
-domains and triggers retain their gates. The complete example is
-`scenarios/macos-persistence-example/native-system-job.yaml`; its caller starts explicitly
-before collection. The legacy example below retains partial aggregate activation.
 
-`macos_launch_item` now authors the bounded root/system-domain workflow on arm64 Mac workstations. Supply an earlier root `process_ref` as `caller_ref` and an explicit label. `write` requires a `/Library/LaunchDaemons/*.plist` path, program, exact argument vector and positive modeled byte size; `bootstrap` consumes that retained file. `activate`, `exit` and `unload` address the loaded label. `remove` withdraws the current file placement without unloading the job. A later activation can therefore consume a previously loaded definition after removal.
-Write, registration, activation, completed leader exit, group unload and file removal are distinct operations. No stage implies the next. `run_at_load` is retained definition metadata; activation must still be authored. Exit permits an explicit normal `exit_code`; unload uses the existing completed group-close contract without inventing a signal or exit code. The bounded profile requires an explicit unload before scenario end. GUI LaunchAgents, automatic KeepAlive/timer/socket triggers and native plist/artifact generation remain unsupported.
-The file and process stages produce canonical eCAR evidence subject to existing collection policies. Registration and dormant unload have no admitted native source and are identified as unobserved in ground truth; they do not become fabricated launchd or ES messages. Activate may name a `process_ref` for subsequent process relationships. New file replacements require increasing `version`; loaded definitions remain independent of later file replacement. See `scenarios/macos-persistence-example/scenario.yaml` for an executable synthetic example. This new typed event adds no top-level Mac configuration or management flags.
+`macos_launch_item` provides root/system `write`, `bootstrap`, `activate`, `exit`, `unload`
+and `remove` stages. Supply an earlier root `process_ref` as `caller_ref`, an explicit label,
+and a `/Library/LaunchDaemons/*.plist` path for write. Write includes program, exact
+arguments and positive modeled byte size. Registration is distinct from activation; removal
+of a file does not unload its retained definition. Replacement needs an increasing version.
+Exit may supply a known `exit_code`; unload closes the retained group without inventing an
+unknown terminal status. Explicit unload before scenario end is required.
 
-Explicit collector connections now retain an exact modeled process execution and completed close time. Live admission and counter commit reject exited or replaced executions; completed retries and delayed observations preserve the original owner. Legacy unowned profiles remain unknown. This internal API does not provide a native sink, infer every process's ES-client flag, or enable ES generation. The persistence workflow now shares the normal runtime content owner; Mac root artifacts use system ownership, and file trace matching includes the exact writer lifetime.
+For native ES startup select write-stage `launch_profile: root_xpcproxy_v11`, installed
+`/usr/bin/true` or `/usr/bin/sw_vers`, and RunAtLoad false. The loaded definition freezes its
+clean environment. Each activation owns a launchd fork, xpcproxy exec, setsid and target
+exec; a known exit is explicit. Other images/domains/triggers remain gated. The example
+`scenarios/macos-persistence-example/native-system-job.yaml` provisions its caller before
+collection. The older example without this preset retains partial aggregate activation.
 
-The internal ES process compositor now accepts complete matching relationship, runtime-file, signing and collection observations. It supports explicit terminal absence only and rejects unknown client/terminal facts. This is a projection contract, not a new scenario event or source capability; production installed-file/terminal metadata and native source publication remain gated. Do not fill absent metadata with zeros, `false`, or `null` to make an ES record parse.
+File/process stages can produce eCAR. Registration and dormant unload have no admitted
+native observation. GUI LaunchAgents, automatic KeepAlive/timer/socket activation, native
+plist artifacts and launchd ULF messages remain unavailable. Do not invent ULF lifecycle
+messages merely because a job has ES process evidence.
 
-Internal execution metadata can retain an explicit Mac directory/stat snapshot at launch or exec. It does not derive cwd from the generator host, a home directory or a previous launch. No authored/configuration field exposes this primitive, and it does not enable native ES exec generation.
+## Unified Log families and policy outcomes
 
-Ordinary Mac process launches retain resolved executable-version identity independently of subsequent file replacement. Complete internal native projections require that exact version; matching a path is insufficient. The supported SSH path supplies complete fork/v11 metadata and passes nonempty CLI/parser/filter/checkpoint acceptance. Qualified direct commands from a metadata-complete interactive SSH shell use actual canonical fork/exec occurrences: ES renders the inherited shell fork and, for the bounded command contract without a PTY, exec into the requested utility with three distinct channel-owned pipe descriptors. eCAR renders both phases. This does not backfill a shell/helper's unknown FD inventory or qualify additional PTY helper families. Aggregate GUI births, incomplete metadata, shell syntax and effect-bearing commands do not acquire invented fork records. The v11 profile admits complete exec and known-exit projections; unknown terminal outcomes still omit native exit. Explicit app-policy refusal is separately supported through `outcome: policy_refused`; broader Gatekeeper causes and message families remain unqualified.
+A local interactive login requests loginwindow's `-[Login1 launchWorkspace]` entry.
+That is method entry, not desktop-completion proof, and SSH/service sessions do not
+request it. Explicit `process.outcome: policy_refused` supplies a bounded ASP kernel
+refusal. Its target PID/path belong to the attempt; the refusal does not create a running
+child, successful exec, command effects or history. Use an earlier live initiator
+`parent_ref` and a bundle executable path; `process_ref` is forbidden. Cause, actual
+parentage and target execution stage remain unclassified.
 
-Authored interactive Mac processes submit history through their actual live Bash/zsh owner after successful launch admission. Foreground scheduling consults live and retained child intervals rather than jumping to later baseline reservations; explicitly bounded utility profiles can finish before the next command. Unknown long-running invocations still require a modeled release. Ground truth records rejected launches as skipped, and evaluation rejects legacy successful process records with nonpositive PIDs. The informational host profile lists native and shell-history sources as conditional, reports process/fork/exec counts separately from FLOW volume, and does not interpret an unused Bash source as missing Mac telemetry.
+`outcome: denied` is a separate pre-child refusal with no native Gatekeeper claim.
+`outcome: exec_failed` preserves the referenced caller's old image/lifetime, leaves errno
+unknown and suppresses success effects. Neither form invents a successful child or exit.
 
-Apple Terminal (`macos-terminal`) and iTerm2 (`macos-iterm2`) share a retained native startup
-and command owner. Both use launchd fork, xpcproxy exec, GUI binding and same-PID app exec.
-Terminal then forks login and the initial zsh; iTerm2 3.7.6 additionally forks iTermServer and
-execs ShellLauncher before same-PID zsh. Select iTerm2 through the user's deployment assignment;
-with both eligible, Apple Terminal is the stable default. In-window fresh startup can now
-satisfy complete ES coverage, including setuid/drop, job control, TTY and exact FD layouts.
-Existing active shells are reused without new starts. New windows/restored jobs in an already
-running app remain separately gated. Signing/helper facts are not interchangeable. Older
-frozen profiles retain their previous bootstrap and cannot claim the new native capability.
+Accepted SSH authentication shares the root receiver's exact audit-adoption occurrence,
+peer/user/session and retained eCAR/ULF journal in both PTY modes. Password intent uses
+the observed keyboard-interactive/PAM payload. Plain-public-key intent uses canonical
+type/SHA256 fingerprint and source-derived text through the same qualified Info/static
+`%.500s` logger. Its semantic basis is distinct from the local PAM reference. Certificates
+and missing/noncanonical keys produce no invented row. Synthetic build offsets/frames are
+explicit; private system addresses or stack frames are not used. The profile models the
+reference's visible text, not every collector's privacy/persistence setting.
 
-The macOS 27 v11 codec admits explicit null entitlements and bounded objects containing exact
-Boolean values, signed 64-bit integers, strings or arrays of strings, including an explicit empty object. Integers and Booleans retain distinct types. Canonical signatures freeze those values and preserve
-them across checkpoint restore. Older frozen profiles keep their narrower capabilities;
-unknown values never become null. Apple Terminal and login catalog templates use verified
-Apple-shipped signing metadata; iTerm2 has its own verified vendor main-image template. Their
-native startup uses canonical credential, session, controlling-terminal and descriptor
-transitions. The paired reference reveals extra iTerm2 helper execs and a different login FD
-inventory; use app-specific stages within the shared process contract.
+Ordinary daemon verbosity is retained. VERBOSE session-start/close messages, other
+unqualified PAM/disconnect families, generic app ULF and launchd ULF remain gated. The
+final bounded launchd capture passed controls and cleanup but retained zero rows. The
+agreed collection sequence has ended; this is not proof of global absence and does not
+change ES coverage. No new capture or alternate diagnostic-file source is requested.
 
-Authored history exposures use existing `spillage` / `surface: shell_history` semantics with an ordinary local Mac user and `zsh_history` collection. An explicit earlier local login gives the Terminal/login/zsh owner time to become ready. Use ASCII invented values. The profile records a submitted command without asserting success, a child process or a network request. Missing zsh ownership suppresses the exposure label; output filtering cannot select a different shell. Root/service-account exposure, SSH-owned history exposure and metafied Unicode remain outside this authored profile. See `scenarios/macos-workstation-example/history-exposure.yaml`.
+## Other evidence and interpretation
 
+Mac file populations use existing `environment.storage.file_sets` with absolute POSIX
+roots. Experimental mounted SMB clients reuse existing mappings with automatic/mounted
+path presentation; they do not make a Mac an SMB server. Client eCAR and selected network/
+Windows/Samba server evidence remain owned by their actual platforms. Native Mac SMB
+messages and broader APFS alias/case behavior are unavailable.
 
-`process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image, a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
+History needs a live interactive shell in the owning session. Noninteractive commands,
+multiline/metafied records, erasure and delayed exit-only persistence are unsupported.
+Authored `spillage` / `surface: shell_history` supports ASCII invented values under an
+ordinary local Mac user and live zsh owner. It records submission, without asserting a
+child process or success. Root/service-account and SSH-owned exposures remain outside
+that profile. Output filtering must not choose a different shell or create missing facts.
 
+Internal `process_fork`, `process_exec`, `process_audit_bind`, privilege/service drops,
+job-control and workspace occurrences are bundle-owned; do not author them or substitute
+raw messages. eCAR extensions preserve actor/subject and before/after execution identity.
+Native export has its own qualified projections; eCAR availability alone does not prove it.
 
-Public generation also writes typed `GROUND_TRUTH.json.macos_native_coverage` and a Markdown
-summary. It reports native phases for committed exact cohorts and explicitly annotated authored
-aggregate births by host and authored cluster. Qualification blockers (for example unknown exit
-result, descriptors or entitlements) are separate from filtered/dropped/out-of-window decisions.
-Aggregate diagnostics consume no ES counters. Unannotated background aggregate births and other
-compatibility paths are not a complete inventory. Eval includes this account beside observed
-host source volumes; selecting a format or passing its parser does not establish native coverage.
-
-Plain nested `/bin/zsh` and `/bin/bash` invocations may own later direct external commands through
-`nested_command_shells` in the internal execution metadata profile. Exact vectors and all existing
-metadata gates are required. This adds no authoring field and does not qualify `-c` strings,
-scripts, PTYs, GUI responsibility or effect-bearing commands. A nested qualified query can retain
-the same declared nominal result as a direct query; successful exec alone still supplies no result.
-
-The accepted-authentication ULF source is owned by the successful-authentication/audit-adoption occurrence. It uses the actual root sshd-session execution, user and transport peer tuple, an Info/static %.500s callsite with private-data flag, empty subsystem/category, zero activities and explicit synthetic main-image offsets/frames. The observed PAM reference exported visible text; generation models that visibility without claiming every collector exposes private arguments. Plain public-key text is derived from Apple's public OpenSSH auth function, through the same qualified logger envelope, with complete canonical type/SHA256 fingerprint. That method records a distinct source-derived semantic basis; it is not a new local public-key observation. Certificates and missing/invalid keys produce no invented native row. No emitter allocates a writer, looks up a later reused PID or derives an authentication event from ES output. Exact eCAR/ULF publication and filtered output share the retained startup journal. Ordinary daemon verbosity is preserved; verbose session messages remain gated. This adds no new authored event type or raw-message requirement.
+`eforge eval` discovers host-scoped `macos_unified_log.ndjson` and
+`macos_endpoint_security.ndjson`. Native UID/audit/PID roles and nanosecond timestamp text
+are preserved; directory provenance is not an embedded native hostname or username.
+Historical v6/v9/v10 imports remain separate from current v11 generation. Parsing is not
+proof of lifecycle completeness, native fidelity or external SIEM normalization.

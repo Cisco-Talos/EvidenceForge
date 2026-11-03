@@ -713,7 +713,8 @@ A native fork requires an actual authenticated fork and complete signing, valida
 terminal and file facts. Exec additionally requires exact argv, environment, cwd, Mach-O slice,
 script presence and complete post-exec descriptors. The bounded v11 codec exports null
 `entitlements` when the canonical binary explicitly models absence, or an object whose values
-are exact Booleans, strings or arrays of strings. The paired macOS 27 Terminal/iTerm2 references
+are exact Booleans, signed 64-bit integers, strings or arrays of strings. The bounded
+macOS 27 references and separately verified vendor templates
 establish those flat shapes, including an explicit empty object distinct from null and unknown.
 Objects are bounded to 128 keys, arrays to 128 strings each, and the whole
 object to 4,096 nodes and 1 MiB of text. Canonical values are immutable and survive checkpoint
@@ -746,7 +747,7 @@ ownership remains unknown. Apple Terminal and login have explicit catalog signer
 templates from verified Apple-shipped metadata; those templates alone do not qualify their
 startup process transitions or descriptors. iTerm2 has a separately verified vendor main-image
 signing/entitlement template and independently qualified helper templates; native startup
-integration remains separate from these installed facts.
+uses the shared phase owner and the app-specific transitions/descriptors described below.
 The installed-file owner supplies login's verified root-owned setuid mode 04555 only for its
 exact machine-installed Apple product/artifact/path. User copies and other images keep their
 own modeled permissions; older frozen policies keep their previous stat. File mode alone

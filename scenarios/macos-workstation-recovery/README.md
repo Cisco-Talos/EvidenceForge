@@ -3,7 +3,9 @@
 This three-hour companion preserves the two invented Macs, developer, applications,
 source selections, seed 373, unsuppressed medium baseline and complete ES policy of
 the thirty-minute workstation acceptance source. It is a separate managed draft;
-the original reference remains unchanged. No native captures are inputs.
+the original reference remains unchanged. The companion also includes the already
+supported ASP refusal as a negative control, without adding a successful process
+or changing baseline settings. No native captures are inputs.
 
 Both terminal chains, Chrome and its three required helper roles start before the
 checkpoint. Non-PTY and PTY SSH continuations remain open through either permitted
@@ -15,6 +17,12 @@ bundle files against an uninterrupted control. Native-only filtering must also a
 byte for byte. The completed workload must realize every authored activity, all
 required executable/argument roles and a positive background sample, with exact
 independent State/native census reconciliation and no aggregate starts.
+
+The same run covers all implemented minimum ULF families: workspace entry, SSH
+PAM/plain-public-key authentication and ASP refusal. The refused target must have
+one kernel policy observation, no process/fork/exec/exit under its reserved PID,
+and no command effects or shell history. The refusal's cause and execution stage
+stay unclassified. Launchd ULF remains gated and is not synthesized for this test.
 
 Run from the repository root:
 

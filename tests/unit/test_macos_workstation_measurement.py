@@ -3,6 +3,7 @@
 
 """A diagnostic slice must not masquerade as the full acceptance workload."""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -17,6 +18,7 @@ from scripts.measure_macos_workstation import (
     summarize,
 )
 
+from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
 from evidenceforge.formats.macos_endpoint_security import ESExit, ESExitEvent
 from evidenceforge.generation.engine.typed_handlers.authentication import handle_logoff
 from evidenceforge.models.scenario import LogoffEventSpec
@@ -50,6 +52,75 @@ def test_measurement_counts_native_exit_union_rather_than_an_unrelated_event_num
     result = summarize(tmp_path, case, full=True, exit_code=0, text="")
     assert result.native_exit_rows == 1
     assert result.exit_outcomes_unknown is None
+
+
+@pytest.mark.parametrize("outcome", [None, "success", "denied", "exec_failed", "policy_refused"])
+def test_measurement_requires_exec_for_success_but_not_for_an_unsuccessful_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str | None
+) -> None:
+    import scripts.measure_macos_workstation as measurement
+
+    start = datetime(2026, 10, 19, 14, tzinfo=UTC)
+    successful = outcome in {None, "success"}
+    coverage = MacosNativeCoverage.model_validate(
+        {
+            "schema_version": 2,
+            "scope": "canonical_process_window",
+            "policy": "complete",
+            "hosts": [
+                {
+                    "hostname": "MAC",
+                    "source_profile": "invented",
+                    "observations": [],
+                    "process_census": {
+                        "window_start": start,
+                        "window_end": start + timedelta(minutes=1),
+                        "expected_forks": 0,
+                        "expected_execs": int(successful),
+                        "published_forks": 0,
+                        "published_execs": 0,
+                        "fork_identities_match": True,
+                        "exec_identities_match": not successful,
+                        "aggregate_births": 0,
+                        "aggregate_examples": [],
+                        "complete": not successful,
+                    },
+                }
+            ],
+        }
+    )
+    event = SimpleNamespace(
+        storyline_id="attempt",
+        kind="process",
+        emitted=True,
+        system="MAC",
+        time=start,
+        attributes=SimpleNamespace(pid=777, process_name="/invented", outcome=outcome),
+    )
+    monkeypatch.setattr(
+        measurement,
+        "GroundTruthDocument",
+        SimpleNamespace(
+            model_validate_json=lambda raw: SimpleNamespace(
+                events=(event,), macos_native_coverage=coverage
+            )
+        ),
+    )
+    (tmp_path / "GENERATION_MANIFEST.json").write_text(
+        '{"generation_seed":373,"output_target":"default"}'
+    )
+    (tmp_path / "GROUND_TRUTH.json").write_text("{}")
+    result = summarize(
+        tmp_path,
+        Case(name="attempt", description="Attempt", steps=("attempt",), required_images=()),
+        full=True,
+        exit_code=0,
+        text="",
+    )
+    assert result.authored_phase_gaps == (
+        ("attempt:exec:authored_identity_missing",) if successful else ()
+    )
+    assert result.activity_supported is not successful
 
 
 def test_slice_preserves_baseline_and_environment_and_declares_partial() -> None:

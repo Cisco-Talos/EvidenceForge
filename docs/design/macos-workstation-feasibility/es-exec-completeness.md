@@ -1,5 +1,23 @@
 # Complete modeled macOS ES exec coverage
 
+## Current bounded completion
+
+Revision 377 passes the accepted process-start contract on the fixed two-Mac workload:
+33 canonical/native forks and 39 execs in the primary, and 63/78 in the positive-background
+recovery companion, with no aggregate births or missing required image/argument roles.
+The independent State census, complete-policy rejection, all 22 deterministic recovery
+files and native ES/ULF filter equivalence pass. This is bounded supported-workload
+acceptance; arbitrary application/launch qualification remains separate.
+
+The implementation sequence below preserves the original accepted plan and intermediate
+milestones. Statements about then-missing producers or accounting are dated engineering
+context, not current instructions to restart those tasks. See the
+[current results](../../../scenarios/macos-workstation-acceptance/REPORT.md) and
+[finite endpoint delivery plan](endpoint-delivery-acceptance.md) for current limits.
+Known exits retain their exact outcomes; unknown GUI/SSH teardown remains unknown.
+Launchd ULF is separately gated after the finite reference sequence ended without
+qualifying rows. It does not reopen the completed process-start milestone.
+
 ## Accepted outcome
 
 On October 28, 2026, the user accepted this contract as the highest development priority:
