@@ -1,0 +1,27 @@
+{
+  "exact_resume_files_equal": true,
+  "native_filter_bytes_equal": true,
+  "deterministic_files_compared": 22,
+  "checkpoint_hour": 3,
+  "generation_behavior_revision": 374,
+  "seed": 373,
+  "forks": 45,
+  "execs": 55,
+  "background_native_execs": 16,
+  "aggregate_births": 0,
+  "census_complete": true,
+  "activity_supported": true,
+  "missing_images": [],
+  "missing_execution_roles": [],
+  "unrealized_steps": [],
+  "authored_phase_gaps": [],
+  "manifest_sha256": "3c22caf7865a14711777621952163df4d4cd9167f26dd55e2b6c26df4a28e174",
+  "scope": "Synthetic engineering acceptance only; no private reference records",
+  "deterministic_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 88.70949582169094,
+    "total_records": 2816,
+    "native_es_records": 112,
+    "unified_log_records": 2
+  }
+}

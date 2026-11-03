@@ -139,6 +139,12 @@ scenarios/macos-workstation-acceptance/*
 !scenarios/macos-workstation-acceptance/README.md
 !scenarios/macos-workstation-acceptance/REPORT.md
 !scenarios/macos-workstation-acceptance/RESULTS.json
+!scenarios/macos-workstation-recovery/
+scenarios/macos-workstation-recovery/*
+!scenarios/macos-workstation-recovery/draft.json
+!scenarios/macos-workstation-recovery/source/
+!scenarios/macos-workstation-recovery/README.md
+!scenarios/macos-workstation-recovery/RESULTS.json
 !scenarios/macos27-native-assessment/
 scenarios/macos27-native-assessment/*
 !scenarios/macos27-native-assessment/draft.json

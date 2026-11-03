@@ -2631,3 +2631,48 @@ traffic and general app-launch Unified Log evidence are not admitted by this
 bounded producer. No additional human data was requested and no assessment loop
 was started. The next work should use the measured workload/coverage conditions,
 not another open-ended reference or reviewer loop.
+
+
+## 2026-11-02 — Combined recovery and phase-one acceptance
+
+The user authorized finishing the combined recovery check, fixing only concrete
+failures, pushing that milestone, then completing phases 1–4. The separate managed
+`macos-workstation-recovery` draft preserves the two invented Macs, installed apps,
+seed 373, medium baseline, source selections and complete native policy. Its three-hour
+window holds both SSH continuations and live terminal/browser/helper work across the
+checkpoint, then runs remote commands, closes sessions and reactivates the inventory
+job. The original thirty-minute source remains unchanged.
+
+The new extended integration gate passes public suspend/status/verify/exact resume,
+retained non-PTY/PTY continuations and live terminals/helpers, equality of **all 22
+deterministic bundle files**, and native-only filter byte equality. The completed
+companion has **45 forks, 55 execs, 112 native rows, 16 background execs**, zero aggregate
+births, exact independent identities, every authored phase and every required Chrome
+argument role. One deterministic evaluation verifies 2,816 records and passes applicable
+hard gates at **88.7095/100**; only two ULF rows are present. Source warnings remain the
+three pre-window fixture setup steps and absent firewall sensor.
+
+Initial test-harness attempts are preserved under ignored runs: a standalone harness
+correctly rejected the pytest-only synchronization hook; the integration test initially
+assumed a single suspension cursor and looked for SSH snapshots in State instead of their
+retained continuation. Those expectations were repaired. No production failure or engine
+change was established. The final passing run is
+`runs/macos-workstation-acceptance/2026-11-02-combined-pytest-374d/`.
+
+The acceptance matrix now explicitly separates the quiet thirty-minute primary seed 373
+from positive predeclared seed 375 and this longer seed-373 recovery companion. A quiet
+sample does not prove positive coverage; a companion does not replace the primary. This
+closes phase 1's bounded fork/exec engineering milestone. Whole Ruff/format/diff and behavior
+checks pass; production revision remains 374. No native logs were read or collected.
+
+Remaining finite sequence:
+
+2. Measure known/unknown native exits and repair concrete owning-layer lifecycle or
+   cross-source failures. Do not assign success to unknown GUI/SSH teardown results.
+3. Minimum ULF scope: existing GUI workspace entry and qualified ASP refusal, plus bounded
+   SSH authentication/session and launchd job activation/completion if reference-qualified.
+   Existing ES-only captures do not establish these ULF templates. Additional app catalogs,
+   arbitrary GUI mechanisms and every auxiliary Chrome helper are outside this phase.
+4. One combined acceptance and bounded realism review, after actual implementation; repair
+   concrete blockers. Do not restart an open-ended assessment loop or declare unqualified
+   ULF families accurate.

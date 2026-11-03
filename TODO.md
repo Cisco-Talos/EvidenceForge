@@ -72,18 +72,16 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P0 — highest priority, user-approved:** Represent every modeled Mac process starting
-  in the simulation window in ES, with the appropriate fork/exec evidence during complete
-  lossless collection; every successful exec must have its native exec record or generation
-  must fail with actionable missing requirements. Start with small measured workloads, then establish a
-  complete canonical execution census, migrate aggregate launch producers, complete native
-  metadata and enforce exact output reconciliation. Unsupported launch paths must reject;
-  passing diagnostics on a subset is insufficient. Preserve explicit collection exclusions and
-  avoid inventing execs for builtins, app reuse or failed launch attempts. See the
-  [implementation contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md)
-  and [effort worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
-  Drive remaining repairs with the fixed [two-Mac workstation workload](scenarios/macos-workstation-acceptance/README.md)
-  and its coverage report; individual producer tests do not close this milestone.
+- [x] **P0 — Mac process-start coverage:** The bounded two-Mac workstation matrix now
+  reconciles every in-window canonical fork/exec, rejects unsupported starts, and passes
+  combined exact recovery/filter equivalence with positive background activity. The quiet
+  primary remains separately reported. See the [contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md),
+  [recovery acceptance](scenarios/macos-workstation-recovery/README.md) and
+  [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [ ] Finish the finite Mac endpoint delivery sequence: explicit lifecycle outcomes for the
+  supported workload; reference-qualified minimum Unified Log coverage; one combined final
+  acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and
+  evidence blockers belong in the same worklog.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native

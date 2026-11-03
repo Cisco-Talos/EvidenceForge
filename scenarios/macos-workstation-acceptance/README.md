@@ -58,3 +58,8 @@ every intended activity realized, exact independent fork/exec reconciliation wit
 no aggregate starts, ingestible native records and matching eCAR relationships.
 Then native-only filtering and checkpoint/resume must preserve the result. Passing
 parsing/count checks establishes implementation coverage, not universal Mac fidelity.
+
+The separate [combined recovery companion](../macos-workstation-recovery/README.md)
+now closes the checkpoint and positive-background engineering gates. The original
+quiet primary remains separately reported; the acceptance matrix does not require
+random sampling to start a background process in every thirty-minute run.
