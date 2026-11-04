@@ -35,7 +35,7 @@ import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from evidenceforge.events.application import (
     ApplicationChannelIdentity,
@@ -71,6 +71,7 @@ from evidenceforge.events.lifecycle import (
 from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
     source_observation_delay_difference,
@@ -3228,6 +3229,9 @@ class SshSessionExecutor(Protocol):
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
     ) -> None:
         """Generate source-native process termination evidence."""
         ...
@@ -3239,6 +3243,17 @@ class SshSessionActionBundle:
 
     request: SshSessionRequest
     executor: SshSessionExecutor
+
+    def _ordinary_macos_exit(
+        self,
+        process: ProcessIdentity,
+        at: datetime,
+        *,
+        owner: Literal["ssh_client", "ssh_receiver", "ssh_descendant"],
+    ) -> PosixProcessExit | None:
+        """Use the frozen explicit ordinary-close policy, independently of command status."""
+        provider = getattr(self.executor, "macos_execution_metadata", None)
+        return provider.ordinary_close(process, at, owner=owner) if provider is not None else None
 
     def _timing_planner(self) -> BaselineTimingPlanner:
         """Return the engine planner or one stateless direct-test adapter."""
@@ -5275,7 +5290,11 @@ class SshSessionActionBundle:
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         if source_session_identity is not None:
             state_builder.patch_session_activity(source_session_identity, terminate_time)
-        state_builder.terminate_process(identity, end_time=terminate_time)
+        state_builder.terminate_process(
+            identity,
+            end_time=terminate_time,
+            exit_outcome=self._ordinary_macos_exit(identity, terminate_time, owner="ssh_client"),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -5333,7 +5352,11 @@ class SshSessionActionBundle:
         session_identity = plan.session_identity()
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         state_builder.patch_session_activity(session_identity, terminate_time)
-        state_builder.terminate_process(identity, end_time=terminate_time)
+        state_builder.terminate_process(
+            identity,
+            end_time=terminate_time,
+            exit_outcome=self._ordinary_macos_exit(identity, terminate_time, owner="ssh_receiver"),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -5401,7 +5424,13 @@ class SshSessionActionBundle:
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         if session_identity is not None:
             state_builder.patch_session_activity(session_identity, planned.terminate_at)
-        state_builder.terminate_process(identity, end_time=planned.terminate_at)
+        state_builder.terminate_process(
+            identity,
+            end_time=planned.terminate_at,
+            exit_outcome=self._ordinary_macos_exit(
+                identity, planned.terminate_at, owner="ssh_descendant"
+            ),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -5536,6 +5565,14 @@ class SshSessionActionBundle:
             raise StateError("Exact SSH source termination lost its frozen terminal time")
         try:
             if continuation is None:
+                identity = self.executor.state_manager.get_process_identity(
+                    source_system.hostname, source_process.pid
+                )
+                outcome = (
+                    self._ordinary_macos_exit(identity, terminate_time, owner="ssh_client")
+                    if identity is not None
+                    else None
+                )
                 self.executor.generate_process_termination(
                     user=self.request.user,
                     system=source_system,
@@ -5544,6 +5581,11 @@ class SshSessionActionBundle:
                     process_name=running.image,
                     logon_id=running.logon_id,
                     from_storyline=self.request.source.startswith("storyline"),
+                    **(
+                        {"exit_outcome": outcome, "expected_process": identity}
+                        if outcome is not None
+                        else {}
+                    ),
                 )
             else:
                 identity = self.executor.state_manager.get_process_identity(

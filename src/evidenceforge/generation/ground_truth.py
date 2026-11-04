@@ -348,7 +348,7 @@ class GroundTruthGenerator:
                             f"Exit observations {census.observed_exits}/{census.expected_exits}; "
                             f"known results {census.known_exits}; native exits {census.published_exits}; "
                             f"exit accounting {'passes' if census.exit_accounting_complete else 'fails'}; "
-                            f"exit completeness {'passes' if census.exit_complete else 'incomplete (unknown outcomes)'}.\n"
+                            f"exit completeness {'passes' if census.exit_complete else 'incomplete'}.\n"
                         )
             content.append("| Host | Phase | Qualification | Source decision | Count |")
             content.append("| --- | --- | --- | --- | ---: |")

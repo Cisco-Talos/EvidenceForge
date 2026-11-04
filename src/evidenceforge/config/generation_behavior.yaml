@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 382
+current_revision: 383
 history_start_revision: 1
-behavior_surface_sha256: 33cde5bc135466e8928f792b91830ec23ebe93f1128c61ea721e2755e4d4bb0a
+behavior_surface_sha256: 9fde2000657d6c7b1dd256c5a3c16d07a317d8eaac4b1f457267685b85d764d3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3646,3 +3646,9 @@ changes:
     domains: [macos-process-lifecycle, process-completion, native-source-publication]
     formats: [ecar, macos_endpoint_security]
     summary: Adds explicit bounded nominal query completion policies and dependency-aware natural closure, admits canonical SSH termination phases to native accounting, and preserves collection-window classification for unknown exit results.
+  - revision: 383
+    id: macos-explicit-ordinary-close-model
+    impact: localized
+    domains: [macos-process-lifecycle, session-shutdown, ssh-shutdown]
+    formats: [ecar, macos_endpoint_security]
+    summary: Adds the user-selected ordinary-close model with distinct completed GUI, terminal and SSH return paths and explicit cancellation signals for unfinished queries; frozen legacy and unsupported shutdown behavior stays unknown.

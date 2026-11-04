@@ -53,23 +53,28 @@ missing exit observations or lost known outcomes. Unknown results remain visible
 past collection has no in-window termination obligation. Legacy census records have
 unknown exit history rather than fabricated zero counts.
 
-## Remaining shutdown-model choice
+## Approved ordinary-close model
 
 After natural command repair, the inventory identifies 69 shutdown observations:
 47 GUI application/helper closes, seven shells, three login processes, eight SSH server
 workers, three still-active curl commands and one SSH client. Existing code chooses
 closure times without declaring how each process actually ends.
 
-A concrete way to finish without empirical collection is an explicit ordinary-close
-simulation profile: orderly GUI quits, shell logout after completed work, and a named
-SSH close path with separately selected worker/client results. Interrupted work needs
-an explicit cancellation/termination result rather than success. These would be declared
-model choices; they must not be described as measured macOS 27 automatic-logoff behavior.
+The user selected the explicit ordinary-close simulation model on November 4.
+The frozen `orderly_logout_and_ssh_normal_return_v1` policy declares completed orderly
+GUI quits, terminal-server returns, shell logout and login returns with status zero.
+SSH client, receiver and worker returns are independent policy results, selected as zero
+for this normal-return path. Unfinished supported queries are explicitly cancelled with
+completed signal 15 termination. A cancellation is not a successful query, and a mere
+quit/signal request is not evidence that termination completed.
 
-Alternatively, retain unknown shutdown results until a bounded native reference qualifies
-the desired automatic teardown behavior. Existing captures may help, but require separate
-permission for an offline fixed-output review. No such review or new collection is
-currently authorized by this document.
+Lifecycle owners supply these results before committing the exact terminal transition;
+renderers do not fill unknown results. Exact deployed images and execution identities
+are required. Terminal and iTerm2 resolve through the frozen application catalog,
+including the user-scoped iTermServer placement. Unsupported images and legacy profiles
+without the selected policy retain unknown outcomes. Surviving processes are not killed
+at collection cutoff. These are declared simulation behaviors, not measured macOS 27
+automatic-logoff behavior. No private review or new collection is needed or authorized.
 
 The existing reviewed SSH reference explicitly reports final server-worker exit 255
 while the controlled client/marker exit zero. It cannot supply a universal success or

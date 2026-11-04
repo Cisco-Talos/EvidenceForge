@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.config.schemas import MacosCommandCompletionPolicy
+from evidenceforge.config.schemas import MacosCommandCompletionPolicy, MacosOrdinaryClosePolicy
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
@@ -98,18 +98,23 @@ def test_natural_completion_plans_owned_hold_before_certifying_result(
 
 
 @pytest.mark.parametrize("pty", [False, True])
+@pytest.mark.parametrize("ordinary", [False, True])
 def test_ssh_terminal_phases_are_all_accounted_without_inventing_results(
-    tmp_path: Path, pty: bool
+    tmp_path: Path, pty: bool, ordinary: bool
 ) -> None:
     engine = _ssh_engine(tmp_path, pty=pty)
     try:
+        if not ordinary:
+            engine.macos_execution_metadata.profile = (
+                engine.macos_execution_metadata.profile.model_copy(update={"ordinary_close": None})
+            )
         engine.activity_generator.finalize_ssh_session_lifecycles(engine.end_time)
         engine._finalize_macos_process_coverage()
         census = engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census
         assert census.expected_exits == census.observed_exits == 6
-        assert census.known_exits == census.published_exits == 3
+        assert census.known_exits == census.published_exits == (6 if ordinary else 3)
         assert census.exit_accounting_complete and census.known_exit_identities_match
-        assert census.exit_complete is False
+        assert census.exit_complete is ordinary
     finally:
         engine._close_emitters()
     rows = [
@@ -263,3 +268,125 @@ def test_uncommitted_exit_census_is_rolled_back_with_process_state() -> None:
 def test_completion_templates_reject_ambiguous_or_unbounded_selectors(selector: dict) -> None:
     with pytest.raises(ValidationError):
         MacosCommandCompletionPolicy.model_validate(selector | {"exit_code": 0})
+
+
+@pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_selected_terminal_logout_model_closes_exact_chain_or_preserves_unknown(
+    tmp_path: Path, terminal_id: str, ordinary: bool
+) -> None:
+    engine = _terminal_engine(tmp_path, terminal_id)
+    try:
+        engine._initialize()
+        if not ordinary:
+            engine.macos_execution_metadata.profile = (
+                engine.macos_execution_metadata.profile.model_copy(update={"ordinary_close": None})
+            )
+        generator = engine.activity_generator
+        user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
+        generator.ensure_macos_session_shell(user, system, logon, at + timedelta(seconds=10))
+        generator.generate_logoff(user, system, at + timedelta(minutes=2), logon)
+        engine._finalize_macos_process_coverage()
+        census = engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census
+        expected = 3 if terminal_id == "macos-terminal" else 4
+        assert census.expected_exits == census.observed_exits == expected
+        assert census.published_exits == (expected if ordinary else 0)
+        assert census.exit_complete is ordinary
+    finally:
+        engine._close_emitters()
+
+
+def test_shutdown_cancellation_is_a_signal_result_not_natural_query_success(
+    tmp_path: Path, scenarios_dir: Path
+) -> None:
+    with _engine(tmp_path, scenarios_dir, complete=True, chronological=True) as fixture:
+        engine, target, user, session = fixture
+        process, at = _launch(fixture)
+        provider = engine.macos_execution_metadata
+        assert provider.command_completion(process, at) == PosixProcessExit(exit_code=0)
+        cancelled = provider.ordinary_close(process, at, owner="session")
+        assert cancelled == PosixProcessExit(signal=15)
+        engine.activity_generator.generate_process_termination(
+            user,
+            target,
+            at,
+            process.pid,
+            process.image,
+            session.logon_id,
+            exit_outcome=cancelled,
+            expected_process=process,
+        )
+    assert _native_exits(tmp_path, process.pid)[0].event.exit.stat == 15
+
+
+def test_ssh_server_results_are_independent_of_the_shell_result(tmp_path: Path) -> None:
+    engine = _ssh_engine(tmp_path)
+    try:
+        provider = engine.macos_execution_metadata
+        policy = provider.profile.ordinary_close.model_copy(
+            update={
+                "ssh_worker_return": PosixProcessExit(exit_code=255),
+                "ssh_receiver_return": PosixProcessExit(exit_code=255),
+            }
+        )
+        provider.profile = provider.profile.model_copy(update={"ordinary_close": policy})
+        engine.activity_generator.finalize_ssh_session_lifecycles(engine.end_time)
+        engine._finalize_macos_process_coverage()
+        assert engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.exit_complete
+    finally:
+        engine._close_emitters()
+    exits = [
+        json.loads(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+        if json.loads(line)["event_type"] == 15
+    ]
+    server = [
+        r
+        for r in exits
+        if r["process"]["executable"]["path"] == "/usr/libexec/sshd-session"
+        and r["event"]["exit"]["stat"] != 0
+    ]
+    shell = [r for r in exits if r["process"]["executable"]["path"] == "/bin/zsh"]
+    assert len(server) == 2 and all(r["event"]["exit"]["stat"] == 255 << 8 for r in server)
+    assert len(shell) == 1 and shell[0]["event"]["exit"]["stat"] == 0
+
+
+def test_collection_end_does_not_quit_surviving_terminal_processes(tmp_path: Path) -> None:
+    engine = _terminal_engine(tmp_path, "macos-iterm2")
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
+        shell = generator.ensure_macos_session_shell(
+            user, system, logon, at + timedelta(seconds=10)
+        )
+        generator.finalize_foreground_process_lifetimes(engine.end_time)
+        engine._finalize_macos_process_coverage()
+        assert engine.state_manager.get_process(system.hostname, shell) is not None
+        assert (
+            engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.expected_exits == 0
+        )
+    finally:
+        engine._close_emitters()
+
+
+@pytest.mark.parametrize("change", ["cancel_as_success", "quit_as_signal", "relative_image"])
+def test_ordinary_close_policy_rejects_conflicting_cause_and_result(change: str) -> None:
+    from evidenceforge.generation.activity.macos_execution_metadata import (
+        load_macos_execution_metadata_profile,
+    )
+
+    raw = load_macos_execution_metadata_profile().ordinary_close.model_dump()
+    if change == "cancel_as_success":
+        raw["cancelled_command"] = {"exit_code": 0}
+    elif change == "quit_as_signal":
+        raw["application_quit"] = {"signal": 15}
+    else:
+        raw["login_image"] = "login"
+    with pytest.raises(ValidationError):
+        MacosOrdinaryClosePolicy.model_validate(raw)

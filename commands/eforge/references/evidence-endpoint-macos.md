@@ -59,9 +59,19 @@ distinct semantics; none should acquire a fabricated successful exec.
 `GROUND_TRUTH.json.macos_native_coverage` and its Markdown summary distinguish the
 independent process census, qualification blockers, filtered/dropped/out-of-window
 observations and authored activity. Exit has a separate obligation: an explicit completed
-result is required. Unknown GUI/SSH teardown is reported and omits native exit; it never
-becomes success. The current fixed workload reconciles 33 forks/39 execs, and its positive
-background recovery companion 63/78. This is bounded workload acceptance, not every app.
+result is required. Independent State exit/known-result digests reconcile all in-window
+termination observations and known native output. Coverage reports `expected_exits`,
+`observed_exits`, `known_exits`, `published_exits` and `exit_complete` separately from
+start completeness. Unknown teardown remains reported and omits native exit; it never
+becomes success. A process surviving collection has no in-window exit obligation.
+
+The current frozen ordinary-close policy selects completed orderly app quits, terminal
+server/login/shell returns, and independent normal SSH worker/receiver/client returns.
+Unfinished supported queries are cancelled with signal 15 rather than reported successful.
+Natural query results require the exact invocation and an untruncated completion after
+owned work. These are explicit simulation choices, not measured universal macOS logoff
+behavior. Unsupported images/results and older profiles stay unknown. See the repository's
+`docs/design/macos-workstation-feasibility/exit-completeness.md` for scope and acceptance.
 
 Complete native facts include the exact execution, parent/responsible/audit identities,
 installed image/signature, runtime security, thread, cwd, argv, ordered environment and
@@ -139,7 +149,9 @@ a pipe-backed shell. Unsupported/unknown invocation facts omit history without d
 the command's process evidence. Known terminal facts survive fork, exec and checkpoint.
 Use later `process` events with `supplementary: none`. Additional login shells, complex
 shell plans, background jobs and unsupported helper families remain gated; unsupported
-commands reject before allocating a child. Generic final-worker results remain unknown.
+commands reject before allocating a child. The selected ordinary-close model supplies
+worker, receiver and client results independently; remote-command success does not
+establish any server result. Profiles without that model retain unknown final results.
 
 ## Explicit system launch-item stages
 

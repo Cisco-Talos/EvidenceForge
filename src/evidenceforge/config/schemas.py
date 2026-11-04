@@ -34,6 +34,7 @@ from pydantic import (
 from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 from evidenceforge.events.macos_entitlements import NativeEntitlementValue
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.models.http import HttpMultipartEntitySpec
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
@@ -4456,6 +4457,50 @@ class MacosTerminalStartupPolicy(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosOrdinaryClosePolicy(BaseModel, extra="forbid", frozen=True):
+    """Selected completed outcomes for an explicitly modeled ordinary shutdown."""
+
+    model: Literal["orderly_logout_and_ssh_normal_return_v1"]
+    application_quit: PosixProcessExit
+    terminal_server_return: PosixProcessExit
+    shell_logout: PosixProcessExit
+    login_return: PosixProcessExit
+    ssh_client_return: PosixProcessExit
+    ssh_worker_return: PosixProcessExit
+    ssh_receiver_return: PosixProcessExit
+    cancelled_command: PosixProcessExit
+    shell_images: tuple[str, ...] = Field(min_length=1, max_length=16)
+    login_image: str = Field(min_length=1, max_length=4096)
+    ssh_client_images: tuple[str, ...] = Field(min_length=1, max_length=16)
+    ssh_receiver_image: str = Field(min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def completed_outcomes(self) -> Self:
+        """Keep orderly returns distinct from completed cancellation signals."""
+        for result in (
+            self.application_quit,
+            self.terminal_server_return,
+            self.shell_logout,
+            self.login_return,
+            self.ssh_client_return,
+            self.ssh_worker_return,
+            self.ssh_receiver_return,
+        ):
+            if result.exit_code is None:
+                raise ValueError("Ordinary returns require a completed normal exit status")
+        if self.cancelled_command.signal is None:
+            raise ValueError("Command cancellation requires its completed termination signal")
+        for path in (
+            *self.shell_images,
+            self.login_image,
+            *self.ssh_client_images,
+            self.ssh_receiver_image,
+        ):
+            if not path.startswith("/") or "\0" in path or ".." in PurePosixPath(path).parts:
+                raise ValueError("Ordinary close selectors require canonical absolute images")
+        return self
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4507,6 +4552,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )
+    ordinary_close: MacosOrdinaryClosePolicy | None = None
 
     @field_validator("finder_launch_images")
     @classmethod

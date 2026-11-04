@@ -2066,8 +2066,16 @@ every eligible in-window canonical fork/exec must reconcile with native output o
 fails with the missing requirements. Missing signing, entitlement or descriptor facts cannot
 silently omit a required start. Explicit `macos_process_coverage: partial` admits a narrower
 diagnostic/lossy request without that guarantee; output filtering cannot silently remove a
-complete request. Exit has its own requirement: unknown completed results remain reported
-limitations and omit native exit without becoming success. Existing collection settings govern
+complete request. Exit has its own requirement: independent State/native accounting covers
+all in-window terminations and known results. `exit_complete` requires a known native result
+for each such termination. Unknown completed results remain reported limitations and omit
+native exit without becoming success. The current frozen policy selects ordinary completed
+GUI quits, terminal/shell/login returns and separate SSH worker/receiver/client returns;
+unfinished supported queries are cancelled with signal 15. Natural query success requires
+an exact declared invocation and completion after owned work. These are explicit simulation
+choices, not measured automatic macOS logoff behavior. Unsupported command results and legacy
+profiles remain unknown. Collection cutoff does not itself terminate surviving processes.
+Existing collection settings govern
 eligibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
 for remaining gaps and the distinction between decoding and generation admission.
 

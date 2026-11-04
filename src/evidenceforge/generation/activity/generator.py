@@ -16473,6 +16473,14 @@ class ActivityGenerator:
             )
             try:
                 for process_close in generic_process_closes:
+                    outcome = (
+                        self.macos_execution_metadata.ordinary_close(
+                            process_close.identity, process_close.end_time, owner="session"
+                        )
+                        if _get_os_category(system.os) == "macos"
+                        and self.macos_execution_metadata is not None
+                        else None
+                    )
                     self.generate_process_termination(
                         user=user,
                         system=system,
@@ -16482,6 +16490,11 @@ class ActivityGenerator:
                         logon_id=logon_id,
                         from_storyline=from_storyline,
                         session_end_plan=authoritative_end_plan,
+                        **(
+                            {"exit_outcome": outcome, "expected_process": process_close.identity}
+                            if outcome is not None
+                            else {}
+                        ),
                     )
                     lifecycle_process = self._lifecycle_authority.registry.get_process(
                         process_close.identity.object_id

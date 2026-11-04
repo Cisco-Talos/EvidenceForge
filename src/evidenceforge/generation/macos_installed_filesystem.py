@@ -228,6 +228,15 @@ class MacosInstalledFilesystem:
         """Resolve a binary through this filesystem's exact immutable deployment owner."""
         return self._deployments.resolve_binary(hostname, path, "macos", principal=principal)
 
+    def application_image(self, application_id: str, principal: str) -> str | None:
+        """Resolve an exact frozen catalog image, including user-scoped placement."""
+        descriptor = self._deployments.application_descriptor(application_id, "macos")
+        return (
+            descriptor.image_path.replace("{username}", principal)
+            if descriptor is not None
+            else None
+        )
+
     def observe(
         self,
         deployments: DeploymentContentRegistry,

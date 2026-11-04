@@ -216,8 +216,41 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         item.activity_supported and item.census_complete and item.background_native_execs > 0
         for item in measurements
     ), measurements
+    # One background compound shell is outside the bounded completion policy.
+    # Keep its unknown result as a negative control rather than invent success.
     assert all(
-        item.native_exit_rows > 0 and item.exit_outcomes_unknown > 0 for item in measurements
+        item.native_exit_rows > 0 and item.exit_outcomes_unknown == 1 for item in measurements
+    )
+    for host in measurements[0].coverage.hosts:
+        census = host.process_census
+        assert census is not None
+        assert census.exit_accounting_complete and census.known_exit_identities_match
+        unknown = 1 if host.hostname == "MAC-APPLE" else 0
+        assert census.expected_exits == census.known_exits + unknown
+        assert census.published_exits == census.known_exits
+        assert census.exit_complete is (unknown == 0)
+    apple = next((output / "data").glob("MAC-APPLE.*/macos_endpoint_security.ndjson"))
+    records = [json.loads(line) for line in apple.read_text().splitlines()]
+    compound = [
+        record["event"]["exec"]["target"]["audit_token"]
+        for record in records
+        if record["event_type"] == 9
+        and record["event"]["exec"]["args"] == ["/bin/zsh", "-c", "id; groups"]
+    ]
+    assert len(compound) == 1
+    assert not any(
+        record["event_type"] == 15 and record["process"]["audit_token"] == compound[0]
+        for record in records
+    )
+    endpoints = [json.loads(line) for line in (apple.parent / "ecar.json").read_text().splitlines()]
+    assert (
+        sum(
+            row["object"] == "PROCESS"
+            and row["action"] == "TERMINATE"
+            and row["pid"] == compound[0]["pid"]
+            for row in endpoints
+        )
+        == 1
     )
     (tmp_path / "RESULTS.json").write_text(
         json.dumps(

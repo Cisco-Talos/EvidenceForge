@@ -213,6 +213,65 @@ class MacosExecutionMetadataProducer:
                 return PosixProcessExit(exit_code=rule.exit_code)
         return None
 
+    def ordinary_close(
+        self,
+        process: ProcessIdentity,
+        at: datetime,
+        *,
+        owner: Literal["session", "ssh_client", "ssh_receiver", "ssh_descendant"],
+    ) -> PosixProcessExit | None:
+        """Select an approved completed shutdown path for an exact deployed image.
+
+        This is model-owned terminal truth, not a quit/signal request, a command
+        completion inference or an empirical automatic-logoff classification.
+        """
+        policy = self.profile.ordinary_close
+        if (
+            policy is None
+            or process.executable_version is None
+            or process.executable_version.identity_kind != "installed_release"
+            or process.executable_version.platform != "macos"
+            or not self._known_from <= process.execution_started_at < at < self._known_until
+        ):
+            return None
+        binary = self._filesystem.deployed_binary(
+            process.hostname, process.image, process.principal
+        )
+        if binary is None or binary.content_id != process.executable_version.content_id:
+            return None
+        if owner == "ssh_client":
+            return policy.ssh_client_return if process.image in policy.ssh_client_images else None
+        if owner == "ssh_receiver":
+            return (
+                policy.ssh_receiver_return if process.image == policy.ssh_receiver_image else None
+            )
+        if owner == "ssh_descendant" and process.image == policy.ssh_receiver_image:
+            return policy.ssh_worker_return
+        if process.image in policy.shell_images:
+            return policy.shell_logout
+        if process.image == policy.login_image:
+            return policy.login_return
+        for terminal in self.profile.terminal_startups:
+            if process.image == self._filesystem.application_image(
+                terminal.application_id, process.principal
+            ):
+                return policy.application_quit
+            if terminal.server_application_id is not None and process.image == (
+                self._filesystem.application_image(
+                    terminal.server_application_id, process.principal
+                )
+            ):
+                return policy.terminal_server_return
+        if process.image in self.profile.finder_launch_images or any(
+            process.image == helper.image for helper in self.profile.browser_helpers
+        ):
+            return policy.application_quit
+        # A declared bounded query still active at shutdown is cancelled. Its
+        # nominal natural success is only an invocation selector here, not the result.
+        if self.command_completion(process, at) is not None:
+            return policy.cancelled_command
+        return None
+
     def directory(self, hostname: str, path: str, at: datetime) -> MacosExecutionDirectory:
         """Observe one provisioned directory object without inferring arbitrary paths."""
         metadata = self._directories.get((hostname.casefold(), path))

@@ -3835,3 +3835,40 @@ The user selected **Implement the explicit ordinary-close model**. Continue with
 approved model as revision 383, keeping worker/client/cancellation results distinct.
 A final unchanged-scenario regeneration/evaluation and combined recovery/filter gate
 will cover both revisions; no intermediate scenario result is claimed for revision 382.
+
+### Approved ordinary-close model and recovery verification
+
+Revision 382 was committed as `00809d33` and pushed. Revision 383 implements the user's
+approved `orderly_logout_and_ssh_normal_return_v1` model. The frozen policy declares
+completed GUI/terminal-server/shell/login ordinary returns and distinct SSH client,
+receiver and worker normal returns. The chosen normal statuses are zero; unfinished
+supported queries are cancelled with completed signal 15 termination. This is selected
+simulation behavior, not captured automatic macOS logoff or success inferred from a
+remote command. Unsupported/legacy outcomes remain unknown, and collection cutoff does
+not invent termination. Lifecycle owners supply the result before exact state commit.
+
+The first terminal close tests exposed a catalog-ID/product-ID mismatch. Exact frozen
+application-image resolution now handles both Terminal and iTerm2, including user-scoped
+iTermServer placement. The final targeted selections pass **154 tests** (72 and 82),
+covering both terminal chains, native PTY/non-PTY SSH, independent server/client results,
+explicit cancellation, no cutoff exits, exact exit groups, rollback, census hydration and
+negative publication gates. A server-result test selects 255 while the shell remains zero.
+Whole-repository Ruff/format and diff checks pass. Revision-383 surface:
+`9fde2000657d6c7b1dd256c5a3c16d07a317d8eaac4b1f457267685b85d764d3`.
+
+The combined exact recovery/filter test passes in **54.34 seconds**, comparing all
+22 deterministic files and native-only ES/ULF bytes. It retains five ULF rows, positive
+background starts and the ASP refusal negative control. Its 71 canonical exits reconcile
+exactly: 70 known native exits and one explicit unsupported background `zsh -c 'id; groups'`
+completion. An initial overbroad test expectation of zero unknowns failed on this known
+boundary; the final test requires that exact negative control, including its eCAR
+termination and absent native result, while requiring exact exit accounting and all
+known results. No producer was loosened or successful status invented for the compound
+command. The failed diagnostic remains separately preserved outside Git.
+
+Fresh validation of the unchanged working MacOS-test draft passes with zero errors or
+warnings and the same two informational pivot notes. All twelve formats, seed 42,
+medium baseline, six hosts/three users and the eight-hour window remain unchanged.
+One fresh strict generation is running at `post-fix-complete-v383` under the existing
+trial root; its exit completeness and evaluation are not yet claimed. No private/native
+log or capture, installed code, live probe, collector or app was inspected or run.

@@ -39,3 +39,11 @@ companion exercise positive background starts. A zero-start sample never proves
 positive background coverage, and neither companion replaces the primary result.
 This closes the bounded fork/exec engineering gate, not universal app coverage,
 complete native exit outcomes or general Unified Log authenticity.
+
+Revision 383 additionally exercises the approved ordinary-close model and independent
+exit census through the same exact recovery/filter test. All 71 canonical in-window
+terminations are accounted for, with 70 known native results. The single unsupported
+background compound command `zsh -c 'id; groups'` remains an explicit unknown-result
+negative control: its eCAR termination exists, its native exit is withheld, and every
+other known result must reconcile. This does not qualify the command's inner processes
+or infer success from its shell's successful exec. Collection cutoff is not a kill.

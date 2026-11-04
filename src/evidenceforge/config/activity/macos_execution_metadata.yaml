@@ -145,6 +145,23 @@ nested_command_shells:
 preexisting_root_shell:
   image: /bin/sh
   arguments: ["/bin/sh"]
+# Explicit selected simulation path, approved November 4. These are completed
+# ordinary-close outcomes, not measured automatic logoff behavior or signal requests.
+# SSH worker results belong to their normal-return path, not the remote command result.
+ordinary_close:
+  model: orderly_logout_and_ssh_normal_return_v1
+  application_quit: {exit_code: 0}
+  terminal_server_return: {exit_code: 0}
+  shell_logout: {exit_code: 0}
+  login_return: {exit_code: 0}
+  ssh_client_return: {exit_code: 0}
+  ssh_worker_return: {exit_code: 0}
+  ssh_receiver_return: {exit_code: 0}
+  cancelled_command: {signal: 15}
+  shell_images: [/bin/zsh, /bin/bash, /bin/sh]
+  login_image: /usr/bin/login
+  ssh_client_images: [/usr/bin/ssh, /opt/homebrew/bin/ssh]
+  ssh_receiver_image: /usr/libexec/sshd-session
 command_completions:
   - arguments: ["/usr/bin/true"]
     exit_code: 0
