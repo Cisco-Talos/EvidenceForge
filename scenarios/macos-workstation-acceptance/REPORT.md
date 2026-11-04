@@ -1,11 +1,16 @@
 # Current Mac workstation acceptance
 
-**Scope update, 2026-11-04:** These passing measurements cover the fixed fixture.
-The user's broader `MacOS-test` workload now fails complete ES coverage at
-148/239 execs. Its separately verified partial diagnostic is not a coverage pass.
-Baseline catalog and two authored persistence starts remain development work;
-see the [user-scenario results](../../docs/worklog/2026-10-28-macos-es-exec-completeness.md).
-No PR into `dev` is authorized until the user is satisfied.
+**Scope update, 2026-11-04:** These measurements cover the fixed revision-377 fixture.
+After the initial failure, revision 380 passes the user's unchanged broader
+`MacOS-test` workload: 229/229 forks, 291/291 execs, zero aggregate starts, all 85
+authored starts and all 291 eCAR exec transitions independently matched. The later
+bounded walkthrough demonstrates coherent selected process chains but finds early
+successful sleep completion under independent jitter and an interactive-history
+eligibility defect for non-PTY SSH. Those remain concrete development work alongside
+the explicit fidelity limits; see the
+[user-scenario results](../../docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+The fixture below is not relabelled as a new run. No PR into `dev` is authorized
+until the user is satisfied.
 
 The bounded process-start milestone is complete. Every modeled in-window fork
 and successful exec in the two-Mac acceptance matrix reconciles with native ES,

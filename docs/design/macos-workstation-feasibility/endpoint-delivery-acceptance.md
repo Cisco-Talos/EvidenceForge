@@ -12,16 +12,22 @@ feature branch; no PR into `dev` is authorized until the user is satisfied.
 The existing launchd result does not qualify a message family, and no further
 native collection is requested for this acceptance run.
 
-The November 4 user-scenario trial now **fails complete ES coverage**. Its macOS 27
-working copy preserves all application/command/timing intent: 148/239 expected
-execs are exported, with 66 aggregate starts and 25 unknown-entitlement execs
-uncovered. All 163 modeled forks and 84/85 authored Mac process requests have
-native evidence; the remaining authored caller and sleep job need native owners.
-A separate partial diagnostic is manifest-verified, but is not a coverage pass.
-The fixed matrix below remains valid evidence for its narrower scope, not proof
-that this broader default catalog works. See the November 4 results in the
-[worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md). Launchd ULF is
-separately gated and does not cause these ES gaps. Integration remains on hold.
+The November 4 user-scenario trial initially failed complete ES coverage. Owning-layer
+repairs at revision 380 now pass the unchanged workload: **229/229 forks, 291/291
+execs, zero aggregate starts**, all 85 authored Mac starts matched, and all 291 eCAR
+exec transitions matched independently. The earlier failed and partial diagnostics
+remain historical evidence. The fixed matrix below still describes its narrower
+scope; it is not relabelled as a revision-380 run. See the current results in the
+[worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
+
+The subsequent bounded walkthrough confirms the selected Terminal, iTerm2, SSH,
+GUI and job start chains, but finds two concrete realism defects: independent
+storyline jitter shortens the successful sleep-600 lifetime by 19.74549 seconds,
+and interactive history is emitted for the sampled non-PTY zsh without interactive
+invocation. These require timing/lifecycle and shell-history eligibility repairs;
+complete start counts do not close them. Existing unknown-exit, vendor-template/
+runtime-policy and ULF limits remain explicit. No new collection is requested.
+Launchd ULF stays gated and integration remains on hold for user review.
 
 | Phase | Completion evidence | Current state |
 | --- | --- | --- |

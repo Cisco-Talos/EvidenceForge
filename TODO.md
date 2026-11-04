@@ -85,6 +85,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   main templates are repaired. This is start-coverage acceptance; unknown exits,
   runtime model choices and exact vendor-build limits remain explicit. See the same
   [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [ ] **P1 — Mac walkthrough defects:** Preserve successful command-duration constraints
+  across dependent storyline jitter (the unchanged sleep-600 job exits 19.74549 seconds
+  early with status 0), and require canonical interactive-shell eligibility before
+  writing SSH shell history (the sampled non-PTY `-zsh` invocation lacks `-i`).
+  Start coverage remains complete. Fix the timing/lifecycle and shell-submission owners,
+  then recheck the same chains; no new native collection is needed to diagnose them.
+  See the same [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
 - [ ] Finish the finite Mac endpoint delivery sequence: explicit lifecycle outcomes for the
   supported workload; reference-qualified minimum Unified Log coverage; one combined final
   acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and

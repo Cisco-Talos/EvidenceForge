@@ -3642,3 +3642,59 @@ PR into `dev`; no PR, merge, release or new native collection was performed.
 The trial root retains `POST-FIX-COMPLETE-V380-RUN.json`, separate CLI diagnostics,
 `strict-v380-evaluation.json`, `POST-FIX-COMPLETE-V380-REVIEW.json` and a concise
 `POST-FIX-REPORT.md`. No generated or native records were added to Git.
+
+### Bounded process-chain walkthrough
+
+The user requested the concrete walkthrough, not another assessment loop or the
+broader unknown-exit implementation. Four selected chains were reviewed in the
+preserved revision-380 MacOS-test bundle: local Terminal/id, non-PTY SSH/find, Word
+GUI startup and the root-owned sleep job. The existing revision-377 recovered
+iTerm2/uname fixture provides the separate terminal variant; it is not claimed as
+an iTerm2 generation of MacOS-test. Selected records were projected into bounded
+field summaries, with at most twenty nearby records per chain. Selected data,
+ground truth and resolved hashes were checked against their manifests. The prior
+evaluation was reused; no generation/evaluation/native collection or blind panel
+was rerun. No private capture, installed application, personal log or generation.log
+was opened. Engine code, authored scenarios and authoritative outputs are unchanged.
+
+All selected starts have one child lifetime, advancing execution versions, matching
+ES/eCAR PID/image/argv/audit identity and coherent parentage. The local command has
+known exit 0 and terminal responsibility. SSH binds to the accepted authentication,
+remote account, fork-only intermediary and pipe-backed shell. Word uses one PID
+through xpcproxy/app exec and preserves its own nested entitlements. iTerm2 has the
+expected four startup forks/six execs, server/login/ShellLauncher chain and same-PID
+ShellLauncher-to-zsh transition. Pre-existing boot launchd needs no retrospective
+in-window CREATE row. Source observation delays are explicit rather than duplicate
+executions. Unknown native exits remain explicit limitations.
+
+Two **concrete defects** prevent calling the whole reviewed output realistic:
+
+- The sleep-600 job's target exec-to-successful-exit interval is **580.254510s**,
+  **19.745490s too short**. Both ES and eCAR share this bad canonical lifetime. The
+  authored activation/exit are nominally ten minutes apart; generic storyline
+  scheduling independently jitters their anchors and the job leader-exit owner
+  accepts the resulting time without a successful-duration constraint. Apple's
+  public sleep source waits through the requested duration before ordinary success;
+  no early interruption is modeled. Fix dependent canonical scheduling and lifecycle
+  validation, preserving the command/intent rather than patching one emitter.
+- The sampled non-PTY SSH shell has argv `[-zsh]`, pipe stdin and no tty, but receives
+  an interactive-history submission. Zsh's documented INTERACTIVE initialization
+  requires tty input or an explicit invocation option; it cannot be enabled later
+  by startup files. `emit_macos_shell_history` currently accepts session kind `ssh`
+  and a live `-zsh`/`-bash` shell without proving interactivity. Fix canonical shell/
+  submission eligibility while preserving the correct process evidence and allowing
+  explicitly forced-interactive non-PTY cases as a distinct modeled invocation.
+
+Primary behavior references: [Apple sleep](https://github.com/apple-oss-distributions/shell_cmds/blob/main/sleep/sleep.c)
+and [zsh shell state](https://zsh.sourceforge.io/Doc/Release/Options.html#Shell-State).
+These are public-source comparisons, not new local observations. Both defects can
+be diagnosed without additional user assistance or collection. They are recorded
+as the finite next repair targets in TODO.md, ahead of the broader unknown-exit
+classification. Start-coverage acceptance remains intact; broader realism review
+and the integration hold remain open.
+
+Detailed annotated chains with source-line references are retained outside Git at
+`/private/tmp/eforge-macos-test-20261104-y5r18rii/PROCESS-CHAIN-WALKTHROUGH.md`, with
+`WALKTHROUGH-CHECKS.json`, `WALKTHROUGH-SELECTION.json` and `WALKTHROUGH-ITERM.json`.
+Only aggregate findings are tracked. Stale initial-failure paragraphs in the delivery
+plan and fixed-fixture report were corrected without changing historical metrics.
