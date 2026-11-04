@@ -26401,8 +26401,24 @@ class ActivityGenerator:
             or shell.logon_id != logon_id
             or shell.username != user.username
             or shell.image not in {"/bin/zsh", "/bin/bash"}
-            or shell.command_line not in {"-zsh", "-bash"}
             or not self._is_pid_active_at(system, shell_pid, time)
+        ):
+            return False
+        from evidenceforge.generation.macos_shell_history import interactive_history_shell
+
+        identity = self.state_manager.get_process_identity(system.hostname, shell_pid)
+        if identity is None:
+            return False
+        descriptors = self.state_manager.process_descriptors_at(identity, event_time=time)
+        stdin = (
+            next((item for item in descriptors.bindings if item.fd == 0), None)
+            if descriptors is not None
+            else None
+        )
+        if not interactive_history_shell(
+            shell.image,
+            identity.arguments,
+            stdin_is_terminal=stdin.is_terminal if stdin is not None else None,
         ):
             return False
         kind = "zsh_command" if shell.image == "/bin/zsh" else "bash_command"

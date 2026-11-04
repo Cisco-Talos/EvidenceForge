@@ -72,7 +72,14 @@ def test_pty_checkpoint_tag_is_distinct_and_legacy_auth_rows_keep_their_mode() -
         _decode_ssh_auth(row)
 
 
-def _engine(tmp_path: Path, *, native: bool = True, unified: bool = False) -> GenerationEngine:
+def _engine(
+    tmp_path: Path,
+    *,
+    native: bool = True,
+    unified: bool = False,
+    pty: bool = True,
+    history: bool = False,
+) -> GenerationEngine:
     scenario = _scenario()
     scenario.environment.systems[0].services = ["ssh"]
     scenario.macos_process_coverage = "complete" if native else "partial"
@@ -81,6 +88,8 @@ def _engine(tmp_path: Path, *, native: bool = True, unified: bool = False) -> Ge
     )
     if unified:
         scenario.output.logs.append({"format": "macos_unified_log"})
+    if history:
+        scenario.output.logs.append({"format": "zsh_history"})
     engine = GenerationEngine(scenario, tmp_path, generation_seed=370)
     engine._chronological_es_delivery = True
     engine._initialize()
@@ -93,7 +102,7 @@ def _engine(tmp_path: Path, *, native: bool = True, unified: bool = False) -> Ge
         duration=120,
         emit_session_close=True,
         defer_session_close=True,
-        pty=True,
+        pty=pty,
     )
     return engine
 

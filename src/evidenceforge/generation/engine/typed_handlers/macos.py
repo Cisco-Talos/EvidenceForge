@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
@@ -13,6 +14,7 @@ from evidenceforge.generation.actions.macos_persistence import (
     MacosPersistenceRequest,
 )
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
+from evidenceforge.generation.storyline_timing import STORYLINE_EVENT_JITTER_SECONDS
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import MacosLaunchItemEventSpec
 from evidenceforge.utils.rng import stable_uuid
@@ -53,15 +55,40 @@ def handle_launch_item(
             run_at_load=spec.run_at_load,
             launch_profile=spec.launch_profile,
         )
+    bundle = MacosPersistenceActionBundle(
+        state=runtime.state_manager,
+        lifecycle=runtime.lifecycle_registry,
+        authority=runtime.lifecycle_authority,
+        dispatcher=dispatcher,
+        deployments=dispatcher.deployment_registry,
+        content=RuntimeContentIdentityManager(dispatcher.local_artifact_registry),
+        metadata_provider=generator.macos_execution_metadata,
+        native_startups=generator._macos_finder_startups,
+    )
+    at = (
+        bundle.plan_exit_time(
+            hostname=context.system.hostname,
+            label=spec.label,
+            requested_at=context.time,
+            exit_code=spec.exit_code,
+            latest_at=context.authored_nominal_time
+            + timedelta(seconds=STORYLINE_EVENT_JITTER_SECONDS, microseconds=999999)
+            if context.authored_nominal_time is not None
+            else None,
+        )
+        if spec.operation == "exit"
+        else context.time
+    )
+    runtime.state_manager.set_current_time(at)
     request = MacosPersistenceRequest(
         caller=caller,
         host=generator._build_host_context(context.system),
-        timestamp=context.time,
+        timestamp=at,
         action_id=stable_uuid(
             "authored-macos-launch-item",
             context.system.hostname,
             dispatcher.authored_intent_id,
-            context.time.isoformat(),
+            at.isoformat(),
             spec.operation,
             spec.label,
         ),
@@ -73,19 +100,10 @@ def handle_launch_item(
         size_bytes=spec.size_bytes,
         exit_code=spec.exit_code,
     )
-    bundle = MacosPersistenceActionBundle(
-        state=runtime.state_manager,
-        lifecycle=runtime.lifecycle_registry,
-        authority=runtime.lifecycle_authority,
-        dispatcher=dispatcher,
-        deployments=dispatcher.deployment_registry,
-        content=RuntimeContentIdentityManager(dispatcher.local_artifact_registry),
-        metadata_provider=generator.macos_execution_metadata,
-        native_startups=generator._macos_finder_startups,
-    )
     completed = bundle.execute(request)
     process = completed.process
     result = context.malicious_event
+    result["time"] = at
     result.update(launchd_operation=spec.operation, launchd_label=spec.label, outcome="success")
     result["process_object_ids"] = [process.object_id for process in completed.terminated] + (
         [process.object_id] if process is not None else []

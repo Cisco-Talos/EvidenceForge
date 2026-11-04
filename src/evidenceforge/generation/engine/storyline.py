@@ -78,6 +78,7 @@ from evidenceforge.generation.engine.storyline_helpers import periodic as period
 from evidenceforge.generation.engine.storyline_helpers import process as process_helpers
 from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.generation.storage_world import CompiledStorageFile
+from evidenceforge.generation.storyline_timing import STORYLINE_EVENT_JITTER_SECONDS
 from evidenceforge.generation.world_model import (
     RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
     RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
@@ -3749,10 +3750,13 @@ class StorylineMixin:
         self._ensure_account_sid_tracking()
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
-            event_time = self._parse_storyline_time(storyline_event.time)
+            nominal_time = self._parse_storyline_time(storyline_event.time)
+            event_time = nominal_time
             rng = _get_rng()
             jitter = timedelta(
-                seconds=rng.uniform(-30, 30),
+                seconds=rng.uniform(
+                    -STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS
+                ),
                 microseconds=rng.randint(0, 999999),
             )
             event_time = event_time + jitter
@@ -3855,6 +3859,9 @@ class StorylineMixin:
                             ),
                             authored_time_shift=cumulative_rdp_shift,
                             session_required_until=session_required_until,
+                            authored_nominal_time=nominal_time
+                            + timedelta(seconds=cadence_offsets[i])
+                            + cumulative_rdp_shift,
                         )
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
@@ -3888,10 +3895,11 @@ class StorylineMixin:
         storyline_event = self.scenario.storyline[event_idx]
         event_idx + 1
 
-        event_time = self._parse_storyline_time(storyline_event.time)
+        nominal_time = self._parse_storyline_time(storyline_event.time)
+        event_time = nominal_time
         rng = _get_rng()
         jitter = timedelta(
-            seconds=rng.uniform(-30, 30),
+            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
             microseconds=rng.randint(0, 999999),
         )
         event_time = event_time + jitter
@@ -3973,6 +3981,9 @@ class StorylineMixin:
                         ),
                         authored_time_shift=cumulative_rdp_shift,
                         session_required_until=session_required_until,
+                        authored_nominal_time=nominal_time
+                        + timedelta(seconds=cadence_offsets[i])
+                        + cumulative_rdp_shift,
                     )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
@@ -4005,10 +4016,11 @@ class StorylineMixin:
         self._ensure_account_sid_tracking()
         rh_event = self.scenario.red_herrings[event_idx]
 
-        event_time = self._parse_storyline_time(rh_event.time)
+        nominal_time = self._parse_storyline_time(rh_event.time)
+        event_time = nominal_time
         rng = _get_rng()
         jitter = timedelta(
-            seconds=rng.uniform(-30, 30),
+            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
             microseconds=rng.randint(0, 999999),
         )
         event_time = event_time + jitter
@@ -4083,6 +4095,9 @@ class StorylineMixin:
                         future_specs=itertools.islice(rh_event.events, i + 1, None),
                         authored_time_shift=cumulative_rdp_shift,
                         session_required_until=session_required_until,
+                        authored_nominal_time=nominal_time
+                        + timedelta(seconds=cadence_offsets[i])
+                        + cumulative_rdp_shift,
                     )
                     if result:
                         # Track as red herring, not malicious
@@ -4109,6 +4124,7 @@ class StorylineMixin:
         future_specs: Sequence[Any] = (),
         authored_time_shift: timedelta = timedelta(0),
         session_required_until: datetime | None = None,
+        authored_nominal_time: datetime | None = None,
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
@@ -4151,6 +4167,7 @@ class StorylineMixin:
             self,
             spec,
             TypedEventContext(
+                authored_nominal_time=authored_nominal_time,
                 actor=actor,
                 system=system,
                 time=time,

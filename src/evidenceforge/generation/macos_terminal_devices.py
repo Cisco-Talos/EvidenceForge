@@ -156,7 +156,10 @@ def plan_macos_standard_io(
         raise StateError("Terminal standard I/O requires its exact allocated session device")
     if intent == "terminal":
         object_id = stable_uuid("macos-tty-open", identity.object_id, terminal.metadata_json)
-        bindings = tuple(MacosDescriptorBinding(fd, "file", object_id, False) for fd in range(3))
+        bindings = tuple(
+            MacosDescriptorBinding(fd, "file", object_id, False, is_terminal=True)
+            for fd in range(3)
+        )
     else:
         bindings = tuple(
             MacosDescriptorBinding(

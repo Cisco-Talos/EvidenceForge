@@ -10,6 +10,7 @@ import ntpath
 import random
 import re
 import shlex
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -86,6 +87,22 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     return None
 
 
+def numeric_sleep_seconds(arguments: Sequence[str] | None) -> Decimal | None:
+    """Read one literal numeric sleep operand without executing or capping its duration."""
+    if (
+        arguments is None
+        or len(arguments) != 2
+        or arguments[0].rsplit("/", 1)[-1].lower() != "sleep"
+        or re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", arguments[1]) is None
+    ):
+        return None
+    try:
+        requested = Decimal(arguments[1])
+    except InvalidOperation:
+        return None
+    return requested if requested.is_finite() and requested >= 0 else None
+
+
 def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
     """Estimate foreground Linux command lifetime for shell-history ordering."""
     exe_name = process_name.rsplit("/", 1)[-1].lower()
@@ -132,21 +149,13 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
             argv = shlex.split(command_line)
         except ValueError:
             argv = []
-        if (
-            len(argv) == 2
-            and argv[0].rsplit("/", 1)[-1].lower() == "sleep"
-            and re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", argv[1]) is not None
-        ):
-            try:
-                requested = Decimal(argv[1])
-            except InvalidOperation:
-                requested = Decimal(-1)
-            if requested.is_finite() and requested >= 0:
-                bounded = min(requested, Decimal(86_400))
-                bounded_seconds = float(bounded)
-                lower = max(0.05, bounded_seconds)
-                completion_slack = min(2.0, max(0.05, bounded_seconds * 0.02))
-                return (lower, lower + completion_slack)
+        requested = numeric_sleep_seconds(argv)
+        if requested is not None:
+            bounded = min(requested, Decimal(86_400))
+            bounded_seconds = float(bounded)
+            lower = max(0.05, bounded_seconds)
+            completion_slack = min(2.0, max(0.05, bounded_seconds * 0.02))
+            return (lower, lower + completion_slack)
         return (0.2, 2.0)
     if exe_name == "test":
         return (0.2, 2.0)

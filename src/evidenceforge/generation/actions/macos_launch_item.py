@@ -11,7 +11,7 @@ occurrences before this boundary is exposed to scenario authoring.
 
 import shlex
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
@@ -38,6 +38,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedFileEffectPayload,
 )
 from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
+from evidenceforge.generation.activity.process_helpers import numeric_sleep_seconds
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
     LocalArtifactPublishToken,
@@ -685,6 +686,31 @@ class MacosSystemJobLeaderExitPlan:
     group: PosixGroupIdentity
 
 
+def macos_successful_exit_not_before(
+    process: ProcessIdentity, exit_outcome: PosixProcessExit | None
+) -> datetime | None:
+    """Return the known command-duration bound for this exact successful image epoch."""
+    if (
+        exit_outcome is None
+        or exit_outcome.exit_code != 0
+        or process.image != "/bin/sleep"
+        or process.arguments is None
+        or process.arguments[0] != process.image
+    ):
+        return None
+    seconds = numeric_sleep_seconds(process.arguments)
+    if seconds is None:
+        return None
+    try:
+        numerator, denominator = seconds.as_integer_ratio()
+        duration = timedelta(microseconds=(numerator * 1_000_000 + denominator - 1) // denominator)
+        return process.execution_started_at + duration
+    except OverflowError as error:
+        raise StateError(
+            "Successful sleep duration exceeds the supported timestamp range"
+        ) from error
+
+
 def macos_system_job_leader_exit_completion_plan(
     *,
     lifecycle_registry: LifecycleRegistry,
@@ -731,6 +757,9 @@ def macos_system_job_leader_exit_completion_plan(
         or at < binding.bound_at
     ):
         raise StateError("Leader exit cannot substitute group, process lifetime or activation time")
+    minimum = macos_successful_exit_not_before(leader, exit_outcome)
+    if minimum is not None and at < minimum:
+        raise StateError("Successful sleep exit precedes its requested command duration")
     builder = state_manager.begin_action_cohort_materialization()
     adoptions = prepare_surviving_child_adoptions(
         lifecycle_registry=lifecycle_registry,

@@ -24,6 +24,7 @@ class MacosDescriptorBinding:
     object_id: Annotated[str, Field(strict=True, min_length=1)]
     close_on_exec: Annotated[bool, Field(strict=True)]
     native_pipe_id: Annotated[int, Field(strict=True, ge=0, lt=2**64)] | None = None
+    is_terminal: Annotated[bool, Field(strict=True)] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -35,6 +36,8 @@ class MacosDescriptorBinding:
             or not self.object_id.strip()
             or "\0" in self.object_id
             or type(self.close_on_exec) is not bool
+            or (self.is_terminal is not None and type(self.is_terminal) is not bool)
+            or (self.is_terminal is True and self.kind != "file")
             or (
                 self.native_pipe_id is not None
                 and (
@@ -76,11 +79,14 @@ class MacosDescriptorTable:
                 "Mac descriptor table requires exact host, aware time and bounded bindings"
             )
         object_kinds: dict[str, str] = {}
+        object_terminals: dict[str, bool | None] = {}
         for item in self.bindings:
             item.__post_init__()
             previous = object_kinds.setdefault(item.object_id, item.kind)
             if previous != item.kind:
                 raise ValueError("One shared descriptor object cannot have conflicting kinds")
+            if object_terminals.setdefault(item.object_id, item.is_terminal) != item.is_terminal:
+                raise ValueError("Shared descriptors require the same terminal fact")
         numbers = tuple(item.fd for item in self.bindings)
         if numbers != tuple(sorted(set(numbers))):
             raise ValueError("Mac descriptor table requires sorted unique descriptor numbers")

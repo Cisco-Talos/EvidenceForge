@@ -40,6 +40,7 @@ from evidenceforge.generation.actions.command_effects import (
 from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
 from evidenceforge.generation.actions.macos_launch_item import (
     MacosSystemJobGroupUnloadPlan,
+    macos_successful_exit_not_before,
     macos_system_job_bootstrap_plan,
     macos_system_job_definition_from_file,
     macos_system_job_deployment_identity,
@@ -64,6 +65,7 @@ from evidenceforge.generation.runtime_content import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
@@ -185,6 +187,51 @@ class MacosPersistenceActionBundle:
         self.native_startups = native_startups
         self.services = LifecycleProductionAdapter(lifecycle)
         authority.bind_source_timing_planner(dispatcher.source_timing_planner)
+
+    def plan_exit_time(
+        self,
+        *,
+        hostname: str,
+        label: str,
+        requested_at: datetime,
+        exit_code: int | None,
+        latest_at: datetime | None = None,
+    ) -> datetime:
+        """Constrain a jittered authored completion against its actual retained execution."""
+        if exit_code != 0:
+            return requested_at
+        host = self.deployments.host_deployment(hostname)
+        if host is None:
+            raise StateError("Job completion timing requires its compiled host deployment")
+        logical_id = stable_uuid("macos-launchd-system-job", host.hostname, label)
+        job = self.lifecycle.service_for_logical_at(hostname, logical_id, requested_at)
+        if job is None:
+            raise StateError("Job completion timing requires its loaded definition")
+        bindings, more = self.lifecycle.service_process_binding_page(
+            service_object_id=job.identity.object_id, limit=2
+        )
+        if more is not None or len(bindings) != 1:
+            raise StateError("Job completion timing requires one active process binding")
+        process = self.state.get_process_identity_by_object_id(
+            bindings[0].identity.process_object_id
+        )
+        if process is None:
+            raise StateError("Job completion timing lost its active process")
+        minimum = macos_successful_exit_not_before(process, PosixProcessExit(exit_code=exit_code))
+        if minimum is None:
+            return requested_at
+        graph = TemporalConstraintGraph(
+            scope=TimingScope(stable_id=process.execution_id, host=hostname, lifecycle_id=label),
+            relationship_key="macos.system_job.successful_completion",
+        )
+        start = process.execution_started_at
+        graph.add_node("exec", start, within=(start, start))
+        horizon = self.dispatcher.output_end_time
+        if horizon is not None and requested_at <= horizon:
+            latest_at = min(latest_at, horizon) if latest_at is not None else horizon
+        graph.add_node("exit", requested_at, not_after=latest_at)
+        graph.constrain_after("exit", "exec", min_gap=minimum - start)
+        return graph.resolved_time("exit")
 
     def execute(self, request: MacosPersistenceRequest) -> MacosPersistenceResult:
         """Complete one stage; successful file/process sources use canonical owners."""

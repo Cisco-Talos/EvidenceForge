@@ -18197,7 +18197,10 @@ class StateManager:
             return MacosDescriptorTable(
                 after.hostname,
                 at,
-                tuple(MacosDescriptorBinding(fd, "file", object_id, False) for fd in range(3)),
+                tuple(
+                    MacosDescriptorBinding(fd, "file", object_id, False, is_terminal=True)
+                    for fd in range(3)
+                ),
                 2,
             )
         if (

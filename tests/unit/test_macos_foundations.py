@@ -311,7 +311,9 @@ def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path, terminal
     assert closes == creates
 
 
-def test_mac_ssh_client_binds_catalog_terminal_history_and_transport_hold(tmp_path: Path) -> None:
+def test_mac_ssh_client_binds_catalog_terminal_without_guessing_unknown_history(
+    tmp_path: Path,
+) -> None:
     from evidenceforge.generation.emitters.zsh_history import ZshHistoryEmitter
 
     state = StateManager()
@@ -362,8 +364,7 @@ def test_mac_ssh_client_binds_catalog_terminal_history_and_transport_hold(tmp_pa
     history.close()
     endpoint.close()
     outputs = list(tmp_path.rglob("*.zsh_history"))
-    assert len(outputs) == 1
-    assert outputs[0].read_text().count(client.command_line) == 1
+    assert outputs == []
 
 
 @pytest.mark.parametrize(
@@ -576,17 +577,20 @@ def test_mac_history_requires_an_interactive_shell_and_keeps_bash_separate(
     when = _TIME + timedelta(seconds=30)
     shell_pid = generator.ensure_macos_session_shell(user, system, logon, when)
     assert shell_pid is not None
-    if shell_name == "bash":
-        shell_pid = generator.generate_process(
-            user,
-            system,
-            when,
-            logon,
-            "/bin/bash",
-            "-bash",
-            parent_pid=shell_pid,
-        )
-        when += timedelta(seconds=10)
+    # This legacy fixture has no native stdin inventory. Explicit -i owns its
+    # interactive intent without treating an unknown descriptor as a terminal.
+    shell_pid = generator.generate_process(
+        user,
+        system,
+        when,
+        logon,
+        f"/bin/{shell_name}",
+        f"-{shell_name} -i",
+        parent_pid=shell_pid,
+        arguments=(f"-{shell_name}", "-i"),
+        require_exact_parent=True,
+    )
+    when += timedelta(seconds=10)
     assert not generator.emit_macos_shell_history(
         user, system, when, "id", logon_id=logon, shell_pid=1
     )

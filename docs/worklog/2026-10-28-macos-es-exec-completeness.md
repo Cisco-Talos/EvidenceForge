@@ -3698,3 +3698,37 @@ Detailed annotated chains with source-line references are retained outside Git a
 `WALKTHROUGH-CHECKS.json`, `WALKTHROUGH-SELECTION.json` and `WALKTHROUGH-ITERM.json`.
 Only aggregate findings are tracked. Stale initial-failure paragraphs in the delivery
 plan and fixed-fixture report were corrected without changing historical metrics.
+
+### Walkthrough repairs at revision 381
+
+The user requested both concrete walkthrough defects be fixed. The job completion
+planner now constrains a known successful literal `/bin/sleep N` against the actual
+retained target exec, using the existing temporal graph and authored jitter/collection
+bounds. The lifecycle completion owner independently rejects an early success before
+mutation. Ground truth and both process sources consume the same corrected canonical
+time. Unknown, signal and nonzero outcomes remain distinct. Numeric parsing is shared
+with the existing Linux policy without changing its cap or lifetime behavior.
+
+History admission now consumes canonical shell argv and stdin terminal status instead
+of treating SSH/login mode as proof of interactivity. Explicit terminal producers set
+the fact; inherited/duplicated descriptors, exec and checkpoint retain it. Vnode type,
+controlling tty and opaque object names do not manufacture that fact. Explicit `-i`
+can qualify non-PTY input; unsupported/unknown invocation facts omit history without
+omitting the command's ES/eCAR execution. Descriptor checkpoint tag v3 upgrades older
+records to unknown terminal status. Legacy tests now preserve that distinction.
+
+The final targeted selection passes **255 tests**, including real-engine PTY/non-PTY
+command evidence, duration rejection/constraint saturation, hydrated state/lifecycle,
+descriptor fork/exec/duplication, legacy decoding, and unchanged Linux lifetime cases.
+The separate foundation/SSH/native-job selection also passed after fixture corrections;
+the initial failing test attempts were development checks, not accepted generation.
+Whole-repository Ruff/format and diff checks pass. Behavior revision 381 surface:
+`a4c72a675712b96feca5d8c6955184fc0efd4010021a9c93ea8655c2356f687a`.
+
+Fresh validation of the unchanged working MacOS-test draft has zero errors/warnings
+and the same two informational pivot notes. It retains all twelve formats, medium
+baseline, six hosts/three users and eight hours plus warmup. Expected peak disk is
+57,681,817 bytes (upper 86,522,725); the default checkpoint cadence creates no checkpoint
+in this short run. The next check is one fresh strict generation and one evaluation,
+then independent start reconciliation and the same two chain assertions. No native
+collection, installed-code read or personal log inspection was performed.

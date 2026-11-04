@@ -133,6 +133,10 @@ performs closure through interruption and checkpoint recovery.
 `pty: true` qualifies initial zsh startup and literal installed foreground commands.
 One controlling terminal owns its standard vnodes; command groups remain distinct from
 the shell's POSIX session and audit origin. Non-PTY commands use channel-owned pipes.
+History additionally requires canonical interactive invocation: terminal-backed stdin or
+an explicit interactive shell flag. Login argv such as `-zsh` alone does not qualify
+a pipe-backed shell. Unsupported/unknown invocation facts omit history without dropping
+the command's process evidence. Known terminal facts survive fork, exec and checkpoint.
 Use later `process` events with `supplementary: none`. Additional login shells, complex
 shell plans, background jobs and unsupported helper families remain gated; unsupported
 commands reject before allocating a child. Generic final-worker results remain unknown.
@@ -156,6 +160,11 @@ inputs use the frozen run policy. A known exit is explicit. Other domains/trigge
 gated. The example `scenarios/macos-persistence-example/native-system-job.yaml` provisions
 its caller before collection. An authored root process without `parent_ref` uses a modeled
 pre-existing elevated shell; no in-window elevation or authentication is invented.
+A successful literal `/bin/sleep N` completion cannot precede `N` seconds after the actual
+target exec. Authored exit timing is constrained within the existing jitter/collection
+window; an impossible window fails instead of publishing an early success. Direct lifecycle
+callers must already supply a compatible time. Unknown, signal and nonzero results do not
+become successful completions.
 
 File/process stages can produce eCAR. Registration and dormant unload have no admitted
 native observation. GUI LaunchAgents, automatic KeepAlive/timer/socket activation, native

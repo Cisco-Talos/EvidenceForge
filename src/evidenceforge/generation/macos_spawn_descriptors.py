@@ -131,7 +131,10 @@ def plan_spawn_descriptors(
             object_id = stable_uuid(
                 "macos-tty-open", process.object_id, terminal.metadata.canonical_json()
             )
-            bindings = [MacosDescriptorBinding(fd, "file", object_id, False) for fd in (0, 1, 2)]
+            bindings = [
+                MacosDescriptorBinding(fd, "file", object_id, False, is_terminal=True)
+                for fd in (0, 1, 2)
+            ]
     allocation = None
     count = (
         2

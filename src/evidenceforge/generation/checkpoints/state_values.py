@@ -518,9 +518,9 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("platform", "identity_kind", "content_id", "artifact_version_id"),
     ),
     "running-process-v21": (RunningProcess, _RUNNING_PROCESS_FIELDS),
-    "macos-descriptor-binding-v2": (
+    "macos-descriptor-binding-v3": (
         MacosDescriptorBinding,
-        ("fd", "kind", "object_id", "close_on_exec", "native_pipe_id"),
+        ("fd", "kind", "object_id", "close_on_exec", "native_pipe_id", "is_terminal"),
     ),
     "macos-descriptor-table-v2": (
         MacosDescriptorTable,
@@ -683,6 +683,9 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None, None, None, None]
         if record_tag == "macos-descriptor-binding-v1" and len(encoded_fields) == 4:
             record_tag = "macos-descriptor-binding-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "macos-descriptor-binding-v2" and len(encoded_fields) == 5:
+            record_tag = "macos-descriptor-binding-v3"
             encoded_fields = [*encoded_fields, None]
         if record_tag == "macos-descriptor-table-v1" and len(encoded_fields) == 3:
             record_tag = "macos-descriptor-table-v2"

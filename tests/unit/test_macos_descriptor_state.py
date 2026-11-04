@@ -30,6 +30,47 @@ def _table(seconds: int = 0) -> MacosDescriptorTable:
     )
 
 
+def test_terminal_fact_survives_dup_fork_exec_and_checkpoint_without_guessing_legacy() -> None:
+    state, parent = _process()
+    legacy = _table()
+    assert legacy.bindings[0].is_terminal is None
+    table = replace(
+        legacy,
+        bindings=(replace(legacy.bindings[0], is_terminal=True), *legacy.bindings[1:]),
+    ).duplicated(0, 1, close_on_exec=False, observed_at=_START)
+    assert table.bindings[0].is_terminal is table.bindings[1].is_terminal is True
+    builder = state.begin_action_cohort_materialization()
+    builder.record_macos_descriptors(parent, table=table)
+    state.materialize_action_cohort(builder.seal())
+    builder = state.begin_action_cohort_materialization()
+    child = builder.fork_process(parent, forked_at=_START + timedelta(seconds=1))
+    state.materialize_action_cohort(builder.seal())
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    inherited = restored.process_descriptors_at(
+        child.identity, event_time=child.identity.started_at
+    )
+    assert inherited.bindings[0].is_terminal is True
+    executed = _execute(restored, child.identity, seconds=2)
+    assert (
+        restored.process_descriptors_at(executed, event_time=executed.executed_at)
+        .bindings[0]
+        .is_terminal
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "tag,extent", [("macos-descriptor-binding-v1", 4), ("macos-descriptor-binding-v2", 5)]
+)
+def test_older_descriptor_records_keep_terminal_status_unknown(tag: str, extent: int) -> None:
+    encoded = encode_state_value(_table().bindings[0])
+    assert encoded[1] == "macos-descriptor-binding-v3"
+    encoded[1] = tag
+    encoded[2] = encoded[2][:extent]
+    assert decode_state_value(encoded).is_terminal is None
+
+
 def test_unknown_empty_and_known_tables_remain_distinct_through_checkpoint() -> None:
     state, process = _process()
     assert state.process_descriptors_at(process, event_time=_START) is None

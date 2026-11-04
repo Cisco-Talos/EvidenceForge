@@ -31,3 +31,4 @@ class TypedEventContext:
     dispatcher: EventDispatcher | None
     malicious_event: dict[str, Any]
     _ground_truth_uid: Callable[[str, str, str], str]
+    authored_nominal_time: datetime | None = None
