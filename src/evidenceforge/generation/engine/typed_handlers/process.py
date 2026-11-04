@@ -94,10 +94,15 @@ def handle_process(
     )
     command_line = spec.command_line or process_name
     provider = self.activity_generator.macos_execution_metadata if os_category == "macos" else None
+    launch_session = self.state_manager.get_session_at(logon_id, time) if provider else None
     finder = getattr(spec, "launch_method", None) == "finder" or (
         os_category == "macos"
         and provider is not None
         and process_name in provider.profile.finder_launch_images
+        and spec.parent_ref is None
+        and launch_session is not None
+        and launch_session.session_kind == "interactive"
+        and launch_session.logon_type == 2
     )
     if finder and os_category != "macos":
         from evidenceforge.models.exceptions import StateError

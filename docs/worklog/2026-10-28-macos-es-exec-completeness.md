@@ -3504,3 +3504,37 @@ The next actual-scenario run will use a fresh explicitly partial diagnostic outp
 with unchanged workload, then reconcile its starts against the previous preserved
 diagnostic. No native completeness claim is made yet: GUI target signing remains
 unqualified. No PR/merge/release or new native collection is authorized.
+
+### Actual-scenario routing failure and owning-layer repair
+
+Commit `6e121135` is pushed. The unchanged partial diagnostic validates with zero
+errors/warnings and the same two informational pivot notes. Its first revision-378
+generation failed in hour 1 after 31 seconds: process attribution for profile
+traffic selected a GUI executable under an SSH session, then automatic image-only
+routing incorrectly replaced its shell parent with the Finder owner. This produced
+the strict GUI-login ownership error, not a source render/collection failure. The
+failed output `post-fix-diagnostic-v378` is preserved with no recovery point or
+authoritative bundle and is not evaluated as completed output.
+
+A temporary in-memory diagnostic against a fresh synthetic run classified all
+preconditions together: boot parent present; active SSH session, Type 10; known
+audit origin; within the metadata window. It opened no native logs or private
+capture. The separate failed `routing-diagnostic-v378` is preserved. The root cause
+is using executable identity alone to select launch semantics.
+
+Revision 379 makes automatic Finder routing conditional on a live interactive
+Type-2 GUI owner in both API and typed-event paths. An SSH direct invocation retains
+its existing shell parent and canonical fork/exec. An explicit authored parent is
+also preserved; explicit `launch_method: finder` keeps its own stronger contract.
+The application, network flow and session are not dropped or rewritten. Two real-
+engine regressions exercise a Chrome executable started from SSH through both
+paths, requiring one native app exec with the same SSH shell/session identity.
+All **62 command/Finder/root ownership cases** pass. The behavior surface is
+`d91bfb889141c759e74d37e6119db85d3e64433722f00e1756d498a78741a6c1`.
+
+Public GUI metadata work is independent. Firefox 158.0 was downloaded from Mozilla,
+mounted read-only and inspected without launching/installing it. A first standalone-
+copy signature check correctly failed after losing signed bundle context; checking
+the unchanged image in its original public bundle passed. Both temporary volumes
+were detached. Its fixed public signer/entitlement/architecture metadata is retained
+outside Git, pending catalog qualification. No installed GUI application was read.

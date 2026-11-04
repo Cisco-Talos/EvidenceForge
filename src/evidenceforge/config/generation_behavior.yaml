@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 378
+current_revision: 379
 history_start_revision: 1
-behavior_surface_sha256: a9f066a4c693649eeb28df4002304e2f22f4a2b1d897002344187cb78396cc88
+behavior_surface_sha256: d91bfb889141c759e74d37e6119db85d3e64433722f00e1756d498a78741a6c1
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3622,3 +3622,9 @@ changes:
     domains: [literal-shell-arguments, macos-process-lifecycle, macos-binary-metadata, macos-gui-startup, macos-launchd]
     formats: [ecar, macos_endpoint_security, zsh_history]
     summary: Fixes literal argv and canonical root/job/GUI launch ownership; adds bounded Homebrew/Apple static metadata and shared UUID signing identifiers while retaining native qualification gaps.
+  - revision: 379
+    id: macos-gui-launch-session-routing
+    impact: localized
+    domains: [macos-process-lifecycle, macos-gui-startup, macos-ssh]
+    formats: [ecar, macos_endpoint_security, zsh_history]
+    summary: Restricts automatic Finder startup to live local GUI sessions; direct GUI executable invocation from SSH retains the existing shell fork-exec path and explicit parent references retain their ownership.

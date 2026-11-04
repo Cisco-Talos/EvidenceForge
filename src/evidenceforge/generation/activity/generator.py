@@ -17093,12 +17093,20 @@ class ActivityGenerator:
                 parent_pid = shell_pid
                 if ensure_utc(time) <= shell.execution_started_at:
                     time = shell.execution_started_at + timedelta(milliseconds=50)
+        finder_session = (
+            self.state_manager.get_session_at(logon_id, time)
+            if provider is not None and process_name in provider.profile.finder_launch_images
+            else None
+        )
         if (
             _get_os_category(system.os) == "macos"
             and macos_launch_kind is None
             and not require_exact_parent
             and provider is not None
             and process_name in provider.profile.finder_launch_images
+            and finder_session is not None
+            and finder_session.session_kind == "interactive"
+            and finder_session.logon_type == 2
         ):
             parent_pid = 1
             require_exact_parent = True

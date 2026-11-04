@@ -12,7 +12,7 @@ import pytest
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
-from evidenceforge.models.scenario import LogonEventSpec
+from evidenceforge.models.scenario import LogonEventSpec, ProcessEventSpec
 from tests.support.macos_ssh import MACOS_NATIVE_QUERY_COMMANDS
 from tests.unit.test_macos_command_exit_outcomes import _engine
 
@@ -257,6 +257,54 @@ def test_mysql_option_value_quoting_uses_the_canonical_fork_exec_owner(
         sum(row.event_type == 9 and row.event.exec.target.audit_token.pid == pid for row in records)
         == 1
     )
+
+
+@pytest.mark.parametrize("authored", [False, True], ids=["network-owner-api", "authored"])
+def test_gui_executable_started_from_ssh_keeps_its_shell_launch_chain(
+    tmp_path: Path, scenarios_dir: Path, authored: bool
+) -> None:
+    image = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    with _engine(tmp_path, scenarios_dir) as (engine, target, user, session):
+        assert session.session_kind == "ssh"
+        at = engine.start_time + timedelta(minutes=11)
+        command = shlex.join((image,))
+        if authored:
+            engine._record_storyline_logon(user, target, session.logon_id)
+            result = engine._execute_typed_event(
+                ProcessEventSpec(process_name=image, command_line=command, supplementary="none"),
+                user,
+                target,
+                at,
+                "Direct app executable from SSH",
+                {"process"},
+            )
+            pid = result["pid"]
+            assert result["native_process_model"] == "fork_exec"
+        else:
+            pid = engine.activity_generator.generate_process(
+                user,
+                target,
+                at,
+                session.logon_id,
+                image,
+                command,
+                parent_pid=session.session_shell_pid,
+            )
+        process = engine.state_manager.get_process_identity(target.hostname, pid)
+        assert process.execution_ordinal == 1 and process.initial_image == "/bin/zsh"
+        assert process.parent_pid == session.session_shell_pid
+        assert process.logon_id == session.logon_id and process.arguments == (image,)
+    rows = [
+        decode_endpoint_security_record(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    targets = [
+        row.event.exec.target
+        for row in rows
+        if row.event_type == 9 and row.event.exec.target.audit_token.pid == pid
+    ]
+    assert len(targets) == 1 and targets[0].executable.path == image
 
 
 def test_quoted_shell_invocation_has_its_own_exec_without_inventing_inner_processes(
