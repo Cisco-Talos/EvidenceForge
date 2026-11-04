@@ -163,6 +163,17 @@ def handle_process(
     elif explicit_parent is not None:
         parent_pid, _parent_image = explicit_parent
         requires_interactive_session = True
+    elif (
+        os_category == "macos"
+        and process_actor.username == "root"
+        and not process_logon_id
+        and (
+            foothold_pid := self.activity_generator._get_system_pid(
+                system.hostname, "preexisting-root-shell", 0
+            )
+        )
+    ):
+        parent_pid = foothold_pid
     elif service_process_identity is not None:
         process_actor, _service_name, service_lifecycle_group_id = service_process_identity
         process_logon_id = {

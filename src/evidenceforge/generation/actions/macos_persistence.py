@@ -218,7 +218,24 @@ class MacosPersistenceActionBundle:
         if job is None or job.identity.launchd_job is None:
             raise StateError("Launch-item operation requires its currently loaded system job")
         if request.operation == "activate":
-            if job.identity.launchd_job.launch_profile is not None:
+            definition = job.identity.launchd_job
+            canonical_startup = definition.launch_profile is not None
+            if not canonical_startup and (
+                self.metadata_provider is not None
+                and self.metadata_provider.profile.system_job_startup == "root_xpcproxy_v11"
+                and self.native_startups is not None
+                and definition.principal == "root"
+                and not definition.run_at_load
+            ):
+                binary = self.dispatcher.resolve_process_binary_identity(
+                    caller.hostname, "root", definition.program, "macos"
+                )
+                canonical_startup = (
+                    type(binary) is BinaryReleaseIdentity
+                    and binary.mach_o_image is not None
+                    and binary.mach_o_image.architecture == "arm64"
+                )
+            if canonical_startup:
                 return self._activate_native(request, job.identity.object_id)
             binary = self.dispatcher.resolve_process_binary_identity(
                 host.hostname,

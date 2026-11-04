@@ -195,7 +195,20 @@ def test_local_logoff_uses_current_exec_without_rewriting_lifetime_birth(
         ("/bin/zsh *", None),
         ("/bin/zsh id | cat", None),
         ("/bin/zsh id > output", None),
-        ("/bin/zsh 'a'b", None),
+        ("/bin/zsh 'a'b", ("/bin/zsh", "ab")),
+        ('/bin/zsh --execute="SELECT 1"', ("/bin/zsh", "--execute=SELECT 1")),
+        ("/bin/zsh --label='a; b'", ("/bin/zsh", "--label=a; b")),
+        ('/bin/zsh --label=""', ("/bin/zsh", "--label=")),
+        ('/bin/zsh --label="prefix"suffix', ("/bin/zsh", "--label=prefixsuffix")),
+        ('/bin/zsh --label="safe"$HOME', None),
+        ('/bin/zsh --label="safe"$(id)', None),
+        ('/bin/zsh --label="safe"`id`', None),
+        ('/bin/zsh --label="safe"*', None),
+        ('/bin/zsh --label="safe";id', None),
+        ('/bin/zsh --label="safe"|cat', None),
+        ('/bin/zsh --label="safe">output', None),
+        ("/bin/zsh --label='literal'$HOME", None),
+        ('/bin/zsh --label="unterminated', None),
         ("/bin/zsh\nid", None),
         ("/bin/zsh bad\0word", None),
     ],
@@ -204,6 +217,46 @@ def test_literal_exec_arguments_preserve_quoted_input_without_expansion(
     command: str, arguments: tuple[str, ...] | None
 ) -> None:
     assert literal_shell_child_arguments("/bin/zsh", command) == arguments
+
+
+def test_mysql_option_value_quoting_uses_the_canonical_fork_exec_owner(
+    tmp_path: Path, scenarios_dir: Path
+) -> None:
+    image = "/opt/homebrew/opt/mysql-client/bin/mysql"
+    command = image + ' --host=db01.example.test --execute="SELECT 1"'
+    with _engine(tmp_path, scenarios_dir) as fixture:
+        engine, target, user, session = fixture
+        pid = engine.activity_generator.generate_process(
+            user,
+            target,
+            engine.start_time + timedelta(minutes=11),
+            session.logon_id,
+            image,
+            command,
+            parent_pid=session.session_shell_pid,
+            require_exact_parent=True,
+        )
+        process = engine.state_manager.get_process_identity(target.hostname, pid)
+        assert process is not None and process.execution_ordinal == 1
+        assert process.initial_image == "/bin/zsh"
+        assert process.arguments == (image, "--host=db01.example.test", "--execute=SELECT 1")
+        binary = engine.dispatcher.resolve_loaded_process_binary_identity(process)
+        assert binary.code_signature.entitlements == "absent"
+        assert binary.code_signature.signing_id == (
+            "mysql-55554944" + binary.mach_o_image.build_uuid.replace("-", "").lower()
+        )
+    records = [
+        decode_endpoint_security_record(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    assert any(
+        row.event_type == 11 and row.event.fork.child.audit_token.pid == pid for row in records
+    )
+    assert (
+        sum(row.event_type == 9 and row.event.exec.target.audit_token.pid == pid for row in records)
+        == 1
+    )
 
 
 def test_quoted_shell_invocation_has_its_own_exec_without_inventing_inner_processes(

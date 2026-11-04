@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 377
+current_revision: 378
 history_start_revision: 1
-behavior_surface_sha256: 3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8
+behavior_surface_sha256: a9f066a4c693649eeb28df4002304e2f22f4a2b1d897002344187cb78396cc88
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3616,3 +3616,9 @@ changes:
     domains: [macos-ssh-authentication, ssh-client-key-identity]
     formats: [macos_unified_log, syslog]
     summary: Adds source-derived plain public-key success through the qualified SSH logger and canonical method/key facts; fixes shared Base64 SHA256 fingerprints and preserves unknown-key and verbose-message gates.
+  - revision: 378
+    id: macos-catalog-launch-ownership
+    impact: localized
+    domains: [literal-shell-arguments, macos-process-lifecycle, macos-binary-metadata, macos-gui-startup, macos-launchd]
+    formats: [ecar, macos_endpoint_security, zsh_history]
+    summary: Fixes literal argv and canonical root/job/GUI launch ownership; adds bounded Homebrew/Apple static metadata and shared UUID signing identifiers while retaining native qualification gaps.

@@ -3,6 +3,7 @@
 
 """A shared Finder producer publishes the complete measured root-to-app chain."""
 
+import shlex
 from datetime import timedelta
 from pathlib import Path
 
@@ -82,11 +83,27 @@ def _finder_engine(
     native: bool,
     missing_boot_policy: bool = False,
     complete: bool = True,
+    missing_app_signature: bool = False,
+    root_foothold: bool = False,
+    gui_application: str | None = None,
 ) -> GenerationEngine:
     raw = _scenario().model_dump(mode="json", exclude_none=True)
     if native:
         raw["output"]["logs"].append({"format": "macos_endpoint_security"})
         raw["macos_process_coverage"] = "complete" if complete else "partial"
+    if root_foothold:
+        raw["storyline"] = [
+            {
+                "id": "root-child",
+                "time": "+11m",
+                "actor": "root",
+                "system": "MAC-01",
+                "activity": "Use an already elevated foothold; elevation is outside collection.",
+                "events": [
+                    {"type": "process", "process_name": "/bin/sh", "command_line": "/bin/sh"}
+                ],
+            }
+        ]
     overlay = tmp_path / ".eforge/config/activity/application_catalog.yaml"
     overlay.parent.mkdir(parents=True)
     catalog = yaml.safe_load((get_activity_directory() / "application_catalog.yaml").read_text())
@@ -99,12 +116,23 @@ def _finder_engine(
                     {
                         "id": application["id"],
                         "personas": ["developer"]
-                        if application["id"] == "macos-reference-app"
+                        if application["id"] in {"macos-reference-app", gui_application}
                         else [],
                         "_replace": True,
+                        **(
+                            {"platforms": {"macos": {"code_signature": {"entitlements": None}}}}
+                            if missing_app_signature and application["id"] == "macos-reference-app"
+                            else {}
+                        ),
                     }
                     for application in catalog["applications"]
-                    if "macos" in application["platforms"] and "code" in application["categories"]
+                    if "macos" in application["platforms"]
+                    and (
+                        "code" in application["categories"]
+                        or gui_application is not None
+                        and ".app/Contents/MacOS/"
+                        in application["platforms"]["macos"]["image_path"]
+                    )
                 ],
             }
         )
@@ -138,6 +166,114 @@ def _finder_engine(
     )
     engine._chronological_es_delivery = True
     return engine
+
+
+@pytest.mark.parametrize(
+    "application_id",
+    [
+        "tableau_desktop",
+        "zoom",
+        "acrobat",
+        "cisco_secure_client",
+        "globalprotect",
+        "dropbox",
+        "firefox",
+        "google_drive_desktop",
+        "word",
+        "webex",
+        "citrix_workspace",
+        "dbeaver",
+        "outlook",
+        "slack",
+        "onedrive",
+    ],
+)
+def test_existing_user_scenario_gui_apps_share_the_canonical_launch_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, application_id: str
+) -> None:
+    engine = _finder_engine(tmp_path, monkeypatch, native=False, gui_application=application_id)
+    try:
+        with effective_config_scope(engine.compiled_scenario.effective_config):
+            engine._initialize()
+        generator = engine.activity_generator
+        system, user = engine.scenario.environment.systems[0], engine.scenario.environment.users[0]
+        descriptor = engine.deployment_registry.application_descriptor(application_id, "macos")
+        image = descriptor.image_path
+        logon = generator.generate_logon(
+            user, system, engine.start_time - timedelta(minutes=5), allow_local_session_reuse=False
+        )
+        pid = generator.generate_process(
+            user,
+            system,
+            engine.start_time + timedelta(minutes=2),
+            logon,
+            image,
+            shlex.join((image,)),
+        )
+        process = engine.state_manager.get_process_identity(system.hostname, pid)
+        assert process.parent_pid == 1 and process.initial_image == "/sbin/launchd"
+        assert process.execution_ordinal == 2 and process.arguments == (image,)
+        assert process.credentials.audit_uid == process.credentials.real_uid
+        assert process.responsibility.responsible is None
+        assert process.image_security is None
+        binary = engine.dispatcher.resolve_loaded_process_binary_identity(process)
+        assert binary.code_signature is None
+    finally:
+        engine._close_emitters()
+
+
+def test_unknown_app_signer_keeps_canonical_gui_chain_and_complete_coverage_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _finder_engine(tmp_path, monkeypatch, native=True, missing_app_signature=True)
+    try:
+        with effective_config_scope(engine.compiled_scenario.effective_config):
+            engine._initialize()
+        generator = engine.activity_generator
+        system, user = engine.scenario.environment.systems[0], engine.scenario.environment.users[0]
+        logon = generator.generate_logon(
+            user, system, engine.start_time - timedelta(minutes=5), allow_local_session_reuse=False
+        )
+        metadata = engine.macos_execution_metadata
+        metadata.profile = metadata.profile.model_copy(
+            update={
+                "code_validation": tuple(
+                    rule
+                    for rule in metadata.profile.code_validation
+                    if rule.product_id != "eforge-reference"
+                )
+            }
+        )
+        pid = generator.generate_process(
+            user,
+            system,
+            engine.start_time + timedelta(minutes=2),
+            logon,
+            _APP,
+            _APP,
+            parent_pid=1,
+            require_exact_parent=True,
+            arguments=(_APP,),
+            macos_launch_kind="finder",
+        )
+        process = engine.state_manager.get_process_identity(system.hostname, pid)
+        assert process.execution_ordinal == 2 and process.initial_image == "/sbin/launchd"
+        assert process.image_security is None
+        assert (
+            engine.dispatcher.resolve_loaded_process_binary_identity(
+                process
+            ).code_signature.entitlements
+            is None
+        )
+        with pytest.raises(StateError, match="Incomplete native macOS process coverage"):
+            engine._finalize_macos_process_coverage()
+        host = engine.dispatcher.macos_es_ingress.coverage.hosts[0]
+        assert host.process_census.aggregate_births == 0
+        assert host.process_census.expected_forks == host.process_census.published_forks == 1
+        assert host.process_census.expected_execs == 2 and host.process_census.published_execs == 1
+        assert any(row.reason == "entitlements_unknown" for row in host.observations)
+    finally:
+        engine._close_emitters()
 
 
 @pytest.mark.parametrize("authored", [False, True], ids=["baseline-owner", "authored"])

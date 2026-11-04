@@ -295,6 +295,15 @@ def prepared_macos_es_process_publication(
 
     # Unsupported individual phases retain counter observations, with no native
     # bytes. A known fork remains available when later exec metadata is unknown.
+    def signing_known(process: ProcessIdentity) -> bool:
+        security = process.image_security
+        return (
+            security is not None
+            and security.validation_category is not None
+            and dispatcher.resolve_loaded_process_binary_identity(process).code_signature
+            is not None
+        )
+
     def phase_reason(event: CanonicalOccurrence) -> str:
         # A known terminal result cannot qualify an image whose exact loaded
         # version was never supplied. This is an unavailable source phase, not
@@ -312,6 +321,8 @@ def prepared_macos_es_process_publication(
                 and source.profile.boot_parent_token is None
             ):
                 return "boot_parent_token_unknown"
+            if not signing_known(actor) or not signing_known(subject):
+                return "image_security_unknown"
         if event.event_type == "process_exec":
             execution = next(
                 item
@@ -320,6 +331,11 @@ def prepared_macos_es_process_publication(
             )
             if execution.target.executable_version is None:
                 return "executable_version_unknown"
+            binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
+            if binary.code_signature is None or binary.code_signature.entitlements is None:
+                return "entitlements_unknown"
+            if not all(signing_known(item) for item in (execution.target, execution.after)):
+                return "image_security_unknown"
             if execution.gui_session is not None:
                 for snapshot in (execution.target, execution.after):
                     if (
@@ -351,9 +367,6 @@ def prepared_macos_es_process_publication(
                     )
                 except ValueError:
                     return "gui_exec_metadata_unknown"
-            binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
-            if binary.code_signature is None or binary.code_signature.entitlements is None:
-                return "entitlements_unknown"
             entitlements = binary.code_signature.entitlements
             policy = source.profile.exec_entitlements
             if entitlements != "absent" and not (
@@ -379,6 +392,8 @@ def prepared_macos_es_process_publication(
                 return "thread_replacement_unknown"
             return "supported"
         if event.event_type == "process_terminate":
+            if not signing_known(subject):
+                return "image_security_unknown"
             return (
                 "supported"
                 if any(

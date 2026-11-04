@@ -3431,3 +3431,76 @@ and selected baseline tools/apps, with qualified launch and metadata facts. Keep
 the workload and complete coverage contract intact for its next acceptance run.
 This is durable incomplete product work, now explicitly prioritized in TODO.md;
 the partial diagnostic must not be relabelled as satisfaction of the user's goal.
+
+## 2026-11-04 — Repair launch owners and qualify the existing command catalog
+
+The user agreed to the persistence → Homebrew → GUI sequence and emphasized root
+cause fixes. The first concrete defect was the shared literal argv adapter:
+POSIX/non-POSIX shlex word-count comparison rejected adjacent literal quote pieces,
+including MySQL's `--execute="SELECT 1"`. A bounded lexical quote scan now accepts
+literal concatenation while retaining expansion/operator/glob/escape rejection.
+The canonical fork/exec owner receives the actual argument vector.
+
+Root/system/GUI canonical startup had been coupled to a small target metadata
+allowlist. The system-job coordinator now admits installed native root targets
+through the existing retained launchd/xpcproxy/setsid/target journal even when
+`launch_profile` is omitted. The loaded definition's content identity is unchanged;
+omitted launch inputs use the run's frozen execution policy. Lifecycle binding and
+checkpoint hydration validate the real root/group/execution relationship rather
+than requiring that optional authoring flag. Historical target-list input remains
+readable as reference inventory, not a canonical startup allowlist. Unsupported
+unknown image formats retain their existing aggregate fallback.
+
+For the root caller's unspecified parent, the user requested a recommendation.
+The selected interpretation is a pre-existing elevated shell, consistent with the
+authored foothold statement. World intent requests this initial context; the shared
+fleet transaction owns it before collection and the typed process handler selects
+that exact parent. The in-window child uses the shared shell fork/exec owner without
+inventing elevation or authentication. The explicit nominal context is unattributed
+root, no terminal, null standards and a plain `/bin/sh`. Explicit `parent_ref` wins.
+The test exposed inherited System integrity being overwritten by a generic High
+label: fork/exec publication now consumes the canonical inherited integrity.
+
+The user separately authorized the prepared fixed-output static checker for only
+`/bin/sh` and `/bin/sleep`. Sandbox verification was unavailable; the exact checker
+outside the sandbox passed both signatures and returned expected signing IDs,
+absent team/entitlements, arm64e/ptrauth slices and no static option bits. Neither
+command was executed. No local log, profile or private capture was opened or copied.
+The catalog now has those explicit static facts. Runtime outcomes remain selected
+frozen platform-command/system-job policy, **not measured runtime flags**.
+
+Four public Homebrew macOS 27 arm64 bottle layers were independently fetched and
+digest-verified outside Git: mysql-client 26.7.0, libpq 18.6 revision 2, sqlcmd 1.10.0
+and curl 8.23.0. Only exact main executable members were inspected; none was installed
+or executed. Apple's read-only codesign verification passed all four. All have ad-hoc
+signatures and absent XML/DER entitlements/team IDs. sqlcmd uses `a.out` and retains
+LINKER_SIGNED; curl/mysql/psql identifiers contain the separate image LC_UUID. The
+deployment compiler now resolves a bounded UUID token once from its existing
+release-owned Mach-O identity, preserving cross-source truth and synthetic hashes.
+Successful ad-hoc runtime validation is explicit model policy, not a captured run.
+Public archive digests/provenance and all model limits are in
+`docs/design/macos-workstation-feasibility/catalog-native-metadata.md`.
+
+All fifteen existing GUI applications from the gap inventory now have explicit
+native-image/bundle declarations and share the same regular LaunchServices owner.
+Their signer/entitlement/runtime facts remain unknown; no app borrows Chrome's
+metadata. Native qualification is independent of canonical startup. An actual bug
+exposed by this separation also allowed known exits with missing image security to
+reach rendering and raise. Shared source admission now records `image_security_unknown`
+for unavailable fork/exec/exit snapshots, preserving canonical events and the
+unchanged complete-coverage failure instead of inventing facts.
+
+Verification: the 264-case targeted routine selection passed its behavioral cases;
+three manifest-summary-length failures were corrected and all 23 manifest cases
+passed on rerun. The new automatic/explicit job checkpoint cases both pass, including
+byte-equal output after hydration. All **18 slow Finder/system-job publication-fault
+recovery cases** pass without coverage. The fifteen selected GUI apps pass shared-
+owner tests; literal quoting, UUID identity, native root fork/exec and qualified/
+unknown sleep exit controls pass. Whole-repository Ruff/format and diff checks pass.
+Behavior revision **378**, surface digest
+`a9f066a4c693649eeb28df4002304e2f22f4a2b1d897002344187cb78396cc88`.
+
+The next actual-scenario run will use a fresh explicitly partial diagnostic output
+with unchanged workload, then reconcile its starts against the previous preserved
+diagnostic. No native completeness claim is made yet: GUI target signing remains
+unqualified. No PR/merge/release or new native collection is authorized.

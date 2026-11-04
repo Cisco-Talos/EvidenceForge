@@ -143,6 +143,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Firefox.app/Contents/MacOS/firefox
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -227,6 +228,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -276,6 +278,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -461,6 +464,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/OneDrive.app/Contents/MacOS/OneDrive
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -498,6 +502,7 @@ applications:
     platforms:
       macos:
         image_path: '/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat'
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: catalog
@@ -1060,6 +1065,8 @@ applications:
     platforms:
       macos:
         image_path: /opt/homebrew/opt/curl/bin/curl
+        executable_format: mach_o
+        code_signature: {signing_id: 'curl-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1418,6 +1425,8 @@ applications:
     platforms:
       macos:
         image_path: /opt/homebrew/bin/sqlcmd
+        executable_format: mach_o
+        code_signature: {signing_id: a.out, team_id: null, entitlements: absent}
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1517,6 +1526,8 @@ applications:
     platforms:
       macos:
         image_path: /opt/homebrew/opt/mysql-client/bin/mysql
+        executable_format: mach_o
+        code_signature: {signing_id: 'mysql-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1548,6 +1559,8 @@ applications:
     platforms:
       macos:
         image_path: /opt/homebrew/opt/libpq/bin/psql
+        executable_format: mach_o
+        code_signature: {signing_id: 'psql-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1634,6 +1647,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Slack.app/Contents/MacOS/Slack
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1692,6 +1706,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/zoom.us.app/Contents/MacOS/zoom.us
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1751,6 +1766,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Webex.app/Contents/MacOS/Webex
+        executable_format: mach_o
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -1805,6 +1821,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Dropbox.app/Contents/MacOS/Dropbox
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1858,6 +1875,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Google Drive.app/Contents/MacOS/Google Drive
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1908,6 +1926,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1989,6 +2008,7 @@ applications:
       macos:
         available_from: "2026-10-16"
         image_path: "/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"
+        executable_format: mach_o
         deployment:
           kind: managed
           product_id: cisco-secure-client-ui
@@ -2010,6 +2030,7 @@ applications:
     platforms:
       macos:
         image_path: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+        executable_format: mach_o
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -2129,6 +2150,7 @@ applications:
     platforms:
       macos:
         image_path: '/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau'
+        executable_format: mach_o
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -2237,6 +2259,7 @@ applications:
       macos:
         singleton_per_session: true
         image_path: /Applications/DBeaver.app/Contents/MacOS/dbeaver
+        executable_format: mach_o
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -3229,6 +3252,33 @@ applications:
   # Host-build identities and Mach-O UUIDs are modeled, not captured binaries.
   # Signing and absent entitlements below are explicit synthetic binary facts.
   # They do not assert the entitlement inventory of every installed Apple build.
+  # Fixed-output static inspection confirmed these two Apple signing identifiers,
+  # absent entitlements and arm64e slices. Runtime outcomes remain selected model
+  # policy, not measurements of their execution. See catalog-native-metadata.md.
+  - id: macos-sh
+    display_name: macOS POSIX shell
+    platforms:
+      macos:
+        image_path: /bin/sh
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.sh, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/sh]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sleep
+    display_name: macOS sleep
+    platforms:
+      macos:
+        image_path: /bin/sleep
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.sleep, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/sleep 600]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
   - id: macos-true
     display_name: macOS true
     platforms:

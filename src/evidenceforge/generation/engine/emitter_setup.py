@@ -1245,6 +1245,40 @@ class EmitterSetupMixin:
             )
         if not processes or processes[0].alias != "launchd":
             raise StateError("Mac boot catalog must begin with the macos-launchd application")
+        world = getattr(self, "world_model", None)
+        if system.hostname in getattr(world, "preexisting_macos_root_shell_hosts", ()):
+            from evidenceforge.generation.activity.macos_execution_metadata import (
+                load_macos_execution_metadata_profile,
+            )
+
+            metadata_profile = load_macos_execution_metadata_profile()
+            shell = metadata_profile.preexisting_root_shell if metadata_profile else None
+            if shell is not None:
+                binary = deployment.resolve_binary(
+                    system.hostname, shell.image, "macos", principal="root"
+                )
+                if type(binary) is not BinaryReleaseIdentity or binary.mach_o_image is None:
+                    raise StateError("Pre-existing root shell requires its installed native image")
+                elapsed += rng.uniform(0.05, 1.9)
+                started_at = boot_time + timedelta(seconds=elapsed) if boot_time else None
+                if started_at is None or started_at >= self.start_time:
+                    raise StateError("Assumed root foothold must exist before collection starts")
+                processes.append(
+                    _BootProcessSpec(
+                        alias="preexisting-root-shell",
+                        parent_alias="launchd",
+                        fixed_pid=None,
+                        image=shell.image,
+                        command_line=shlex.join(shell.arguments),
+                        arguments=shell.arguments,
+                        username="root",
+                        integrity_level="System",
+                        os_category="macos",
+                        logon_id="",
+                        start_time=started_at,
+                        executable_version=ProcessExecutableVersion.from_binary(binary),
+                    )
+                )
         # Collection is part of the modeled host, independent of which output
         # formats are exported. The same fleet transaction owns its activation.
         from evidenceforge.generation.macos_es_source import select_macos_es_profile

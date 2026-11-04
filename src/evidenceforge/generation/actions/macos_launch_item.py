@@ -453,7 +453,8 @@ def macos_system_job_running_activation_plan(
         raise StateError("Native job binding requires its exact live loaded definition")
     definition = owner.identity.launchd_job
     if (
-        definition.launch_profile != "root_xpcproxy_v11"
+        definition.principal != "root"
+        or definition.run_at_load
         or not action_id
         or process.hostname != owner.identity.hostname
         or process.image != definition.program

@@ -72,9 +72,8 @@ class MacosSystemJobStartup(MacosFinderStartup):
             or parent.responsibility is None
             or parent.responsibility.responsible is not None
             or policy.system_job_startup != "root_xpcproxy_v11"
-            or definition.launch_profile != policy.system_job_startup
+            or definition.launch_profile not in (None, policy.system_job_startup)
             or definition.principal != "root"
-            or definition.program not in policy.system_job_images
             or definition.run_at_load
             or definition.arguments[0] != definition.program
             or not all(left < right for left, right in zip(times, times[1:], strict=False))
@@ -88,17 +87,24 @@ class MacosSystemJobStartup(MacosFinderStartup):
                 type(binary) is not BinaryReleaseIdentity
                 or binary.mach_o_image is None
                 or binary.mach_o_image.architecture != "arm64"
-                or binary.code_signature is None
-                or metadata.image_security(binary) is None
             ):
                 raise StateError(
-                    "Native system-job startup requires qualified installed native binaries"
+                    "System-job startup requires exact installed native arm64 binaries"
                 )
-        if not definition.launch_environment or any(
+        if launcher.code_signature is None or metadata.image_security(launcher) is None:
+            raise StateError("System-job startup requires its qualified launcher")
+        # The launch mechanism is independent of the target's signer metadata.
+        # Unknown target facts remain unknown and gate source publication there.
+        environment = (
+            definition.launch_environment
+            if definition.launch_environment is not None
+            else policy.system_job_environment
+        )
+        if not environment or any(
             item.split("=", 1)[0] in {"XPC_FLAGS", "XPC_SERVICE_NAME", "OSLogRateLimit"}
             or "{" in item
             or "}" in item
-            for item in definition.launch_environment
+            for item in environment
         ):
             raise StateError(
                 "Native system-job preset requires literal, disjoint environment inputs"
@@ -117,7 +123,7 @@ class MacosSystemJobStartup(MacosFinderStartup):
         self._times, self._storyline = times, True
         self._launcher_arguments = ("xpcproxy", definition.label)
         self._launcher_environment = ("XPC_FLAGS=0x0",)
-        self._app_environment = definition.launch_environment + (
+        self._app_environment = environment + (
             "OSLogRateLimit=64",
             "XPC_FLAGS=1",
             f"XPC_SERVICE_NAME={definition.label}",

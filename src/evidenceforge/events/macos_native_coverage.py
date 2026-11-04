@@ -19,6 +19,7 @@ NativeReason = Literal[
     "thread_replacement_unknown",
     "exit_outcome_unknown",
     "executable_version_unknown",
+    "image_security_unknown",
     "gui_exec_metadata_unknown",
     "boot_parent_token_unknown",
 ]

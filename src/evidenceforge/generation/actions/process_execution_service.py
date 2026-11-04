@@ -476,7 +476,11 @@ class ProcessExecutionService:
             return self._continue_finder(request.stable_id, retained)
         root = self._prepare_root(request, admission, launch)
         if root.birth_event is not None:
-            launch = replace(launch, time=root.identity.execution_started_at)
+            launch = replace(
+                launch,
+                time=root.identity.execution_started_at,
+                integrity=root.process.integrity_level,
+            )
         evidence = self._prepare_evidence(request, admission, launch, root)
         publication = self._prepare_publication(request, admission, root, evidence)
         running = self._publish_process(request, root, publication)
@@ -1624,15 +1628,29 @@ class ProcessExecutionService:
         parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
         provider = self.identity.macos_execution_metadata
         session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
+        root_shell = (
+            parent is not None
+            and provider is not None
+            and provider.profile.preexisting_root_shell is not None
+            and parent.image == provider.profile.preexisting_root_shell.image
+            and parent.arguments == provider.profile.preexisting_root_shell.arguments
+            and parent.principal == launch.actor.username == "root"
+            and not parent.logon_id
+            and not launch.actor.logon_id
+            and session is None
+        )
         if (
             parent is None
             or provider is None
-            or parent.image not in {"/bin/zsh", "/bin/bash"}
+            or not (root_shell or parent.image in {"/bin/zsh", "/bin/bash"})
             or not (
-                parent.command_line in {"-zsh", "-bash"}
-                or any(
-                    parent.image == rule.image and parent.arguments == rule.arguments
-                    for rule in provider.profile.nested_command_shells
+                root_shell
+                or (
+                    parent.command_line in {"-zsh", "-bash"}
+                    or any(
+                        parent.image == rule.image and parent.arguments == rule.arguments
+                        for rule in provider.profile.nested_command_shells
+                    )
                 )
             )
             or parent.principal != launch.actor.username
@@ -1641,24 +1659,18 @@ class ProcessExecutionService:
             or parent.credentials.audit_uid is None
             or parent.credentials.audit_session_id is None
             or parent.responsibility is None
-            or parent.image_security is None
-            or parent.image_security.validation_category is None
             or parent.executable_version is None
             or parent.parentage is None
             or parent.job_control is None
             or parent.audit_pid_version is None
             or parent.primary_thread is None
             or parent.environment is None
-            or session is None
-            or session.session_kind not in {"interactive", "ssh"}
+            or not (
+                root_shell or session is not None and session.session_kind in {"interactive", "ssh"}
+            )
         ):
             return None
-        parent_binary = self.dispatcher.resolve_loaded_process_binary_identity(parent)
-        if (
-            getattr(parent_binary, "code_signature", None) is None
-            or self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
-            is None
-        ):
+        if self.state_manager.known_macos_terminal(parent.job_control.session, launch.time) is None:
             return None
         arguments = (
             request.arguments
@@ -1730,6 +1742,7 @@ class ProcessExecutionService:
             image_security=provider.image_security(binary),
             macos_ssh_standard_io=(
                 provider.profile.ssh_command_descriptors == "standard_pipes"
+                and session is not None
                 and session.session_kind == "ssh"
                 and session.ssh_command_streams is not None
                 and self.state_manager.process_descriptors_at(parent, event_time=forked_at) is None
@@ -1755,11 +1768,18 @@ class ProcessExecutionService:
             host=self.identity.host_context(request.system),
             parent=parent,
             child=birth.identity,
-            integrity_level=launch.integrity,
+            integrity_level=birth.integrity_level,
         )
         fork.storyline_origin = request.from_storyline
         return ProcessRootPlan(
-            birth, cohort, session.session_id, session_identity, parent, binary, after, fork
+            birth,
+            cohort,
+            session.session_id if session is not None else None,
+            session_identity,
+            parent,
+            binary,
+            after,
+            fork,
         )
 
     def _prepare_evidence(

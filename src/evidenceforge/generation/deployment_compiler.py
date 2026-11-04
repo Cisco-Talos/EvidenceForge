@@ -393,18 +393,26 @@ def _release_for_application_artifact(
     is_main_executable = canonical_native_path(artifact_path, platform) == canonical_native_path(
         platform_config.image_path, platform
     )
+    mach_o_image = (
+        MachOImageIdentity.derive(key)
+        if platform_config.executable_format == "mach_o" and is_main_executable
+        else None
+    )
+    signing_id = signature.signing_id if signature is not None else None
+    if signing_id is not None and "{macho_uuid_hex}" in signing_id and is_main_executable:
+        if mach_o_image is None:
+            raise ValueError("UUID-based signing identifier requires the selected native image")
+        signing_id = signing_id.replace(
+            "{macho_uuid_hex}", mach_o_image.build_uuid.replace("-", "").lower()
+        )
     return BinaryReleaseIdentity(
         key=key,
         pe_version_info=pe_version_info,
-        mach_o_image=(
-            MachOImageIdentity.derive(key)
-            if platform_config.executable_format == "mach_o" and is_main_executable
-            else None
-        ),
+        mach_o_image=mach_o_image,
         code_signature=(
             MachOCodeSignature.derive(
                 key,
-                signing_id=signature.signing_id,
+                signing_id=signing_id,
                 team_id=signature.team_id,
                 entitlements=tuple(sorted(signature.entitlements.items()))
                 if type(signature.entitlements) is dict

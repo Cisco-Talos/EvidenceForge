@@ -99,10 +99,11 @@ class MacosFinderStartup:
                 type(binary) is not BinaryReleaseIdentity
                 or binary.mach_o_image is None
                 or binary.mach_o_image.architecture != "arm64"
-                or binary.code_signature is None
-                or metadata.image_security(binary) is None
             ):
-                raise StateError("Finder startup requires qualified installed native executables")
+                raise StateError("Finder startup requires exact installed native arm64 executables")
+        if launcher.code_signature is None or metadata.image_security(launcher) is None:
+            raise StateError("Finder startup requires its qualified launcher")
+        # App signing facts qualify its native records, not its canonical launch.
         self._state = state
         self._dispatcher = dispatcher
         self._metadata = metadata

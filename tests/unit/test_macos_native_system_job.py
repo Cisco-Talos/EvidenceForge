@@ -27,8 +27,11 @@ def _setup(
     *,
     native: bool = True,
     program: str = "/usr/bin/true",
+    explicit_profile: bool = True,
+    arguments: tuple[str, ...] | None = None,
+    complete: bool = True,
 ) -> tuple:
-    engine = _finder_engine(tmp_path, monkeypatch, native=native)
+    engine = _finder_engine(tmp_path, monkeypatch, native=native, complete=complete)
     with effective_config_scope(engine.compiled_scenario.effective_config):
         engine._initialize()
     generator, dispatcher = engine.activity_generator, engine.dispatcher
@@ -50,9 +53,9 @@ def _setup(
     spec = LaunchdSystemJobSpec(
         label="org.example.native-job",
         program=program,
-        arguments=(program,),
+        arguments=arguments if arguments is not None else (program,),
         principal="root",
-        launch_profile="root_xpcproxy_v11",
+        launch_profile="root_xpcproxy_v11" if explicit_profile else None,
     )
 
     def request(operation: str, seconds: int) -> MacosPersistenceRequest:
@@ -173,20 +176,88 @@ def test_optional_mac_start_displaced_after_collection_allocates_no_process(
         engine._close_emitters()
 
 
-def test_unqualified_job_image_rejects_before_startup_or_census_mutation(
+def test_installed_job_outside_reference_inventory_uses_shared_startup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine, bundle, request = _setup(tmp_path, monkeypatch, program="/usr/bin/id")
+    engine, bundle, request = _setup(
+        tmp_path, monkeypatch, program="/usr/bin/id", explicit_profile=False
+    )
     try:
-        before = engine.state_manager.macos_process_census_snapshot()
-        with pytest.raises(StateError, match="qualified root preset"):
-            bundle.execute(request("activate", 63))
-        assert engine.state_manager.macos_process_census_snapshot() == before
+        process = bundle.execute(request("activate", 63)).process
+        assert process.execution_ordinal == 2 and process.arguments == ("/usr/bin/id",)
+        bundle.execute(request("exit", 65))
+        bundle.execute(request("unload", 66))
+        engine._finalize_macos_process_coverage()
+        census = engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census
+        assert census.complete and census.aggregate_births == 0
+        assert census.expected_execs == census.published_execs == 2
         assert not engine.activity_generator._macos_finder_startups
         assert bundle.services.service_preparation_census().publication_reservations == 0
-        bundle.execute(request("unload", 66))
     finally:
         engine._close_emitters()
+
+
+@pytest.mark.parametrize("native", [False, True], ids=["filtered", "native"])
+@pytest.mark.parametrize("qualified", [False, True], ids=["unknown-validation", "qualified"])
+def test_sleep_job_keeps_real_start_and_known_exit_without_inventing_signer_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native: bool, qualified: bool
+) -> None:
+    engine, bundle, request = _setup(
+        tmp_path,
+        monkeypatch,
+        native=native,
+        program="/bin/sleep",
+        arguments=("/bin/sleep", "600"),
+        explicit_profile=False,
+        complete=False,
+    )
+    try:
+        if not qualified:
+            provider = bundle.metadata_provider
+            provider.profile = provider.profile.model_copy(
+                update={
+                    "code_validation": tuple(
+                        rule
+                        for rule in provider.profile.code_validation
+                        if not (rule.product_id == "apple-macos" and "sleep" in rule.artifact_names)
+                    )
+                }
+            )
+        process = bundle.execute(request("activate", 63)).process
+        assert process.initial_image == "/sbin/launchd" and process.execution_ordinal == 2
+        assert process.arguments == ("/bin/sleep", "600")
+        assert (process.image_security is not None) == qualified
+        binary = engine.dispatcher.resolve_loaded_process_binary_identity(process)
+        assert binary.code_signature.entitlements == "absent"
+        assert process.executable_version is not None
+        result = bundle.execute(request("exit", 664))
+        assert result.terminated == (process,)
+        bundle.execute(request("unload", 665))
+        engine._finalize_macos_process_coverage()
+        if native:
+            host = engine.dispatcher.macos_es_ingress.coverage.hosts[0]
+            assert host.process_census.aggregate_births == 0
+            assert host.process_census.expected_forks == host.process_census.published_forks == 1
+            assert host.process_census.expected_execs == 2
+            assert host.process_census.published_execs == 1 + int(qualified)
+            assert host.process_census.complete == qualified
+            if not qualified:
+                assert any(row.reason == "image_security_unknown" for row in host.observations)
+    finally:
+        engine._close_emitters()
+    rows = [
+        decode_endpoint_security_record(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    if native:
+        assert [row.event_type for row in rows] == ([11, 9, 9, 15] if qualified else [11, 9])
+        assert rows[1].event.exec.target.executable.path == "/usr/libexec/xpcproxy"
+        if qualified:
+            assert rows[2].event.exec.args == ("/bin/sleep", "600")
+            assert rows[3].event.exit.stat == 0
+    else:
+        assert not rows
 
 
 def test_native_service_binding_cannot_use_ordinary_registry_commit(
@@ -333,8 +404,9 @@ def test_each_native_job_phase_resumes_exactly(
         engine._close_emitters()
 
 
+@pytest.mark.parametrize("explicit_profile", [False, True], ids=["automatic", "explicit"])
 def test_loaded_native_job_and_post_exec_group_survive_checkpoint_hydration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_profile: bool
 ) -> None:
     from evidenceforge.generation.checkpoints.lifecycle_head import _capture, _restore
     from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
@@ -345,7 +417,7 @@ def test_loaded_native_job_and_post_exec_group_survive_checkpoint_hydration(
         with generation_seed_scope(372):
             reset_thread_rng()
             root = tmp_path / ("restored" if hydrate else "plain")
-            engine, bundle, request = _setup(root, monkeypatch)
+            engine, bundle, request = _setup(root, monkeypatch, explicit_profile=explicit_profile)
             try:
                 process = bundle.execute(request("activate", 63)).process
                 before = engine.lifecycle_registry.get_process(process.object_id)
@@ -370,11 +442,12 @@ def test_loaded_native_job_and_post_exec_group_survive_checkpoint_hydration(
                     process.execution_started_at,
                 )
                 assert owner.process_group == process.job_control
-                assert owner.identity.launchd_job.launch_profile == "root_xpcproxy_v11"
-                assert owner.identity.launchd_job.launch_environment == (
-                    "PATH=/usr/bin:/bin",
-                    "LANG=C",
-                    "LC_ALL=C",
+                definition = owner.identity.launchd_job
+                assert definition.launch_profile == (
+                    "root_xpcproxy_v11" if explicit_profile else None
+                )
+                assert definition.launch_environment == (
+                    ("PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C") if explicit_profile else None
                 )
                 bundle.execute(request("exit", 65))
                 bundle.execute(request("unload", 66))

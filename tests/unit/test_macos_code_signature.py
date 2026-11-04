@@ -83,6 +83,41 @@ def _network_request(binary: BinaryReleaseIdentity) -> NetworkConnectionRequest:
     )
 
 
+def test_uuid_signing_identifier_uses_the_same_release_owned_macho_image() -> None:
+    data = _application().model_dump(mode="python")
+    platform = data["platforms"]["macos"]
+    platform["executable_format"] = "mach_o"
+    platform["code_signature"]["signing_id"] = "example-55554944{macho_uuid_hex}"
+    application = ApplicationEntry.model_validate(data)
+    first = _release(application)
+    second = _release(application)
+    assert first == second
+    assert first.code_signature.signing_id == (
+        "example-55554944" + first.mach_o_image.build_uuid.replace("-", "").lower()
+    )
+    changed = application.model_copy(deep=True)
+    changed.platforms["macos"].deployment = changed.platforms["macos"].deployment.model_copy(
+        update={"build": "2"}
+    )
+    other = _release(changed)
+    assert first.mach_o_image != other.mach_o_image
+    assert first.code_signature.signing_id != other.code_signature.signing_id
+    assert _unpack_binary_release(_pack_binary_release(first)) == first
+
+
+@pytest.mark.parametrize("identifier", ["{username}", "{macho_uuid_hex.extra}", "{macho_uuid_hex"])
+def test_signing_identifier_rejects_unknown_or_unclosed_tokens(identifier: str) -> None:
+    with pytest.raises(ValidationError):
+        MacCodeSignatureEntry(signing_id=identifier)
+
+
+def test_uuid_signing_identifier_cannot_supply_missing_image_format() -> None:
+    data = _application().model_dump(mode="python")
+    data["platforms"]["macos"]["code_signature"]["signing_id"] = "example-{macho_uuid_hex}"
+    with pytest.raises(ValidationError, match="executable_format"):
+        ApplicationEntry.model_validate(data)
+
+
 def test_durable_network_identity_authenticates_nested_signing_metadata() -> None:
     binary = _release(_application())
     restored = _unpack_binary_release(_pack_binary_release(binary))

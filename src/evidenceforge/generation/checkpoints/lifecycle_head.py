@@ -1884,7 +1884,8 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             view = process_views.get(object_id)
             native_group = (
                 service.identity.launchd_job is not None
-                and service.identity.launchd_job.launch_profile == "root_xpcproxy_v11"
+                and service.identity.launchd_job.principal == "root"
+                and not service.identity.launchd_job.run_at_load
                 and leader is not None
                 and view is not None
                 and group.leader_object_id == group.session.leader_object_id == object_id

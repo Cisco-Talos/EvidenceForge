@@ -37,14 +37,60 @@ finder_launch_relationships: launchd_self
 # environment or extrapolated to arbitrary installed GUI applications.
 finder_launch_execution: xpcproxy_app_exec
 finder_launch_images:
+  - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
   - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
   - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-# Explicit invented bundle metadata, never inferred from a signing identifier.
+  - /Applications/Firefox.app/Contents/MacOS/firefox
+  - /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+  - /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+  - /Applications/OneDrive.app/Contents/MacOS/OneDrive
+  - /Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat
+  - /Applications/Slack.app/Contents/MacOS/Slack
+  - /Applications/zoom.us.app/Contents/MacOS/zoom.us
+  - /Applications/Webex.app/Contents/MacOS/Webex
+  - /Applications/Dropbox.app/Contents/MacOS/Dropbox
+  - /Applications/Google Drive.app/Contents/MacOS/Google Drive
+  - /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+  - /Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client
+  - /Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau
+  - /Applications/DBeaver.app/Contents/MacOS/dbeaver
+# Explicit bundle metadata; never inferred from a signing identifier.
+# Public packaging/vendor provenance is recorded in catalog-native-metadata.md.
 finder_applications:
+  - image: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+    bundle_identifier: com.paloaltonetworks.GlobalProtect.client
   - image: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
     bundle_identifier: org.evidenceforge.Reference
   - image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
     bundle_identifier: com.google.Chrome
+  - image: /Applications/Firefox.app/Contents/MacOS/firefox
+    bundle_identifier: org.mozilla.firefox
+  - image: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+    bundle_identifier: com.microsoft.Outlook
+  - image: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+    bundle_identifier: com.microsoft.Word
+  - image: /Applications/OneDrive.app/Contents/MacOS/OneDrive
+    bundle_identifier: com.microsoft.OneDrive
+  - image: /Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat
+    bundle_identifier: com.adobe.Acrobat.Pro
+  - image: /Applications/Slack.app/Contents/MacOS/Slack
+    bundle_identifier: com.tinyspeck.slackmacgap
+  - image: /Applications/zoom.us.app/Contents/MacOS/zoom.us
+    bundle_identifier: us.zoom.xos
+  - image: /Applications/Webex.app/Contents/MacOS/Webex
+    bundle_identifier: Cisco-Systems.Spark
+  - image: /Applications/Dropbox.app/Contents/MacOS/Dropbox
+    bundle_identifier: com.getdropbox.dropbox
+  - image: /Applications/Google Drive.app/Contents/MacOS/Google Drive
+    bundle_identifier: com.google.drivefs
+  - image: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+    bundle_identifier: com.citrix.receiver.nomas
+  - image: /Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client
+    bundle_identifier: com.cisco.anyconnect.gui
+  - image: /Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau
+    bundle_identifier: com.tableausoftware.tableaudesktop
+  - image: /Applications/DBeaver.app/Contents/MacOS/dbeaver
+    bundle_identifier: org.jkiss.dbeaver.core.product
 # Bounded fresh LaunchServices browser and direct sandboxed helper roles.
 # Pipe slots and environment are explicit synthetic inputs, not copied host values.
 # The dedicated GPU bundle, Crashpad double-fork, alerts and other helper classes
@@ -78,6 +124,8 @@ ssh_pty_execution: zsh_foreground_v11
 # Explicit loaded-job preset: root cwd, null standards, clean declared environment.
 # Launcher/target XPC fields come from the reviewed system activation boundary.
 system_job_startup: root_xpcproxy_v11
+# Historical reference targets. Installed native targets share the startup owner;
+# each target's own signing/validation facts still qualify its ES publication.
 system_job_images: [/usr/bin/true, /usr/bin/sw_vers]
 system_job_environment: ["PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"]
 system_job_phase_timing: {minimum: 0.001, median: 0.002, maximum: 0.02, sigma: 0.5} # nominal, not measured
@@ -92,6 +140,11 @@ nested_command_shells:
     arguments: ["/bin/zsh"]
   - image: /bin/bash
     arguments: ["/bin/bash"]
+# Explicit assumed foothold for authored root process intents without a parent.
+# Pre-window inventory only; this asserts no in-window elevation or GUI login.
+preexisting_root_shell:
+  image: /bin/sh
+  arguments: ["/bin/sh"]
 command_completions:
   - arguments: ["/usr/bin/true"]
     exit_code: 0
@@ -136,6 +189,46 @@ first_pipe_id: 1000000 # host-local monotonic synthetic native pipe-object names
 # CS_VALID | CS_SIGNED | CS_PLATFORM_BINARY; no unmodeled entitlements/debug state.
 # Values: Apple XNU osfmk/kern/cs_blobs.h. Only enumerated native artifacts qualify.
 code_validation:
+  # Static inspection qualifies identifier/entitlement/slice only. These select
+  # the existing modeled platform-validation outcomes for the plain root shell
+  # and explicit system-job target, respectively; no runtime flags were collected.
+  - product_id: apple-macos
+    artifact_names: [sh]
+    codesigning_flags: 0x24000001
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [sleep]
+    codesigning_flags: 0x26011b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  # Public macOS 27 arm64 Homebrew bottles have ad-hoc signatures and no XML/DER
+  # entitlements. This explicitly selects successful ad-hoc validation, following
+  # the existing model's SIGNED|ADHOC|VALID policy; it is not a live runtime capture.
+  # sqlcmd additionally retains its observed CodeDirectory LINKER_SIGNED bit.
+  # Public artifact provenance: docs/design/macos-workstation-feasibility/catalog-native-metadata.md.
+  - product_id: mysql
+    artifact_names: [mysql]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: psql
+    artifact_names: [psql]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: curl
+    artifact_names: [curl]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: sqlcmd
+    artifact_names: [sqlcmd]
+    codesigning_flags: 0x20020003
+    is_platform_binary: false
+    validation_category: 10
   - product_id: apple-macos
     artifact_names:
       - bash

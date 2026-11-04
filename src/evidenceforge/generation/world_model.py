@@ -375,6 +375,23 @@ class WorldModel:
         self.users_by_username: dict[str, User] = {
             user.username: user for user in scenario.environment.users
         }
+        # An unparented authored root process assumes an existing foothold, not
+        # a newly inferred authentication or service installation. Its selected
+        # pre-window shell is materialized by the shared initial fleet owner.
+        self.preexisting_macos_root_shell_hosts: frozenset[str] = frozenset(
+            step.system
+            for step in scenario.storyline or ()
+            if step.actor == "root"
+            and step.system in self.systems_by_hostname
+            and _get_os_category(self.systems_by_hostname[step.system].os) == "macos"
+            and any(
+                event.type == "process"
+                and event.outcome == "success"
+                and event.parent_ref is None
+                and event.launch_method is None
+                for event in step.events or ()
+            )
+        )
         self.hosts: dict[str, HostWorld] = {
             system.hostname: self._compile_host(system) for system in scenario.environment.systems
         }

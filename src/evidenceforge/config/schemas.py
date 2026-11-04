@@ -872,6 +872,19 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
             raise ValueError("code signature identifiers must be nonblank, exact text or null")
         return value
 
+    @field_validator("signing_id")
+    @classmethod
+    def bounded_identifier_template(cls, value: str) -> str:
+        """Allow only the image-owned UUID token, never arbitrary formatting."""
+        literal = value.replace("{macho_uuid_hex}", "")
+        if (
+            "{" in literal
+            or "}" in literal
+            or len(value.replace("{macho_uuid_hex}", "0" * 32)) > 512
+        ):
+            raise ValueError("signing_id permits only the {macho_uuid_hex} image token")
+        return value
+
 
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
@@ -909,6 +922,17 @@ class PlatformConfig(BaseModel, extra="forbid"):
             and self.available_until < self.available_from
         ):
             raise ValueError("application platform available_until precedes available_from")
+        return self
+
+    @model_validator(mode="after")
+    def identifier_image_dependency(self) -> Self:
+        """A UUID-based signing identifier requires its explicitly declared Mach-O image."""
+        if (
+            self.code_signature is not None
+            and "{macho_uuid_hex}" in self.code_signature.signing_id
+            and self.executable_format != "mach_o"
+        ):
+            raise ValueError("UUID-based signing_id requires executable_format: mach_o")
         return self
 
 
@@ -4311,7 +4335,7 @@ class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
 class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
     """A literal nested shell invocation admitted as a modeled command parent."""
 
-    image: Literal["/bin/zsh", "/bin/bash"]
+    image: Literal["/bin/zsh", "/bin/bash", "/bin/sh"]
     arguments: tuple[str, ...] = Field(min_length=1, max_length=1)
 
     @model_validator(mode="after")
@@ -4445,10 +4469,15 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     ssh_receiver_service_label: Literal["com.openssh.sshd"] | None = None
     ssh_pty_execution: Literal["zsh_foreground_v11"] | None = None
     system_job_startup: Literal["root_xpcproxy_v11"] | None = None
-    system_job_images: tuple[str, ...] = Field(default=(), max_length=64)
+    system_job_images: tuple[str, ...] = Field(
+        default=(),
+        max_length=64,
+        description="Historical reference-target inventory, not a canonical launch allowlist",
+    )
     system_job_environment: tuple[str, ...] = ()
     system_job_phase_timing: ShortCommandTiming | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
+    preexisting_root_shell: MacosCommandShellPolicy | None = None
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )

@@ -71,9 +71,14 @@ the exact test label, and `OSLogRateLimit=64`. No unknown key remains. Each revi
 ran once, offline, without commands, probes, collectors, writes or live queries.
 Those permissions are consumed.
 
-Generation selects the bounded producer explicitly with write-stage
-`launch_profile: root_xpcproxy_v11`. The current execution policy admits
-`/usr/bin/true` and `/usr/bin/sw_vers`, root/system domain, explicit activation and RunAtLoad false.
+The original producer was selected explicitly with write-stage
+`launch_profile: root_xpcproxy_v11`, initially for `/usr/bin/true` and `/usr/bin/sw_vers`.
+Revision 378 separates launch-mechanism admission from target signing qualification:
+installed native root targets with explicit activation and RunAtLoad false also
+use that shared owner when the field is omitted. Unknown target metadata remains
+unknown and does not qualify native output. `/bin/sleep` has separately reviewed
+static metadata and explicit modeled runtime policy; see the
+[catalog boundaries](../catalog-native-metadata.md).
 Its clean PATH/LANG/LC_ALL environment is frozen into the modeled file definition
 before publication; loaded state retains it independently of file replacement
 or removal. The private authentication nonce is not modeled. The producer adds
@@ -92,8 +97,9 @@ The invented complete CLI workload has two job starts, two forks and four execs,
 plus explicit zero exits. Its provisioning caller is explicitly pre-existing
 before collection; its startup is outside this measured workload. This does not
 qualify an arbitrary provisioning executable starting inside collection. Legacy
-definitions without the preset retain partial aggregate activation and fail the
-complete contract when that start occurs in-window.
+definitions without the preset now use the shared canonical owner when compatible;
+older frozen policies without that mechanism retain aggregate activation. This
+does not change the capture's actual scope or qualify an unknown target signer.
 
 User LaunchAgents, privilege drops, other images, triggers/restart policies,
 arbitrary helpers and launchd Unified Log messages were not observed and remain

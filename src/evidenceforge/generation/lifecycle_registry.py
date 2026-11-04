@@ -7557,7 +7557,8 @@ class LifecycleServicePublicationRequest:
         if active is not None and (
             type(active) is not ProcessIdentity
             or definition is None
-            or definition.launch_profile != "root_xpcproxy_v11"
+            or definition.principal != "root"
+            or definition.run_at_load
             or active.image != definition.program
             or active.arguments != definition.arguments
             or active.parent_pid != 1
