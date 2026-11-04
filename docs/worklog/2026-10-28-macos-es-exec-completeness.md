@@ -3593,3 +3593,52 @@ execs and complete independent census for every native launch. Unknown-metadata 
 still fail complete coverage. Strict scenario validation has zero errors/warnings and
 the same two informational pivot notes. Fresh complete-coverage regeneration is next;
 no complete scenario result, PR, merge, release or new collection is claimed yet.
+
+### Complete actual-scenario acceptance at revision 380
+
+Commit `0d2af53b` is pushed. Fresh strict generation from `working-draft/source/scenario.yaml`
+completed successfully in **281.10 seconds**, with `macos_process_coverage: complete`.
+The original user copy is untouched; only the previously documented OS-27 adjustments
+exist in the working source. Seed 42, all twelve sources, six hosts, three users,
+eight hours plus warmup, medium baseline, applications, commands and storyline timing
+are retained. The initial failed/partial outputs remain intact. The new authoritative
+bundle is `/private/tmp/eforge-macos-test-20261104-y5r18rii/post-fix-complete-v380`.
+
+| Host | Native forks / expected | Native execs / expected | Aggregate starts | Known native exits |
+| --- | ---: | ---: | ---: | ---: |
+| MAC-01 | 148/148 | 195/195 | 0 | 18 |
+| MAC-02 | 81/81 | 96/96 | 0 | 24 |
+
+The independent authored join is **85/85** by host/PID/image/exact argv/time,
+maximum timestamp delta 19.544ms. An independent cross-source join is **291/291**
+between eCAR exec transitions and ES targets using host, PID, numeric audit PID-version
+and image; neither direction has an unmatched transition. eCAR's property stores the
+version as decimal text while native audit tokens store integers; the checker explicitly
+normalizes those representations. Canonical State and source publication identity
+digests agree for both forks and execs on both Macs. All fifteen previously missing
+baseline GUI mains now appear, alongside the four Homebrew tools, root caller and job.
+No target replacement, app removal, timing change or weakened start criterion was used.
+
+One evaluation verifies the authoritative resolved inputs, deployment binding and
+artifact hashes: **PASS 95.87644192353848**, **224,556 records**, no failing hard
+criteria; specification, format constraints and OS/value plausibility are 100.
+ES has **562 records** (229 forks, 291 execs, 42 known exits), ULF **8**, and zsh history
+118. No second evaluation or blind panel was run. Whole-repository Ruff/format, diff
+checks and the revision-380 behavior-surface check pass. Surface digest:
+`5dfd7b3227cca77dce03b826820aa6795aab25f62394ecbe8e9bc3455123e673`.
+
+This closes the actual workload's **process-start** defect, not every endpoint fidelity
+question. Native timestamps are monotonic and counter values are unique/increasing,
+but exported counters are not contiguous: existing ingress policy observes suppressed
+phases too. The totals reconcile **181 withheld counter positions** to **147 unknown
+exit outcomes + 34 out-of-window phases**; no start is missing. Unknown exits are still
+withheld instead of assigned success. This is a known output limit, not evidence of
+collection loss. The GUI runtime flags are selected model outcomes, some public template
+builds differ from catalog builds, arbitrary helper graphs remain unqualified, and
+launchd ULF remains gated. The eight ULF rows retain the admitted workspace/SSH scope;
+they are not one ULF row for every process. User review is still required before any
+PR into `dev`; no PR, merge, release or new native collection was performed.
+
+The trial root retains `POST-FIX-COMPLETE-V380-RUN.json`, separate CLI diagnostics,
+`strict-v380-evaluation.json`, `POST-FIX-COMPLETE-V380-REVIEW.json` and a concise
+`POST-FIX-REPORT.md`. No generated or native records were added to Git.

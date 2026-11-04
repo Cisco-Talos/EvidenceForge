@@ -78,13 +78,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   primary remains separately reported. See the [contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md),
   [recovery acceptance](scenarios/macos-workstation-recovery/README.md) and
   [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
-- [ ] **P0 — Actual MacOS-test coverage:** The November 4 user-scenario check fails
-  complete ES coverage: 148/239 expected execs, despite all 163 modeled forks and
-  84/85 authored Mac process requests having native evidence. Close the root-shell
-  caller and sleep-job gaps plus native startup/metadata gaps in the already-selected
-  baseline applications/tools. Keep that workload intact; a partial diagnostic PASS
-  is not acceptance. The fixed two-Mac matrix did not exercise this broader catalog.
-  See the same [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [x] **P0 — Actual MacOS-test start coverage:** The unchanged November 4 workload now
+  passes complete ES coverage: 229/229 forks, 291/291 execs, zero aggregate starts,
+  all 85 authored Mac starts and all 291 eCAR exec transitions independently matched.
+  Root caller/job ownership, literal argv, Homebrew tools and fifteen existing GUI
+  main templates are repaired. This is start-coverage acceptance; unknown exits,
+  runtime model choices and exact vendor-build limits remain explicit. See the same
+  [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
 - [ ] Finish the finite Mac endpoint delivery sequence: explicit lifecycle outcomes for the
   supported workload; reference-qualified minimum Unified Log coverage; one combined final
   acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and
