@@ -3978,3 +3978,50 @@ Ruff/format/diff checks pass. Final behavior surface:
 `3121084e3ada981770dcbefdda3bb61276aac7c78126adb0befaf7d466ecd5c5`.
 Fresh validation passes, and `post-fix-complete-v384-exits` is running with the unchanged
 source/all formats. Its final measurements and evaluation are pending.
+
+### Final exit acceptance: revision 384
+
+Implementation commit `cc0247f5` is pushed. Fresh strict generation into
+`post-fix-complete-v384-exits` completes in **301.59 seconds**, retaining the same source
+SHA, seed 42, all twelve formats, medium baseline, six hosts/three users, eight-hour
+window plus warmup, no packs/OOB and complete start policy. Original user copy and
+working source remain unchanged. Resolved SHA:
+`e41fa80a2c9eb723973775226fbfbee7cf8b47bda1305479403a8c4147a93cd5`.
+Structured comparison verifies unchanged scenario/assets/provenance.
+
+Both hosts now pass start and exit reconciliation: **229/229 forks, 291/291 execs,
+200/200 observed/known/native exits**, zero aggregate starts or unknown in-window results.
+MAC-01 has 148 forks/195 execs/127 exits; MAC-02 has 81/96/73. Independent eCAR joins
+match all 291 exec identities and all 200 terminal lifetimes/final execution identities,
+with no missing side or duplicate exit. Eleven pre-window lifetimes are verified against
+the existing synthetic inventory; no retrospective starts are invented. All 85 authored
+starts match (maximum time delta 19.544ms). Native counters are increasing, unique and
+contiguous; source mach time is nondecreasing.
+
+Outcomes are **174 status-zero, 13 MySQL status-one, 10 PostgreSQL status-two and three
+signal-15 cancellations**. Every one of the 23 failed queries independently joins to its
+single failed transport attempt and exact final identity. Against revision 383, the
+only changed `data/` file is MAC-01 native ES, and its only changes are those 23 raw
+wait statuses (zero to 256/512). All other data is byte-identical. The final correction
+therefore preserves the previously accepted canonical activity, timings, PIDs, history
+and cross-source evidence. All 39 bounded walkthrough assertions still pass; sleep-600
+remains 600.005884 seconds. Historical iTerm2 fixture evidence is still labelled 377,
+with current terminal coverage supplied by the final unit/recovery tests.
+
+One evaluation verifies the authoritative bundle and returns **PASS 95.87391526820508**,
+**224,701 records**, source schema 100 and no failing applicable hard criterion.
+Source counts are 720 ES, 8 ULF, 105 zsh history and 61,237 eCAR; all source counts
+except the 158 added native exits match revision 381. The existing low anomaly-rate
+diagnostic remains unchanged. Final 94-test selection and 56.52-second exact recovery/
+native-filter test pass; all 22 deterministic files match, including implemented ULF
+families and the ASP negative control. The pre-existing timing-inventory failure remains
+separate and is not hidden by these results.
+
+No new native/private collection, offline capture review, personal log, installed-code
+inspection, app or probe was used. No generated/native records enter Git. The declared
+model remains bounded; launchd ULF stays gated, native sqlcmd network expansion and
+Homebrew SSH qualification remain separate follow-ups, and no PR/merge/release is made.
+User review remains the integration gate. Outside Git, final reports include
+`EXIT-COMPLETENESS-V384-EXITS.json`, `QUERY-OUTCOMES-V384-EXITS.json`,
+`POST-FIX-COMPLETE-V384-EXITS-REVIEW.json`, `DATA-V383-V384-EXITS-DIFF.json`,
+the walkthrough selection/checks and the single evaluation JSON.

@@ -33,12 +33,22 @@ execs and 85/85 authored starts. One evaluation passes at 95.87391526820508 with
 runtime-policy and ULF limits remain explicit. No new collection was performed.
 Launchd ULF stays gated and integration remains on hold for user review.
 
+Revision 384 completes exit coverage for the unchanged user workload using the approved
+ordinary-close model: **200/200 canonical/native exits**, zero unknown in-window results,
+exact eCAR lifetime/final-execution matches, and no duplicate exits. All 23 existing failed
+PostgreSQL/MySQL attempts have matching nonzero outcomes; three unfinished commands end
+with signal 15. Start coverage remains 229/229 forks, 291/291 execs and 85/85 authored
+starts. One evaluation passes at 95.87391526820508 with 224,701 records. The final
+combined recovery/filter test matches all 22 deterministic files. Shutdown results are
+selected simulation behavior; native sqlcmd network expansion and Homebrew SSH admission
+remain separate follow-ups. See the [exit-completeness contract](exit-completeness.md).
+
 | Phase | Completion evidence | Current state |
 | --- | --- | --- |
 | 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete for the bounded workload, reconfirmed at revision 377. Primary: 33 forks/39 execs. Final recovery companion with ASP negative control: 63 forks/78 execs, 39 background execs, all 22 deterministic files identical. |
-| 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | Complete for the bounded outcome contract: 13 known native exits in each workload, with 13/51 explicit unknown observations. Query completion and reconciliation pass; arbitrary GUI/SSH teardown remains unknown, not successful. |
+| 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | The approved ordinary-close model passes all 200 MacOS-test terminations. Current recovery companion reconciles 71 terminations, with 70 known native results and one unsupported compound-shell result retained as an explicit unknown negative control. |
 | 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, ordinary-verbosity SSH accepted authentication, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal, observed PAM success and source-derived plain-public-key success through the same qualified logger exist. On 2026-11-03 the user retained ordinary daemon verbosity and left VERBOSE session messages gated. The final corrected category-or-message capture passed job/cleanup controls but retained zero rows. The agreed collection sequence has ended; launchd ULF stays gated and no template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
-| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 377 passes combined exact recovery, ES+ULF filtering and deterministic evaluation for all implemented minimum families, including the ASP negative control. Original full-scope acceptance remains unpassed because launchd ULF is unqualified; finite reference collection has ended. |
+| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 384 passes combined exact recovery/filtering with all 22 deterministic files equal; the fresh unchanged MacOS-test evaluation and bounded start/exit/transport joins pass. Original full-scope acceptance remains unpassed because launchd ULF is unqualified; finite reference collection has ended. User acceptance still precedes integration. |
 
 The quiet thirty-minute primary is preserved as a quiet sampling case. The
 predeclared positive seed and longer same-seed recovery companion exercise background

@@ -106,3 +106,22 @@ agreement, no duplicate exits and no collection-cutoff exits. Exercise filtered 
 and checkpoint recovery. Regenerate once and evaluate once after the independent fixes.
 Classify any remaining unknowns against the fixed inventory; request only the specific
 model decision or evidence needed. Do not broaden catalogs or repeat a blind panel.
+
+## Verified result
+
+Final revision 384 passes unchanged-workload MacOS-test generation: 229/229 forks,
+291/291 execs and 200/200 exits, with zero unknown in-window results and no duplicate
+exits. All 200 terminations join to eCAR lifetimes and exact final execution identities;
+eleven lifetimes began before collection. All 85 authored starts still match.
+There are 174 status-zero returns, thirteen status-one MySQL failures, ten status-two
+PostgreSQL failures and three signal-15 cancellations. Every existing failed query joins
+to its one failed transport attempt. This is declared simulation truth within the
+supported policy, not newly collected automatic-logoff evidence.
+
+The final correction changes only those 23 native wait-status values relative to the
+revision-383 data; every other data file is byte-identical. One evaluation passes at
+95.87391526820508 with 224,701 records. All 94 focused tests pass, and combined exact
+recovery/filter acceptance matches 22 deterministic files. Its one unsupported compound
+shell result remains an explicit unknown negative control. The unrelated pre-existing
+timing-inventory guard and deferred native sqlcmd/Homebrew SSH work remain documented
+in the worklog. Launchd ULF stays gated; user review still precedes integration.

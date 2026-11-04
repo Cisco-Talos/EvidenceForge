@@ -90,9 +90,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   now measures 600.005884 seconds for sleep-600; all thirteen removed history entries
   belong to noninteractive SSH commands that remain in ES. Start coverage remains complete.
   See the same [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
-- [ ] Finish the finite Mac endpoint delivery sequence: explicit lifecycle outcomes for the
-  supported workload; reference-qualified minimum Unified Log coverage; one combined final
-  acceptance. No open-ended catalog expansion or repeated blind-assessment loop. Scope and
+- [x] **P1 — Actual MacOS-test exit completeness:** The approved ordinary-close model and
+  canonical command/accounting repairs now publish all 200 in-window exits, with exact
+  eCAR lifetime/final-execution matches and zero unknown results. All 23 existing failed
+  PostgreSQL/MySQL attempts have nonzero native results. Start coverage remains 229/229
+  forks, 291/291 execs and 85/85 authored starts. See the same worklog.
+- [ ] Finish user acceptance of the finite Mac endpoint delivery sequence: supported
+  process starts/exits, reference-qualified minimum Unified Log coverage and combined
+  recovery/filter verification now pass within the documented scope. No open-ended
+  catalog expansion or repeated blind-assessment loop. Scope and
   evidence blockers are fixed in the [delivery plan](docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
   and the same worklog. New SSH/launchd ULF templates require bounded native references;
   existing ES-only references do not close those gates. Ordinary-verbosity SSH accepted
