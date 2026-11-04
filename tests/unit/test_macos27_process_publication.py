@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from evidenceforge.events.macos_entitlements import FrozenEntitlements
+from evidenceforge.events.macos_entitlements import FrozenEntitlements, freeze_entitlements
 from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -28,7 +28,8 @@ from tests.unit.test_macos_native_sink_publication import _prepare
 
 
 @pytest.mark.parametrize(
-    "known_entitlements", [False, True, "boolean", "string_array", "string", "empty", "integer"]
+    "known_entitlements",
+    [False, True, "boolean", "string_array", "string", "empty", "integer", "nested"],
 )
 @pytest.mark.parametrize(
     "entitlement_policy",
@@ -38,6 +39,7 @@ from tests.unit.test_macos_native_sink_publication import _prepare
         "absent_boolean_or_string_array_object",
         "absent_or_bounded_object",
         "absent_or_bounded_integer_object",
+        "absent_or_bounded_property_object",
     ],
 )
 @pytest.mark.parametrize("exit_code", [None, 7])
@@ -84,6 +86,7 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             "string": (("invented.identity", "example.vendor"),),
             "empty": (),
             "integer": (("invented.version", 1),),
+            "nested": freeze_entitlements({"invented.object": {"flag": True}}),
         }
 
         def executable() -> RuntimeArtifactDescriptor:
@@ -192,17 +195,25 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
                 "absent_boolean_or_string_array_object",
                 "absent_or_bounded_object",
                 "absent_or_bounded_integer_object",
+                "absent_or_bounded_property_object",
             )
         )
         or (
             known_entitlements in ("string", "empty")
             and entitlement_policy
-            in ("absent_or_bounded_object", "absent_or_bounded_integer_object")
+            in (
+                "absent_or_bounded_object",
+                "absent_or_bounded_integer_object",
+                "absent_or_bounded_property_object",
+            )
         )
         or (
             known_entitlements == "integer"
-            and entitlement_policy == "absent_or_bounded_integer_object"
+            and entitlement_policy
+            in ("absent_or_bounded_integer_object", "absent_or_bounded_property_object")
         )
+        or known_entitlements == "nested"
+        and entitlement_policy == "absent_or_bounded_property_object"
     )
     expected = [11] + ([9] if has_exec else []) + ([15] if exit_code is not None else [])
     assert [record.event_type for record in records] == expected
@@ -225,6 +236,8 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             if known_entitlements == "empty"
             else {"invented.version": 1}
             if known_entitlements == "integer"
+            else {"invented.object": {"flag": True}}
+            if known_entitlements == "nested"
             else None
         )
         assert (

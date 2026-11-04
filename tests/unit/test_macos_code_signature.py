@@ -175,7 +175,7 @@ def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippab
         {"a": None},
         {"a": [1]},
         {"a": [True]},
-        {"a": {"nested": True}},
+        {"a": {"nested": 1.0}},
         {"\0": True},
     ],
 )
@@ -188,6 +188,49 @@ def test_catalog_boolean_entitlements_reject_unreviewed_or_coerced_values(value:
 def test_canonical_entitlements_cannot_retain_mutable_or_ambiguous_data(value: object) -> None:
     with pytest.raises(ValueError):
         MachOCodeSignature("invented", None, "a" * 40, value)
+
+
+def test_nested_entitlements_keep_exact_types_identity_and_checkpoint_representation() -> None:
+    from evidenceforge.events.macos_entitlements import native_entitlements
+
+    values = {
+        "com.apple.security.scripting-targets": {"com.apple.mail": ["com.apple.mail.compose"]},
+        "invented.empty_object": {},
+        "invented.empty_array": [],
+        "invented.nested": {"flag": True, "text": "a\nb/é"},
+    }
+    app = _application()
+    app.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor", entitlements=values
+    )
+    restored_app = ApplicationEntry.model_validate_json(app.model_dump_json())
+    binary = _release(restored_app)
+    signature = binary.code_signature
+    assert native_entitlements(signature.entitlements) == values
+    encoded = json.loads(json.dumps(signature.serialized_values()))
+    assert encoded[3][0] == "property-object-v1"
+    assert MachOCodeSignature.from_serialized_values(encoded) == signature
+    assert _unpack_binary_release(_pack_binary_release(binary)) == binary
+    # bool and int compare equal in Python; they must differ at every dictionary depth.
+    values["invented.nested"]["flag"] = 1
+    app.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor", entitlements=values
+    )
+    other = _release(app).code_signature
+    assert signature != other and signature.cdhash != other.cdhash
+    assert native_entitlements(signature.entitlements)["invented.nested"]["flag"] is True
+
+
+def test_nested_entitlements_share_depth_and_aggregate_bounds() -> None:
+    from evidenceforge.events.macos_entitlements import freeze_entitlements
+
+    value: dict = {"leaf": True}
+    for _ in range(9):
+        value = {"child": value}
+    with pytest.raises(ValueError, match="nesting bound"):
+        freeze_entitlements(value)
+    with pytest.raises(ValueError, match="aggregate"):
+        freeze_entitlements({str(i): {str(j): ["item"] * 128 for j in range(32)} for i in range(2)})
 
 
 def test_string_array_entitlements_are_immutable_and_use_an_explicit_checkpoint_tag() -> None:

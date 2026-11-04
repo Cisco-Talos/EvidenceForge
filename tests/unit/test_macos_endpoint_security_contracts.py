@@ -21,6 +21,19 @@ from evidenceforge.formats.macos_endpoint_security import (
 _TIME = "2026-10-19T12:30:00.123456789Z"
 
 
+def test_v11_nested_entitlement_objects_survive_wire_roundtrip_without_flattening() -> None:
+    record = _record(11, "exec")
+    values = {
+        "com.apple.security.scripting-targets": {"com.apple.mail": ["com.apple.mail.compose"]},
+        "invented.empty": {},
+        "invented.array": [],
+        "invented.multiline": "first\nsecond é",
+    }
+    record["event"]["exec"]["entitlements"] = values
+    decoded = decode_endpoint_security_record(json.dumps(record))
+    assert json.loads(decoded.model_dump_json())["event"]["exec"]["entitlements"] == values
+
+
 def _file(path: str = "/usr/local/bin/example") -> dict[str, object]:
     return {
         "path": path,

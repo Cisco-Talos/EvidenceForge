@@ -44,7 +44,13 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 from uuid import UUID
 
-from evidenceforge.events.macos_entitlements import FrozenEntitlements, validate_entitlements
+from evidenceforge.events.macos_entitlements import (
+    EntitlementObject,
+    FrozenEntitlements,
+    canonical_entitlements,
+    freeze_entitlements,
+    native_entitlements,
+)
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 
@@ -285,13 +291,7 @@ class MachOCodeSignature:
     entitlements: Literal["absent"] | FrozenEntitlements | None = None
 
     def _comparison_key(self) -> tuple[object, ...]:
-        entries = self.entitlements
-        typed = (
-            tuple((key, type(value).__name__, value) for key, value in entries)
-            if type(entries) is tuple
-            else entries
-        )
-        return self.signing_id, self.team_id, self.cdhash, typed
+        return (json.dumps(self.serialized_values(), sort_keys=True, ensure_ascii=True),)
 
     def __eq__(self, other: object) -> bool:
         """Keep integer 1 distinct from Boolean true even in mixed entitlement objects."""
@@ -313,14 +313,17 @@ class MachOCodeSignature:
         object.__setattr__(self, "cdhash", _validate_digest(self.cdhash, "sha1"))
         if self.entitlements is not None and self.entitlements != "absent":
             entries = self.entitlements
-            validate_entitlements(entries)
-            object.__setattr__(self, "entitlements", tuple(sorted(entries)))
+            object.__setattr__(self, "entitlements", canonical_entitlements(entries))
 
     def serialized_values(self) -> tuple[object, ...]:
         """Preserve old encodings and tag newly supported value families explicitly."""
         values = (self.signing_id, self.team_id, self.cdhash)
         if self.entitlements is None:
             return values
+        if type(self.entitlements) is tuple and any(
+            type(value) is EntitlementObject for _, value in self.entitlements
+        ):
+            return (*values, ("property-object-v1", native_entitlements(self.entitlements)))
         encoded = (
             (
                 "integer-object-v1"
@@ -346,6 +349,11 @@ class MachOCodeSignature:
         entries = values[3] if len(values) == 4 else None
         tag: str | None = None
         if type(entries) in {list, tuple}:
+            if len(entries) == 2 and entries[0] == "property-object-v1":
+                restored = cls(values[0], values[1], values[2], freeze_entitlements(entries[1]))
+                if restored.serialized_values()[3][0] != "property-object-v1":
+                    raise ValueError("Entitlement representation tag disagrees with its values")
+                return restored
             if (
                 len(entries) != 2
                 or entries[0]
@@ -389,7 +397,7 @@ class MachOCodeSignature:
         if key.platform != "macos":
             raise ValueError("Mach-O code signatures require a macOS binary release")
         if type(entitlements) is tuple:
-            entitlements = tuple(sorted(validate_entitlements(entitlements)))
+            entitlements = canonical_entitlements(entitlements)
         facts = (*key.canonical_key, signing_id, team_id)
         if entitlements is not None:
             facts = (*facts, ("entitlements", entitlements))

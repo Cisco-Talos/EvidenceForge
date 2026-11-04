@@ -144,6 +144,19 @@ applications:
       macos:
         image_path: /Applications/Firefox.app/Contents/MacOS/firefox
         executable_format: mach_o
+        code_signature:
+          signing_id: org.mozilla.firefox
+          team_id: 43AQ936H96
+          entitlements:
+            com.apple.application-identifier: 43AQ936H96.org.mozilla.firefox
+            com.apple.developer.web-browser.public-key-credential: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.smartcard: true
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -229,6 +242,108 @@ applications:
       macos:
         image_path: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
         executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.Outlook
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.Outlook
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoftonline.com
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.microsoft.com
+            - applinks:outlook-sdf.office.com
+            - applinks:outlook.office.com
+            - applinks:outlook-sdf.office365.com
+            - applinks:outlook.office365.com
+            - applinks:outlook.cloud.microsoft
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.developer.ubiquity-kvstore-identifier: UBF8T346G9.com.microsoft.Outlook
+            com.apple.developer.usernotifications.communication: true
+            com.apple.developer.usernotifications.time-sensitive: true
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.Office
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.group.com.microsoft.shared
+            - UBF8T346G9.OfficeOsfWebHost
+            com.apple.security.assets.movies.read-only: true
+            com.apple.security.assets.music.read-only: true
+            com.apple.security.assets.pictures.read-only: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.security.print: true
+            com.apple.security.smartcard: true
+            com.apple.security.temporary-exception.apple-events:
+            - com.microsoft.lync
+            - com.microsoft.skypeforbusiness
+            - com.cisco.jabber
+            - cisco-systems.spark
+            - microsoft/com.microsoft.alertsdaemon
+            - com.microsoft.autoupdate2
+            - com.microsoft.entourage.databasedaemon
+            - com.microsoft.outlook.database_daemon
+            - com.microsoft.entourage.databaseutility
+            - com.microsoft.outlook.databasedaemon
+            - com.microsoft.outlook.databaseutility
+            - com.microsoft.entourage
+            - com.microsoft.outlook
+            - com.microsoft.errorreporting
+            - com.microsoft.excel
+            - com.microsoft.communicator
+            - microsoft/com.microsoft.messengerdaemon
+            - microsoft/com.microsoft.messenger
+            - com.microsoft.messenger
+            - com.microsoft.entourage.officereminders
+            - com.microsoft.outlook.officereminders
+            - com.microsoft.setupassistant
+            - com.microsoft.powerpoint
+            - com.microsoft.entourage.syncservices12
+            - com.microsoft.syncservicesagent
+            - com.microsoft.word
+            - com.microsoft.myday
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Preferences/com.microsoft.office.licensingV2.plist
+            - /Library/Logs/Microsoft/
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Application Support/Microsoft/
+            - /Library/Caches/TemporaryItems/msoclip/
+            - /Documents/Microsoft User Data/
+            - /Documents/Microsoft-Benutzerdaten/
+            - /Documents/Datos de usuario de Microsoft/
+            - /Documents/Données utilisateurs Microsoft/
+            - /Documents/Microsoft användardata/
+            - /Documents/Microsoft ユーザー データ/
+            - /Documents/Dati utente Microsoft/
+            - /Documents/Dane użytkownika produktów firmy Microsoft/
+            - /Documents/Данные пользователя Майкрософт/
+            - /Documents/Microsoft 用户数据/
+            - /Documents/Microsoft 使用者資料/
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.microsoft.office.licensingV2.helper.port
+            - com.apple.GSSCred
+            com.apple.security.temporary-exception.sbpl:
+            - "\n (allow authorization-right-obtain (right-name \"com.apple.KerberosAgent\")) "
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.apple.ncprefs
+            - com.apple.notificationcenterui
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.microsoft.autoupdate2
+            - com.microsoft.office
+            - com.microsoft.shared
+            - com.cisco.WebEx Productivity Tools
+            - com.cisco.Cisco Webex Meetings
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -279,6 +394,71 @@ applications:
       macos:
         image_path: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
         executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.Word
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.Word
+            com.apple.developer.aps-environment: production
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoftonline.com
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.microsoft.com
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.Office
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.group.com.microsoft.shared
+            - UBF8T346G9.OfficeOsfWebHost
+            - UBF8T346G9.OfficeOneDriveSyncIntegration
+            - UBF8T346G9.OfficeWordWidget
+            com.apple.security.assets.movies.read-only: true
+            com.apple.security.assets.music.read-only: true
+            com.apple.security.assets.pictures.read-only: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.files.bookmarks.app-scope: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.security.print: true
+            com.apple.security.scripting-targets:
+              com.apple.mail:
+              - com.apple.mail.compose
+            com.apple.security.temporary-exception.apple-events:
+            - com.microsoft.outlook
+            - com.microsoft.lync
+            - com.microsoft.skypeforbusiness
+            - com.filemaker.client.pro12
+            - com.thomsonresearchsoft.endnote
+            - com.dessci.mathtype
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Preferences/com.microsoft.office.licensingV2.plist
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.microsoft.office.licensingV2.helper.port
+            com.apple.security.temporary-exception.sbpl:
+            - '(allow file-read* file-write* (require-all (vnode-type REGULAR-FILE) (regex #"(^|/)~\$[^/]+$"))
+              )'
+            - (deny file-write* (subpath (string-append (param "_HOME") "/Library/Application Scripts"))
+              (subpath (string-append (param "_HOME") "/Library/LaunchAgents")) )
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.ThomsonResearchSoft.EndNote
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.microsoft.autoupdate2
+            - com.microsoft.office
+            - com.microsoft.shared
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -465,6 +645,28 @@ applications:
       macos:
         image_path: /Applications/OneDrive.app/Contents/MacOS/OneDrive
         executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.OneDrive
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.OneDrive
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoft.com
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.windows-ppe.net
+            com.apple.developer.usernotifications.communication: true
+            com.apple.security.app-sandbox: false
+            com.apple.security.application-groups:
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.OneDriveSyncClientSuite
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.OneDriveStandaloneSuite
+            - UBF8T346G9.OfficeOneDriveSyncIntegration
+            - UBF8T346G9.Kfm
+            - UBF8T346G9.ms
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -503,6 +705,19 @@ applications:
       macos:
         image_path: '/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat'
         executable_format: mach_o
+        code_signature:
+          signing_id: com.adobe.Acrobat.Pro
+          team_id: JQ525L2MZD
+          entitlements:
+            com.apple.security.application-groups:
+            - JQ525L2MZD.com.adobe.NGL
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-executable-page-protection: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.photos-library: true
         available_from: '2026-10-15'
         deployment:
           kind: catalog
@@ -1648,6 +1863,18 @@ applications:
       macos:
         image_path: /Applications/Slack.app/Contents/MacOS/Slack
         executable_format: mach_o
+        code_signature:
+          signing_id: com.tinyspeck.slackmacgap
+          team_id: BQR82RBBHL
+          entitlements:
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1707,6 +1934,21 @@ applications:
       macos:
         image_path: /Applications/zoom.us.app/Contents/MacOS/zoom.us
         executable_format: mach_o
+        code_signature:
+          signing_id: us.zoom.xos
+          team_id: BJ4HAAB9B3
+          entitlements:
+            com.apple.application-identifier: BJ4HAAB9B3.us.zoom.xos
+            com.apple.developer.associated-domains:
+            - webcredentials:devep-int.zoomdev.us
+            - webcredentials:zoom.us
+            com.apple.developer.team-identifier: BJ4HAAB9B3
+            com.apple.security.application-groups:
+            - BJ4HAAB9B3.ZoomClient3rd
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.calendars: true
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1767,6 +2009,33 @@ applications:
       macos:
         image_path: /Applications/Webex.app/Contents/MacOS/Webex
         executable_format: mach_o
+        code_signature:
+          signing_id: Cisco-Systems.Spark
+          team_id: DE8Y96K9QP
+          entitlements:
+            com.apple.application-identifier: DE8Y96K9QP.Cisco-Systems.Spark
+            com.apple.developer.associated-domains:
+            - applinks:alpha.webex.com
+            - applinks:convergedats.webex.com
+            - applinks:co-ats.webex.com
+            - applinks:co.webex.com
+            - applinks:cisco.webex.com
+            - applinks:acecloud.webex.com
+            - applinks:cisco-collab.webex.com
+            - applinks:drive.webex.com
+            - applinks:appleincsso.webex.com
+            - applinks:appleinc.webex.com
+            - applinks:appletestci.webex.com
+            com.apple.developer.networking.custom-protocol: true
+            com.apple.developer.team-identifier: DE8Y96K9QP
+            com.apple.developer.usernotifications.communication: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.calendars: true
+            keychain-access-groups:
+            - DE8Y96K9QP.Cisco-Systems.Spark
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -1822,6 +2091,18 @@ applications:
       macos:
         image_path: /Applications/Dropbox.app/Contents/MacOS/Dropbox
         executable_format: mach_o
+        code_signature:
+          signing_id: com.getdropbox.dropbox
+          team_id: G7HH3F8CAK
+          entitlements:
+            com.apple.application-identifier: G7HH3F8CAK.com.getdropbox.dropbox
+            com.apple.security.application-groups:
+            - G7HH3F8CAK.com.getdropbox.dropbox.sync
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.personal-information.photos-library: true
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1876,6 +2157,19 @@ applications:
       macos:
         image_path: /Applications/Google Drive.app/Contents/MacOS/Google Drive
         executable_format: mach_o
+        code_signature:
+          signing_id: com.google.drivefs
+          team_id: EQHXZ8M8AV
+          entitlements:
+            com.apple.application-identifier: EQHXZ8M8AV.com.google.drivefs
+            com.apple.security.application-groups:
+            - EQHXZ8M8AV.group.com.google.drivefs
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.personal-information.photos-library: true
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -1927,6 +2221,27 @@ applications:
       macos:
         image_path: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
         executable_format: mach_o
+        code_signature:
+          signing_id: com.citrix.receiver.nomas
+          team_id: S272Y5R93J
+          entitlements:
+            com.apple.application-identifier: S272Y5R93J.com.citrix.receiver.nomas
+            com.apple.developer.aps-environment: production
+            com.apple.developer.team-identifier: S272Y5R93J
+            com.apple.security.application-groups:
+            - S272Y5R93J.group.com.citrix.shared
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.location: true
+            keychain-access-groups:
+            - S272Y5R93J.com.citrix.clkeychain.access
+            - S272Y5R93J.com.citrix.mdx
+            - S272Y5R93J.com.citrix.workspace.firstparty
+            - S272Y5R93J.com.citrix.workspace.appsagent
+            - S272Y5R93J.com.citrix.cllease
+            - S272Y5R93J.com.citrix.aadSSO
         available_from: '2026-10-15'
         deployment:
           kind: managed
@@ -2009,6 +2324,10 @@ applications:
         available_from: "2026-10-16"
         image_path: "/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"
         executable_format: mach_o
+        code_signature:
+          signing_id: com.cisco.secureclient.gui
+          team_id: DE8Y96K9QP
+          entitlements: {}
         deployment:
           kind: managed
           product_id: cisco-secure-client-ui
@@ -2031,6 +2350,21 @@ applications:
       macos:
         image_path: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
         executable_format: mach_o
+        code_signature:
+          signing_id: com.paloaltonetworks.GlobalProtect.client
+          team_id: PXPZ95SK77
+          entitlements:
+            com.apple.developer.team-identifier: PXPZ95SK77
+            com.apple.developer.system-extension.install: true
+            keychain-access-groups:
+            - PXPZ95SK77.com.paloaltonetworks.GlobalProtect
+            com.apple.application-identifier: PXPZ95SK77.com.paloaltonetworks.GlobalProtect.client
+            com.apple.security.application-groups:
+            - PXPZ95SK77.com.paloaltonetworks.GlobalProtect.client
+            com.apple.developer.networking.networkextension:
+            - app-proxy-provider-systemextension
+            - content-filter-provider-systemextension
+            - dns-proxy-systemextension
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -2151,6 +2485,13 @@ applications:
       macos:
         image_path: '/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau'
         executable_format: mach_o
+        code_signature:
+          signing_id: com.tableausoftware.tableaudesktop
+          team_id: QJ4XPRK37C
+          entitlements:
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-library-validation: false
+            com.apple.security.get-task-allow: false
         available_from: '2026-10-16'
         deployment:
           kind: managed
@@ -2260,6 +2601,18 @@ applications:
         singleton_per_session: true
         image_path: /Applications/DBeaver.app/Contents/MacOS/dbeaver
         executable_format: mach_o
+        code_signature:
+          signing_id: org.jkiss.dbeaver.core.product
+          team_id: 42B6MDKMW8
+          entitlements:
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.debugger: true
+            com.apple.security.cs.disable-executable-page-protection: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.microphone: true
         available_from: '2026-10-15'
         deployment:
           kind: managed

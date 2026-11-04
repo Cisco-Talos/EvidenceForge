@@ -19,6 +19,7 @@ from evidenceforge.events.es_collector import (
     ESDeliveryRequest,
 )
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_entitlements import EntitlementObject
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
 from evidenceforge.events.macos_process_observation import (
     MacosGUIExecResponsibilityObservation,
@@ -369,10 +370,18 @@ def prepared_macos_es_process_publication(
                     return "gui_exec_metadata_unknown"
             entitlements = binary.code_signature.entitlements
             policy = source.profile.exec_entitlements
+            nested = (
+                any(type(value) is EntitlementObject for _, value in entitlements)
+                if type(entitlements) is tuple
+                else False
+            )
             if entitlements != "absent" and not (
-                policy == "absent_or_bounded_integer_object"
+                policy == "absent_or_bounded_property_object"
+                or policy == "absent_or_bounded_integer_object"
+                and not nested
                 or (
                     policy == "absent_or_bounded_object"
+                    and not nested
                     and all(type(value) is not int for _, value in entitlements)
                 )
                 or (

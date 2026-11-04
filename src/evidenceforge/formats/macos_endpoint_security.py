@@ -26,6 +26,7 @@ from pydantic import (
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_entitlements import (
     FrozenEntitlements,
+    NativeEntitlementValue,
     freeze_entitlements,
     native_entitlements,
 )
@@ -245,7 +246,7 @@ class ESExecV11(ESExec):
 
     dyld_exec_path: str = Field(description="Required native execution path")
     entitlements: Annotated[FrozenEntitlements, Field(max_length=128)] | None = Field(
-        description="Required null or a bounded flat Boolean/integer/string/string-array object"
+        description="Required null or a bounded entitlement property object"
     )
 
     @field_validator("entitlements", mode="before")
@@ -257,7 +258,7 @@ class ESExecV11(ESExec):
     @field_serializer("entitlements")
     def native_entitlements(
         self, value: FrozenEntitlements | None
-    ) -> dict[str, bool | int | str | list[str]] | None:
+    ) -> dict[str, NativeEntitlementValue] | None:
         """Keep the validated model immutable while preserving the native JSON object."""
         return native_entitlements(value) if value is not None else None
 

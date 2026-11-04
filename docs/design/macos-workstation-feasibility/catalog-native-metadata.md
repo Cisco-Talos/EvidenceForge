@@ -86,10 +86,10 @@ or GUI-login observation.
 
 ## Regular GUI application declarations
 
-These are explicit bundle/image declarations for the existing workload, used to
-select the shared launch mechanism. They **do not supply signing identities,
-entitlements or runtime validation**. Those target facts remain unknown until
-qualified independently. No additional helper graph is implied.
+These explicit bundle/image declarations select the shared launch mechanism for
+the existing workload. The separately inspected public main-image templates below
+now supply their own signer and complete bounded entitlement dictionary. No
+additional helper graph is implied, and no app inherits another app's signature.
 
 | Existing application | Selected bundle identifier | Public vocabulary basis |
 | --- | --- | --- |
@@ -105,11 +105,95 @@ qualified independently. No additional helper graph is implied.
 | DBeaver | `org.jkiss.dbeaver.core.product` | [Homebrew packaging](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/d/dbeaver-community.rb) |
 | Google Drive | `com.google.drivefs` | [Homebrew packaging](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/g/google-drive.rb) |
 | Citrix Workspace | `com.citrix.receiver.nomas` | [Citrix MDM schema](https://docs.citrix.com/us/en/citrix-workspace-app-for-mac/mobile-device-management.html) |
-| Cisco Secure Client | `com.cisco.anyconnect.gui` | [Cisco deployment guide](https://www.cisco.com/c/en/us/products/collateral/security/secure-access/secure-client-tamper-resistance-guide.html) |
+| Cisco Secure Client | `com.cisco.secureclient.gui` | Verified public main image below; the old AnyConnect preference domain was not this executable's identifier |
 | Tableau Desktop | `com.tableausoftware.tableaudesktop` | [Homebrew saved-application-state vocabulary](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/t/tableau.rb) |
 | GlobalProtect | `com.paloaltonetworks.GlobalProtect.client` | [Vendor preference domain](https://docs.paloaltonetworks.com/globalprotect/release-notes/6-3/known-issues-related-to-gp-app/globalprotect-6-3-3-h6-windows-and-macos-known-issues) |
 
-Preference/state domains are vocabulary evidence for the declared model, not a
-signature or complete packaged-Info.plist verification. The remaining GUI signer,
-entitlement and runtime-policy work is still required for complete target ES
-publication. A native xpcproxy row alone does not satisfy the app-start contract.
+Preference/state domains were initial vocabulary evidence, not signature proof.
+The public package checks independently verified each main executable's signature,
+arm64 slice, signing identifier, team, entitlement dictionary and Info.plist bundle
+identifier. A native xpcproxy row alone does not satisfy the app-start contract.
+
+## Fifteen public GUI main-image templates
+
+Public packages were downloaded into an isolated temporary directory outside Git.
+Disk images were mounted read-only with browsing/auto-open disabled and detached.
+`pkgutil --expand-full` extracted payloads without installing them or executing
+installer scripts. No downloaded executable was run, and no installed application,
+profile, native log or private capture was inspected. The same-named Acrobat helper
+and the x86 Google Drive payload were explicitly excluded from main-image selection.
+
+| Application | Public reference release | Public artifact SHA256 |
+| --- | --- | --- |
+| Firefox | 158.0 | `dfe8508ee8880cec1578253eb02b9154b5971a55e832d97396f463cd07b5ef67` |
+| Slack | 4.52.178 | `8a5bd759b91478c19f23deef1f21b870a5c3c55b631e3341be32f1c297260331` |
+| Dropbox | 274.4.4905 | `8371409c1941e7a5e425568ae7f1a765d1c54ab8bf0084c4d522b20866dd5644` |
+| DBeaver | 26.2.2 | `7f47579bc583571ca0ccef9fdce7d6cc56f84b74844e4e700ab7a46d1e501ec5` |
+| Outlook | 16.114.26101123 | `85c44957c44f223797b2a2cda48c096897274678ac8cf1adae14ec947f0f54ca` |
+| Word | 16.114.26101123 | `594a85317fb20b6fe9cc2b1e08aa8dacce0adafd167593230200f8a5f1937366` |
+| OneDrive | 26.173.0906.0008 | `cc0270130dc32cf92d27a52a145639a6cbbf0e88287a1b5603be4292af9da66a` |
+| Zoom | 7.2.2.88465 | `ff15d926ef5a714c6683cc23ed628a7c2fc43d080a88ac54af4e200ba03a2456` |
+| Citrix Workspace | 26.09.0.17 | `c0c9d44f622226b019e6406f3df8012da351b17e86f2dc42b62039df17d0a3df` |
+| Webex | 46.11.0.36194 | `f7565acf44c4a4012f2fef5824016595ed89872f5d89bf1f72c1484dc61e4b1b` |
+| Google Drive | 133.0.2 | `edfe08e00728c5084366f68a9e086a8ccafa3087bb0b47c2998148ac5db16661` |
+| Cisco Secure Client | 5.1.20.2493 | `7c2d9da63b46aad12e085c5b0e29c26e8f014010022ab9ba96cc216855a0a69c` |
+| GlobalProtect | 6.3.3-1199 | `a0b5dbe7b58fad6eaa5d8ca1f6d12623af18548002ec8671bb92bf1ccd266ab0` |
+| Tableau Desktop | 2026.3.0, build 20263.26.1022.1645 | `e1724f98347f43cb613620bac329d026925ca46ddb159f82b5d000cf5b00113e` |
+| Acrobat Pro | 26.002.22031 | `2c36119095065e2c78c4fe2bcf3d8440536b1c4a113185fc8f509164aa94b46d` |
+
+Artifact sources: [Mozilla release](https://download-installer.cdn.mozilla.net/pub/firefox/releases/158.0/mac/en-US/Firefox%20158.0.dmg),
+[Slack release](https://downloads.slack-edge.com/desktop-releases/mac/arm64/4.52.178/Slack-4.52.178-macOS.dmg),
+[Dropbox release](https://edge.dropboxstatic.com/dbx-releng/client/Dropbox%20274.4.4905.arm64.dmg),
+[DBeaver release](https://dbeaver.io/files/26.2.2/dbeaver-ce-26.2.2-macos-aarch64.dmg),
+[Outlook package](https://res.public.onecdn.static.microsoft/mro1cdnstorage/C1297A47-86C4-4C1F-97FA-950631F94777/MacAutoupdate/Microsoft_Outlook_16.114.26101123_Installer.pkg),
+[Word package](https://res.public.onecdn.static.microsoft/mro1cdnstorage/C1297A47-86C4-4C1F-97FA-950631F94777/MacAutoupdate/Microsoft_Word_16.114.26101123_Installer.pkg),
+[OneDrive package](https://oneclient.sfx.ms/Mac/Installers/26.173.0906.0008/universal/OneDrive.pkg),
+[Zoom package](https://cdn.zoom.us/prod/7.2.2.88465/arm64/zoomusInstallerFull.pkg),
+[Citrix package](https://downloadplugins.citrix.com/ReceiverUpdates/Prod/Receiver/Mac/CitrixWorkspaceAppUniversal26.09.0.17.pkg),
+[Webex image](https://binaries.webex.com/webex-macos-apple-silicon/Webex.dmg),
+[Google Drive image](https://dl.google.com/drive-file-stream/5-percent/GoogleDrive.dmg),
+[Cisco university distribution](https://secure.nis.vt.edu/resources/downloads/vpn/cisco-secure-client-macos.dmg),
+[GlobalProtect university distribution](https://vpn.upenn.edu/global-protect/getmsi.esp?platform=mac&version=none),
+[Tableau image](https://downloads.tableau.com/esdalt/2026.3.0/TableauDesktop-2026-3-0-arm64.dmg),
+[Adobe image](https://trials.adobe.com/AdobeProducts/APRO/Acrobat_HelpX/osx10/Acrobat_DC_Web_WWMUI.dmg).
+Some URLs roll forward; the measured digest binds the reference inspected here.
+The two university-distributed VPN images additionally passed Apple-anchored
+requirements for the exact expected vendor team and main identifier.
+
+The Tableau image's measured checksum **differs** from the published Homebrew cask
+checksum `b9d89df8cb1310657077310c3c4d14e71ae95423d72a2d6d7ee09a00773dc4ea`.
+It is not called a Homebrew-verified artifact. Its static template instead comes
+directly from the vendor's HTTPS image, with independently verified Apple-anchored
+main signing and `com.tableausoftware.tableaudesktop` identifier. The discrepancy
+does not establish why packaging changed. The measured build and both digests are
+retained explicitly; no published checksum was silently replaced.
+
+These are **synthetic catalog templates**, not exact installed-build parity claims.
+Tableau, Cisco Secure Client, GlobalProtect, Webex and Google Drive references differ
+from the selected catalog builds; Acrobat previously had no exact release declaration.
+The scenario's existing applications, images, versions, commands and timing remain
+unchanged. The reference templates define each modeled release's explicit metadata;
+synthetic content/CodeDirectory hashes and image UUIDs remain release-owned derivations.
+No real image hash or UUID is inserted into generated events.
+
+All public mains have generic arm64 slices and the static RUNTIME option; Slack also
+declares REQUIRE_LV. Successful Developer ID validation/category 6 and the runtime
+security flag sets are **selected model outcomes, not observed runtime measurements**.
+The explicit per-image policy retains hard/kill/enforcement/restriction, successful
+signed/dyld validation and RUNTIME; it selects entitlement validation when the object
+is nonempty and removes REQUIRE_LV only for explicit true disable-library-validation.
+False remains false, an empty object remains distinct from absence, and unlisted
+images retain unknown facts. This bounded ordinary-main policy does not establish
+sandbox transitions, helper graphs, app-specific ULF or Gatekeeper outcomes.
+
+Word's `com.apple.security.scripting-targets` contains a nested dictionary, exactly
+as [Apple's entitlement reference](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/AppSandboxTemporaryExceptionEntitlements.html)
+documents. Apple's [ES entitlement API](https://developer.apple.com/documentation/endpointsecurity/es_exec_entitlements(_:))
+returns the exec entitlement dictionary. The v11 codec/property-object capability
+preserves that dictionary recursively, rather than deleting or flattening keys.
+This is an API-derived extension of the existing JSON object representation, not a
+new captured wire sample. It admits only exact Boolean/int64/string/string-array/
+dictionary values with depth, node, entry and UTF-8 bounds. Prior narrower source
+profiles still reject nested objects. Canonical storage distinguishes empty objects
+from arrays, preserves Boolean versus integer identity at every depth, and uses a
+new explicit checkpoint tag without changing old flat encodings.

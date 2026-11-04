@@ -188,10 +188,11 @@ def _finder_engine(
         "onedrive",
     ],
 )
+@pytest.mark.parametrize("native", [False, True], ids=["filtered", "native"])
 def test_existing_user_scenario_gui_apps_share_the_canonical_launch_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, application_id: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, application_id: str, native: bool
 ) -> None:
-    engine = _finder_engine(tmp_path, monkeypatch, native=False, gui_application=application_id)
+    engine = _finder_engine(tmp_path, monkeypatch, native=native, gui_application=application_id)
     try:
         with effective_config_scope(engine.compiled_scenario.effective_config):
             engine._initialize()
@@ -215,9 +216,15 @@ def test_existing_user_scenario_gui_apps_share_the_canonical_launch_owner(
         assert process.execution_ordinal == 2 and process.arguments == (image,)
         assert process.credentials.audit_uid == process.credentials.real_uid
         assert process.responsibility.responsible is None
-        assert process.image_security is None
+        assert process.image_security is not None
         binary = engine.dispatcher.resolve_loaded_process_binary_identity(process)
-        assert binary.code_signature is None
+        assert binary.code_signature is not None and binary.code_signature.entitlements is not None
+        if native:
+            engine._finalize_macos_process_coverage()
+            census = engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census
+            assert census.complete and census.aggregate_births == 0
+            assert census.expected_forks == census.published_forks == 1
+            assert census.expected_execs == census.published_execs == 2
     finally:
         engine._close_emitters()
 

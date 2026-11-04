@@ -65,9 +65,9 @@ background recovery companion 63/78. This is bounded workload acceptance, not ev
 
 Complete native facts include the exact execution, parent/responsible/audit identities,
 installed image/signature, runtime security, thread, cwd, argv, ordered environment and
-FD table. The v11 entitlement profile admits explicit null or bounded flat objects with
-Boolean, signed-64-bit integer, string or string-array values, including an explicit empty
-object. Unknown is distinct from empty/null. Old frozen profiles retain their narrower
+FD table. The v11 entitlement profile admits explicit null or bounded property objects with
+Boolean, signed-64-bit integer, string, string-array or nested dictionary values, including
+distinct empty objects and arrays. Unknown is distinct from empty/null. Old frozen profiles retain their narrower
 capabilities. Public source rows must render supplied canonical facts rather than invent
 missing descriptors, metadata, outcomes or identities.
 
@@ -95,8 +95,14 @@ An existing local GUI login owns audit identity. This producer owns the launchd 
 root xpcproxy exec, GUI credential/audit transition and app exec. The latter phases share
 one PID/lifetime; the app is not an invented child of xpcproxy. `parent_ref` and unsuccessful
 outcomes are incompatible with this fresh-launch contract. Qualified reference-app and
-Chrome producers use it; arbitrary apps/signing classes and Dock/Spotlight attribution
-remain outside qualification. Every accepted start still has to satisfy complete coverage.
+Chrome producers use it. The existing Tableau, Zoom, Acrobat, Cisco Secure Client,
+GlobalProtect, Dropbox, Firefox, Google Drive, Word, Webex, Citrix Workspace, DBeaver,
+Outlook, Slack and OneDrive mains also use this shared owner with independent public
+static templates and explicit successful Developer ID runtime model policy. Some reference
+builds differ from the catalog; exact installed-build parity is not claimed. Their arbitrary
+helpers/signing classes and Dock/Spotlight attribution remain outside qualification.
+Direct app execution from SSH retains its shell chain. Every accepted start still has to
+satisfy complete coverage.
 
 Chrome supports a fresh Finder main and three bounded direct helper roles: renderer
 (`--type=renderer`), generic-helper GPU (`--type=gpu-process`) and generic-helper network
@@ -141,12 +147,15 @@ of a file does not unload its retained definition. Replacement needs an increasi
 Exit may supply a known `exit_code`; unload closes the retained group without inventing an
 unknown terminal status. Explicit unload before scenario end is required.
 
-For native ES startup select write-stage `launch_profile: root_xpcproxy_v11`, installed
-`/usr/bin/true` or `/usr/bin/sw_vers`, and RunAtLoad false. The loaded definition freezes its
-clean environment. Each activation owns a launchd fork, xpcproxy exec, setsid and target
-exec; a known exit is explicit. Other images/domains/triggers remain gated. The example
-`scenarios/macos-persistence-example/native-system-job.yaml` provisions its caller before
-collection. The older example without this preset retains partial aggregate activation.
+Installed native root targets with RunAtLoad false use the shared launchd fork,
+xpcproxy exec, setsid and target-exec owner, including when `launch_profile` is omitted.
+`root_xpcproxy_v11` selects that same explicit model. Native source admission still needs
+the target's own installed/signing/execution facts; an unknown signer is not replaced by
+a different program. Explicit launch inputs are frozen with the definition, while omitted
+inputs use the frozen run policy. A known exit is explicit. Other domains/triggers remain
+gated. The example `scenarios/macos-persistence-example/native-system-job.yaml` provisions
+its caller before collection. An authored root process without `parent_ref` uses a modeled
+pre-existing elevated shell; no in-window elevation or authentication is invented.
 
 File/process stages can produce eCAR. Registration and dormant unload have no admitted
 native observation. GUI LaunchAgents, automatic KeepAlive/timer/socket activation, native

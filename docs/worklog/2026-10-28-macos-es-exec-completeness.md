@@ -3538,3 +3538,58 @@ copy signature check correctly failed after losing signed bundle context; checki
 the unchanged image in its original public bundle passed. Both temporary volumes
 were detached. Its fixed public signer/entitlement/architecture metadata is retained
 outside Git, pending catalog qualification. No installed GUI application was read.
+
+### Revision-379 measured progress, before GUI qualification
+
+The second fresh partial diagnostic completed in 4m49s with seed 42 and the same
+authored workload, twelve sources, medium baseline and no packs/OOB. Its independent
+GT/ES join matches **85/85 authored Mac starts** by host, PID, exact image/argv and
+timestamp (maximum delta 19.544ms). The root caller now has native fork/exec, and the
+unchanged sleep job has native startup and its explicit known exit. Aggregate starts
+fell **66 → 0**. Native forks are **229/229**, and execs **239/291**, up from 148.
+The expected exec count rises because the previously aggregate GUI chains now include
+their canonical xpcproxy phases. The remaining **52** withheld execs are GUI target
+metadata gaps. No workload item was removed or changed to improve that result.
+
+One evaluation verifies the authoritative partial bundle/hashes: PASS,
+95.87644192353848, 224,504 records, no failing hard criteria, source/spec scores 100.
+This remains a **partial diagnostic, not complete-coverage acceptance**. Outputs,
+separate CLI diagnostics, evaluation and `POST-FIX-V379-AUTHORED-JOIN.json` are retained
+under the existing `/private/tmp/eforge-macos-test-20261104-y5r18rii` trial root.
+
+### Fifteen vendor main templates and bounded nested entitlements
+
+Static checks now cover the fifteen already-selected GUI mains, entirely from public
+vendor/university distribution packages outside Git. No installed GUI code, private
+capture, profile or local native log was opened. DMGs were mounted read-only without
+browsing/auto-open and detached; PKG payload expansion ran no installer scripts and
+its temporary directories were removed. The two university VPN distributions passed
+Apple-anchored exact vendor team/identifier requirements. Cisco's actual main/bundle
+identifier is `com.cisco.secureclient.gui`, correcting the initial AnyConnect-domain
+assumption. Each app retains its own full entitlement dictionary and synthetic
+release-owned hashes/UUID. Neither native records nor public binaries enter Git.
+
+Several public builds differ from the selected catalog releases. These are explicit
+synthetic static templates, not exact installed-build or runtime-parity claims.
+The scenario versions/images/programs/commands/timing remain intact. Runtime flags
+are selected ordinary successful Developer ID policy with per-image entitlement/LV
+choices, not measured executions. Public artifact versions, sources, SHA256s and
+all limits are documented in `catalog-native-metadata.md`. Tableau's vendor artifact
+does not match the public cask checksum; that mismatch is explicit, and its independent
+Apple-anchored main verification is the separate static provenance basis.
+
+Word exposed a real flat-only entitlement-model defect: Apple's documented
+`scripting-targets` dictionary could not survive admission. The canonical owner now
+retains bounded immutable nested dictionaries, distinguishing empty object/array and
+Boolean/integer at every depth. Config, deployment, digest identity, checkpoint tags
+and v11 rendering share that value. The new `property-object-v1` serialized tag preserves
+old flat encodings. The wider v11 capability follows the documented ES dictionary API
+and JSON object representation; it is explicitly API-derived, not a new native wire
+capture. Old narrower source profiles still reject nested objects. The initial
+**396** codec/signature/publication cases pass, including fault paths and nested-policy
+rejection. The final **456-case** selection also passes all fifteen apps through the
+shared owner with native output both selected and filtered, requiring one fork/two
+execs and complete independent census for every native launch. Unknown-metadata controls
+still fail complete coverage. Strict scenario validation has zero errors/warnings and
+the same two informational pivot notes. Fresh complete-coverage regeneration is next;
+no complete scenario result, PR, merge, release or new collection is claimed yet.

@@ -15,6 +15,6 @@ profiles:
     clock_profile: macos27-workspace-entry-v1
     # Reviewed non-PTY SSH client confirms exact integer values in v11 objects.
     # Application keys/templates and descriptor inventories remain separate gates.
-    exec_entitlements: absent_or_bounded_integer_object
+    exec_entitlements: absent_or_bounded_property_object
     # Reviewed v7 boot-parent export; launchd's own assigned ASID is distinct.
     boot_parent_token: default_unattributed_kernel

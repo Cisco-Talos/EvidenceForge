@@ -47,6 +47,7 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_entitlements import freeze_entitlements
 from evidenceforge.generation.activity.application_catalog import (
     child_image_from_command,
     load_catalog,
@@ -414,7 +415,7 @@ def _release_for_application_artifact(
                 key,
                 signing_id=signing_id,
                 team_id=signature.team_id,
-                entitlements=tuple(sorted(signature.entitlements.items()))
+                entitlements=freeze_entitlements(signature.entitlements)
                 if type(signature.entitlements) is dict
                 else signature.entitlements,
             )

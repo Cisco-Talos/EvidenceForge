@@ -33,6 +33,7 @@ from pydantic import (
 
 from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+from evidenceforge.events.macos_entitlements import NativeEntitlementValue
 from evidenceforge.models.http import HttpMultipartEntitySpec
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
@@ -845,10 +846,10 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
 
     signing_id: str = Field(min_length=1, max_length=512)
     team_id: str | None = Field(default=None, min_length=1, max_length=128)
-    entitlements: Literal["absent"] | dict[str, bool | int | str | tuple[str, ...]] | None = Field(
+    entitlements: Literal["absent"] | dict[str, NativeEntitlementValue] | None = Field(
         default=None,
         description=(
-            "Explicit absence or a bounded Boolean/integer/string/string-array object; "
+            "Explicit absence or a bounded Boolean/integer/string/string-array/nested object; "
             "null is unknown"
         ),
     )
@@ -857,11 +858,11 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
     @classmethod
     def exact_entitlements(cls, value: object) -> object:
         """Keep unknown, absent and observed immutable value types distinct."""
-        from evidenceforge.events.macos_entitlements import freeze_entitlements
+        from evidenceforge.events.macos_entitlements import freeze_entitlements, native_entitlements
 
         if value is None or (type(value) is str and value == "absent"):
             return value
-        return dict(freeze_entitlements(value))
+        return native_entitlements(freeze_entitlements(value))
 
     @field_validator("signing_id", "team_id")
     @classmethod
@@ -4260,6 +4261,7 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
         "absent_boolean_or_string_array_object",
         "absent_or_bounded_object",
         "absent_or_bounded_integer_object",
+        "absent_or_bounded_property_object",
     ]
     boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
 

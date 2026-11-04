@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 379
+current_revision: 380
 history_start_revision: 1
-behavior_surface_sha256: d91bfb889141c759e74d37e6119db85d3e64433722f00e1756d498a78741a6c1
+behavior_surface_sha256: 5dfd7b3227cca77dce03b826820aa6795aab25f62394ecbe8e9bc3455123e673
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3628,3 +3628,9 @@ changes:
     domains: [macos-process-lifecycle, macos-gui-startup, macos-ssh]
     formats: [ecar, macos_endpoint_security, zsh_history]
     summary: Restricts automatic Finder startup to live local GUI sessions; direct GUI executable invocation from SSH retains the existing shell fork-exec path and explicit parent references retain their ownership.
+  - revision: 380
+    id: macos-existing-gui-static-metadata
+    impact: localized
+    domains: [macos-binary-metadata, macos-es-entitlements, macos-gui-startup, application-catalog]
+    formats: [ecar, macos_endpoint_security]
+    summary: Adds per-vendor static templates for fifteen selected GUI apps and bounded nested entitlement identity/serialization, preserving explicit runtime model policy and source-profile qualification.

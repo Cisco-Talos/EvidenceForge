@@ -86,7 +86,7 @@ finder_applications:
   - image: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
     bundle_identifier: com.citrix.receiver.nomas
   - image: /Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client
-    bundle_identifier: com.cisco.anyconnect.gui
+    bundle_identifier: com.cisco.secureclient.gui
   - image: /Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau
     bundle_identifier: com.tableausoftware.tableaudesktop
   - image: /Applications/DBeaver.app/Contents/MacOS/dbeaver
@@ -340,6 +340,114 @@ code_validation:
   - product_id: chrome
     artifact_names: [Google Chrome Helper]
     codesigning_flags: 0x22013b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  # Public vendor static templates; successful runtime flags are selected model
+  # outcomes, not measurements. Full artifact/release boundaries are documented in
+  # docs/design/macos-workstation-feasibility/catalog-native-metadata.md.
+  - product_id: firefox
+    artifact_names:
+    - firefox
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: slack
+    artifact_names:
+    - Slack
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: dropbox
+    artifact_names:
+    - Dropbox
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: dbeaver
+    artifact_names:
+    - dbeaver
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: outlook
+    artifact_names:
+    - Microsoft Outlook
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: word
+    artifact_names:
+    - Microsoft Word
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: onedrive
+    artifact_names:
+    - OneDrive
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: zoom
+    artifact_names:
+    - zoom.us
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: citrix_workspace
+    artifact_names:
+    - Citrix Workspace
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: webex
+    artifact_names:
+    - Webex
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: google_drive_desktop
+    artifact_names:
+    - Google Drive
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: cisco-secure-client-ui
+    artifact_names:
+    - Cisco Secure Client
+    codesigning_flags: 0x22013b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: tableau_desktop
+    artifact_names:
+    - Tableau
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: globalprotect
+    artifact_names:
+    - GlobalProtect
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: acrobat
+    artifact_names:
+    - AdobeAcrobat
+    codesigning_flags: 0x22015b01
     is_platform_binary: false
     validation_category: 6
     cpu_subtype: 0

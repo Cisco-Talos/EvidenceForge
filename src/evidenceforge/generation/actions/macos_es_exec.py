@@ -18,6 +18,7 @@ from evidenceforge.events.es_collector import (
     PreparedESDeliveryCommit,
 )
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
+from evidenceforge.events.macos_entitlements import native_entitlements
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
 from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metadata
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
@@ -318,7 +319,7 @@ def _exec_record(
     }
     native_exec = (
         ESExecV11(
-            entitlements=dict(binary.code_signature.entitlements)
+            entitlements=native_entitlements(binary.code_signature.entitlements)
             if type(binary.code_signature.entitlements) is tuple
             else None,
             **payload,
