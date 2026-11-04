@@ -3324,3 +3324,110 @@ families and phase 4's supported-family acceptance are complete. Original full-s
 phases 3/4 remain explicitly incomplete solely because launchd ULF has no qualified
 message/envelope. The user has not waived that family; it remains gated without
 another collection request, alternative source, catalog expansion or assessment loop.
+
+## 2026-11-04 — User scenario acceptance requested; hold integration
+
+The user agreed to keep launchd ULF gated. They explicitly prohibited a PR into
+`dev` until satisfied that the approach works, and authorized regenerating and
+checking their actual `MacOS-test` scenario. This replaces the proposed integration
+step with user-scenario acceptance. No PR, merge or release is authorized. Native
+collection remains closed; only authored inputs and fresh synthetic output are
+in scope. Generation/evaluation skills apply, with preserved original inputs and
+fresh output instead of overwrite.
+
+Read-only Studio catalog metadata identifies the managed draft as
+`45fc2adf-76a8-435c-8cd4-b74dbe1a4848` in the user's Documents workspace. Direct
+source reads are denied by macOS Documents privacy, including the escalated
+read-only CLI inspection. Studio has no running service descriptor to provide
+its own source-read endpoint. No historical cached scenario or generated bundle
+is substituted for the current draft. The user has been asked to copy only that
+authored draft to `/private/tmp/eforge-macos-test-current-draft`; validation and
+generation await the accessible input. No native logs or private reference files
+were opened. Generation behavior revision 377/digest remains current.
+
+The user copied the managed draft as requested. Its pristine source SHA256 is
+`b5ca9d9c98c380494d355fb39bfd40411826d9c68e21eedb901137e358ed1b00`.
+It still declares macOS 26 on both Macs. Unchanged validation correctly fails
+with two unsupported-target errors plus dependent ES-profile/coverage errors.
+The original copied draft is preserved. A separate temporary working copy changes
+only the two OS declarations and matching environment description to macOS 27,
+the previously agreed generation target; commands, timing, baseline, persistence,
+formats, seed and draft identity are unchanged. No scenario is written back to
+Documents and no old bundle is overwritten.
+
+Trial root: `/private/tmp/eforge-macos-test-20261104-y5r18rii`.
+`INPUT-PROVENANCE.json` and `input-changes.diff` record the exact compatibility
+revision. The working source is `working-draft/source/scenario.yaml`; its fresh
+generation target is `complete/`. Validation passes with zero errors/warnings and
+the existing two informational pivot notes. This is the actual six-host,
+three-user, eight-hour source: 18 storyline steps, 20 red herrings, 88 process
+intents, six SSH intents and six launch-item stages. Seed 42, default target,
+medium baseline, all 12 selected formats and complete Mac ES policy are retained.
+Generation is running with the current checkout and its ordinary default
+checkpoint cadence. Reports/stdout/stderr are separate under the trial root.
+No production code or input is changed while the run is active. A result is not
+yet claimed; authoritative finalization/evaluation remain pending.
+
+### Actual scenario result: complete coverage fails; diagnostic preserved
+
+The strict generation finished all eight hours in 4m30s, then correctly failed
+final coverage validation with exit 21. MAC-01 has 95/95 forks but 79/156 execs,
+53 aggregate starts and 24 execs with unknown entitlements. There is no committed
+authoritative bundle and no recovery cursor; the failed workspace is preserved
+under `complete/`. It was not overwritten, evaluated as a completed bundle or
+reported as passing. No application was removed to improve coverage.
+
+One separately labelled diagnostic changes only `macos_process_coverage: partial`
+in another temporary authored copy. It keeps seed 42, all 12 sources, timing,
+applications, commands and medium baseline unchanged. Both validation passes have
+zero errors/warnings and the original two informational pivot notes. The diagnostic
+completes in 4m25s at `diagnostic/`. One evaluation verifies its authoritative
+manifest, resolved document and hashes: 224,176 records, 12 sources, score
+95.87205616744582, all deterministic hard criteria passing. **That partial-input
+evaluation is not a complete process-coverage acceptance.** No second evaluation
+or blind panel was run. No generation implementation changed.
+
+| Host | Native forks / expected | Native execs / expected | Known native exits | ULF | zsh |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MAC-01 | 95/95 | 79/156 | 17 | 3 | 75 |
+| MAC-02 | 68/68 | 69/83 | 24 | 5 | 43 |
+
+All 84 ordinary authored Mac commands match native exec by host, PID, image and
+exact argv; the unmatched 85th process request is the assumed-root `/bin/sh`
+persistence caller. Its separate launch-item `/bin/sleep` activation also remains
+aggregate and the known job exit lacks executable-version facts. That legacy job
+does not select the qualified native preset or one of its supported targets.
+Changing the program or timing would change the exercise and was not done.
+
+The independent State census and exact eCAR-to-ES target audit PID/version join
+partition all **91 missing execs**: **66 aggregate starts** plus **25 actual exec
+transitions with unknown entitlements**. Two aggregates are the authored caller/
+job; the other 64 are baseline. Entitlement gaps are sqlcmd 9, psql 10, Homebrew
+curl 5 and Zoom 1. Aggregate baseline images include mysql 13, Tableau 11, Word,
+Acrobat, Firefox, DBeaver, VPN/sync clients, Slack and other existing catalog apps.
+These are missing launch owners/native facts, not collection loss or launchd ULF.
+The fixed two-Mac acceptance did not establish this broader catalog's readiness.
+
+The 352 ES rows are 163 forks, 148 execs and 41 known exits. ULF has four workspace
+entries and four accepted SSH messages (two public-key, two PAM); no policy-refusal
+intent is authored and no ASP row is invented. Launchd ULF remains gated. Both
+Macs use Apple Terminal in this scenario; prior iTerm2 acceptance is separate.
+The bounded remote find chain agrees across GT, ES fork/exec, eCAR fork/exec and
+zsh history: one child PID, audit-version transition, literal wildcard argv and
+compatible timestamps. No private/native records were reviewed. The diagnostic
+also retains nonblocking HTTP-pairing/firewall-indicator/persistence-pivot and
+authored-gap timing findings; these are leads, not newly established engine bugs.
+
+The copied original's SHA256 is unchanged. `REPORT.md`, `GAP-INVENTORY.json`,
+`MAC-COVERAGE-REVIEW.json`, `BOUNDED-COMMAND-CHAIN.json`, exact source diffs,
+validation, evaluation and separate command diagnostics are retained under
+`/private/tmp/eforge-macos-test-20261104-y5r18rii`. All generated data stays outside
+Git; only these aggregate findings and the integration hold are recorded here.
+No source was written back to Documents, no profiles/gates were relaxed in the
+engine, no native capture was requested and no PR/merge/release was created.
+
+The next development target is the existing scenario's two persistence starts
+and selected baseline tools/apps, with qualified launch and metadata facts. Keep
+the workload and complete coverage contract intact for its next acceptance run.
+This is durable incomplete product work, now explicitly prioritized in TODO.md;
+the partial diagnostic must not be relabelled as satisfaction of the user's goal.

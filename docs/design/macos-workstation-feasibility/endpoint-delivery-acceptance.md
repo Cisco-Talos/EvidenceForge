@@ -5,6 +5,24 @@ roadmap. The target is useful, correlated evidence for the fixed two-Mac worksta
 workload on macOS 27 arm64. All scenario identities are invented. Raw native references
 stay outside Git and are never inspected by agents without specific permission.
 
+On 2026-11-04 the user agreed to leave launchd ULF gated and proceed with a fresh
+generation and review of their `MacOS-test` scenario. This is the next user
+acceptance step beyond the fixed engineering workload. Keep all work on the
+feature branch; no PR into `dev` is authorized until the user is satisfied.
+The existing launchd result does not qualify a message family, and no further
+native collection is requested for this acceptance run.
+
+The November 4 user-scenario trial now **fails complete ES coverage**. Its macOS 27
+working copy preserves all application/command/timing intent: 148/239 expected
+execs are exported, with 66 aggregate starts and 25 unknown-entitlement execs
+uncovered. All 163 modeled forks and 84/85 authored Mac process requests have
+native evidence; the remaining authored caller and sleep job need native owners.
+A separate partial diagnostic is manifest-verified, but is not a coverage pass.
+The fixed matrix below remains valid evidence for its narrower scope, not proof
+that this broader default catalog works. See the November 4 results in the
+[worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md). Launchd ULF is
+separately gated and does not cause these ES gaps. Integration remains on hold.
+
 | Phase | Completion evidence | Current state |
 | --- | --- | --- |
 | 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete for the bounded workload, reconfirmed at revision 377. Primary: 33 forks/39 execs. Final recovery companion with ASP negative control: 63 forks/78 execs, 39 background execs, all 22 deterministic files identical. |
