@@ -5741,6 +5741,7 @@ class ActivityGenerator:
         logon_id: str,
         lifetime: tuple[float, float],
         rng: random.Random,
+        completion_outcome: PosixProcessExit | None = None,
     ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
         termination_time = start_time + self._bounded_process_duration(
@@ -5826,7 +5827,18 @@ class ActivityGenerator:
                 process_name=process_name,
                 logon_id=logon_id,
                 session_end_plan=session_end_plan,
-                **({"macos_command_completed": True} if macos_completed else {}),
+                **(
+                    {
+                        "exit_outcome": completion_outcome,
+                        "expected_process": self.state_manager.get_process_identity(
+                            system.hostname, pid
+                        ),
+                    }
+                    if macos_completed and completion_outcome is not None
+                    else {"macos_command_completed": True}
+                    if macos_completed
+                    else {}
+                ),
             )
         return tracked_termination_time
 
@@ -28319,12 +28331,14 @@ class ActivityGenerator:
         time: datetime,
         pid: int,
         rng: random.Random,
-    ) -> None:
+    ) -> PosixProcessExit | None:
         """Emit network connections correlated with a process creation.
 
         When a baseline process is one that normally generates network
         traffic (browsers, Office apps, dev tools, DB clients), emit
         a corresponding connection shortly after process creation.
+        A declared Mac query connection failure supplies its canonical terminal
+        result to the bounded completion owner, independently of rendered logs.
         """
         # Extract executable basename
         exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
@@ -28508,6 +28522,17 @@ class ActivityGenerator:
             conn_state=failure_conn_state,
             ssh_attempted_username=ssh_attempted_username,
         )
+        if (
+            failure_conn_state is not None
+            and _get_os_category(system.os) == "macos"
+            and self.macos_execution_metadata is not None
+        ):
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is not None:
+                return self.macos_execution_metadata.command_completion(
+                    process, conn_time, connection_failed=True
+                )
+        return None
 
     def _baseline_type3_source_ip(
         self,
@@ -29355,7 +29380,7 @@ class ActivityGenerator:
 
                     # Emit correlated network connection for network-active apps
                     # (tight PID+timestamp coupling alongside profile-driven volume)
-                    self._emit_process_network_correlation(
+                    network_command_outcome = self._emit_process_network_correlation(
                         system,
                         network_process_name,
                         network_command_line,
@@ -29464,6 +29489,7 @@ class ActivityGenerator:
                                 logon_id=logon_id,
                                 lifetime=lifetime,
                                 rng=rng,
+                                completion_outcome=network_command_outcome,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)

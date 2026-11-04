@@ -4,6 +4,7 @@
 """Canonical exit accounting and bounded natural completion regressions."""
 
 import json
+import random
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta
@@ -17,9 +18,12 @@ from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.checkpoints.state_values import decode_state_value, encode_state_value
+from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.macos_process_census import MacosOccurrenceDigest, MacosProcessCensus
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import Scenario
 from tests.unit.test_macos_command_exit_outcomes import _engine, _launch, _native_exits
+from tests.unit.test_macos_installed_provisioning import _scenario
 from tests.unit.test_macos_ssh_pty_execution import _engine as _ssh_engine
 from tests.unit.test_macos_terminal_applications import _engine as _terminal_engine
 from tests.unit.test_process_execution_state import _START, _process
@@ -390,3 +394,83 @@ def test_ordinary_close_policy_rejects_conflicting_cause_and_result(change: str)
         raw["login_image"] = "login"
     with pytest.raises(ValidationError):
         MacosOrdinaryClosePolicy.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    "application,image,arguments,code",
+    [
+        ("psql", "/opt/homebrew/opt/libpq/bin/psql", '-h absent.example.test -c "SELECT 1"', 2),
+        (
+            "mysql",
+            "/opt/homebrew/opt/mysql-client/bin/mysql",
+            '--host=absent.example.test --execute="SELECT 1"',
+            1,
+        ),
+    ],
+)
+def test_failed_query_transport_supplies_nonzero_completed_native_result(
+    tmp_path: Path, application: str, image: str, arguments: str, code: int
+) -> None:
+    raw = _scenario().model_dump(mode="json", exclude_none=True)
+    raw["environment"]["deployment_overrides"] = [
+        {
+            "system": "MAC-01",
+            "user_applications": [
+                {"user": "alex", "applications": ["macos-terminal", application]}
+            ],
+        }
+    ]
+    raw["output"]["logs"] = [{"format": "ecar"}, {"format": "macos_endpoint_security"}]
+    raw["macos_process_coverage"] = "complete"
+    engine = GenerationEngine(Scenario.model_validate(raw), tmp_path, generation_seed=384)
+    engine._chronological_es_delivery = True
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        user, target = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, target, at, allow_local_session_reuse=False)
+        shell = generator.ensure_macos_session_shell(user, target, logon, at + timedelta(seconds=1))
+        start = at + timedelta(seconds=2)
+        command = f"{image} {arguments}"
+        pid = generator.generate_process(
+            user, target, start, logon, image, command, parent_pid=shell
+        )
+        process = engine.state_manager.get_process_identity(target.hostname, pid)
+        provider = engine.macos_execution_metadata
+        assert provider.command_completion(
+            process, start + timedelta(seconds=1)
+        ) == PosixProcessExit(exit_code=0)
+        result = generator._emit_process_network_correlation(
+            target, image, command, start, pid, random.Random(384)
+        )
+        assert result == PosixProcessExit(exit_code=code)
+        generator._generate_bounded_foreground_process_termination(
+            user=user,
+            system=target,
+            start_time=start,
+            pid=pid,
+            process_name=image,
+            logon_id=logon,
+            lifetime=(1.0, 2.0),
+            rng=random.Random(384),
+            completion_outcome=result,
+        )
+        assert (
+            engine.state_manager._ended_processes_by_object_id[process.object_id].exit_outcome
+            == result
+        )
+        generator.execute_baseline_activity(
+            user, target, start + timedelta(minutes=1), "process_query"
+        )
+        baseline = [
+            ended
+            for object_id, ended in engine.state_manager._ended_processes_by_object_id.items()
+            if object_id != process.object_id and ended.image == image
+        ]
+        assert len(baseline) == 1 and baseline[0].exit_outcome == result
+        engine._finalize_macos_process_coverage()
+    finally:
+        engine._close_emitters()
+    assert _native_exits(tmp_path, pid)[0].event.exit.stat == code << 8
+    assert _native_exits(tmp_path, baseline[0].pid)[0].event.exit.stat == code << 8

@@ -162,7 +162,9 @@ class MacosExecutionMetadataProducer:
         self._known_from = born_at
         self._known_until = window_end
 
-    def command_completion(self, process: ProcessIdentity, at: datetime) -> PosixProcessExit | None:
+    def command_completion(
+        self, process: ProcessIdentity, at: datetime, *, connection_failed: bool = False
+    ) -> PosixProcessExit | None:
         """Select declared nominal truth for an exact first command execution.
 
         The completion owner must separately prove a natural bounded close.
@@ -188,8 +190,9 @@ class MacosExecutionMetadataProducer:
         if binary is None or binary.content_id != process.executable_version.content_id:
             return None
         for rule in self.profile.command_completions:
+            code = rule.connection_failure_exit_code if connection_failed else rule.exit_code
             if process.arguments == rule.arguments:
-                return PosixProcessExit(exit_code=rule.exit_code)
+                return PosixProcessExit(exit_code=code) if code is not None else None
             template = rule.argument_template
             if template is None or len(template) != len(process.arguments):
                 continue
@@ -210,7 +213,7 @@ class MacosExecutionMetadataProducer:
                 re.fullmatch(pattern, value) is not None
                 for pattern, value in zip(patterns, process.arguments, strict=True)
             ):
-                return PosixProcessExit(exit_code=rule.exit_code)
+                return PosixProcessExit(exit_code=code) if code is not None else None
         return None
 
     def ordinary_close(

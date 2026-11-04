@@ -39,6 +39,17 @@ untruncated timing. They are not inferred from successful exec or TCP establishm
 Unknown, held, truncated and unsupported invocations retain unknown outcomes. Templates
 bind home to the modeled account and retain literal argv, including the find pattern.
 
+Nominal query success must not override an explicit failed connection. The baseline
+process/network owner supplies a declared connection-failure result to its bounded
+completion owner after committing the canonical attempt. The lifecycle owner waits
+for owned work before committing that result. It does not inspect a rendered Zeek/eCAR
+row to trigger an exit. The selected database failure codes are psql 2 and mysql 1.
+The native `sqlcmd` network mapping is a separate unimplemented expansion; its
+existing declared nominal completion does not assert a verified transport outcome.
+Sources: [PostgreSQL exit status](https://www.postgresql.org/docs/current/app-psql.html#APP-PSQL-EXIT-STATUS),
+[MySQL connection-failure and exit handling](https://github.com/mysql/mysql-server/blob/trunk/client/mysql.cc).
+These bounded selected query paths do not claim to model every possible client error.
+
 Exact Mac SSH exits must be pure canonical process occurrences, with authenticated
 session ownership retained in the identity plan and the existing exact publication/
 recovery journal. Logout is separate. Native source admission must account for these

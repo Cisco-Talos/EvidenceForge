@@ -4326,6 +4326,7 @@ class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
     arguments: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
     argument_template: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
     exit_code: int = Field(strict=True, ge=0, le=255)
+    connection_failure_exit_code: int | None = Field(default=None, strict=True, ge=1, le=255)
 
     @field_validator("arguments", "argument_template")
     @classmethod

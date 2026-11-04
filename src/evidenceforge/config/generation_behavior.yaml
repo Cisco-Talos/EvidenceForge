@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 383
+current_revision: 384
 history_start_revision: 1
-behavior_surface_sha256: 9fde2000657d6c7b1dd256c5a3c16d07a317d8eaac4b1f457267685b85d764d3
+behavior_surface_sha256: 3121084e3ada981770dcbefdda3bb61276aac7c78126adb0befaf7d466ecd5c5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3652,3 +3652,9 @@ changes:
     domains: [macos-process-lifecycle, session-shutdown, ssh-shutdown]
     formats: [ecar, macos_endpoint_security]
     summary: Adds the user-selected ordinary-close model with distinct completed GUI, terminal and SSH return paths and explicit cancellation signals for unfinished queries; frozen legacy and unsupported shutdown behavior stays unknown.
+  - revision: 384
+    id: macos-query-connection-failure-completion
+    impact: localized
+    domains: [macos-process-lifecycle, process-network-correlation]
+    formats: [ecar, macos_endpoint_security, zeek_conn]
+    summary: Supplies declared nonzero PostgreSQL and MySQL query completion from their existing canonical failed database connection attempts without changing process or network activity selection.

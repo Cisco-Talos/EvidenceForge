@@ -3872,3 +3872,109 @@ medium baseline, six hosts/three users and the eight-hour window remain unchange
 One fresh strict generation is running at `post-fix-complete-v383` under the existing
 trial root; its exit completeness and evaluation are not yet claimed. No private/native
 log or capture, installed code, live probe, collector or app was inspected or run.
+
+### Revision-383 run and concrete query-outcome correction
+
+The ordinary-close implementation is committed/pushed as `56452271`. Strict generation
+of the unchanged MacOS-test draft completed in **290.24 seconds**. It reconciles
+229/229 forks, 291/291 execs and 200/200 canonical/native exits (127 MAC-01, 73 MAC-02),
+with zero unknown in-window results, exact final execution identities and no duplicate
+exits. Eleven exit lifetimes started before collection; the synthetic revision-381
+inventory independently verifies those identities rather than requiring retrospective
+start records. All 85 authored starts and all 291 eCAR/ES exec identities still match.
+Sleep-600 remains 600.005884 seconds and all 39 bounded walkthrough assertions pass;
+the historical iTerm2 fixture stays explicitly labelled revision 377. The fresh combined
+recovery test and current unit tests cover iTerm2 at the current behavior revision.
+
+One evaluation passed at **95.87391526820508**, 224,701 records, source schema 100 and
+no failing applicable hard criteria. Native rows grew from 562 to 720 solely through
+158 added exits; every other source count is unchanged. The authored source hash remains
+`18be80547b29d767406b76a2665f69c0ced5c6c6a36938caccdfb080cd95c263`. The resolved SHA
+is `c8eba0b827b8ed97bf60c74ffd01c73e327d14cb47562c8921072bebf335de38`; a structured
+comparison confirms only the frozen completion/ordinary-close configuration and derived
+digests changed. Scenario/assets/provenance are unchanged. Dependency-aware completion
+also retimes later baseline commands/history and nine owned connection occurrences;
+the authored workload is unchanged, not every generated timestamp/PID.
+
+A final cross-source comparison exposed a concrete contradiction despite the passing
+generic evaluation: nominal status zero for queries whose canonical network attempts
+fail. Revision 384 passes explicit declared database connection-failure results from
+the process/network owner to the bounded completion owner. It uses no rendered source
+as a trigger and adds no retained sidecar. PostgreSQL uses 2, MySQL 1 and sqlcmd 1 for
+the selected failure paths; the separate ordinary-close/cancellation policy remains
+unchanged. The native `sqlcmd` alias also joins its existing SQL Server service map.
+Primary public references are recorded in the exit-completeness design note; no private
+capture or installed code was opened.
+
+Three new real-engine query regressions pass, including exact State/native outcome
+agreement. The expanded final selection passes **95 tests**, including the existing
+network policy/Windows and Linux correlation checks. Combined exact recovery/filter
+acceptance passes again in **54.99 seconds** with all 22 deterministic files and native
+bytes equal; the one declared unsupported compound-shell result remains the explicit
+negative control. Whole-repository Ruff/format/diff and behavior-manifest checks pass.
+Revision-384 surface:
+`c76981a276bb0589ed52a8b31f617acdacd354892b7b234eb5adf9737168395a`.
+Fresh validation passes, and a separate unchanged-scenario revision-384 generation is
+running before the final outcome/transport joins and its single evaluation. The prior
+revision-383 result is retained as a diagnostic, not relabelled as the final fix.
+
+The first revision-384 candidate failed complete start coverage after the new native
+sqlcmd mapping consumed the caller's random stream and resampled later baseline app
+choices (including unqualified Teams/Finder). That failed attempt is preserved, with
+CLI exit 21 after 265.42 seconds. No source gate was weakened or catalog expanded.
+The new mapping now selects `rng_scope: process_instance`; its network parameters and
+nested synchronous network generation use an owned deterministic stream. The public
+generation seed and stable identity namespace stay unchanged, and the caller's stream
+is restored across nested scopes/exceptions. Existing mappings retain their prior
+sampling policy. The real-engine sqlcmd regression checks both passed-in and thread-local
+stream preservation. The final focused selection passes **96 tests**, and the combined
+recovery/filter gate passes again in **54.64 seconds**. A separate fresh final bundle
+is running; the failed candidate is not overwritten.
+
+An additional slow static timing-inventory check has a pre-existing failure: nine calls
+exceed its legacy selector caps. A read-only AST comparison against pushed `56452271`
+proves the exact same excess and zero added or removed continuous-RNG call sites from
+this correction. The other two static checks pass. The inventory is not weakened, and
+that older migration work is separate from this exit repair. Its fixed comparison is
+retained outside Git in `TEMPORAL-RNG-GUARD-BASELINE.json`. Final revision-384 surface:
+`921d6e0b0a864ff2dc43f73c6176d610b42dab353f05650ecde92c916125a484`.
+
+The second uncommitted candidate still failed complete starts after 282.08 seconds
+(131/131 forks, 168/169 execs). Its retained synthetic ingress identifies one
+Homebrew `ssh -V` execution with unknown entitlements. Inspection used only this
+authorized synthetic staging data. The new sqlcmd alias was also eligible for unrelated
+ambient ownership through the inverse network map. It now requires an explicit endpoint,
+and exact executable policy takes precedence over suffix fallback, preserving Windows
+`sqlcmd.exe` eligibility. Tests cover both index directions and both platform spellings.
+No unqualified start is accepted, no scenario is narrowed and no application catalog
+is expanded to satisfy a changed random sample.
+
+The final selection passes **97 tests**. The three query cases also invoke the actual
+baseline `process_query` entry point and verify its completed State/native nonzero result.
+The final combined recovery/filter gate passes in **55.57 seconds**. The separate
+`post-fix-complete-v384-r3` generation is running after fresh successful validation;
+both previous failed candidates remain intact. Current revision-384 surface:
+`c13236819bf0c236a599dcd25616bb76a63dfa70611038e42d884effff86ce5d`.
+
+### Final scope: existing failed-query outcomes only
+
+The third network-expansion candidate also fails the same native entitlement gate
+after 298.00 seconds. Adding native sqlcmd network coverage is beyond the approved
+exit repair and perturbs canonical activity/ownership as well as sampling. That entire
+uncommitted expansion is removed: no process-network map/index change, RNG utility,
+sampling-policy field or alias-policy test remains in the final change. The three failed
+attempts remain outside Git as diagnostics, not accepted generations. Native Homebrew
+SSH admission and native sqlcmd network expansion are separate follow-up work, not a
+reason to weaken complete process coverage or keep expanding this repair.
+
+Final revision 384 supplies nonzero outcomes only for the **existing** PostgreSQL/MySQL
+failed connection paths. Query completion is handed off synchronously from that canonical
+owner; it adds no source rows, sidecar or activity-selection change. Native sqlcmd keeps
+its existing nominal process-completion policy and unimplemented network mapping; no
+verified transport outcome is claimed for it. The final regressions exercise both direct
+completion and actual baseline entry points for PostgreSQL/MySQL. **94 tests pass**, and
+combined recovery/filter acceptance passes in **56.52 seconds**. Whole-repository
+Ruff/format/diff checks pass. Final behavior surface:
+`3121084e3ada981770dcbefdda3bb61276aac7c78126adb0befaf7d466ecd5c5`.
+Fresh validation passes, and `post-fix-complete-v384-exits` is running with the unchanged
+source/all formats. Its final measurements and evaluation are pending.

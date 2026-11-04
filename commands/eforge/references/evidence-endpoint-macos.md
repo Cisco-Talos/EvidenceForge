@@ -69,7 +69,9 @@ The current frozen ordinary-close policy selects completed orderly app quits, te
 server/login/shell returns, and independent normal SSH worker/receiver/client returns.
 Unfinished supported queries are cancelled with signal 15 rather than reported successful.
 Natural query results require the exact invocation and an untruncated completion after
-owned work. These are explicit simulation choices, not measured universal macOS logoff
+owned work. Explicit failed database connections supply their nonzero query result through
+the same canonical process/network owner; nominal success cannot override that failure.
+These are explicit simulation choices, not measured universal macOS logoff
 behavior. Unsupported images/results and older profiles stay unknown. See the repository's
 `docs/design/macos-workstation-feasibility/exit-completeness.md` for scope and acceptance.
 

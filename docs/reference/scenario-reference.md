@@ -1988,9 +1988,9 @@ iTerm2 for that user's automatically bootstrapped terminal. With both terminals 
 Apple Terminal is the stable default; an existing active session shell is reused. This
 models one primary terminal shell per GUI session. App identities remain distinct, and
 iTerm2 does not inherit Apple's signing metadata. App reuse creates no new process start.
-Native command output works beneath either app. Native qualification of the terminal app,
-login and initial shell startup remains incomplete; starting them within a complete ES
-collection window still rejects rather than accepting missing records.
+Native command output works beneath either app. Their bounded fresh startup chains include
+the terminal app, login and initial shell, with iTermServer/ShellLauncher for iTerm2 3.7.6.
+New windows/restored jobs in an already running app remain outside this startup model.
 
 Use existing system fields (`os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
 
@@ -2000,11 +2000,12 @@ output selection. The catalog can hold multiple profiles; historical wire decode
 available independently of generation admission.
 
 Authored interactive commands keep their shell scheduling and history. Qualified direct launches
-use canonical fork/exec transitions. Native v11 output requires complete per-phase facts; unknown
-SSH descriptors omit exec rows while preserving qualified forks and eCAR exec evidence. Known
+use canonical fork/exec transitions. Native v11 output requires complete per-phase facts;
+unsupported descriptors or other missing facts reject complete coverage rather than accepting
+missing starts. A partial request reports omitted rows separately. Known
 canonical terminal outcomes can render exit rows; unknown results remain unexported. An
-unexecuted command is reported as skipped. Selecting a native format never asserts a complete
-native audit of all processes.
+unexecuted command is reported as skipped. Complete coverage applies to the modeled in-window
+starts and eligible collection, not an arbitrary real endpoint's entire process vocabulary.
 
 The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Explicit `process.outcome: policy_refused` adds the bounded kernel app-policy refusal described below. Qualified native SSH receivers also emit accepted authentication through the same action in both PTY modes: observed keyboard-interactive/PAM success for password intent, or source-derived plain-public-key success with complete canonical type/SHA256 fingerprint. The latter reuses the native-qualified common logger envelope; it is not a separate local public-key observation. Certificates, incomplete keys, PAM open/close, disconnect and launchd messages remain gated. Ordinary SSH daemon verbosity is preserved; VERBOSE session messages are outside this profile. Other Unified Log families remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
 

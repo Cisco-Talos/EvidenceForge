@@ -195,8 +195,10 @@ command_completions:
     exit_code: 0
   - argument_template: ["/opt/homebrew/opt/libpq/bin/psql", "-h", "{db_server}", "-c", "SELECT 1"]
     exit_code: 0
+    connection_failure_exit_code: 2
   - argument_template: ["/opt/homebrew/opt/mysql-client/bin/mysql", "--host={db_server}", "--execute=SELECT 1"]
     exit_code: 0
+    connection_failure_exit_code: 1
   - argument_template: ["/opt/homebrew/opt/curl/bin/curl", "--head", "{internal_url}"]
     exit_code: 0
 terminal:

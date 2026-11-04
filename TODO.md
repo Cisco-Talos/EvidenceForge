@@ -123,6 +123,14 @@ without turning `TODO.md` back into a high-conflict work journal.
   and timing owners. The historical panel identifies 14 Windows births in two milliseconds;
   retain startup and collection alternatives. The separate bounded Mac query timing repair
   is recorded in the current coverage worklog above. See the same assessment.
+- [ ] **P1** Migrate the Mac branch's remaining continuous timing-RNG call sites to the
+  shared timing owner and reconcile moved selectors without weakening the inventory cap.
+  The slow static guard has nine pre-existing excess calls; the November 4 exit repair
+  adds none. See the [Mac worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [ ] **P2** Add native sqlcmd process/network correlation with explicit endpoint ownership
+  and qualify baseline Homebrew SSH metadata. Keep the new network action independent of
+  later activity selection/ownership; prototype failures and scope are recorded in the
+  same Mac worklog. This is separate from the supported workload's exit-completeness gate.
 - [ ] **P1/P2** Correct native SMB service-type and NTP reference-ID semantics through the
   protocol facts/projection owners after qualifying the exporter contract. Keep broader
   HTTP owner and remote-auth visibility findings as qualified leads, not assumed defects.
