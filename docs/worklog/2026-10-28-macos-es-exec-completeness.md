@@ -3732,3 +3732,44 @@ baseline, six hosts/three users and eight hours plus warmup. Expected peak disk 
 in this short run. The next check is one fresh strict generation and one evaluation,
 then independent start reconciliation and the same two chain assertions. No native
 collection, installed-code read or personal log inspection was performed.
+
+### Revision-381 unchanged-scenario verification
+
+Implementation commit `7e4396e0` is pushed. Fresh strict generation completed in
+**282.79 seconds** into `post-fix-complete-v381` under the existing trial root.
+The source SHA256 is `18be80547b29d767406b76a2665f69c0ced5c6c6a36938caccdfb080cd95c263`;
+the authoritative resolved SHA256 remains exactly the revision-380 value,
+`49348724ba1ea47db2f8c97dae66195a2066a7a9f5eb6f538ed9a8da7f5f1c2e`.
+The original user copy also retains its previously recorded hash. Seed 42, default
+target, all twelve formats, six hosts, three users, eight hours plus warmup, medium
+baseline, no packs/OOB and complete coverage remain unchanged.
+
+The same sleep PID 34858 now has **600.005884 seconds** between native target exec
+and normal exit 0, versus 580.254510 before. eCAR independently measures
+**600.005 seconds** between its sleep exec and termination. The unchanged non-PTY
+find PID 5061 still has its one fork/exec and matching eCAR lifetime, but no history.
+All **13 removed history entries** were independently joined by exact argv/time to
+ES commands whose parent shell has `[-zsh]`, pipe stdin and no tty. No history entry
+was added. MAC-01 retains all 75 history entries, including the selected local id
+at line 19; MAC-02 correctly falls from 43 to 30. Two additional real-engine tests
+confirm both Apple Terminal and iTerm2 still emit history and one native command exec.
+These are in addition to the final 255-test regression selection.
+
+Independent start reconciliation remains **229/229 forks, 291/291 execs**, zero
+aggregates, **85/85 authored starts** (maximum delta 19.544ms), and **291/291 exact
+eCAR/ES exec identities** with no unmatched side. All original **39 walkthrough
+assertions pass**; the historical iTerm2 fixture remains identified as revision 377,
+not relabelled as this MacOS-test run. Native counters/timestamps remain increasing.
+Known exits remain 42 and unknown exits 147; this bounded fix does not fabricate outcomes.
+
+One evaluation verifies the new authoritative bundle and returns **PASS
+95.87391526820508**, **224,543 records**, no failing hard criteria, source-schema
+score 100. The 13-record reduction is entirely the corrected history suppression;
+all other source counts remain unchanged (562 ES, 8 ULF, 61,237 eCAR). No repeated
+evaluation, blind panel, live collection, native/personal log read or installed-code
+inspection was performed. Launchd ULF stays gated; no PR, merge or release is authorized.
+
+Outside Git, the trial retains `POST-FIX-COMPLETE-V381-RUN.json`, separate generation/
+evaluation diagnostics, `POST-FIX-COMPLETE-V381-REVIEW.json`,
+`WALKTHROUGH-V381-SELECTION.json`, `WALKTHROUGH-V381-CHECKS.json`,
+`WALKTHROUGH-V381-HISTORY-DIFF.json` and `POST-FIX-V381-REPORT.md`.

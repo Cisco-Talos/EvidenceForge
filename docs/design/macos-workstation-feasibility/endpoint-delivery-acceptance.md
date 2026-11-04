@@ -20,13 +20,17 @@ remain historical evidence. The fixed matrix below still describes its narrower
 scope; it is not relabelled as a revision-380 run. See the current results in the
 [worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
 
-The subsequent bounded walkthrough confirms the selected Terminal, iTerm2, SSH,
-GUI and job start chains, but finds two concrete realism defects: independent
-storyline jitter shortens the successful sleep-600 lifetime by 19.74549 seconds,
-and interactive history is emitted for the sampled non-PTY zsh without interactive
-invocation. These require timing/lifecycle and shell-history eligibility repairs;
-complete start counts do not close them. Existing unknown-exit, vendor-template/
-runtime-policy and ULF limits remain explicit. No new collection is requested.
+The subsequent bounded walkthrough found an early successful sleep exit and history
+from a noninteractive SSH shell. Revision 381 repairs their canonical timing/lifecycle
+and shell-submission owners. Fresh unchanged MacOS-test generation measures
+**600.005884 seconds** from native sleep exec to exit 0 (eCAR: **600.005 seconds**).
+All thirteen removed history entries independently match noninteractive pipe-backed
+SSH commands still present in ES; local Terminal history is retained. The original
+39 chain assertions now pass, and separate current tests cover both Terminal and iTerm2
+history with native command evidence. Start coverage remains 229/229 forks, 291/291
+execs and 85/85 authored starts. One evaluation passes at 95.87391526820508 with
+224,543 records; all applicable hard gates pass. Existing unknown-exit, vendor-template/
+runtime-policy and ULF limits remain explicit. No new collection was performed.
 Launchd ULF stays gated and integration remains on hold for user review.
 
 | Phase | Completion evidence | Current state |

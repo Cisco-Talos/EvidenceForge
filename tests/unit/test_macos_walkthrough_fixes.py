@@ -19,6 +19,7 @@ from evidenceforge.generation.timing import TemporalConstraintError
 from evidenceforge.models.exceptions import StateError
 from tests.unit.test_macos_native_system_job import _setup
 from tests.unit.test_macos_ssh_pty_execution import _engine
+from tests.unit.test_macos_terminal_applications import _engine as _terminal_engine
 from tests.unit.test_process_execution_state import _process
 
 
@@ -181,3 +182,57 @@ def test_ssh_history_follows_stdin_interactivity_without_losing_process_evidence
     )
     history = [path.read_text() for path in tmp_path.rglob("*history*") if path.is_file()]
     assert any(";id" in content for content in history) is pty
+
+
+@pytest.mark.parametrize("terminal_id", ["macos-terminal", "macos-iterm2"])
+def test_both_terminal_variants_keep_interactive_history_and_native_command(
+    tmp_path: Path, terminal_id: str
+) -> None:
+    engine = _terminal_engine(tmp_path, terminal_id, history=True)
+    try:
+        engine._initialize()
+        generator, state = engine.activity_generator, engine.state_manager
+        user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        at = engine.start_time + timedelta(minutes=1)
+        logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
+        shell_pid = generator.ensure_macos_session_shell(
+            user, system, logon, at + timedelta(seconds=10)
+        )
+        when = at + timedelta(minutes=1)
+        shell = state.get_process_identity(system.hostname, shell_pid)
+        stdin = next(
+            item
+            for item in state.process_descriptors_at(shell, event_time=when).bindings
+            if item.fd == 0
+        )
+        assert stdin.is_terminal is True
+        pid = generator.generate_process(
+            user,
+            system,
+            when,
+            logon,
+            "/usr/bin/id",
+            "/usr/bin/id",
+            parent_pid=shell_pid,
+            require_exact_parent=True,
+        )
+        assert generator.emit_macos_shell_history(
+            user, system, when, "id", logon_id=logon, shell_pid=shell_pid
+        )
+        engine._finalize_macos_process_coverage()
+        assert engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.complete
+    finally:
+        engine._close_emitters()
+    rows = [
+        json.loads(line)
+        for path in tmp_path.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    assert (
+        sum(
+            row["event_type"] == 9 and row["event"]["exec"]["target"]["audit_token"]["pid"] == pid
+            for row in rows
+        )
+        == 1
+    )
+    assert any(";id" in path.read_text() for path in tmp_path.rglob("*.zsh_history"))

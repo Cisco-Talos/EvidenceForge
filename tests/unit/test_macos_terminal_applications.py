@@ -17,7 +17,9 @@ from evidenceforge.models.scenario import Scenario
 from tests.unit.test_macos_installed_provisioning import _scenario
 
 
-def _engine(tmp_path: Path, terminal_id: str, *, native: bool = True) -> GenerationEngine:
+def _engine(
+    tmp_path: Path, terminal_id: str, *, native: bool = True, history: bool = False
+) -> GenerationEngine:
     raw = _scenario().model_dump(mode="json", exclude_none=True)
     raw["environment"]["deployment_overrides"] = [
         {
@@ -29,6 +31,8 @@ def _engine(tmp_path: Path, terminal_id: str, *, native: bool = True) -> Generat
     if native:
         raw["output"]["logs"].append({"format": "macos_endpoint_security"})
         raw["macos_process_coverage"] = "complete"
+    if history:
+        raw["output"]["logs"].append({"format": "zsh_history"})
     engine = GenerationEngine(Scenario.model_validate(raw), tmp_path, generation_seed=358)
     engine._chronological_es_delivery = True
     return engine
