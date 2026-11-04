@@ -1993,6 +1993,18 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     "and its metadata, or explicitly set macos_process_coverage: partial for a "
                     "diagnostic run. This bundle cannot claim complete process coverage."
                 )
+            if (
+                census.exit_accounting_complete is not True
+                or census.known_exit_identities_match is not True
+            ):
+                raise StateError(
+                    f"Incomplete macOS exit accounting on {system.hostname}: "
+                    f"observed {census.observed_exits}/{census.expected_exits}, "
+                    f"published known results {census.published_exits}/{census.known_exits}. "
+                    "Every canonical in-window termination needs its exact native observation; "
+                    "unknown outcomes remain separately reported. Repair the owning termination "
+                    "producer, or start fresh if an older checkpoint has no exit census."
+                )
 
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""

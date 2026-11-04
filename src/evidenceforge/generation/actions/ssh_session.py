@@ -5036,6 +5036,36 @@ class SshSessionActionBundle:
         ):
             raise TypeError("Exact SSH terminal cohort received an invalid typed owner")
         continuation.prepared.require_projection_owner(self.executor)
+        if (
+            _is_ssh_process_termination_phase(phase)
+            and event.src_host is not None
+            and event.src_host.os_category == "macos"
+        ):
+            from evidenceforge.generation.actions.posix_process import process_exit_occurrence
+
+            terminal = next(
+                item
+                for item in state_plan.process_terminations
+                if item.identity == expected_identity
+            )
+            running = self.executor.state_manager.get_process(
+                expected_identity.hostname, expected_identity.pid
+            )
+            if running is None or running.ecar_object_id != expected_identity.object_id:
+                raise StateError("Mac SSH process exit lost its exact live State owner")
+            pure_exit = process_exit_occurrence(
+                host=event.src_host,
+                process=expected_identity,
+                timestamp=terminal.end_time,
+                integrity_level=running.integrity_level,
+                session=event.identity_plan.session,
+                exit_outcome=terminal.exit_outcome,
+            )
+            pure_exit.process = replace(
+                pure_exit.process, concurrency_group_id=event.process.concurrency_group_id
+            )
+            pure_exit.storyline_origin = event.storyline_origin
+            event = pure_exit
         root_action_id = f"ssh-close:{continuation.continuation_id}:{phase}"
         audit_plan = ExecutionEffectPlan(
             ActionAnchor(

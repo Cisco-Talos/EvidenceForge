@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 381
+current_revision: 382
 history_start_revision: 1
-behavior_surface_sha256: a4c72a675712b96feca5d8c6955184fc0efd4010021a9c93ea8655c2356f687a
+behavior_surface_sha256: 33cde5bc135466e8928f792b91830ec23ebe93f1128c61ea721e2755e4d4bb0a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3640,3 +3640,9 @@ changes:
     domains: [macos-process-lifecycle, storyline-timing, shell-history, process-descriptors]
     formats: [ecar, macos_endpoint_security, zsh_history, bash_history]
     summary: Constrains successful literal sleep jobs by actual exec duration across authored jitter and admits shell history only from canonical interactive invocation and stdin facts, retaining noninteractive process evidence.
+  - revision: 382
+    id: macos-natural-command-exits-and-shutdown-accounting
+    impact: localized
+    domains: [macos-process-lifecycle, process-completion, native-source-publication]
+    formats: [ecar, macos_endpoint_security]
+    summary: Adds explicit bounded nominal query completion policies and dependency-aware natural closure, admits canonical SSH termination phases to native accounting, and preserves collection-window classification for unknown exit results.

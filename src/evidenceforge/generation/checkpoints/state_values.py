@@ -494,9 +494,18 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "macos-exec-image-v1": (MacosExecImage, ("cpu_subtype", "dyld_exec_path")),
     "macos-occurrence-digest-v1": (MacosOccurrenceDigest, ("count", "digest")),
     "macos-aggregate-birth-sample-v1": (MacosAggregateBirthSample, ("image", "started_at")),
-    "macos-process-census-v1": (
+    "macos-process-census-v2": (
         MacosProcessCensus,
-        ("start", "end", "forks", "execs", "aggregate_births", "aggregate_samples"),
+        (
+            "start",
+            "end",
+            "forks",
+            "execs",
+            "aggregate_births",
+            "aggregate_samples",
+            "exits",
+            "known_exits",
+        ),
     ),
     "macos-terminal-session-v1": (
         MacosTerminalSession,
@@ -681,6 +690,9 @@ def decode_state_value(value: object) -> object:
         if record_tag == "macos-process-service-drop-v1" and len(encoded_fields) == 10:
             record_tag = "macos-process-service-drop-v2"
             encoded_fields = [*encoded_fields, None, None, None, None]
+        if record_tag == "macos-process-census-v1" and len(encoded_fields) == 6:
+            record_tag = "macos-process-census-v2"
+            encoded_fields = [*encoded_fields, None, None]
         if record_tag == "macos-descriptor-binding-v1" and len(encoded_fields) == 4:
             record_tag = "macos-descriptor-binding-v2"
             encoded_fields = [*encoded_fields, None]

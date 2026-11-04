@@ -4320,18 +4320,42 @@ class MacosEndpointSecurityProfilesConfig(BaseModel, extra="forbid", frozen=True
 
 
 class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
-    """Explicit nominal result for one literal modeled query invocation."""
+    """Explicit nominal result for one bounded modeled query invocation."""
 
-    arguments: tuple[str, ...] = Field(min_length=1, max_length=32)
+    arguments: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
+    argument_template: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
     exit_code: int = Field(strict=True, ge=0, le=255)
 
-    @field_validator("arguments")
+    @field_validator("arguments", "argument_template")
     @classmethod
-    def literal_invocation(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def literal_invocation(cls, values: tuple[str, ...] | None) -> tuple[str, ...] | None:
         """Require an absolute executable and NUL-free literal argument vector."""
+        if values is None:
+            return None
         if not values[0].startswith("/") or values[0] == "/" or any("\0" in v for v in values):
             raise ValueError("Mac command completion requires an absolute NUL-free invocation")
         return values
+
+    @model_validator(mode="after")
+    def bounded_selector(self) -> Self:
+        """Keep template parameters explicit and outside the executable selector."""
+        from string import Formatter
+
+        if (self.arguments is None) == (self.argument_template is None):
+            raise ValueError("Mac completion requires exactly one literal or template selector")
+        if self.argument_template is not None:
+            if "{" in self.argument_template[0] or "}" in self.argument_template[0]:
+                raise ValueError("Mac completion templates require a literal executable")
+            fields: list[str] = []
+            for argument in self.argument_template:
+                for _literal, name, spec, conversion in Formatter().parse(argument):
+                    if name is not None:
+                        if name not in {"home", "db_server", "internal_url"} or spec or conversion:
+                            raise ValueError("Unsupported Mac completion template parameter")
+                        fields.append(name)
+            if not fields:
+                raise ValueError("Mac completion templates require explicit parameters")
+        return self
 
 
 class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
@@ -4544,7 +4568,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         shell_invocations = [(rule.image, rule.arguments) for rule in self.nested_command_shells]
         if len(shell_invocations) != len(set(shell_invocations)):
             raise ValueError("Nested Mac command shell policies must have distinct invocations")
-        invocations = [rule.arguments for rule in self.command_completions]
+        invocations = [
+            (rule.arguments, rule.argument_template) for rule in self.command_completions
+        ]
         if len(invocations) != len(set(invocations)):
             raise ValueError("Mac command completion policies must have distinct argument vectors")
         return self

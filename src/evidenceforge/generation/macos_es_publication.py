@@ -425,11 +425,12 @@ def prepared_macos_es_process_publication(
     deployments = dispatcher.deployment_registry
     filesystem = dispatcher.macos_installed_filesystem
     records: list[MacosForkRecordInput | MacosExecRecordInput | MacosExitRecordInput | None] = []
+    decisions = tuple(_decision(dispatcher, event) for event in events)
     decisions = tuple(
-        _decision(dispatcher, event)
-        if phase_reason(event) == "supported"
-        else ObservationDecision("filtered")
-        for event in events
+        ObservationDecision("filtered")
+        if decision.status in {"visible", "delayed"} and phase_reason(event) != "supported"
+        else decision
+        for event, decision in zip(events, decisions, strict=True)
     )
     try:
         for event, decision in zip(events, decisions, strict=True):

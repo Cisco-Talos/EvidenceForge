@@ -3773,3 +3773,65 @@ Outside Git, the trial retains `POST-FIX-COMPLETE-V381-RUN.json`, separate gener
 evaluation diagnostics, `POST-FIX-COMPLETE-V381-REVIEW.json`,
 `WALKTHROUGH-V381-SELECTION.json`, `WALKTHROUGH-V381-CHECKS.json`,
 `WALKTHROUGH-V381-HISTORY-DIFF.json` and `POST-FIX-V381-REPORT.md`.
+
+### Exit-completeness inventory and independent repairs
+
+The user authorized the proposed inventory/implementation sequence without new private
+collection. A single instrumented revision-381 replay completed in 276.81 seconds at
+`exit-owner-diagnostic-v381` under the existing trial root. Every hashed `data/` file
+matches the accepted revision-381 bundle byte-for-byte; resolved inputs also match.
+Only synthetic runtime objects were inspected. No private capture, personal/native log,
+installed application, collector, probe or live scenario command was opened/executed.
+
+The authoritative in-window inventory is **200 canonical terminations**, joined by exact
+process object to all 200 eCAR terminations. It contains 42 known exits, 89 natural command
+completions, 55 generic-logoff closes, one SSH client close and thirteen exact SSH closes
+that bypass native accounting because they carry unrelated AuthContext. The previous
+147 unknown counter observations include two pre-window warmup terminations and omit those
+thirteen SSH closes: the net eCAR/ES gap is eleven, but the actual unresolved in-window
+count is 158. The full 202-termination diagnostic includes the two warmup objects; it is
+not relabelled as an in-window count. Detailed runtime inventory stays outside Git in
+`EXIT-OWNER-INVENTORY-V381.json`, with in-window/aggregate reports beside it.
+
+The 89 natural commands comprise 55 Apple discovery/file queries, 32 database queries
+and two HEAD requests. Twenty-three mysql/psql requests are moved later after process-
+owned work. The new bounded natural-completion planner resolves those dependencies before
+requesting completion; a later clamp cannot certify an arbitrary successful result.
+Explicit nominal completion rules extend the frozen query policy with exact invocations
+and bounded templates for the modeled account home, server and URL. These are selected
+simulation outcomes, not empirical results or success inferred from exec/TCP. Existing
+held/truncated/unsupported and generic teardown paths stay unknown.
+
+Exact Mac SSH terminal phases now build pure process exits while preserving authenticated
+session identity and the existing exact journal. Dispatcher shape/ownership checks are
+updated together; Linux terminal contracts remain unchanged. Window admission precedes
+unknown-result classification. Independent bounded State exit/known-result digests join
+all native observations and known output, separately from the start census. Coverage
+schema 3 and census checkpoint tag v2 retain old exit history as unknown. A complete
+start request fails missing exit accounting or lost known results; `exit_complete` stays
+false while outcomes remain unknown. The initial corrected targeted selection passes
+68 tests; expanded fault/rollback/recovery checks are in progress. Revision 382 remains
+uncommitted until those checks and the fresh-run verification complete.
+
+The remaining inventory is 69 shutdowns: 47 GUI applications/helpers, seven shells,
+three login processes, eight SSH workers, three active curl commands and one SSH client.
+Existing code chooses end times without declaring the terminal causes. A concrete
+ordinary-close model versus reference-qualified automatic teardown choice is documented
+in `docs/design/macos-workstation-feasibility/exit-completeness.md`. The user was asked
+asynchronously which to implement while independent checks continue. Do not infer
+server success from remote command status: the existing reviewed SSH reference explicitly
+reports final workers 255 while the client/marker are zero. That tracked reference was
+read; its private capture was not reopened. Public Apple OpenSSH/AppKit sources were
+consulted only for behavior boundaries. No new collection or private offline review
+is requested or authorized yet. Launchd ULF and integration holds remain in place.
+
+The expanded revision-382 selection now passes **83 tests**, including missing-native-
+exit faults, filtered known-result faults, provisional rollback and checkpoint decoding.
+The provisional-exit test exposed a missing undo capture for the new census mapping;
+that commit-owner capture is now repaired and the retry leaves no doubled counter.
+Whole-repository Ruff/format and diff checks pass. Revision-382 surface:
+`33cde5bc135466e8928f792b91830ec23ebe93f1128c61ea721e2755e4d4bb0a`.
+The user selected **Implement the explicit ordinary-close model**. Continue with that
+approved model as revision 383, keeping worker/client/cancellation results distinct.
+A final unchanged-scenario regeneration/evaluation and combined recovery/filter gate
+will cover both revisions; no intermediate scenario result is claimed for revision 382.

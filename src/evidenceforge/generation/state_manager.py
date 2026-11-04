@@ -115,7 +115,7 @@ from evidenceforge.generation.indexes import (
     IndexedEntityStore,
     TemporalAllocationIndex,
 )
-from evidenceforge.generation.macos_process_census import MacosProcessCensus
+from evidenceforge.generation.macos_process_census import MacosOccurrenceDigest, MacosProcessCensus
 from evidenceforge.generation.macos_process_overlay import MacosProcessRelationshipOverlay
 from evidenceforge.generation.macos_spawn_descriptors import plan_spawn_descriptors
 from evidenceforge.generation.macos_terminal_devices import (
@@ -6949,7 +6949,9 @@ class StateManager:
             if prior is not None and (prior.start, prior.end) != (start, end):
                 raise StateError("Mac process census window cannot change during generation")
             if prior is None:
-                self._macos_process_census[hostname] = MacosProcessCensus(start, end)
+                self._macos_process_census[hostname] = MacosProcessCensus(
+                    start, end, exits=MacosOccurrenceDigest(), known_exits=MacosOccurrenceDigest()
+                )
 
     def macos_process_census_snapshot(self) -> tuple[tuple[str, MacosProcessCensus], ...]:
         """Return immutable per-host obligations, including terminated processes."""
@@ -12601,6 +12603,11 @@ class StateManager:
         payload = plan._payload
         key = prepared.process_key if prepared is not None else (identity.hostname, identity.pid)
         process = self.state.running_processes[key]
+        census = self._macos_process_census.get(identity.hostname)
+        if census is not None:
+            self._macos_process_census[identity.hostname] = census.terminate(
+                identity, at=payload.end_time, known=payload.exit_outcome is not None
+            )
 
         parent_identity = payload.parent_identity
         parent_activity_time = payload.parent_activity_time
@@ -14412,6 +14419,7 @@ class StateManager:
         ended_thread_keys: set[object] = set()
         for item in process_terminations:
             identity = item.plan.identity
+            capture_mapping(self._macos_process_census, identity.hostname)
             capture_membership(identity.job_control)
             process = process_rows.get(identity.object_id) or self._processes_by_object_id.get(
                 identity.object_id

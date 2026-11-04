@@ -21,10 +21,12 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.process_helpers import (
     _posix_foreground_lifetime,
     _posix_shell_process_reserves_foreground,
+    _process_termination_delay_after_activity_seconds,
 )
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
@@ -730,6 +732,53 @@ class ProcessForegroundLifecycle:
                 ensure_utc(latest_closed_child) + timedelta(microseconds=1),
             )
         return candidate
+
+    def plan_macos_command_completion(
+        self,
+        *,
+        system: System,
+        pid: int,
+        preferred_at: datetime,
+        latest_at: datetime | None = None,
+    ) -> datetime | None:
+        """Plan a natural command completion after its owned activity/transport work."""
+        if _get_os_category(system.os) != "macos":
+            raise StateError("Mac natural completion requires a modeled Mac host")
+        candidate = self.resolve_process_lifecycle_close_candidate(
+            system.hostname, pid, preferred_at
+        )
+        if candidate is None:
+            return None
+        process = self.state_manager.get_process_identity(system.hostname, pid)
+        running = self.state_manager.get_process(system.hostname, pid)
+        if process is None or running is None:
+            raise StateError("Mac natural completion lost its exact live process")
+        minimum = process.execution_started_at
+        if running.last_activity_time is not None and candidate <= running.last_activity_time:
+            minimum = max(
+                minimum,
+                running.last_activity_time
+                + timedelta(
+                    seconds=_process_termination_delay_after_activity_seconds(
+                        hostname=system.hostname,
+                        pid=pid,
+                        last_activity_time=running.last_activity_time,
+                    )
+                ),
+            )
+        held = self._held_process_termination_time(system=system, pid=pid, requested_time=candidate)
+        if held > candidate:
+            minimum = max(minimum, held)
+        if latest_at is not None and (candidate >= latest_at or minimum >= latest_at):
+            return None
+        graph = TemporalConstraintGraph(
+            scope=TimingScope(stable_id=process.execution_id, host=system.hostname),
+            relationship_key="macos.command.natural_completion",
+        )
+        graph.add_node("work", minimum, within=(minimum, minimum))
+        graph.add_node("exit", candidate, not_after=latest_at)
+        graph.constrain_after("exit", "work")
+        return graph.resolved_time("exit")
 
     def record_termination(
         self, hostname: str, pid: int, start_time: datetime | None, timestamp: datetime

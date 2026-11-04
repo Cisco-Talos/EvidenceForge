@@ -3379,6 +3379,7 @@ class BaselineMixin:
             pid=pid,
             process_name=running.image,
             logon_id=running.logon_id or logon_id,
+            **({"macos_command_completed": True} if _get_os_category(system.os) == "macos" else {}),
         )
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:

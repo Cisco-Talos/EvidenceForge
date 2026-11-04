@@ -6479,6 +6479,16 @@ class EventDispatcher:
                         raise EventContractError("SSH process close crossed its modeled platform")
                     receiver_terminal = root_action_id.endswith(":receiver-terminate")
                     receiver_descendant = ":receiver-descendant:" in root_action_id
+                    if platform == "macos":
+                        from evidenceforge.events.process import process_exit_identity
+
+                        try:
+                            process_exit_identity(event)
+                        except ValueError as exc:
+                            raise EventContractError(str(exc)) from exc
+                        live = self.state_manager.get_process(subject.hostname, subject.pid)
+                        if live is None or event.process.integrity_level != live.integrity_level:
+                            raise EventContractError("Mac SSH exit lost its live process integrity")
                     if platform == "macos" and (receiver_terminal or receiver_descendant):
                         live_session = self.state_manager.get_session(subject.logon_id)
                         expected_session = self.state_manager.get_session_identity(subject.logon_id)
@@ -6496,8 +6506,7 @@ class EventDispatcher:
                             or receiver_terminal != (subject.pid == live_session.transport_pid)
                             or (receiver_terminal and credentials.effective_uid != 0)
                             or event.syslog is not None
-                            or event.auth is None
-                            or event.auth.user_sid
+                            or event.auth is not None
                         ):
                             raise EventContractError(
                                 "Mac SSH process close lost its authenticated receiver/session owner"
@@ -8072,6 +8081,7 @@ class EventDispatcher:
 
         if event.event_type is EventKind.PROCESS_TERMINATE:
             source_terminal = record.root_action_id.endswith(":source-terminate")
+            macos_exit = event.src_host is not None and event.src_host.os_category == "macos"
             receiver_terminal = record.root_action_id.endswith(":receiver-terminate")
             descendant_marker = ":receiver-descendant:"
             descendant_owner, descendant_separator, descendant_object_id = (
@@ -8106,12 +8116,19 @@ class EventDispatcher:
                 or type(event.src_host) is not HostContext
                 or event.dst_host is not None
                 or type(event.process) is not ProcessContext
-                or type(event.auth) is not AuthContext
+                or (event.auth is not None if macos_exit else type(event.auth) is not AuthContext)
             ):
                 raise EventContractError(
                     "Exact SSH process termination changed its singleton State/event shape"
                 )
             identity = identity_plan.subject
+            if macos_exit:
+                from evidenceforge.events.process import process_exit_identity
+
+                try:
+                    process_exit_identity(event)
+                except ValueError as exc:
+                    raise EventContractError(str(exc)) from exc
             termination = plan.process_terminations[0]
             session_patch_identity = (
                 EventDispatcher._action_cohort_target_identity(
@@ -8155,7 +8172,7 @@ class EventDispatcher:
                         identity.credentials is None
                         or identity_plan.session is None
                         or identity_plan.session.session_kind != "ssh"
-                        or event.auth.user_sid
+                        or event.auth is not None
                         or event.syslog is not None
                     )
                 )
@@ -8166,8 +8183,8 @@ class EventDispatcher:
                 or event.process.username != identity.principal
                 or event.process.logon_id != identity.logon_id
                 or event.process.start_time != identity.started_at
-                or event.auth.username != identity.principal
-                or event.auth.logon_id != identity.logon_id
+                or (event.auth is not None and event.auth.username != identity.principal)
+                or (event.auth is not None and event.auth.logon_id != identity.logon_id)
                 or lifecycle.group_id != identity.lifecycle_group_id
                 or lifecycle.canonical_start != identity.started_at
                 or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)

@@ -80,6 +80,8 @@ class MacosProcessCensus:
     execs: MacosOccurrenceDigest = MacosOccurrenceDigest()
     aggregate_births: int = 0
     aggregate_samples: tuple[MacosAggregateBirthSample, ...] = ()
+    exits: MacosOccurrenceDigest | None = None
+    known_exits: MacosOccurrenceDigest | None = None
 
     def __post_init__(self) -> None:
         """Validate persisted bounds without scanning any process history."""
@@ -100,6 +102,12 @@ class MacosProcessCensus:
                 or not self.contains(sample.started_at)
                 for sample in self.aggregate_samples
             )
+            or (self.exits is None) != (self.known_exits is None)
+            or (self.exits is not None and type(self.exits) is not MacosOccurrenceDigest)
+            or (
+                self.known_exits is not None and type(self.known_exits) is not MacosOccurrenceDigest
+            )
+            or (self.exits is not None and self.known_exits.count > self.exits.count)
         ):
             raise ValueError("Invalid Mac process census")
 
@@ -129,4 +137,19 @@ class MacosProcessCensus:
             return self
         return replace(
             self, execs=self.execs.add(identity.hostname, f"process-exec:{identity.execution_id}")
+        )
+
+    def terminate(
+        self, identity: ProcessIdentity, *, at: datetime, known: bool
+    ) -> MacosProcessCensus:
+        """Count a real in-window terminal transition before source qualification."""
+        if not self.contains(at) or self.exits is None:
+            return self
+        occurrence = f"process-exit:{identity.object_id}"
+        return replace(
+            self,
+            exits=self.exits.add(identity.hostname, occurrence),
+            known_exits=self.known_exits.add(identity.hostname, occurrence)
+            if known
+            else self.known_exits,
         )

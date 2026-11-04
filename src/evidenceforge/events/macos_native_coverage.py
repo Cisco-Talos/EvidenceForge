@@ -58,6 +58,13 @@ class MacosProcessCoverageSummary(BaseModel):
     aggregate_births: int = Field(ge=0)
     aggregate_examples: tuple[str, ...] = Field(max_length=8)
     complete: bool
+    expected_exits: int | None = Field(default=None, ge=0)
+    observed_exits: int | None = Field(default=None, ge=0)
+    known_exits: int | None = Field(default=None, ge=0)
+    published_exits: int | None = Field(default=None, ge=0)
+    exit_accounting_complete: bool | None = None
+    known_exit_identities_match: bool | None = None
+    exit_complete: bool | None = None
 
 
 class MacosNativeHostCoverage(BaseModel):
@@ -75,7 +82,7 @@ class MacosNativeCoverage(BaseModel):
     """Coverage is a workload diagnostic, separate from native reference qualification."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal[1, 2] = 1
+    schema_version: Literal[1, 2, 3] = 1
     scope: Literal["exact_process_cohorts_and_authored_births", "canonical_process_window"] = (
         "exact_process_cohorts_and_authored_births"
     )

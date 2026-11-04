@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
+from string import Formatter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
@@ -187,6 +189,27 @@ class MacosExecutionMetadataProducer:
             return None
         for rule in self.profile.command_completions:
             if process.arguments == rule.arguments:
+                return PosixProcessExit(exit_code=rule.exit_code)
+            template = rule.argument_template
+            if template is None or len(template) != len(process.arguments):
+                continue
+            account = self._accounts[process.hostname.casefold(), process.principal.casefold()]
+            parameters = {
+                "home": re.escape(account.home),
+                "db_server": r"[A-Za-z0-9][A-Za-z0-9.:-]*",
+                "internal_url": r"https?://[^\s\x00]+",
+            }
+            patterns = (
+                "".join(
+                    re.escape(literal) + (parameters[name] if name is not None else "")
+                    for literal, name, _spec, _conversion in Formatter().parse(argument)
+                )
+                for argument in template
+            )
+            if all(
+                re.fullmatch(pattern, value) is not None
+                for pattern, value in zip(patterns, process.arguments, strict=True)
+            ):
                 return PosixProcessExit(exit_code=rule.exit_code)
         return None
 

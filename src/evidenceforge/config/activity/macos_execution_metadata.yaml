@@ -156,6 +156,32 @@ command_completions:
     exit_code: 0
   - arguments: ["/usr/bin/uname", "-a"]
     exit_code: 0
+  # Selected nominal query outcomes, not measured command results or success
+  # inferred from exec/TCP. Only the owning untruncated completion may use these.
+  - arguments: ["/bin/pwd"]
+    exit_code: 0
+  - arguments: ["/bin/df", "-h"]
+    exit_code: 0
+  - arguments: ["/sbin/ifconfig", "-a"]
+    exit_code: 0
+  - arguments: ["/bin/ps", "aux"]
+    exit_code: 0
+  - arguments: ["/usr/bin/dscl", ".", "-list", "/Users"]
+    exit_code: 0
+  - argument_template: ["/bin/ls", "-la", "{home}/Documents"]
+    exit_code: 0
+  - argument_template: ["/usr/bin/du", "-sh", "{home}/Documents"]
+    exit_code: 0
+  - argument_template: ["/usr/bin/find", "{home}/Documents", "-maxdepth", "2", "-type", "f", "-name", "*.pdf"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/bin/sqlcmd", "-S", "{db_server}", "-Q", "SELECT 1"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/opt/libpq/bin/psql", "-h", "{db_server}", "-c", "SELECT 1"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/opt/mysql-client/bin/mysql", "--host={db_server}", "--execute=SELECT 1"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/opt/curl/bin/curl", "--head", "{internal_url}"]
+    exit_code: 0
 terminal:
   volume_id: modeled-devfs
   device: 16777217

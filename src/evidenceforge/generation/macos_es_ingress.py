@@ -249,6 +249,8 @@ class MacosESIngress:
         profiles: dict[str, str] = {}
         canonical = dict(dispatcher.state_manager.macos_process_census_snapshot())
         published: dict[str, tuple[MacosOccurrenceDigest, MacosOccurrenceDigest]] = {}
+        observed_exits: dict[str, MacosOccurrenceDigest] = {}
+        published_exits: dict[str, MacosOccurrenceDigest] = {}
         visible_rows = 0
         export_rows: dict[Path, MacosOccurrenceDigest] = {}
         for route in sorted(self.spool._writers.values(), key=lambda item: str(item.output_path)):
@@ -283,6 +285,15 @@ class MacosESIngress:
                     profiles[row.host.hostname] = row.initial.source_profile.profile_id
                     fact = (_PHASE_NAMES[row.event_type], row.reason, row.status)
                     totals.setdefault(row.host.hostname, Counter())[fact] += 1
+                    census = canonical.get(row.host.hostname)
+                    if (
+                        row.event_type == 15
+                        and census is not None
+                        and census.contains(row.observed_at)
+                    ):
+                        observed_exits[row.host.hostname] = observed_exits.get(
+                            row.host.hostname, MacosOccurrenceDigest()
+                        ).add(row.host.hostname, row.occurrence_id)
                     if row.storyline_cluster_id:
                         authored.setdefault(row.host.hostname, {}).setdefault(
                             row.storyline_cluster_id, Counter()
@@ -335,6 +346,10 @@ class MacosESIngress:
                                 forks = forks.add(row.host.hostname, row.occurrence_id)
                             elif row.event_type == 9:
                                 execs = execs.add(row.host.hostname, row.occurrence_id)
+                            elif row.event_type == 15:
+                                published_exits[row.host.hostname] = published_exits.get(
+                                    row.host.hostname, MacosOccurrenceDigest()
+                                ).add(row.host.hostname, row.occurrence_id)
                             published[row.host.hostname] = forks, execs
                     count += 1
         expected = sum(route._sorted_writer.event_count for route in self.spool._writers.values())
@@ -368,6 +383,19 @@ class MacosESIngress:
             if census is None:
                 return None
             forks, execs = published.get(host, (MacosOccurrenceDigest(), MacosOccurrenceDigest()))
+            observed = observed_exits.get(host, MacosOccurrenceDigest())
+            exported = published_exits.get(host, MacosOccurrenceDigest())
+            exit_fields: dict[str, object] = {}
+            if census.exits is not None:
+                exit_fields = dict(
+                    expected_exits=census.exits.count,
+                    observed_exits=observed.count,
+                    known_exits=census.known_exits.count,
+                    published_exits=exported.count,
+                    exit_accounting_complete=observed == census.exits,
+                    known_exit_identities_match=exported == census.known_exits,
+                    exit_complete=observed == census.exits and exported == census.exits,
+                )
             return MacosProcessCoverageSummary(
                 window_start=census.start,
                 window_end=census.end,
@@ -382,6 +410,7 @@ class MacosESIngress:
                 complete=census.aggregate_births == 0
                 and forks == census.forks
                 and execs == census.execs,
+                **exit_fields,
             )
 
         def observations(counter: Counter) -> tuple[MacosNativeCoverageCount, ...]:
@@ -391,7 +420,7 @@ class MacosESIngress:
             )
 
         self.coverage = MacosNativeCoverage(
-            schema_version=2 if canonical else 1,
+            schema_version=3 if canonical else 1,
             scope="canonical_process_window"
             if canonical
             else "exact_process_cohorts_and_authored_births",

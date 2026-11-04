@@ -343,6 +343,13 @@ class GroundTruthGenerator:
                         f"unresolved aggregate starts {census.aggregate_births}; "
                         f"identity reconciliation {'passes' if census.complete else 'fails'}.\n"
                     )
+                    if census.expected_exits is not None:
+                        content.append(
+                            f"Exit observations {census.observed_exits}/{census.expected_exits}; "
+                            f"known results {census.known_exits}; native exits {census.published_exits}; "
+                            f"exit accounting {'passes' if census.exit_accounting_complete else 'fails'}; "
+                            f"exit completeness {'passes' if census.exit_complete else 'incomplete (unknown outcomes)'}.\n"
+                        )
             content.append("| Host | Phase | Qualification | Source decision | Count |")
             content.append("| --- | --- | --- | --- | ---: |")
             for host in doc.macos_native_coverage.hosts:

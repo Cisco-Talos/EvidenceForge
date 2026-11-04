@@ -5779,10 +5779,17 @@ class ActivityGenerator:
                 # would cross the session deadline.
                 return deadline
             termination_time = min(termination_time, latest_termination)
-        resolved_termination_time = self.resolve_process_lifecycle_close_candidate(
-            system.hostname,
-            pid,
-            termination_time,
+        macos_completed = _get_os_category(system.os) == "macos" and (
+            latest_termination is None or termination_time < latest_termination
+        )
+        resolved_termination_time = (
+            self._process_foreground().plan_macos_command_completion(
+                system=system, pid=pid, preferred_at=termination_time, latest_at=latest_termination
+            )
+            if macos_completed
+            else self.resolve_process_lifecycle_close_candidate(
+                system.hostname, pid, termination_time
+            )
         )
         lifecycle_deadline = min(lifecycle_deadlines) if lifecycle_deadlines else None
         resolved_precedes_deadline = (
@@ -5819,6 +5826,7 @@ class ActivityGenerator:
                 process_name=process_name,
                 logon_id=logon_id,
                 session_end_plan=session_end_plan,
+                **({"macos_command_completed": True} if macos_completed else {}),
             )
         return tracked_termination_time
 
