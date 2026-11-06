@@ -779,10 +779,10 @@ def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operation
 
     endpoint_records = _json_records(tmp_path, "ecar.json")
     mappings = _json_records(tmp_path, "smb_mapping.json")
-    assert any(record.get("service") == "Finance" for record in mappings)
-    assert {
-        record["native_file_system"] for record in mappings if record["service"] == "Finance"
-    } == {"ReFS"}
+    assert any(str(record.get("path", "")).endswith(r"FS-01\Finance") for record in mappings)
+    assert all(
+        "service" not in record and "native_file_system" not in record for record in mappings
+    )
     assert not any(
         record.get("name") == "forecast.xlsx"
         for record in _json_records(tmp_path, "smb_files.json")

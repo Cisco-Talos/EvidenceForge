@@ -24,6 +24,29 @@ from evidenceforge.utils.rng import _stable_seed
 logger = logging.getLogger(__name__)
 
 
+def confirmed_service_for_payload(
+    service: str,
+    *,
+    protocol: str,
+    history: str,
+    orig_bytes: int,
+    resp_bytes: int,
+    missed_bytes: int,
+) -> str:
+    """Separate requested service intent from a supported analyzer confirmation."""
+    from evidenceforge.generation.activity.network_params import protocol_confirmation_config
+
+    if not service or protocol == "icmp":
+        return service
+    if orig_bytes + resp_bytes == 0:
+        return ""
+    if protocol != "tcp" or "S" not in history or "h" not in history or missed_bytes > 0:
+        return service
+    requirements = protocol_confirmation_config().payload_directions.get(service, [])
+    available = {"orig": orig_bytes, "resp": resp_bytes}
+    return service if all(available[direction] > 0 for direction in requirements) else ""
+
+
 def connection_state_distribution(protocol: str) -> list[tuple[str, int, str]]:
     """Read validated transport histories from the active configuration scope."""
     from evidenceforge.config.schemas import TransportHistoryEntry

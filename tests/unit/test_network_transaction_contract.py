@@ -688,3 +688,33 @@ def test_network_planner_retains_service_with_modeled_payload() -> None:
     event = next(call.args[0] for call in emitter.emit.call_args_list)
     assert event.network is not None
     assert event.network.service == "smb"
+
+
+@pytest.mark.parametrize("orig,resp,expected", [(2506, 0, ""), (2506, 95, "mysql")])
+def test_mysql_confirmation_is_settled_before_canonical_publication(
+    orig: int, resp: int, expected: str
+) -> None:
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+    generator.generate_connection(
+        src_ip="198.51.100.20",
+        dst_ip="10.0.0.20",
+        time=start,
+        dst_port=3306,
+        proto="tcp",
+        service="mysql",
+        duration=0.5,
+        orig_bytes=orig,
+        resp_bytes=resp,
+        conn_state="SF" if resp else "RSTO",
+        suppress_application_side_effects=True,
+        preserve_explicit_payload=True,
+    )
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network.service == expected
+    assert event.network.traffic.orig.payload_bytes == orig
+    assert event.network.traffic.resp.payload_bytes == resp

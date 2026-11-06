@@ -240,6 +240,8 @@ class MacosESIngress:
         # Close only this private spool. Native output remains owned by its normal
         # emitter and is exported only after all finalization stages succeed.
         self.spool.close()
+        audit_identities = dispatcher.state_manager._macos_audit_identity_intents
+        audit_identities.seal()
         registry = ESCollectorRegistry()
         output = dispatcher.emitters.get("macos_endpoint_security")
         count = 0
@@ -302,7 +304,9 @@ class MacosESIngress:
                     if row.native_body is not None and row.status in {"visible", "delayed"}:
                         if output is None:
                             raise StateError("Visible ES ingress lost its native output owner")
-                        payload = json.loads(row.native_body)
+                        payload = audit_identities.project_native(
+                            row.host.hostname, json.loads(row.native_body)
+                        )
                         record = EndpointSecurityRecord.model_validate_json(
                             json.dumps(
                                 payload

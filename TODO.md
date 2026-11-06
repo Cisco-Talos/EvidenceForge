@@ -72,18 +72,19 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P0 — Native Mac mounted-SMB helper coverage:** The new Mac-heavy iteration-test
-  reaches finalization but complete ES coverage rejects mounted-share `ls`/`cat`/`tee`
-  helper starts. The SMB process recipe still materializes aggregate process state outside
-  the qualified native fork/exec publication path. Repair the owning SMB/process contract;
-  do not remove traffic or weaken complete coverage. The user approved a separately labeled
-  partial diagnostic assessment for initial scores, not process-coverage acceptance. See the
-  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
-- [ ] **P0 — Native Mac identity chronology:** The initial Mac-heavy iteration-test
-  panel independently found five backward fork/exec PID-version allocations while
-  native clocks and child birth times advance. Fix allocation at the canonical
-  process/timeline owner and preserve every token reference; source sorting alone
-  does not repair identity truth. See the same assessment worklog and report.
+- [x] **P0 — Native Mac mounted-SMB helper coverage:** Mounted-share helpers now use
+  the supported native process lifecycle. The fixed Mac-inclusive assessment keeps
+  complete fork/exec/exit coverage and matches all eleven mounted-helper exits in
+  loop62, with zero aggregate births. Native identity chronology was repaired
+  separately in loop64. See the [loop worklog](docs/worklog/2026-11-05-iteration-test-loops44-63.md).
+- [x] **P0 — Native Mac identity chronology:** Loop64 assigns public generations from
+  one canonical chronological allocation ledger while preserving immutable planning
+  reservations and proofs. Fresh data has zero reversals across 219 new allocations,
+  1,608 consistent token references and 117 matching native/eCAR exec transitions.
+  Exact checkpoint/resume and native-only filter equivalence pass; source dictionary/
+  array tokens, schema types and rollback remain covered. This closes the observed
+  chronology defect, not broader claims about hidden host churn or native fidelity.
+  See the [new loop worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
 - [x] **P0 — Mac process-start coverage:** The bounded two-Mac workstation matrix now
   reconciles every in-window canonical fork/exec, rejects unsupported starts, and passes
   combined exact recovery/filter equivalence with positive background activity. The quiet
@@ -141,23 +142,82 @@ without turning `TODO.md` back into a high-conflict work journal.
   entries despite its preceding output scoring 100 for volume adequacy (1208:1).
   Keep its baseline unchanged while this diagnostic repair is deferred; see the
   [promotion worklog](docs/worklog/2026-11-05-iteration-test-promotion.md).
-- [ ] **P1 — Canonical HTTP request-target normalization:** Separate browser navigation
-  URLs from network targets before proxy/HTTP evidence is constructed. Loop 42 found
-  five ordinary-browser proxy GET request lines carrying a client-side URL fragment;
-  RFC 9110 §7.1 excludes fragments from the target URI. Preserve full navigation URLs
-  only in appropriate client telemetry. See the
-  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
-- [ ] **P1 — Native TCP counter projections:** Separate Zeek's sequence-derived
-  stream totals from captured packet/payload and file-completeness ledgers, including
-  application children sharing a transport. Loop 41 found 580 matched completed sensor
-  pairs whose byte deficits equal modeled capture gaps. Preserve physical capture
-  partitions and add a source-observation contract; see the
-  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
-- [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
-  The Mac benchmark independently confirms two contradictions; 16 rows are reported.
-  The loss method is unchanged from the branch base. Repair the network observation owner,
-  covering HTTP/TLS/SMB and partial/closed flows; see the
-  [final assessment](scenarios/macos-assessment/blind-test/loop-3/REPORT.md).
+- [x] **P1 — Canonical HTTP request-target normalization:** Loop47 separates navigation
+  URLs from wire targets and Referers before shared HTTP/proxy construction; encoded
+  fragments and query strings retain their meaning. Family probes and focused tests
+  cover both source views. See the same [loop worklog](docs/worklog/2026-11-05-iteration-test-loops44-63.md).
+- [x] **P1 — Native TCP counter projections:** Loop45 separates sequence-derived stream
+  extent from captured payload/packet ledgers, including application children sharing
+  a transport. Legacy observations preserve unknown extent rather than inventing it.
+  HTTP file/body gap reconciliation is recorded separately below.
+- [x] **P0 — TCP capture-loss packet/history accounting:** Loop49 enforces physical
+  packet minima for observed exclusive history classes through the shared network
+  observation owner and SMB rebinding. Fresh family probes retain zero qualified
+  contradictions; see the same loop worklog.
+- [x] **P1 — HTTP file/body/transport loss semantics:** A frozen physical capture basis
+  and channel-owned byte spans now reconcile transport loss, file completeness and
+  recognized HTTP body gaps. Loop68 retains zero body/direction/aggregate-budget defects
+  across 501 qualified entities. Compression, raw omissions and analyzer-local gaps remain
+  separate qualifications. See the [new worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
+- [ ] **P1 — Application-bound proxy request identity:** Loop63 finds seven exact-tuple
+  browser-family mismatches and 29 Zoom-owned CONNECT flows carrying mixed Edge/Firefox
+  identities. Bind actual client/process identity before request header, byte budget and
+  proxy affinity freeze; preserve loop57's agreement between finalized source views.
+  Known browser/helper defaults now bind before freeze: loop68 has zero family mismatches
+  across 802 joined browser flows. Nonbrowser application routing and mobile/default agents
+  remain open, including 44 Zoom-owned browser-header flows. Preserve actual client intent
+  and explicit header overrides rather than inventing a vendor agent or blanking the field.
+  Header overrides/intermediaries remain alternatives, so qualify the intended client model.
+  See the [new worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
+- [x] **P1 — Site-owned web asset identity:** Default resource size/content identity now
+  belongs to its origin/path; explicit shared resources retain shared bytes. Loop68 has
+  47 favicon sizes across 47 hosts and eight logo sizes across eight hosts; the modeled
+  common font stays shared. Same-site repeats remain stable. See the same new worklog.
+- [x] **P1 — Windows logon failure-condition semantics:** A typed canonical condition
+  supplies main status, specific substatus and the matching native resource reason.
+  Microsoft documentation confirms the previous lockout resource was wrong for the
+  generic disabled-account failure. Loop68 has zero mismatches across 20 failures,
+  retaining disabled-state normalization. See the same new worklog.
+- [x] **P0 — MySQL protocol confirmation prerequisites:** Canonical finalization now
+  separates a requested service from supported analyzer confirmation. Fresh full-open,
+  no-gap exchanges require the configured payload directions; malformed/client-only
+  and banner-only bytes remain intact without an unsupported MySQL label. Loop68 has
+  zero violations across 492 qualified sensor observations; midstream/gapped evidence
+  remains qualified. See the same new worklog and tagged Zeek 8.0.5 references there.
+- [x] **P1 — Native Mac inode allocation chronology:** Installed-file identity now
+  follows existing modeled birth chronology instead of lexical path order. Both Mac
+  inventories retain stable metadata and zero birth-order inversions; exact native
+  recovery/filter checks pass. Dense allocation is still a bounded model, not full APFS
+  fidelity. See the same new worklog.
+- [ ] **P1 — Interactive workflow pacing:** Replace repeated approximately 96-second
+  editor/build launch slots with task/completion/think-time ownership, preserving
+  explicitly intended automation. Two independent reviewers identify the same measured
+  developer burst in loops66–67. Verify the planner rather than adding emitter jitter.
+  See the same new worklog.
+- [ ] **P1 — UDP source-state lifetime and duration:** Separate ASA datagram state
+  expiration from application completion, qualifying configured idle policy, DNS inspection
+  and exceptional removal. Reconcile Zeek duration presence with measured elapsed time
+  rather than one-way state labels. Loop67 finds 11 same-second UDP syslog state deletions
+  and systematic one-way duration omissions. See the same new worklog.
+- [ ] **P1 — Windows session bootstrap ownership:** Verify and repair the session-specific
+  SMSS parent across local and RDP bootstrap paths, preserving canonical identities and
+  source agreement. Loop65 identifies 24 Winlogon creations on six hosts sharing one
+  per-host parent across distinct terminal sessions. See the same new worklog.
+- [ ] **P1 — Browser instance lifecycle:** Model persistent browser ownership per host,
+  user and resolved user-data directory, with short forwarding invocations for additional
+  windows when appropriate. Loop65 finds seven visibly overlapping Mac roots and a Windows
+  sibling; retain profile-isolation alternatives and authored process intent. See the same
+  new worklog.
+- [ ] **P1 — Linux logind allocation chronology:** Replace the elapsed-time-derived
+  eight/nine-IDs-per-minute model with actual modeled session allocation ownership,
+  including supported background sessions. Loop64 measures near-clock progression on
+  three hosts. Preserve rollback, out-of-order planning and recovery; do not conceal the
+  pattern with arbitrary gaps. See the same new worklog.
+- [ ] **P2 — Bounded source follow-ups:** Qualify snapd task IDs and stateful daemon
+  diagnostics; inspect Windows registry actor authority and request/use timing; review
+  Mac short-utility outcomes and terminal ancestor-close fences. Keep version, collection,
+  blocking and asynchronous-reporting alternatives explicit. Evidence and ranked scope
+  remain in the same new worklog rather than a growing roadmap history.
 - [ ] **P1** Investigate the repeated Windows process-birth readiness floor through its activity
   and timing owners. The historical panel identifies 14 Windows births in two milliseconds;
   retain startup and collection alternatives. The separate bounded Mac query timing repair

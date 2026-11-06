@@ -18,6 +18,7 @@ from evidenceforge.config.schemas import (
     HttpRequestPhaseConfig,
     HttpTransportFloorSlackConfig,
     NmapCommandProbeConfig,
+    ProtocolConfirmationConfig,
 )
 from evidenceforge.utils.rng import _stable_seed
 
@@ -151,6 +152,17 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             **default.get("nmap_command_probe", {}),
             **overlay["nmap_command_probe"],
         }
+    if isinstance(overlay.get("protocol_confirmation"), dict):
+        result["protocol_confirmation"] = {
+            **default.get("protocol_confirmation", {}),
+            **overlay["protocol_confirmation"],
+        }
+        directions = overlay["protocol_confirmation"].get("payload_directions")
+        if isinstance(directions, dict):
+            result["protocol_confirmation"]["payload_directions"] = {
+                **default.get("protocol_confirmation", {}).get("payload_directions", {}),
+                **directions,
+            }
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     if isinstance(overlay.get("proxy_connect_status_messages"), dict):
@@ -203,6 +215,13 @@ def nmap_command_probe_config() -> NmapCommandProbeConfig:
     """Return validated bounded planning settings for nmap process effects."""
 
     return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
+
+
+def protocol_confirmation_config() -> ProtocolConfirmationConfig:
+    """Return qualified source-native protocol prerequisites."""
+    return ProtocolConfirmationConfig.model_validate(
+        load_network_params().get("protocol_confirmation", {})
+    )
 
 
 def http_request_phase_config() -> HttpRequestPhaseConfig:

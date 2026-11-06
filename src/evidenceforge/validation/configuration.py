@@ -1841,6 +1841,30 @@ def _validate_dns_and_ids(
                             f'Domain "{domain}" class "{domain_class}" uses browser-like path "{path}"',
                         )
                     )
+    browser_families = proxy_ua_data.get("browser_process_families", {})
+    if not isinstance(browser_families, dict):
+        result.issues.append(
+            Issue("ERROR", "proxy_user_agents.yaml", "Browser process families must be a mapping")
+        )
+        browser_families = {}
+    seen_executables: set[str] = set()
+    for family, executables in browser_families.items():
+        if (
+            family not in {"chrome", "edge", "firefox", "safari", "opera"}
+            or not isinstance(executables, list)
+            or not executables
+            or any(type(exe) is not str or not exe.strip() for exe in executables)
+        ):
+            result.issues.append(
+                Issue("ERROR", "proxy_user_agents.yaml", "Invalid browser process family aliases")
+            )
+            continue
+        aliases = {exe.casefold() for exe in executables}
+        if len(aliases) != len(executables) or seen_executables.intersection(aliases):
+            result.issues.append(
+                Issue("ERROR", "proxy_user_agents.yaml", "Browser process aliases must be unique")
+            )
+        seen_executables.update(aliases)
     proxy_ua_hosts: set[str] = set()
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         for override in proxy_ua_data.get("domain_overrides", {}).values():
@@ -1952,6 +1976,16 @@ def _validate_timing_profiles(
                         "ERROR",
                         "timing_profiles.yaml",
                         f'Relationship "{rel_name}" max_ms must be a non-negative integer',
+                    )
+                )
+            if rel_name == "posix.foreground_shell_resume" and (
+                type(min_ms) is not int or min_ms <= 0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "posix.foreground_shell_resume requires a positive min_ms",
                     )
                 )
             if isinstance(min_ms, int) and isinstance(max_ms, int) and max_ms < min_ms:
@@ -4054,6 +4088,7 @@ def _collect_network_parameter_schema_checks(
         HttpTransportFloorSlackConfig,
         NmapCommandProbeConfig,
         OuiEntry,
+        ProtocolConfirmationConfig,
         PublicDnsResolverEntry,
         PublicNtpServerEntry,
         SslHistoryEntry,
@@ -4132,6 +4167,13 @@ def _collect_network_parameter_schema_checks(
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
+        err = validate_entry(
+            net_params.get("protocol_confirmation", {}),
+            ProtocolConfirmationConfig,
+            "network_params.yaml (protocol_confirmation)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (protocol_confirmation)", err))
         _validate_dns_tunnel_parameters(
             result=result,
             net_params=net_params,

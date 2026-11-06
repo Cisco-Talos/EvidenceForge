@@ -278,7 +278,10 @@ from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionReuseIntent,
     ProcessLifetimePlan,
 )
-from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
+from evidenceforge.generation.actions.scanner_probe import (
+    NmapCommandProbePlanningProfile,
+    nmap_probe_application_semantics,
+)
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
@@ -328,6 +331,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     min_unlock_gap_seconds,
     remote_auth_transport_max_duration_seconds,
+    special_privilege_profile,
     special_privileges_config,
 )
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
@@ -9591,6 +9595,7 @@ class ActivityGenerator:
         http: Optional["HttpContext"] = None,
         explicit_mode: bool = False,
         time: datetime | None = None,
+        client_user_agent: str = "",
     ) -> ProxyContext:
         """Build a proxy access context from the logical origin request."""
         rng = _get_rng()
@@ -9674,7 +9679,11 @@ class ActivityGenerator:
             and not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        if http is not None and getattr(http, "user_agent_known_absent", False):
+        if client_user_agent:
+            # Canonical browser ownership is resolved before header byte budgets
+            # and channel affinity. Domain defaults cannot change that identity.
+            user_agent = client_user_agent
+        elif http is not None and getattr(http, "user_agent_known_absent", False):
             user_agent = ""
         else:
             user_agent = self._proxy_user_agent_for_context(
@@ -12577,6 +12586,8 @@ class ActivityGenerator:
             else ""
         )
 
+        emit_special_privileges = emit_special_privileges and bool(privilege_list)
+
         if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
             self._emit_linux_local_logon_syslog(user, system, time, logon_id)
             session_for_guid = self.state_manager.get_session(logon_id)
@@ -13580,18 +13591,20 @@ class ActivityGenerator:
         known_account = self._is_known_failed_logon_account(effective_username, user)
         failed_profile = self._failed_logon_profile(logon_type, system, source_ip, rng)
         validation_path = self._failed_logon_validation_path(logon_type, failed_profile, rng)
-        if self._is_disabled_failed_logon_account(effective_username, user):
-            substatus = "0xc0000072"  # Account disabled
+        from evidenceforge.events.logon_failure import WindowsLogonFailure
+
+        condition = WindowsLogonFailure.for_account_state(
+            known=known_account,
+            disabled=self._is_disabled_failed_logon_account(effective_username, user),
+        )
+        substatus = condition.substatus
+        failure_reason = condition.resource_reason
+        if condition.substatus == "0xc0000072":
             user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2307"
         elif not known_account:
-            substatus = "0xc0000064"  # User not found: NULL SID
             user_sid = "S-1-0-0"
-            failure_reason = "%%2313"
         else:
-            substatus = "0xc000006a"  # Wrong password
             user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2313"
 
         remote_linux_source = _get_os_category(system.os) == "linux" and auth_source_ip not in (
             None,
@@ -13665,7 +13678,7 @@ class ActivityGenerator:
                 logon_type=logon_type,
                 result="failure",
                 failure_reason=failure_reason,
-                failure_status="0xc000006d",
+                failure_status=condition.status,
                 failure_substatus=substatus,
                 source_ip=(
                     source_ip if remote_linux_source and source_ip is not None else auth_source_ip
@@ -17972,6 +17985,17 @@ class ActivityGenerator:
                 duration = rng.uniform(1.5, 6.0)
                 orig_bytes = rng.randint(0, 64)
                 resp_bytes = 0
+            conn_state, service, duration, orig_bytes, resp_bytes = (
+                nmap_probe_application_semantics(
+                    conn_state,
+                    service,
+                    duration,
+                    orig_bytes,
+                    resp_bytes,
+                    application_probe=plan.application_probe,
+                    server_first_services=frozenset(planning_profile.server_first_services),
+                )
+            )
             self.generate_connection(
                 src_ip=system.ip,
                 dst_ip=target.ip,
@@ -32423,9 +32447,21 @@ class ActivityGenerator:
         command_xml = xml_escape(command)
         arguments_xml = xml_escape(arguments)
         arguments_line = f"\n      <Arguments>{arguments_xml}</Arguments>" if arguments else ""
-        logon_type = "ServiceAccount" if author.upper().startswith("NT AUTHORITY\\") else "Password"
+        # TASK_LOGON_SERVICE_ACCOUNT is an API enum, not an XML logonType.
+        # Reserved machine accounts identify their context through UserId alone.
+        machine_account = author.upper() in {
+            "NT AUTHORITY\\SYSTEM",
+            "NT AUTHORITY\\LOCAL SERVICE",
+            "NT AUTHORITY\\NETWORK SERVICE",
+            "S-1-5-18",
+            "S-1-5-19",
+            "S-1-5-20",
+        }
+        logon_type_xml = "" if machine_account else "      <LogonType>Password</LogonType>\n"
         run_level = (
-            "HighestAvailable" if author.upper() == "NT AUTHORITY\\SYSTEM" else "LeastPrivilege"
+            "HighestAvailable"
+            if author.upper() in {"NT AUTHORITY\\SYSTEM", "S-1-5-18"}
+            else "LeastPrivilege"
         )
         trigger_xml = ActivityGenerator._scheduled_task_trigger_xml(start_boundary, schedule or {})
         return (
@@ -32440,7 +32476,7 @@ class ActivityGenerator:
             "  <Principals>\n"
             '    <Principal id="Author">\n'
             f"      <UserId>{xml_escape(author)}</UserId>\n"
-            f"      <LogonType>{logon_type}</LogonType>\n"
+            f"{logon_type_xml}"
             f"      <RunLevel>{run_level}</RunLevel>\n"
             "    </Principal>\n"
             "  </Principals>\n"
@@ -32469,7 +32505,7 @@ class ActivityGenerator:
         """Return a source-native Task Scheduler principal for local and domain users."""
         normalized = username.strip()
         upper = normalized.upper()
-        if "\\" in normalized:
+        if "\\" in normalized or "@" in normalized or upper.startswith("S-1-"):
             return normalized
         if upper in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"}:
             return f"NT AUTHORITY\\{upper}"
@@ -33216,8 +33252,8 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
                 sam_account_name=target_username,
-                old_uac_value=old_uac_value or "0x0",
-                new_uac_value=new_uac_value or "0x15",
+                old_uac_value=old_uac_value or "-",
+                new_uac_value=new_uac_value or "-",
                 user_account_control=user_account_control or "-",
                 password_last_set=password_last_set,
                 primary_group_id=primary_group_id or "513",
@@ -35319,8 +35355,12 @@ class ActivityGenerator:
                         logon_type=2,
                         source_ip=None,
                         emit_network_evidence=False,
-                        reuse_required_at=child_time,
+                        reuse_required_at=reserve_until,
                         lifecycle_group_id=lifecycle_group_id,
+                        # The sudo owner already rejected every live session for
+                        # this TTY and full command interval. Do not let generic
+                        # bootstrap reuse one with weaker start-only coverage.
+                        allow_local_session_reuse=False,
                     )
                     session = self.state_manager.get_session(logon_id)
                 if session is None:
@@ -36458,27 +36498,14 @@ class ActivityGenerator:
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
             }
 
-    def _select_special_privileges(
-        self,
-        user: User,
-        logon_type: int,
-        hostname: str,
-    ) -> str:
-        """Return a source-native 4672 privilege list for this elevated session."""
+    def _select_special_privileges(self, user: User, logon_type: int, hostname: str) -> str:
+        """Return only sensitive privileges actually assigned to this profile."""
         profile_name = self._special_privilege_profile_name(user, logon_type, hostname)
-        if profile_name == "service_account":
-            profile_name = "service_account"
-        elif profile_name in {"system_account", "machine_account"}:
-            profile_name = "domain_admin"
+        if profile_name in {"system_account", "machine_account"}:
+            profile_name = "system_account"
         elif profile_name == "regular_user":
             profile_name = "uac_elevated_user"
-
-        profiles = special_privileges_config().get("profiles", {})
-        profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
-        privileges = profile.get("privileges") if isinstance(profile, dict) else None
-        if not isinstance(privileges, list) or not privileges:
-            privileges = ["SeChangeNotifyPrivilege"]
-        return "\n\t\t\t".join(str(privilege) for privilege in privileges)
+        return "\n\t\t\t".join(special_privilege_profile(profile_name))
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Get a seeded system process PID by role name."""
@@ -37524,6 +37551,7 @@ class ActivityGenerator:
             state_manager=self.state_manager,
             queries=self._process_queries(),
             identity=self._process_identity_capabilities(),
+            activity_timing=self._process_activity_timing(),
         )
 
     def _process_sources(self) -> "ProcessSourceTiming":

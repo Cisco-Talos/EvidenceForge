@@ -15,11 +15,11 @@ from evidenceforge.generation.checkpoints.dispatcher_observation_head import (
     DispatcherObservationParticipant,
 )
 from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.emitters.macos_endpoint_security import MacosEndpointSecurityEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 from tests.unit.test_macos_es_dispatch_publication import _setup
 from tests.unit.test_macos_native_sink_publication import _prepare
 
@@ -132,11 +132,11 @@ def test_standard_checkpoint_restores_native_bytes_counters_and_state(
         assert retried == seal
     participant.checkpoint_committed(1)
     assert sink.exact_journal_census().admitted_rows == 0
-    state_head = _capture_head(native.owner.state)
+    state_head = capture_complete_state(native.owner.state)
     counters = DispatcherObservationParticipant(dispatcher).prepare_checkpoint(1)
 
     restored_state = StateManager()
-    _restore_head(restored_state, state_head)
+    restore_complete_state(restored_state, state_head)
     restored_dispatcher = EventDispatcher(restored_state, {})
     DispatcherObservationParticipant(restored_dispatcher).restore_checkpoint(
         counters.head.payload, ()

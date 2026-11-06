@@ -1307,6 +1307,27 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_nonpositive_shell_resume_timing(self, monkeypatch):
+        from copy import deepcopy
+
+        from evidenceforge.generation.activity import timing_profiles
+
+        real_loader = timing_profiles.load_timing_profiles
+
+        def load_invalid_timing_profiles():
+            data = deepcopy(real_loader())
+            data["relationships"]["posix.foreground_shell_resume"]["min_ms"] = 0
+            return data
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+        result = validate_config()
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "posix.foreground_shell_resume requires a positive min_ms" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_startup_module_timing(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
@@ -2054,9 +2075,14 @@ class TestValidateConfig:
                     },
                 },
                 "special_privileges": {
+                    "sensitive_privileges": [
+                        "SeAuditPrivilege",
+                        "SeDebugPrivilege",
+                        "SeBackupPrivilege",
+                    ],
                     "profiles": {
                         "service_account": {
-                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "privileges": ["SeAuditPrivilege"],
                             "weight": 1,
                         },
                         "domain_admin": {"privileges": ["SeDebugPrivilege"], "weight": 1},
@@ -2065,10 +2091,10 @@ class TestValidateConfig:
                             "weight": 1,
                         },
                         "uac_elevated_user": {
-                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "privileges": ["SeAuditPrivilege"],
                             "weight": 1,
                         },
-                    }
+                    },
                 },
             }
 
@@ -2116,9 +2142,14 @@ class TestValidateConfig:
                     },
                 },
                 "special_privileges": {
+                    "sensitive_privileges": [
+                        "SeAuditPrivilege",
+                        "SeDebugPrivilege",
+                        "SeBackupPrivilege",
+                    ],
                     "profiles": {
                         "service_account": {
-                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "privileges": ["SeAuditPrivilege"],
                             "weight": 1,
                         },
                         "domain_admin": {"privileges": ["Debug"], "weight": 1},
@@ -2127,10 +2158,10 @@ class TestValidateConfig:
                             "weight": 1,
                         },
                         "uac_elevated_user": {
-                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "privileges": ["SeAuditPrivilege"],
                             "weight": 1,
                         },
-                    }
+                    },
                 },
             }
 
@@ -3066,3 +3097,127 @@ class TestValidateConfig:
             and "kube-probe only with a Kubernetes-scoped source_role_any" in issue.message
             for issue in result.issues
         )
+
+
+def test_validate_config_rejects_invalid_public_leaf_validity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.activity import tls_realism
+
+    real_loader = tls_realism.load_tls_realism
+
+    def load_invalid_policy() -> dict[str, object]:
+        return {
+            **real_loader(),
+            "public_leaf_validity": {
+                "periods": [
+                    {"effective_date": "1970-01-01", "recommended_days": 201, "maximum_days": 200}
+                ]
+            },
+        }
+
+    monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_policy)
+    result = validate_config()
+    assert any(
+        issue.file == "tls_realism.yaml"
+        and "recommended_days must not exceed maximum_days" in issue.message
+        for issue in result.errors
+    )
+
+
+def test_validate_config_rejects_invalid_inspected_tls_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.activity import tls_realism
+
+    real_loader = tls_realism.load_tls_realism
+
+    def load_invalid_budget() -> dict[str, object]:
+        data = real_loader()
+        return {
+            **data,
+            "wire_budget": {
+                **data["wire_budget"],
+                "inspected_client_handshake_bytes_min": 2000,
+                "inspected_client_handshake_bytes_max": 1000,
+            },
+        }
+
+    monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_budget)
+    result = validate_config()
+    assert any(
+        issue.file == "tls_realism.yaml" and "inspected_client_handshake_bytes_min" in issue.message
+        for issue in result.errors
+    )
+
+
+def test_validate_config_rejects_nonsensitive_logon_privilege(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from copy import deepcopy
+
+    from evidenceforge.generation.activity import windows_auth_realism
+
+    real_loader = windows_auth_realism.load_windows_auth_realism
+
+    def load_invalid_privilege() -> dict[str, object]:
+        data = deepcopy(real_loader())
+        data["special_privileges"]["profiles"]["service_account"]["privileges"].append(
+            "SeTimeZonePrivilege"
+        )
+        return data
+
+    monkeypatch.setattr(windows_auth_realism, "load_windows_auth_realism", load_invalid_privilege)
+    result = validate_config()
+    assert any(
+        issue.file == "windows_auth_realism.yaml" and "nonsensitive privileges" in issue.message
+        for issue in result.errors
+    )
+
+
+def test_validate_config_rejects_invalid_scanner_server_first_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.activity import network_params
+
+    real_loader = network_params.load_network_params
+
+    def load_invalid_services() -> dict[str, object]:
+        data = real_loader()
+        return {
+            **data,
+            "nmap_command_probe": {
+                **data["nmap_command_probe"],
+                "server_first_services": ["ssh", "ssh"],
+            },
+        }
+
+    monkeypatch.setattr(network_params, "load_network_params", load_invalid_services)
+    result = validate_config()
+    assert any(
+        issue.file.startswith("network_params.yaml") and "server_first_services" in issue.message
+        for issue in result.errors
+    )
+
+
+@pytest.mark.parametrize(
+    "families", [[], {"chrome": []}, {"unknown": ["browser"]}, {"chrome": ["a"], "edge": ["A"]}]
+)
+def test_proxy_browser_alias_catalog_rejects_invalid_or_ambiguous_mapping(
+    monkeypatch: pytest.MonkeyPatch, families: object
+) -> None:
+    from evidenceforge.generation.activity import proxy_user_agents
+
+    original = proxy_user_agents.load_proxy_user_agents()
+    monkeypatch.setattr(
+        proxy_user_agents,
+        "load_proxy_user_agents",
+        lambda: {**original, "browser_process_families": families},
+    )
+    result = validate_config()
+    assert any(
+        issue.severity == "ERROR"
+        and issue.file == "proxy_user_agents.yaml"
+        and "browser process" in issue.message.casefold()
+        for issue in result.issues
+    )

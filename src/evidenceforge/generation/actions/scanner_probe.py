@@ -162,6 +162,31 @@ class NmapCommandProbeTarget:
     explicit: bool = False
 
 
+def nmap_probe_application_semantics(
+    conn_state: str,
+    service: str,
+    duration: float,
+    orig_bytes: int,
+    resp_bytes: int,
+    *,
+    application_probe: bool,
+    server_first_services: frozenset[str],
+) -> tuple[str, str, float, int, int]:
+    """Resolve scanner payload intent before canonical transport admission."""
+    if conn_state in {"REJ", "S0"}:
+        return conn_state, "", duration, 0, 0
+    if application_probe:
+        return conn_state, service, duration, orig_bytes, resp_bytes
+    banner_bytes = resp_bytes if service in server_first_services else 0
+    return (
+        "RSTO" if conn_state == "SF" else conn_state,
+        service if banner_bytes > 0 else "",
+        duration,
+        0,
+        banner_bytes,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class NmapCommandProbePlan:
     """Canonical bounded plan for one nmap process command."""
@@ -170,6 +195,7 @@ class NmapCommandProbePlan:
     host_discovery_bypass: bool
     ports: tuple[int, ...]
     targets: tuple[NmapCommandProbeTarget, ...]
+    application_probe: bool = False
 
     @property
     def discovery_targets(self) -> tuple[NmapCommandProbeTarget, ...]:
@@ -314,6 +340,21 @@ class NmapCommandProbePlanner:
             host_discovery_bypass=host_discovery_bypass,
             ports=() if discovery else ports,
             targets=tuple(targets),
+            application_probe=any(
+                token
+                in {
+                    "-sV",
+                    "-sR",
+                    "-A",
+                    "-sC",
+                    "--script",
+                    "--data",
+                    "--data-string",
+                    "--data-length",
+                }
+                or token.startswith(("--script=", "--data=", "--data-string=", "--data-length="))
+                for token in tokens
+            ),
         )
 
     @staticmethod
@@ -373,7 +414,7 @@ class NmapCommandProbePlanner:
             if skip_next:
                 skip_next = False
                 continue
-            if token == "-p":
+            if token in {"-p", "--script", "--data", "--data-string", "--data-length"}:
                 skip_next = True
                 continue
             if token.startswith("-"):

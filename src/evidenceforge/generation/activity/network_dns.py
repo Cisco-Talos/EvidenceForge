@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 
 from evidenceforge.events.contexts import (
     DnsContext,
 )
+from evidenceforge.generation.dns_rdata import dns_txt_character_strings
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -70,9 +70,8 @@ def _dns_rr_rdata_size(query_type: str, answer: str) -> int:
         if len(parts) >= 2:
             return _dns_name_wire_size(parts[0]) + _dns_name_wire_size(parts[1]) + 20
         return max(24, len(answer.encode("utf-8", errors="ignore")))
-    if query_type == "TXT":
-        text_len = len(answer.encode("utf-8", errors="ignore"))
-        return text_len + max(1, math.ceil(text_len / 255))
+    if query_type in {"TXT", "SPF"}:
+        return sum(1 + len(part.encode("utf-8")) for part in dns_txt_character_strings(answer))
     return max(4, len(answer.encode("utf-8", errors="ignore")))
 
 

@@ -2528,7 +2528,7 @@ class TestActivityGenerator:
         assert "<Interval>PT1H</Interval>" in task_content
         assert r"<Command>C:\Windows\System32\HealthMonitorSvc.exe</Command>" in task_content
         assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in task_content
-        assert "<LogonType>ServiceAccount</LogonType>" in task_content
+        assert "<LogonType>" not in task_content
 
     def test_generate_scheduled_task_reflects_hourly_modifier(
         self, activity_gen, test_user, test_system, mock_emitters
@@ -2812,7 +2812,6 @@ class TestActivityGenerator:
             password_last_set_to_event_time=True,
             old_uac_value="0x15",
             new_uac_value="0x10",
-            user_account_control="\n\t\t\t%%2081",
             primary_group_id="-",
         )
 
@@ -2825,7 +2824,7 @@ class TestActivityGenerator:
         assert account_context.password_last_set == "3/18/2024 4:14:35 PM"
         assert account_context.old_uac_value == "0x15"
         assert account_context.new_uac_value == "0x10"
-        assert account_context.user_account_control == "\n\t\t\t%%2081"
+        assert account_context.user_account_control == "\n\t\t\t%%2048\n\t\t\t%%2050"
         assert account_context.primary_group_id == "-"
 
     def test_regular_user_logon_is_not_randomly_elevated(
@@ -2833,6 +2832,31 @@ class TestActivityGenerator:
     ):
         """Ordinary users should not receive 4672 without a privileged role."""
         assert activity_gen._should_elevate(test_user) is False
+
+    @pytest.mark.parametrize(
+        "profile,expected", [("uac_elevated_user", False), ("service_account", True)]
+    )
+    def test_elevated_logon_requires_actual_sensitive_privileges(
+        self,
+        activity_gen: Any,
+        test_user: Any,
+        test_system: Any,
+        state_manager: Any,
+        mock_emitters: Any,
+        profile: str,
+        expected: bool,
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        with (
+            patch.object(activity_gen, "_should_elevate", return_value=True),
+            patch.object(activity_gen, "_special_privilege_profile_name", return_value=profile),
+        ):
+            activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        assert event.auth.elevated is True
+        assert event.auth.emit_special_privileges is expected
+        assert bool(event.auth.privilege_list) is expected
 
     def test_help_desk_persona_does_not_imply_special_privileges(self, activity_gen, test_system):
         """Delegated support users need explicit admin groups for 4672 privileges."""
@@ -4892,7 +4916,7 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in event.scheduled_task.task_content
-        assert "<LogonType>ServiceAccount</LogonType>" in event.scheduled_task.task_content
+        assert "<LogonType>" not in event.scheduled_task.task_content
         assert "<RunLevel>HighestAvailable</RunLevel>" in event.scheduled_task.task_content
         assert "<UserId>CORP\\SYSTEM</UserId>" not in event.scheduled_task.task_content
         assert "<LogonType>Password</LogonType>" not in event.scheduled_task.task_content

@@ -1830,8 +1830,8 @@ def test_smb_channel_head_round_trips_reusable_session_and_sensor_view() -> None
         client_access="windows_native",
     )
     traffic = NetworkTrafficLedger(
-        orig=DirectionalTrafficLedger(payload_bytes=100, packets=1, ip_bytes=140),
-        resp=DirectionalTrafficLedger(payload_bytes=200, packets=1, ip_bytes=240),
+        orig=DirectionalTrafficLedger(payload_bytes=100, packets=4, ip_bytes=260),
+        resp=DirectionalTrafficLedger(payload_bytes=200, packets=4, ip_bytes=360),
     )
     plan = NetworkTransactionPlan(
         stable_id="checkpoint-smb-transport",

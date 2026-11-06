@@ -225,24 +225,34 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         census = host.process_census
         assert census is not None
         assert census.exit_accounting_complete and census.known_exit_identities_match
-        unknown = 1 if host.hostname == "MAC-APPLE" else 0
+        unknown = sum(
+            row.count
+            for row in host.observations
+            if row.phase == "exit"
+            and row.reason == "exit_outcome_unknown"
+            and row.status != "out_of_window"
+        )
         assert census.expected_exits == census.known_exits + unknown
         assert census.published_exits == census.known_exits
         assert census.exit_complete is (unknown == 0)
-    apple = next((output / "data").glob("MAC-APPLE.*/macos_endpoint_security.ndjson"))
-    records = [json.loads(line) for line in apple.read_text().splitlines()]
-    compound = [
-        record["event"]["exec"]["target"]["audit_token"]
-        for record in records
-        if record["event_type"] == 9
+    compound_occurrences = [
+        (path, record["event"]["exec"]["target"]["audit_token"])
+        for path in (output / "data").glob("*/macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+        if (record := json.loads(line))["event_type"] == 9
         and record["event"]["exec"]["args"] == ["/bin/zsh", "-c", "id; groups"]
     ]
-    assert len(compound) == 1
+    assert len(compound_occurrences) == 1
+    compound_path, compound_token = compound_occurrences[0]
+    records = [json.loads(line) for line in compound_path.read_text().splitlines()]
+    compound = [compound_token]
     assert not any(
         record["event_type"] == 15 and record["process"]["audit_token"] == compound[0]
         for record in records
     )
-    endpoints = [json.loads(line) for line in (apple.parent / "ecar.json").read_text().splitlines()]
+    endpoints = [
+        json.loads(line) for line in (compound_path.parent / "ecar.json").read_text().splitlines()
+    ]
     assert (
         sum(
             row["object"] == "PROCESS"

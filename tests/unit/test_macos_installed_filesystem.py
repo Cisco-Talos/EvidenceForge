@@ -480,3 +480,47 @@ def test_provisioned_file_observation_is_frozen_through_source_failure_and_retry
         dispatcher.assert_exact_projection_recoveries_drained()
     finally:
         emitter.close()
+
+
+def test_inode_allocation_follows_modeled_births_before_lexical_paths() -> None:
+    _, source, process, _ = _setup()
+    binary = source.resolve_binary(process.hostname, process.image, "macos")
+    assert binary is not None
+    alternate_path = "/zzz/invented-worker"
+    installation = SoftwareInstallationIdentity(
+        process.hostname,
+        "invented-worker",
+        binary.release_id,
+        "macos",
+        "machine",
+        image_paths=(process.image, alternate_path),
+    )
+    deployments = DeploymentContentRegistry(
+        binary_releases=(binary,), installations=(installation,)
+    )
+    later = _spec(deployments, process)
+    earlier = later.model_copy(
+        update={
+            "native_path": alternate_path,
+            "born": MacosFileTime(
+                seconds=later.born.seconds - 3600, nanoseconds=later.born.nanoseconds
+            ),
+        }
+    )
+    volumes = (_volume(process.hostname),)
+    first = MacosInstalledFilesystem(deployments, volumes=volumes, files=(later, earlier))
+    reordered = MacosInstalledFilesystem(deployments, volumes=volumes, files=(earlier, later))
+    old_process = replace(process, image=alternate_path)
+    old = first.observe(deployments, old_process, observed_at=later.valid_from)
+    new = first.observe(deployments, process, observed_at=later.valid_from)
+    assert old.metadata.inode == 730
+    assert new.metadata.inode == 731
+    assert old.binary == new.binary
+    assert (
+        old.metadata
+        == reordered.observe(deployments, old_process, observed_at=later.valid_from).metadata
+    )
+    assert (
+        new.metadata
+        == reordered.observe(deployments, process, observed_at=later.valid_from).metadata
+    )

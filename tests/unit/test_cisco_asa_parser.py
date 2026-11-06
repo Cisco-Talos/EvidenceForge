@@ -45,9 +45,7 @@ class TestParseBuiltRecords:
     def test_parse_302013_tcp_built(self, tmp_path):
         log = tmp_path / "cisco_asa.log"
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection "
-            "100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to "
-            "outside:203.0.113.50/443 (203.0.113.50/443)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for outside:203.0.113.50/443 (203.0.113.50/443) to inside:10.0.10.50/54321 (10.0.10.50/54321)\n"
         )
         parser = CiscoAsaParser()
         records = list(parser.parse_file(log))
@@ -68,9 +66,7 @@ class TestParseBuiltRecords:
     def test_parse_302015_udp_built(self, tmp_path):
         log = tmp_path / "cisco_asa.log"
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection "
-            "100043 for inside:10.0.10.50/54322 (10.0.10.50/54322) to "
-            "outside:8.8.8.8/53 (8.8.8.8/53)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection 100043 for outside:8.8.8.8/53 (8.8.8.8/53) to inside:10.0.10.50/54322 (10.0.10.50/54322)\n"
         )
         parser = CiscoAsaParser()
         records = list(parser.parse_file(log))
@@ -142,7 +138,7 @@ class TestParseTeardownRecords:
         log = tmp_path / "cisco_asa.log"
         log.write_text(
             "<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection "
-            "100042 for inside:10.0.10.50/54321 to outside:203.0.113.50/443 "
+            "100042 for outside:203.0.113.50/443 to inside:10.0.10.50/54321 "
             "duration 0:01:23 bytes 5120 TCP FINs\n"
         )
         parser = CiscoAsaParser()
@@ -153,8 +149,9 @@ class TestParseTeardownRecords:
         assert rec.fields["connection_id"] == 100042
         assert rec.fields["duration"] == "0:01:23"
         assert rec.fields["bytes"] == 5120
-        assert rec.fields["src_ip"] == "10.0.10.50"
-        assert rec.fields["dst_ip"] == "203.0.113.50"
+        assert rec.fields["local_ip"] == "10.0.10.50"
+        assert "src_ip" not in rec.fields
+        assert rec.fields["foreign_ip"] == "203.0.113.50"
 
     def test_parse_302021_icmp_teardown(self, tmp_path):
         log = tmp_path / "cisco_asa.log"
@@ -332,9 +329,7 @@ class TestParseNatRecords:
         """302013 Built with parenthesized mapped IPs differing from real IPs."""
         log = tmp_path / "cisco_asa.log"
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection "
-            "100042 for inside:10.0.10.50/54321 (198.51.100.1/12345) to "
-            "outside:203.0.113.50/443 (203.0.113.50/443)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for outside:203.0.113.50/443 (203.0.113.50/443) to inside:10.0.10.50/54321 (198.51.100.1/12345)\n"
         )
         parser = CiscoAsaParser()
         records = list(parser.parse_file(log))
@@ -351,9 +346,7 @@ class TestParseNatRecords:
         """302013 Built where parens match real (identity NAT) should not crash."""
         log = tmp_path / "cisco_asa.log"
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection "
-            "100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to "
-            "outside:203.0.113.50/443 (203.0.113.50/443)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for outside:203.0.113.50/443 (203.0.113.50/443) to inside:10.0.10.50/54321 (10.0.10.50/54321)\n"
         )
         parser = CiscoAsaParser()
         records = list(parser.parse_file(log))
@@ -388,9 +381,7 @@ class TestTimestampYear:
         log = tmp_path / "fw01" / "2024" / "cisco_asa.log"
         log.parent.mkdir(parents=True)
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection "
-            "100043 for inside:10.0.10.50/54322 (10.0.10.50/54322) to "
-            "outside:8.8.8.8/53 (8.8.8.8/53)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection 100043 for outside:8.8.8.8/53 (8.8.8.8/53) to inside:10.0.10.50/54322 (10.0.10.50/54322)\n"
         )
 
         records = list(CiscoAsaParser().parse_file(log))
@@ -402,9 +393,7 @@ class TestTimestampYear:
         log = tmp_path / "fw01" / "cisco_asa.log"
         log.parent.mkdir()
         log.write_text(
-            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection "
-            "100043 for inside:10.0.10.50/54322 (10.0.10.50/54322) to "
-            "outside:8.8.8.8/53 (8.8.8.8/53)\n"
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection 100043 for outside:8.8.8.8/53 (8.8.8.8/53) to inside:10.0.10.50/54322 (10.0.10.50/54322)\n"
         )
         parser = CiscoAsaParser()
         parser.scenario = SimpleNamespace(

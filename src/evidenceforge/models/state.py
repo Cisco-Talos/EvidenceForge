@@ -52,7 +52,7 @@ from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
-from evidenceforge.events.network import NetworkTrafficLedger
+from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -244,6 +244,7 @@ class OpenConnection:
     bytes_sent: int = 0
     bytes_received: int = 0
     traffic_ledger: NetworkTrafficLedger = field(default_factory=NetworkTrafficLedger)
+    http_capture_transaction: NetworkTransactionPlan | None = None
     transaction_id: str = ""
     conn_state: str = ""
     history: str = ""

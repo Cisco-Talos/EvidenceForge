@@ -131,12 +131,22 @@ def test_checkpoint_restores_counter_history_and_future_allocations_exactly() ->
         first, image="/usr/bin/id", command_line="id", executed_at=_START + timedelta(seconds=1)
     )
     manager.materialize_action_cohort(builder.seal())
+    from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
+
+    seal = StateManagerParticipant(manager).prepare_checkpoint(1)
     restored = StateManager()
-    _restore_head(restored, _capture_head(manager))
+    StateManagerParticipant(restored).restore_checkpoint(
+        seal.head.payload, tuple(segment.payload for segment in seal.segments)
+    )
     assert restored.get_process_identity(first.hostname, first.pid) == after
     assert restored.get_process_identity_at(first.hostname, first.pid, _START) == first
     assert _start(restored) == _start(manager)
-    assert restored.materialization_digest() == manager.materialization_digest()
+    # Full checkpoints rebuild their recorder bindings. Compare all persisted
+    # authority and canonical history, not ephemeral callback object addresses.
+    assert _capture_head(restored) == _capture_head(manager)
+    assert restored._macos_audit_identity_intents.canonical_snapshot() == (
+        manager._macos_audit_identity_intents.canonical_snapshot()
+    )
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, 2**32, "1"])

@@ -2020,6 +2020,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         expected_emitters = dict(snapshot.emitters)
         self._expected_close_emitters = expected_emitters
 
+        if primary is None:
+            from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+            identities = self.state_manager._macos_audit_identity_intents
+            identities.seal()
+            for emitter in expected_emitters.values():
+                if isinstance(emitter, EcarEmitter):
+                    emitter.resolve_native_audit_identities(identities)
+
         for format_name, emitter in expected_emitters.items():
             logger.info("Stopping %s emitter thread", format_name)
             if format_name in self._closed_emitter_names:

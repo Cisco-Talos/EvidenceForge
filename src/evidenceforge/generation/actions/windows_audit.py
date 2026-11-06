@@ -200,6 +200,28 @@ class PasswordChangeRequest:
         return f"password-change-{seed:016x}"
 
 
+def sam_account_control_change_tokens(old_value: str, new_value: str) -> tuple[str, ...]:
+    """Return native message resource IDs for an unsigned SAM flag transition."""
+    values: list[int] = []
+    for value in (old_value, new_value):
+        if (
+            not value.startswith(("0x", "0X"))
+            or not value[2:]
+            or any(character not in "0123456789abcdefABCDEF" for character in value[2:])
+        ):
+            raise ValueError("SAM account-control masks require hexadecimal 0x values")
+        parsed = int(value, 16)
+        if parsed > 0xFFFFFFFF:
+            raise ValueError("SAM account-control masks must fit unsigned 32 bits")
+        values.append(parsed)
+    old, new = values
+    return tuple(
+        f"%%{(2080 if new & (1 << bit) else 2048) + bit}"
+        for bit in range(32)
+        if (old ^ new) & (1 << bit)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class AccountChangedRequest:
     """Intent for one Windows account-changed audit event."""
@@ -215,6 +237,22 @@ class AccountChangedRequest:
     user_account_control: str | None = None
     primary_group_id: str | None = None
     source: str = "activity_generator"
+
+    def __post_init__(self) -> None:
+        """Resolve known mask transitions before any canonical side effects."""
+        if (self.old_uac_value is None) != (self.new_uac_value is None):
+            raise ValueError("SAM account-control changes require both old and new masks")
+        if self.old_uac_value is None:
+            return
+        assert self.new_uac_value is not None
+        tokens = sam_account_control_change_tokens(self.old_uac_value, self.new_uac_value)
+        if self.user_account_control is not None and self.user_account_control.split() != (
+            list(tokens) if tokens else ["-"]
+        ):
+            raise ValueError("SAM account-control descriptions contradict the mask transition")
+        object.__setattr__(
+            self, "user_account_control", "\n\t\t\t" + "\n\t\t\t".join(tokens) if tokens else "-"
+        )
 
     @property
     def stable_id(self) -> str:

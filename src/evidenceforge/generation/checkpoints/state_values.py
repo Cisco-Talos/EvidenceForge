@@ -47,6 +47,7 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
     NetworkTuple,
+    TcpStreamExtent,
 )
 from evidenceforge.events.parentage import (
     ProcessParentage,
@@ -196,6 +197,7 @@ _OPEN_CONNECTION_FIELDS = (
     "bytes_sent",
     "bytes_received",
     "traffic_ledger",
+    "http_capture_transaction",
     "transaction_id",
     "conn_state",
     "history",
@@ -257,6 +259,7 @@ _NETWORK_SENSOR_OBSERVATION_FIELDS = (
     "nat",
     "source_times",
     "source_durations",
+    "tcp_stream",
 )
 _APPLICATION_CHANNEL_BUDGET_FIELDS = ("initiator_bytes", "responder_bytes", "operations")
 _APPLICATION_TRANSPORT_BINDING_FIELDS = ("transport_id", "opened_at", "closes_at")
@@ -457,14 +460,15 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "directional-traffic": (DirectionalTrafficLedger, _DIRECTIONAL_TRAFFIC_FIELDS),
     "file-sensor-observation": (FileSensorObservation, _FILE_SENSOR_OBSERVATION_FIELDS),
     "nat-sensor-observation": (NatSensorObservation, _NAT_SENSOR_OBSERVATION_FIELDS),
-    "network-sensor-observation": (
+    "network-sensor-observation-v2": (
         NetworkSensorObservation,
         _NETWORK_SENSOR_OBSERVATION_FIELDS,
     ),
+    "tcp-stream-extent-v1": (TcpStreamExtent, ("orig_bytes", "resp_bytes")),
     "network-traffic": (NetworkTrafficLedger, _NETWORK_TRAFFIC_FIELDS),
     "network-transaction-plan": (NetworkTransactionPlan, _NETWORK_TRANSACTION_PLAN_FIELDS),
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
-    "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
+    "open-connection-v2": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
     "posix-session-v1": (
         PosixSessionIdentity,
@@ -687,6 +691,20 @@ def decode_state_value(value: object) -> object:
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        if record_tag == "open-connection" and len(encoded_fields) == 21:
+            record_tag = "open-connection-v2"
+            # Historical rows do not establish their original physical ledger.
+            encoded_fields = [*encoded_fields[:17], None, *encoded_fields[17:]]
+        if record_tag == "network-sensor-observation" and len(encoded_fields) == 23:
+            record_tag = "network-sensor-observation-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "tcp-stream-extent-v1" and len(encoded_fields) == 2:
+            try:
+                return TcpStreamExtent(*(decode_state_value(item) for item in encoded_fields))
+            except ValueError as error:
+                raise CheckpointCorruptionError(
+                    "TCP stream extent checkpoint is invalid"
+                ) from error
         if record_tag == "macos-process-service-drop-v1" and len(encoded_fields) == 10:
             record_tag = "macos-process-service-drop-v2"
             encoded_fields = [*encoded_fields, None, None, None, None]

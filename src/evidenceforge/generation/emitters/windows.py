@@ -787,6 +787,10 @@ def _enforce_windows_lock_dwell_after_normalization(
     lock_time = rendered_lock_by_session.pop(key, None)
     if lock_time is None:
         return
+    if event.get("_TimingFinalized") == _FROZEN_TIMING_MARKER:
+        # The bundle/planner owns this interval. Delivery-time compatibility
+        # state must not move an already-authenticated source occurrence.
+        return
     minimum_unlock = lock_time + timedelta(seconds=min_unlock_gap_seconds())
     if normalized < minimum_unlock:
         event["TimeCreated"] = minimum_unlock
@@ -796,7 +800,7 @@ def _repair_windows_lock_lifecycle_rows(
     rows: list[tuple[int, dict[str, Any]]],
     prior_locks: dict[tuple[str, str, str], datetime],
 ) -> set[int]:
-    """Repair 4800 -> Type 7 -> 4801 source order in canonical admission order."""
+    """Repair raw compatibility rows without rewriting frozen source timing."""
 
     locks = dict(prior_locks)
     pending_reauth: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
@@ -826,7 +830,7 @@ def _repair_windows_lock_lifecycle_rows(
             continue
         unlock_time = ensure_utc(timestamp)
         minimum_unlock = lock_time + timedelta(seconds=min_unlock_gap_seconds())
-        if unlock_time < minimum_unlock:
+        if unlock_time < minimum_unlock and event.get("_TimingFinalized") != _FROZEN_TIMING_MARKER:
             unlock_time = minimum_unlock
             event["TimeCreated"] = unlock_time
             changed.add(rowid)
@@ -835,6 +839,8 @@ def _repair_windows_lock_lifecycle_rows(
             continue
         reauth_rowid, reauth_event = reauth
         reauth_time = ensure_utc(reauth_event["TimeCreated"])
+        if reauth_event.get("_TimingFinalized") == _FROZEN_TIMING_MARKER:
+            continue
         if lock_time < reauth_time < unlock_time:
             continue
         gap_ms = 80 + (
@@ -928,37 +934,17 @@ def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str
 
 
 def _special_privilege_fallback(username: str) -> str:
-    """Return a realistic 4672 privilege set when AuthContext omits one."""
+    """Use the same validated native profiles for compatibility callers."""
+    from evidenceforge.generation.activity.windows_auth_realism import special_privilege_profile
+
     normalized = username.upper()
     if normalized in {"LOCAL SERVICE", "NETWORK SERVICE"}:
-        return (
-            "SeAssignPrimaryTokenPrivilege\n\t\t\t"
-            "SeAuditPrivilege\n\t\t\t"
-            "SeImpersonatePrivilege\n\t\t\t"
-            "SeChangeNotifyPrivilege"
-        )
-    if normalized == "SYSTEM" or normalized.endswith("$"):
-        return (
-            "SeTcbPrivilege\n\t\t\t"
-            "SeSecurityPrivilege\n\t\t\t"
-            "SeTakeOwnershipPrivilege\n\t\t\t"
-            "SeLoadDriverPrivilege\n\t\t\t"
-            "SeBackupPrivilege\n\t\t\t"
-            "SeRestorePrivilege\n\t\t\t"
-            "SeDebugPrivilege\n\t\t\t"
-            "SeAuditPrivilege\n\t\t\t"
-            "SeSystemEnvironmentPrivilege\n\t\t\t"
-            "SeImpersonatePrivilege\n\t\t\t"
-            "SeDelegateSessionUserImpersonatePrivilege"
-        )
-    return (
-        "SeSecurityPrivilege\n\t\t\t"
-        "SeBackupPrivilege\n\t\t\t"
-        "SeRestorePrivilege\n\t\t\t"
-        "SeTakeOwnershipPrivilege\n\t\t\t"
-        "SeDebugPrivilege\n\t\t\t"
-        "SeImpersonatePrivilege"
-    )
+        profile = "service_account"
+    elif normalized == "SYSTEM" or normalized.endswith("$"):
+        profile = "system_account"
+    else:
+        profile = "workstation_admin"
+    return "\n\t\t\t".join(special_privilege_profile(profile))
 
 
 _SPOOL_FIELDS_KEY = "fields"

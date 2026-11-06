@@ -38,6 +38,7 @@ from .capabilities import (
     GenerateProcessTerminationCapability,
     GenericLogoffOwnsProcessCloseCapability,
     IsWithinScenarioWindowCapability,
+    ProcessActivityTiming,
     ProcessIdentityCapabilities,
 )
 from .policy import _FOREGROUND_SHELL_INITIAL_READY_MIN_MS, _FOREGROUND_SHELL_INITIAL_READY_SPAN_MS
@@ -68,6 +69,7 @@ class ProcessForegroundLifecycle:
     state_manager: StateManager
     queries: ProcessStateQueries
     identity: ProcessIdentityCapabilities
+    activity_timing: ProcessActivityTiming
 
     def _held_process_termination_time(
         self,
@@ -334,6 +336,29 @@ class ProcessForegroundLifecycle:
         )
         return next_time + timedelta(milliseconds=rng.randint(120, 900))
 
+    def foreground_child_resume_at(
+        self,
+        *,
+        hostname: str,
+        logon_id: str,
+        parent_pid: int,
+        child_object_id: str,
+        closed_at: datetime,
+    ) -> datetime:
+        """Model one canonical shell wake/dispatch after a foreground child releases."""
+        closed_at = ensure_utc(closed_at)
+        gap = self.activity_timing.sample_profile_gap(
+            "posix.foreground_shell_resume",
+            stable_id=f"shell-resume:{logon_id}:{parent_pid}:{child_object_id}:{closed_at.isoformat()}",
+            host=hostname,
+            source="process-execution",
+            lifecycle_id=child_object_id,
+            mode_fraction=0.10,
+        )
+        if gap <= timedelta(0):
+            raise StateError("Foreground shell resume timing requires a positive configured gap")
+        return closed_at + gap
+
     def reserve_authored_macos_shell_time(
         self,
         *,
@@ -399,7 +424,13 @@ class ProcessForegroundLifecycle:
                 break
             if end is None:
                 return None
-            candidate = ensure_utc(end) + timedelta(milliseconds=1)
+            candidate = self.foreground_child_resume_at(
+                hostname=system.hostname,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                child_object_id=process.ecar_object_id,
+                closed_at=end,
+            )
         return candidate
 
     def _unbounded_foreground_shell_ready_at(
@@ -456,7 +487,16 @@ class ProcessForegroundLifecycle:
             deadline = min(ensure_utc(value) for value in deadlines)
             if deadline > requested_time:
                 # This is a scheduling fence, not a fabricated process close.
-                ready_at = max(ready_at, deadline + timedelta(milliseconds=1))
+                ready_at = max(
+                    ready_at,
+                    self.foreground_child_resume_at(
+                        hostname=system.hostname,
+                        logon_id=logon_id,
+                        parent_pid=parent_pid,
+                        child_object_id=process.ecar_object_id,
+                        closed_at=deadline,
+                    ),
+                )
         return ready_at
 
     def _discard_superseded_foreground_reservation(

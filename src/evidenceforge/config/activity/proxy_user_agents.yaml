@@ -7,6 +7,22 @@
 # generic agents, server roles, package-manager destinations, or OS families
 # without copying this whole file.
 
+browser_process_families:
+  chrome:
+    - chrome.exe
+    - chrome
+    - google-chrome
+    - google chrome
+    - chromium
+    - chromium-browser
+    - google chrome helper
+    - google chrome helper (renderer)
+    - google chrome helper (gpu)
+  edge: [msedge.exe, microsoft-edge, edge, microsoft edge]
+  firefox: [firefox.exe, firefox]
+  safari: [safari]
+  opera: [opera.exe, opera]
+
 domain_overrides:
   windows_update:
     os_keywords: ["windows"]

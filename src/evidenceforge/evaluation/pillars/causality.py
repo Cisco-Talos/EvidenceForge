@@ -111,12 +111,26 @@ class CausalityScorer(DimensionScorer):
         self._email_gt = context.email_ground_truth or {}
         self._smb_gt: dict[str, dict[str, Any]] = {}
         self._macos_launch_gt: dict[str, list[dict[str, Any]]] = {}
+        self._macos_process_gt: dict[str, list[dict[str, Any]]] = {}
+        self._macos_trace_times: dict[tuple[str, str], list[datetime]] = {}
         if context.ground_truth is not None:
             for record in context.ground_truth.events:
-                if record.kind == "macos_launch_item" and record.storyline_id:
+                if not record.storyline_id or not record.emitted:
+                    continue
+                facts = record.attributes.model_dump(mode="python")
+                if record.kind == "macos_launch_item":
                     self._macos_launch_gt.setdefault(record.storyline_id, []).append(
-                        record.attributes.model_dump(mode="python")
+                        {**facts, "_canonical_time": record.time}
                     )
+                elif record.kind == "process" and facts.get("native_process_model"):
+                    self._macos_process_gt.setdefault(record.storyline_id, []).append(
+                        {**facts, "_canonical_time": record.time}
+                    )
+                else:
+                    continue
+                self._macos_trace_times.setdefault((record.storyline_id, record.kind), []).append(
+                    record.time
+                )
         storage = scenario.environment.storage
         self._smb_mapping_principals = {
             mapping.id.casefold(): mapping.principal
@@ -709,11 +723,26 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
         event_type: str,
         host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        *,
+        _canonical_anchor: datetime | None = None,
     ) -> list[ParsedRecord]:
+        if _canonical_anchor is None and (
+            anchors := getattr(self, "_macos_trace_times", {}).get((event.storyline_id, event_type))
+        ):
+            # Search actual occurrences without changing authored timing assessment.
+            unique: dict[int, ParsedRecord] = {}
+            for anchor in anchors:
+                for record in self._search_for_event_indexed(
+                    event, event_type, host_time_index, _canonical_anchor=anchor
+                ):
+                    unique[id(record)] = record
+            return list(unique.values())
         found: list[ParsedRecord] = []
         # Prefer a per-type anchor time when set (a step carrying both spillage and
         # adversarial_payload anchors each type to its own emitted time); else event.time.
-        evt_time = event.details.get(f"_anchor_time_{event_type}") or event.time
+        evt_time = (
+            _canonical_anchor or event.details.get(f"_anchor_time_{event_type}") or event.time
+        )
         if evt_time.tzinfo is None:
             evt_time = evt_time.replace(tzinfo=UTC)
         evt_bucket = int(evt_time.timestamp()) // 60
@@ -838,6 +867,75 @@ class CausalityScorer(DimensionScorer):
                 continue
         return False
 
+    def _macos_native_process_trace_matches(
+        self, record: ParsedRecord, event: ResolvedEvent, event_type: str
+    ) -> bool:
+        """Match native execution roles against exact canonical occurrence facts."""
+        if record.parse_errors or not self._host_matches(record.source_host, event.system):
+            return False
+        facts_list = (
+            getattr(self, "_macos_process_gt", {}).get(event.storyline_id, [])
+            if event_type == "process"
+            else getattr(self, "_macos_launch_gt", {}).get(event.storyline_id, [])
+        )
+        fields = record.fields
+        for facts in facts_list:
+            operation = facts.get("launchd_operation", "activate")
+            expected_type = 9 if operation == "activate" else 15
+            if (
+                operation not in {"activate", "exit", "unload"}
+                or fields.get("event_type") != expected_type
+            ):
+                continue
+            expected = facts
+            if operation in {"exit", "unload"}:
+                object_ids = set(facts.get("process_object_ids", []))
+                expected = next(
+                    (
+                        item
+                        for item in facts_list
+                        if item.get("launchd_operation") == "activate"
+                        and object_ids.intersection(item.get("process_object_ids", []))
+                    ),
+                    {},
+                )
+            pid = expected.get("pid")
+            image = expected.get("process_name")
+            if type(pid) is not int or not image:
+                continue
+            native_process = (
+                fields.get("event", {}).get("exec", {}).get("target", {})
+                if expected_type == 9
+                else fields.get("process", {})
+            )
+            if (
+                native_process.get("audit_token", {}).get("pid") != pid
+                or native_process.get("executable", {}).get("path") != image
+            ):
+                continue
+            canonical_time = facts.get("_canonical_time")
+            if (
+                canonical_time is None
+                or record.timestamp is None
+                or abs(
+                    (
+                        _normalize_ts(record.timestamp) - _normalize_ts(canonical_time)
+                    ).total_seconds()
+                )
+                > TIME_TOLERANCE.total_seconds()
+            ):
+                continue
+            command = expected.get("command_line")
+            if expected_type == 9 and command:
+                try:
+                    arguments = shlex.split(command)
+                except ValueError:
+                    continue
+                if fields.get("event", {}).get("exec", {}).get("args") != arguments:
+                    continue
+            return True
+        return False
+
     def _record_matches(
         self,
         record: ParsedRecord,
@@ -883,6 +981,8 @@ class CausalityScorer(DimensionScorer):
                     and str(f.get("senderImagePath", "")).endswith("/AppleSystemPolicy")
                     and self._host_matches(_extract_hostname(record), event.system)
                 )
+            if format_name == "macos_endpoint_security":
+                return self._macos_native_process_trace_matches(record, event, event_type)
             if format_name == "windows_event_security":
                 return (
                     f.get("EventID") == 4688
@@ -974,6 +1074,8 @@ class CausalityScorer(DimensionScorer):
                     and self._user_matches(f.get("principal"), event.actor)
                 )
         elif event_type == "macos_launch_item":
+            if format_name == "macos_endpoint_security":
+                return self._macos_native_process_trace_matches(record, event, event_type)
             if format_name != "ecar" or not self._host_matches(f.get("hostname"), event.system):
                 return False
             for facts in getattr(self, "_macos_launch_gt", {}).get(event.storyline_id, []):
@@ -3065,6 +3167,8 @@ class CausalityScorer(DimensionScorer):
     def _observed_indicator_values(self, event: ResolvedEvent) -> set[str]:
         values: set[str] = set()
         for trace in event.traces:
+            if trace.source_format in {"macos_endpoint_security", "macos_unified_log"}:
+                self._add_pivot_value(values, "host", trace.source_host)
             field_namespaces = {
                 "TargetUserName": "user",
                 "SubjectUserName": "user",

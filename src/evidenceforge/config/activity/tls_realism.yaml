@@ -621,9 +621,24 @@ destinations:
 
 # Optional full-handshake wire material; mandatory RFC message sizes are computed.
 wire_budget:
+  # Fresh inspected-client TLS1.3 handshake, including protected completion.
+  inspected_client_handshake_bytes_min: 400
+  inspected_client_handshake_bytes_max: 1800
+  inspected_server_handshake_bytes_min: 1800
+  inspected_server_handshake_bytes_max: 6500
   extension_bytes_min: 32
   extension_bytes_max: 192
   ticket_bytes_min: 0
   ticket_bytes_max: 512
   starttls_dialogue_bytes_min: 120
   starttls_dialogue_bytes_max: 400
+
+# CA/B Forum TLS BR 6.3.2. Epoch-day buckets model issuance/rotation, not capture time.
+# Use recommendations below the hard inclusive day maxima. Private leaves and CAs
+# are excluded by explicit issuer trust metadata.
+public_leaf_validity:
+  periods:
+    - {effective_date: "1970-01-01", recommended_days: 397, maximum_days: 398}
+    - {effective_date: "2026-03-15", recommended_days: 199, maximum_days: 200}
+    - {effective_date: "2027-03-15", recommended_days: 99, maximum_days: 100}
+    - {effective_date: "2029-03-15", recommended_days: 46, maximum_days: 47}

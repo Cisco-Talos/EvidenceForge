@@ -4097,8 +4097,17 @@ class TestExplicitProxyVisibility:
             if call.args[0].network.src_ip == "10.0.1.10"
             and call.args[0].network.dst_ip == "10.0.3.10"
         )
-        assert proxy_event.protocol.proxy.cs_bytes == request_body + proxy_overhead
-        assert client_event.network.orig_bytes < request_body + 10_000
+        # The legacy estimate is a floor; observed headers can require more.
+        assert proxy_event.protocol.proxy.cs_bytes >= request_body + proxy_overhead
+        assert proxy_event.protocol.proxy.cs_bytes < request_body + 4096
+        from evidenceforge.generation.activity.tls_realism import tls13_application_payload_budget
+
+        phase = proxy_event.protocol.proxy.transaction
+        handshake_bytes = client_event.network.orig_bytes - (
+            phase.tunnel_setup_cs_bytes
+            + tls13_application_payload_budget(proxy_event.protocol.proxy.cs_bytes)
+        )
+        assert 400 <= handshake_bytes <= 1800
 
     def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):
         generator, emitters = _generator(
@@ -4558,9 +4567,19 @@ class TestExplicitProxyVisibility:
         assert len(client_events) == 3
         assert len(origin_events) == 3
         assert len(proxy_events) == 3
-        assert [
-            (event.network.orig_bytes, event.network.resp_bytes) for event in client_events
-        ] == [(846, 1615), (636, 932), (566, 697)]
+        from evidenceforge.generation.activity.tls_realism import tls13_application_payload_budget
+
+        for client_event, proxy_event in zip(client_events, proxy_events, strict=True):
+            proxy = proxy_event.protocol.proxy
+            phase = proxy.transaction
+            client_handshake = client_event.network.orig_bytes - (
+                phase.tunnel_setup_cs_bytes + tls13_application_payload_budget(proxy.cs_bytes)
+            )
+            server_handshake = client_event.network.resp_bytes - (
+                phase.tunnel_setup_sc_bytes + tls13_application_payload_budget(proxy.sc_bytes)
+            )
+            assert 400 <= client_handshake <= 1800
+            assert 1800 <= server_handshake <= 6500
         from evidenceforge.generation.activity.tls_realism import tls_server_payload_budget
 
         for event, (expected_orig, prior_resp_floor) in zip(
@@ -4645,12 +4664,8 @@ class TestExplicitProxyVisibility:
             assert snapshot.close_reason == "setup-only"
             assert snapshot.reserved_operations == 1
             assert snapshot.completed_operations == 1
-            assert snapshot.reserved_initiator_bytes == (
-                phase.tunnel_setup_cs_bytes + proxy_event.protocol.proxy.cs_bytes
-            )
-            assert snapshot.reserved_responder_bytes == (
-                phase.tunnel_setup_sc_bytes + proxy_event.protocol.proxy.sc_bytes
-            )
+            assert snapshot.reserved_initiator_bytes == phase.client_transport_cs_bytes
+            assert snapshot.reserved_responder_bytes == phase.client_transport_sc_bytes
             assert client.orig_bytes == snapshot.reserved_initiator_bytes
             assert client.resp_bytes == snapshot.reserved_responder_bytes
             reserved_request_bytes += snapshot.reserved_initiator_bytes

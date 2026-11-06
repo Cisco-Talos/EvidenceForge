@@ -32,6 +32,7 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from evidenceforge.events.contexts import HttpContext, HttpRequestEntityContext
+from evidenceforge.events.http_semantics import http_wire_target
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity import browsing_session
 from evidenceforge.generation.activity.http_content import (
@@ -488,9 +489,10 @@ class BrowserSessionActionBundle:
 
         if self.static_cache_seen is None or req.is_page_load:
             return False
-        if not is_stable_resource_path(req.path):
+        wire_path = http_wire_target(req.path)
+        if not is_stable_resource_path(wire_path):
             return False
-        cache_key = (self.request.src_ip, self.request.hostname, req.path)
+        cache_key = (self.request.src_ip, self.request.hostname, wire_path)
         if cache_key in self.static_cache_seen:
             self.static_cache_seen[cache_key] += 1
             return True

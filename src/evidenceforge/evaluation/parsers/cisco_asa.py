@@ -39,12 +39,12 @@ ASA_HEADER = re.compile(
     r"(.*)$"  # message body
 )
 
-# Built connection: "Built {inbound/outbound} TCP connection 12345 for inside:10.0.10.50/54321 (mapped/port) to ..."
+# Built connection: "Built {inbound/outbound} TCP connection 12345 for outside:203.0.113.50/443 (mapped/port) to ..."
 BUILT_TCP_UDP = re.compile(
     r"Built\s+(?:inbound|outbound)\s+(?:TCP|UDP)\s+connection\s+(\d+)\s+for\s+"
-    r"(\w+):(\S+)/(\d+)\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+"
     r"\((\S+)/(\d+)\)\s+to\s+"
-    r"(\w+):(\S+)/(\d+)\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+"
     r"\((\S+)/(\d+)\)"
 )
 
@@ -54,11 +54,11 @@ BUILT_ICMP = re.compile(
     r"([^/\s]+)/(\d+)"
 )
 
-# Teardown connection: "Teardown TCP connection 12345 for inside:10.0.10.50/54321 to ..."
+# Teardown connection: "Teardown TCP connection 12345 for outside:203.0.113.50/443 to ..."
 TEARDOWN_TCP_UDP = re.compile(
     r"Teardown\s+(?:TCP|UDP)\s+connection\s+(\d+)\s+for\s+"
-    r"(\w+):(\S+)/(\d+)\s+to\s+"
-    r"(\w+):(\S+)/(\d+)\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+to\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+"
     r"duration\s+(\S+)\s+bytes\s+(\d+)"
 )
 
@@ -79,15 +79,15 @@ DENY = re.compile(
 # NAT Built 305011: "Built dynamic TCP translation from inside:10.0.10.50/54321 to outside:45.83.220.1/12345"
 NAT_BUILT = re.compile(
     r"Built\s+(dynamic|static)\s+(\w+)\s+translation\s+from\s+"
-    r"(\w+):(\S+)/(\d+)\s+to\s+"
-    r"(\w+):(\S+)/(\d+)"
+    r"([\w.-]+):(\S+)/(\d+)\s+to\s+"
+    r"([\w.-]+):(\S+)/(\d+)"
 )
 
 # NAT Teardown 305012: "Teardown dynamic TCP translation from inside:10.0.10.50/54321 to ..."
 NAT_TEARDOWN = re.compile(
     r"Teardown\s+(dynamic|static)\s+(\w+)\s+translation\s+from\s+"
-    r"(\w+):(\S+)/(\d+)\s+to\s+"
-    r"(\w+):(\S+)/(\d+)\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+to\s+"
+    r"([\w.-]+):(\S+)/(\d+)\s+"
     r"duration\s+(\S+)"
 )
 
@@ -120,7 +120,7 @@ def _parse_asa_address_token(token: str) -> tuple[str | None, str]:
         return None, token
 
     interface, address = token.split(":", 1)
-    if not re.fullmatch(r"\w+", interface):
+    if not re.fullmatch(r"[\w.-]+", interface):
         return None, token
 
     try:
@@ -140,11 +140,34 @@ class CiscoAsaParser(LogParser):
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         seed_year = _infer_seed_year(path, self.scenario)
+        # A teardown has native foreign/local endpoints, but no initiation direction.
+        # Bound remembered builds; unmatched/evicted closes remain explicitly native.
+        tracked_builds: dict[tuple[str, int], dict] = {}
+        maximum_tracked_builds = 65_536
         for line_num, line in iter_bounded_text_lines(path):
             line = line.rstrip("\n")
             if not line:
                 continue
-            yield self._parse_line(line, line_num, seed_year)
+            record = self._parse_line(line, line_num, seed_year)
+            fields = record.fields
+            connection_id = fields.get("connection_id")
+            if connection_id is not None:
+                key = (fields["hostname"], connection_id)
+                if fields["msg_id"] in (302013, 302015):
+                    if len(tracked_builds) >= maximum_tracked_builds:
+                        tracked_builds.pop(next(iter(tracked_builds)))
+                    tracked_builds[key] = fields.copy()
+                elif fields["msg_id"] in (302014, 302016):
+                    built = tracked_builds.pop(key, None)
+                    native_keys = ("foreign_ip", "foreign_port", "local_ip", "local_port")
+                    if (
+                        built is not None
+                        and built["protocol"] == fields["protocol"]
+                        and all(fields.get(k) == built.get(k) for k in native_keys)
+                    ):
+                        fields["direction"] = built["direction"]
+                        self._normalize_native_endpoints(fields, built["direction"])
+            yield record
 
     def _parse_line(self, raw: str, line_num: int, seed_year: int) -> ParsedRecord:
         fields: dict = {}
@@ -209,6 +232,10 @@ class CiscoAsaParser(LogParser):
                 fields["dst_port"] = int(match.group(9))
                 fields["mapped_dst_ip"] = match.group(10)
                 fields["mapped_dst_port"] = int(match.group(11))
+                fields["direction"] = message.split()[1]
+                fields["protocol"] = message.split()[2].lower()
+                CiscoAsaParser._preserve_native_endpoints(fields, mapped=True)
+                CiscoAsaParser._normalize_native_endpoints(fields, fields["direction"])
         elif msg_id in (302020,):
             match = BUILT_ICMP.search(message)
             if match:
@@ -229,6 +256,11 @@ class CiscoAsaParser(LogParser):
                 fields["dst_port"] = int(match.group(7))
                 fields["duration"] = match.group(8)
                 fields["bytes"] = int(match.group(9))
+                fields["protocol"] = message.split()[1].lower()
+                CiscoAsaParser._preserve_native_endpoints(fields, mapped=False)
+                for role in ("src", "dst"):
+                    for suffix in ("interface", "ip", "port"):
+                        fields.pop(f"{role}_{suffix}")
         elif msg_id in (302021,):
             match = TEARDOWN_ICMP.search(message)
             if match:
@@ -286,6 +318,29 @@ class CiscoAsaParser(LogParser):
                 fields["avg_rate"] = int(match.group(5))
                 fields["avg_max"] = int(match.group(6))
                 fields["cumulative_count"] = int(match.group(7))
+
+    @staticmethod
+    def _preserve_native_endpoints(fields: dict, *, mapped: bool) -> None:
+        """Keep the wire's foreign/local roles independent of transport initiation."""
+        for native, previous in (("foreign", "src"), ("local", "dst")):
+            for suffix in ("interface", "ip", "port"):
+                fields[f"{native}_{suffix}"] = fields[f"{previous}_{suffix}"]
+            if mapped:
+                for suffix in ("ip", "port"):
+                    fields[f"mapped_{native}_{suffix}"] = fields[f"mapped_{previous}_{suffix}"]
+
+    @staticmethod
+    def _normalize_native_endpoints(fields: dict, direction: str) -> None:
+        """Expose orig/resp only when a native build establishes the direction."""
+        source, destination = (
+            ("foreign", "local") if direction == "inbound" else ("local", "foreign")
+        )
+        for role, native in (("src", source), ("dst", destination)):
+            for suffix in ("interface", "ip", "port"):
+                fields[f"{role}_{suffix}"] = fields[f"{native}_{suffix}"]
+            for suffix in ("ip", "port"):
+                if f"mapped_{native}_{suffix}" in fields:
+                    fields[f"mapped_{role}_{suffix}"] = fields[f"mapped_{native}_{suffix}"]
 
 
 def _infer_seed_year(path: Path, scenario: object | None) -> int:

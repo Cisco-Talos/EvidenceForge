@@ -32,6 +32,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.macos_audit_identity import MacosAuditIdentityLedger
 from evidenceforge.generation.source_timing import (
     compatibility_ecar_flow_identity_deadline,
     compatibility_endpoint_event_times,
@@ -65,9 +66,8 @@ _ECAR_FAILURE_REASON_BY_SUBSTATUS = {
 }
 
 _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
-    "%%2304": "account_locked",
-    "%%2307": "account_disabled",
-    "%%2313": "bad_password",
+    "%%2307": "account_locked",
+    "%%2313": "authentication_failure",
 }
 
 _PORT_BEARING_PROTOCOLS = {"tcp", "udp", "sctp"}
@@ -78,7 +78,15 @@ def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     try:
         record = json.loads(line)
         priority = _ECAR_SORT_PRIORITY.get((record.get("object"), record.get("action")), 50)
-        return int(record.get("timestamp_ms", 0)), priority, line
+        properties = record.get("properties", {})
+        # Native generations are resolved after immutable journal admission.
+        # Tie ordering must depend on the stable occurrence, not a late-bound field.
+        tie = (
+            str(record.get("id", ""))
+            if any(key in properties for key in ("pid_version", "previous_pid_version"))
+            else line
+        )
+        return int(record.get("timestamp_ms", 0)), priority, tie
     except (TypeError, ValueError, json.JSONDecodeError):
         return 0, 50, line
 
@@ -1458,6 +1466,16 @@ class EcarEmitter(HostMultiplexEmitter):
         rendered = self._render_event(event_data)
         host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
+
+    def resolve_native_audit_identities(self, ledger: MacosAuditIdentityLedger) -> None:
+        """Resolve native properties from the sealed canonical allocation owner."""
+        if self.threaded:
+            self.stop_thread()
+        with self._writers_lock:
+            for writer in self._writers.values():
+                if writer._sorted_writer is None:
+                    raise RuntimeError("Native audit resolution requires deferred sorted output")
+                writer._sorted_writer.set_export_projection(ledger.project_ecar)
 
     def flush(self, force: bool = False) -> None:
         """Serialize buffered records in source-timestamp order without semantic mutation."""

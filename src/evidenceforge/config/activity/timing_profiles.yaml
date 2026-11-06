@@ -43,6 +43,12 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  posix.foreground_shell_resume:
+    # Modeled foreground wait/wakeup/dispatch cost, not capture-calibrated latency.
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
   linux.sudo.process_lead:
     class: source_latency
     position: before

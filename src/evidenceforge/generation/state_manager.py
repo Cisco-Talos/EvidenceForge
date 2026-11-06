@@ -34,7 +34,7 @@ import random
 import secrets
 from bisect import bisect_left
 from collections import ChainMap
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
@@ -115,6 +115,7 @@ from evidenceforge.generation.indexes import (
     IndexedEntityStore,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.macos_audit_identity import MacosAuditIdentityLedger
 from evidenceforge.generation.macos_process_census import MacosOccurrenceDigest, MacosProcessCensus
 from evidenceforge.generation.macos_process_overlay import MacosProcessRelationshipOverlay
 from evidenceforge.generation.macos_spawn_descriptors import plan_spawn_descriptors
@@ -190,6 +191,8 @@ _LINUX_PID_BLOCK_SECONDS = 300
 def _bind_materialization_digest_freezer() -> Callable[[object, set[int]], object]:
     """Bind a deep freezer that never dispatches through caller-owned values."""
 
+    audit_ledger_type = MacosAuditIdentityLedger
+    audit_ledger_snapshot = MacosAuditIdentityLedger.canonical_snapshot
     exact_scalar_types = frozenset({bool, int, float, str, bytes})
     exact_container_types = frozenset({dict, list, tuple, set, frozenset})
     rejected_subclass_bases = (
@@ -241,6 +244,11 @@ def _bind_materialization_digest_freezer() -> Callable[[object, set[int]], objec
         if value is None:
             return None
         value_type = type_type(value)
+        if value_type is audit_ledger_type:
+            return (
+                "canonical-macos-audit-identities",
+                freeze(audit_ledger_snapshot(value), active),
+            )
         if value_type in exact_scalar_types:
             return value
         if value_type is datetime_type:
@@ -2761,7 +2769,7 @@ class _PreparedActionCohortSessionTerminalization:
 class _ActionCohortMappingSavepoint:
     """One bounded mapping key captured before cohort mutation."""
 
-    mapping: dict[object, object]
+    mapping: MutableMapping[object, object]
     key: object
     present: bool
     value: object
@@ -5780,6 +5788,11 @@ class StateManager:
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._macos_audit_pid_versions: dict[str, int] = {}
+        self._macos_audit_identity_intents = MacosAuditIdentityLedger(
+            lambda key, value: self._record_incremental_checkpoint_value(
+                "_macos_audit_identity_intents", key, value
+            )
+        )
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._posix_job_control_reservations: dict[ReservationKey, ReservationRows] = {}
@@ -11437,6 +11450,7 @@ class StateManager:
 
         if os_category != "macos":
             return None
+        self._macos_audit_identity_intents.drain_before_planning()
         current = self._macos_audit_pid_versions.get(system, 0) if previous is None else previous
         if type(current) is not int or not 0 <= current < 2**32 - 1:
             raise StateError("macOS audit PID version namespace is exhausted or invalid")
@@ -14191,7 +14205,7 @@ class StateManager:
         object_entries: dict[int, _ActionCohortObjectSavepoint] = {}
         temporal_offsets: dict[tuple[int, str], int] = {}
 
-        def capture_mapping(mapping: dict[object, object], key: object) -> None:
+        def capture_mapping(mapping: MutableMapping[object, object], key: object) -> None:
             journal_key = (id(mapping), key)
             if journal_key in mapping_entries:
                 return
@@ -14425,6 +14439,11 @@ class StateManager:
             capture_indexed(self._running_processes, process_key)  # type: ignore[arg-type]
             capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
             capture_mapping(self._macos_audit_pid_versions, process.system)  # type: ignore[arg-type]
+            if process.audit_pid_version is not None:
+                capture_mapping(
+                    self._macos_audit_identity_intents,  # type: ignore[arg-type]
+                    (process.system, process.audit_pid_version),
+                )
             capture_mapping(self._active_pid_reservation_counts, process.system)  # type: ignore[arg-type]
             capture_mapping(self._process_object_ids, process_key)  # type: ignore[arg-type]
             capture_mapping(self._processes_by_object_id, process.ecar_object_id)  # type: ignore[arg-type]
@@ -14559,6 +14578,11 @@ class StateManager:
             if execution.spawn_pipe_counter is not None:
                 capture_mapping(self._macos_pipe_counters, execution.target.hostname)
             capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
+            if execution.after.audit_pid_version is not None:
+                capture_mapping(
+                    self._macos_audit_identity_intents,  # type: ignore[arg-type]
+                    (execution.after.hostname, execution.after.audit_pid_version),
+                )
             capture_object(
                 process_rows.get(execution.target.object_id)
                 or self._processes_by_object_id[execution.target.object_id]
@@ -16356,6 +16380,10 @@ class StateManager:
                 self._running_processes.refresh((process.system, process.pid))
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
+                self._macos_audit_identity_intents[(process.system, process.audit_pid_version)] = (
+                    execution.after.execution_started_at,
+                    execution.after.execution_id,
+                )
                 self._macos_audit_pid_versions[process.system] = max(
                     self._macos_audit_pid_versions.get(process.system, 0), process.audit_pid_version
                 )
@@ -17218,6 +17246,10 @@ class StateManager:
                 identity, forked=payload.forked
             )
         if identity.audit_pid_version is not None:
+            self._macos_audit_identity_intents[(identity.hostname, identity.audit_pid_version)] = (
+                identity.execution_started_at,
+                identity.execution_id,
+            )
             self._macos_audit_pid_versions[identity.hostname] = max(
                 self._macos_audit_pid_versions.get(identity.hostname, 0), identity.audit_pid_version
             )
@@ -25506,6 +25538,9 @@ class StateManager:
                     bytes_sent=transaction.traffic.orig.payload_bytes,
                     bytes_received=transaction.traffic.resp.payload_bytes,
                     traffic_ledger=transaction.traffic,
+                    http_capture_transaction=(
+                        transaction if transaction.service in {"http", "ssl"} else None
+                    ),
                     transaction_id=transaction.stable_id,
                     conn_state=transaction.conn_state,
                     history=transaction.history,
@@ -25875,6 +25910,9 @@ class StateManager:
                 bytes_sent=transaction.traffic.orig.payload_bytes,
                 bytes_received=transaction.traffic.resp.payload_bytes,
                 traffic_ledger=transaction.traffic,
+                http_capture_transaction=(
+                    transaction if transaction.service in {"http", "ssl"} else None
+                ),
                 transaction_id=transaction.stable_id,
                 conn_state=transaction.conn_state,
                 history=transaction.history,
@@ -28439,6 +28477,8 @@ class StateManager:
                                     (conn.close_time - conn.start_time).total_seconds(),
                                 )
                         else:
+                            if transaction.service in {"http", "ssl"}:
+                                conn.http_capture_transaction = transaction
                             conn.traffic_ledger = transaction.traffic
                             conn.bytes_sent = transaction.traffic.orig.payload_bytes
                             conn.bytes_received = transaction.traffic.resp.payload_bytes

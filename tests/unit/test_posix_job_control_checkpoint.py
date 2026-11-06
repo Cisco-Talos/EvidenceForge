@@ -80,7 +80,7 @@ def test_controller_restores_only_explicitly_compatible_segments(
         phase="collection", completed_simulated_hours=12, next_hour="2026-10-16T00:00:00+00:00"
     )
     manifest = controller.commit(cursor=next_cursor, participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "12"
+    assert manifest.participant_heads[0].schema_version == "13"
     again = StateManager()
     controller.restore_participants(
         recovery=store.recover(), participants=(StateManagerParticipant(again),)

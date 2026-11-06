@@ -142,8 +142,11 @@ def test_cross_platform_smb_matrix_uses_source_native_server_evidence(
     ecar = _json_records(output, "ecar.json")
     syslog = _syslog_records(output)
 
-    samba_mapping = next(record for record in mappings if record.get("service") == "Finance")
-    assert samba_mapping["native_file_system"] == "NTFS"
+    samba_mapping = next(
+        record for record in mappings if str(record.get("path", "")).endswith(r"SAMBA-01\Finance")
+    )
+    assert samba_mapping["share_type"] == "DISK"
+    assert "service" not in samba_mapping and "native_file_system" not in samba_mapping
     assert str(samba_mapping["path"]).replace("/", "\\").endswith(r"SAMBA-01\Finance")
     assert any(str(record.get("name", "")).endswith("linux-plan.xlsx") for record in smb_files)
 
@@ -1619,7 +1622,8 @@ def test_encrypted_samba_share_hides_sensor_file_detail_but_keeps_endpoint_evide
 
     mappings = _json_records(tmp_path, "smb_mapping.json")
     assert any(
-        record.get("service") == "Finance" and record.get("native_file_system") == "NTFS"
+        str(record.get("path", "")).endswith(r"SAMBA-01\Finance")
+        and record.get("share_type") == "DISK"
         for record in mappings
     )
     assert not any(

@@ -103,7 +103,7 @@ class MacosInstalledFileSpec(BaseModel):
 class MacosInstalledFilesystem:
     """Immutable bounded file-object owner compiled from frozen deployment facts.
 
-    Construction allocates sequential inodes after canonical sorting, before
+    Construction allocates sequential inodes in modeled file-birth order, before
     any observation. Input iteration and lookup order cannot change identity.
     Reconstruct from the same frozen inputs after recovery; no mutable allocator
     cursor or generator-host state is needed. Runtime writes/renames belong to
@@ -174,7 +174,17 @@ class MacosInstalledFilesystem:
             prepared.append((host, spec.volume_id, path, spec))
         records: dict[tuple[str, str], tuple[MacosInstalledFileSpec, MacosFileMetadata]] = {}
         next_inodes = {key: volume.first_inode for key, volume in volume_index.items()}
-        for host, volume_id, path, spec in sorted(prepared, key=lambda row: row[:3]):
+        for host, volume_id, path, spec in sorted(
+            prepared,
+            key=lambda row: (
+                row[0],
+                row[1],
+                row[3].born.seconds,
+                row[3].born.nanoseconds,
+                row[3].installation_id,
+                row[2],
+            ),
+        ):
             volume = volume_index[host, volume_id]
             inode = next_inodes[host, volume_id]
             if inode >= 2**64:

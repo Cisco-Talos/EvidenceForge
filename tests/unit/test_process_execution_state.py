@@ -11,7 +11,6 @@ import pytest
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.lifecycle import LifecycleTransition
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.checkpoints.state_values import decode_state_value, encode_state_value
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
@@ -25,6 +24,7 @@ from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.state import RunningProcess
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 
 _START = datetime(2026, 10, 15, 12, tzinfo=UTC)
 
@@ -119,7 +119,7 @@ def test_execution_checkpoint_restores_history_and_continues_same_epoch_sequence
     manager, before = _process()
     first = _execute(manager, before)
     restored = StateManager()
-    _restore_head(restored, _capture_head(manager))
+    restore_complete_state(restored, capture_complete_state(manager))
     assert restored.get_process_identity_at(before.hostname, before.pid, _START) == before
     assert restored.get_process_identity(before.hostname, before.pid) == first
     expected = _execute(manager, first, seconds=2)
@@ -145,7 +145,7 @@ def test_exact_post_exec_frontier_is_atomic_and_survives_checkpoint() -> None:
     assert manager.materialization_digest() == digest
     manager.materialize_action_cohort(plan)
     restored = StateManager()
-    _restore_head(restored, _capture_head(manager))
+    restore_complete_state(restored, capture_complete_state(manager))
     assert restored.get_process(before.hostname, before.pid).last_activity_time == at
 
 

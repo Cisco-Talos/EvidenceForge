@@ -346,7 +346,10 @@ def _http_content_seed_material(
     """Return the canonical HTTP response-content identity seed."""
 
     identity_uri = _http_content_identity_uri(host, uri)
-    return f"http:{host}:{identity_uri}:{response_body_len}:{mime_type}"
+    from evidenceforge.generation.activity.http_content import http_response_resource_identity
+
+    resource_identity = http_response_resource_identity(host, identity_uri)
+    return f"http:{resource_identity}:{response_body_len}:{mime_type}"
 
 
 def _http_content_identity_uri(host: str, uri: str) -> str:

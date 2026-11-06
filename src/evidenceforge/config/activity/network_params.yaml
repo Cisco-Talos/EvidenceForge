@@ -91,7 +91,12 @@ linux_smb_connection_owners:
 
 # Process-owned nmap commands fully expand bounded small CIDRs and use
 # stratified silent-address sampling for larger ranges.
+protocol_confirmation:
+  payload_directions:
+    mysql: [orig, resp]
+
 nmap_command_probe:
+  server_first_services: [ssh, mysql, smtp, ftp]
   full_cidr_max_hosts: 256
   max_expanded_targets: 256
   large_cidr_connect_targets: 20

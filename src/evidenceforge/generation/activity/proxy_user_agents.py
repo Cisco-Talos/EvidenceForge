@@ -290,6 +290,20 @@ def normalize_proxy_user_agent_for_os(
 def _browser_family_for_process(process_image: str) -> str:
     """Return the browser family implied by a process image, if any."""
     exe = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    data = load_proxy_user_agents()
+    if "browser_process_families" not in data:
+        # Frozen inputs predating the alias catalog retain the exact historical
+        # engine classification. Do not silently import today's helper aliases.
+        return _legacy_browser_family_for_process(exe)
+    families = data["browser_process_families"]
+    for family, executables in families.items():
+        if exe in executables:
+            return family
+    return ""
+
+
+def _legacy_browser_family_for_process(exe: str) -> str:
+    """Preserve pre-catalog semantics only for historical frozen configurations."""
     if exe in {
         "chrome.exe",
         "chrome",

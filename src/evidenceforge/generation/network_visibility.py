@@ -93,6 +93,17 @@ class NetworkVisibilityEngine:
             None,
         )
 
+    def sensor_interface(self, hostname: str, ip: str) -> str:
+        """Resolve a sensor's native interface from the canonical real-address topology."""
+        sensor = self.get_sensor(hostname)
+        if sensor is None:
+            return ""
+        address = ipaddress.ip_address(self._vip_to_real_ip.get(ip, ip))
+        for name, network in self._segment_networks.items():
+            if address in network:
+                return sensor.interfaces.get(name, name)
+        return sensor.interfaces.get("_default", "outside")
+
     def infer_sensor_path_role(
         self,
         hostname: str,

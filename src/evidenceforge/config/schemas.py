@@ -1288,6 +1288,7 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     """A single issuer entry in tls_issuers.yaml."""
 
     name: str
+    publicly_trusted: bool = False
     weight: int
     validity_days_min: int
     validity_days_max: int
@@ -1761,13 +1762,54 @@ class TlsWireBudgetConfig(BaseModel, extra="forbid", frozen=True):
     ticket_bytes_max: int = Field(default=512, ge=0, le=65535)
     starttls_dialogue_bytes_min: int = Field(default=120, ge=0, le=65535)
     starttls_dialogue_bytes_max: int = Field(default=400, ge=0, le=65535)
+    inspected_client_handshake_bytes_min: int = Field(default=400, ge=256, le=65535)
+    inspected_client_handshake_bytes_max: int = Field(default=1800, ge=256, le=65535)
+    inspected_server_handshake_bytes_min: int = Field(default=1800, ge=512, le=65535)
+    inspected_server_handshake_bytes_max: int = Field(default=6500, ge=512, le=65535)
 
     @model_validator(mode="after")
     def ordered_ranges(self) -> Self:
         """Reject inverted optional wire ranges before planning."""
-        for name in ("extension_bytes", "ticket_bytes", "starttls_dialogue_bytes"):
+        for name in (
+            "extension_bytes",
+            "ticket_bytes",
+            "starttls_dialogue_bytes",
+            "inspected_client_handshake_bytes",
+            "inspected_server_handshake_bytes",
+        ):
             if getattr(self, f"{name}_min") > getattr(self, f"{name}_max"):
                 raise ValueError(f"{name}_min must not exceed {name}_max")
+        return self
+
+
+class PublicLeafValidityPeriod(BaseModel, extra="forbid", frozen=True):
+    """Subscriber validity policy selected by modeled certificate issuance date."""
+
+    effective_date: date
+    recommended_days: int = Field(gt=0, le=398)
+    maximum_days: int = Field(gt=0, le=398)
+
+    @model_validator(mode="after")
+    def recommendation_within_limit(self) -> Self:
+        """Keep the operational recommendation inside the mandatory limit."""
+        if self.recommended_days > self.maximum_days:
+            raise ValueError("recommended_days must not exceed maximum_days")
+        return self
+
+
+class PublicLeafValidityConfig(BaseModel, extra="forbid", frozen=True):
+    """Ordered public subscriber issuance eras; private and CA rules are separate."""
+
+    periods: tuple[PublicLeafValidityPeriod, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def chronological_periods(self) -> Self:
+        """Reject duplicate or unordered policy boundaries."""
+        dates = [period.effective_date for period in self.periods]
+        if dates != sorted(set(dates)):
+            raise ValueError("public leaf validity effective dates must strictly increase")
+        if dates[0] > date(1970, 1, 1):
+            raise ValueError("public leaf validity must cover dates from 1970-01-01")
         return self
 
 
@@ -1775,6 +1817,7 @@ class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
     wire_budget: TlsWireBudgetConfig = Field(default_factory=TlsWireBudgetConfig)
+    public_leaf_validity: PublicLeafValidityConfig
     san: TlsSanConfig
     serial_numbers: TlsSerialNumberConfig
     ocsp: TlsOcspConfig
@@ -2109,6 +2152,15 @@ class HttpFileProfilesConfig(BaseModel, extra="forbid"):
     extension_mime_types: dict[str, str]
     request_profiles: HttpRequestProfilesConfig
     multipart: HttpMultipartProfilesConfig
+    shared_resources: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("shared_resources")
+    @classmethod
+    def shared_resource_identity_is_explicit(cls, values: dict[str, str]) -> dict[str, str]:
+        for path, identity in values.items():
+            if not path.startswith("/") or "?" in path or "#" in path or not identity.strip():
+                raise ValueError("shared_resources requires origin paths and non-empty identities")
+        return values
 
     @field_validator("extension_mime_types")
     @classmethod
@@ -2431,8 +2483,45 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
         return v
 
 
+class ProtocolConfirmationConfig(BaseModel, extra="forbid", frozen=True):
+    """Required payload directions for confirmed fresh TCP application protocols."""
+
+    payload_directions: dict[str, list[Literal["orig", "resp"]]] = Field(default_factory=dict)
+
+    @field_validator("payload_directions")
+    @classmethod
+    def service_requirements_are_explicit(
+        cls, values: dict[str, list[Literal["orig", "resp"]]]
+    ) -> dict[str, list[Literal["orig", "resp"]]]:
+        for service, directions in values.items():
+            if (
+                not service
+                or service != service.strip().lower()
+                or not service.replace("_", "").isalnum()
+                or not directions
+                or len(directions) != len(set(directions))
+            ):
+                raise ValueError(
+                    "protocol confirmation requires normalized services and unique directions"
+                )
+        return values
+
+
 class NmapCommandProbeConfig(BaseModel, extra="forbid", frozen=True):
     """Bounded address-space planning for process-owned nmap commands."""
+
+    server_first_services: list[str] = Field(default_factory=list)
+
+    @field_validator("server_first_services")
+    @classmethod
+    def server_first_names_are_unique(cls, values: list[str]) -> list[str]:
+        """Require normalized explicit passive service identifiers."""
+        if len(values) != len(set(values)) or any(
+            not value or value != value.strip().lower() or not value.replace("_", "").isalnum()
+            for value in values
+        ):
+            raise ValueError("server_first_services requires unique normalized service names")
+        return values
 
     full_cidr_max_hosts: int = Field(ge=1, le=1024)
     max_expanded_targets: int = Field(ge=1, le=1024)
@@ -3318,7 +3407,7 @@ class WindowsAnonymousSmbBaselineConfig(BaseModel, extra="forbid", frozen=True):
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
-    privileges: list[str] = Field(min_length=1)
+    privileges: list[str] = Field(default_factory=list)
     weight: int = Field(gt=0)
 
     @field_validator("privileges")
@@ -3335,6 +3424,26 @@ class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
 
     emission_probabilities: dict[str, float] = Field(default_factory=dict)
     profiles: dict[str, WindowsSpecialPrivilegesProfile]
+    sensitive_privileges: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def profiles_contain_only_sensitive_privileges(self) -> Self:
+        """Reject full token inventories in event-specific sensitive profiles."""
+        allowed = set(self.sensitive_privileges)
+        if len(allowed) != len(self.sensitive_privileges) or any(
+            not name.startswith("Se") or not name.endswith("Privilege") for name in allowed
+        ):
+            raise ValueError("sensitive_privileges requires unique Windows privilege names")
+        for name, profile in self.profiles.items():
+            if len(set(profile.privileges)) != len(profile.privileges):
+                raise ValueError(f"special_privileges.profiles.{name} has duplicate privileges")
+            unexpected = set(profile.privileges) - allowed
+            if unexpected:
+                raise ValueError(
+                    f"special_privileges.profiles.{name} contains nonsensitive privileges: "
+                    f"{sorted(unexpected)}"
+                )
+        return self
 
     @field_validator("emission_probabilities")
     @classmethod

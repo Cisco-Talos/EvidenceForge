@@ -98,6 +98,7 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
         "state",
     ),
     incremental=(
+        "_macos_audit_identity_intents",
         "_linux_logind_session_used_ids",
         "_logon_id_second_ordinals",
         "_semantic_peer_ordinals",

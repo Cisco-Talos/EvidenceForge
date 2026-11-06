@@ -32,6 +32,7 @@ from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     direct_zeek_source_duration,
     direct_zeek_source_time,
+    native_zeek_file_sender_locality,
 )
 from evidenceforge.generation.network_observation import network_source_timing_key
 
@@ -87,7 +88,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ft.analyzers if ft.analyzers else None,
                 "mime_type": ft.mime_type or None,
                 "duration": file_duration,
-                "local_orig": net.local_orig,
+                "local_orig": native_zeek_file_sender_locality(
+                    ft.is_orig, net.local_orig, net.local_resp
+                ),
                 "is_orig": ft.is_orig,
                 "seen_bytes": ft.seen_bytes,
                 "total_bytes": ft.total_bytes,
@@ -130,7 +133,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ["X509", "MD5", "SHA1", "SHA256"],
                 "mime_type": "application/pkix-cert",
                 "duration": None,
-                "local_orig": net.local_orig,
+                "local_orig": native_zeek_file_sender_locality(
+                    False, net.local_orig, net.local_resp
+                ),
                 "is_orig": False,
                 "seen_bytes": size,
                 "total_bytes": size,

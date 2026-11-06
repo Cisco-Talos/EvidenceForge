@@ -3193,6 +3193,7 @@ class NetworkTransactionPlanner:
                     event=attribution,
                     source_system=source_system,
                     hostname=hostname or http.host,
+                    request_header_finalized=proxy is not None,
                 )
                 http = attribution.http
             if command_http_needs_response_size and http is not None:
@@ -3395,6 +3396,8 @@ class NetworkTransactionPlanner:
                         http,
                         trans_depth=reuse.trans_depth,
                         canonical_request_time=reuse.canonical_request_time,
+                        request_stream_offset=reuse.request_stream_offset,
+                        response_stream_offset=reuse.response_stream_offset,
                     )
                 if not http_application_layer_only:
                     http = replace(http, trans_depth=1)
@@ -3504,6 +3507,7 @@ class NetworkTransactionPlanner:
                 event=attribution,
                 source_system=resolved_source_system,
                 hostname=hostname or http.host,
+                request_header_finalized=proxy is not None,
             )
             if attribution.network.initiating_pid != pid:
                 pid = attribution.network.initiating_pid
@@ -3912,8 +3916,20 @@ class NetworkTransactionPlanner:
                 resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
         elif conn_state == "OTH":
             # OTH/Cc = midstream capture fragment — minimal data visible
-            orig_bytes = rng.randint(0, 200)
-            resp_bytes = rng.randint(0, 200)
+            sampled_orig_bytes = rng.randint(0, 200)
+            sampled_resp_bytes = rng.randint(0, 200)
+            # A capture fragment cannot invent data in a direction whose
+            # application owner supplied a zero (or smaller known) budget.
+            orig_bytes = (
+                min(orig_bytes, sampled_orig_bytes)
+                if request.orig_bytes is not None and orig_bytes is not None
+                else sampled_orig_bytes
+            )
+            resp_bytes = (
+                min(resp_bytes, sampled_resp_bytes)
+                if request.resp_bytes is not None and resp_bytes is not None
+                else sampled_resp_bytes
+            )
             if duration is not None:
                 duration = self._failed_transport_duration_seconds(
                     request,
@@ -5035,9 +5051,16 @@ class NetworkTransactionPlanner:
         event: _NetworkOccurrenceDraft,
         source_system: System | None,
         hostname: str,
+        request_header_finalized: bool = False,
     ) -> None:
-        """Project one browser process identity onto its canonical HTTP request."""
-        if source_system is None or event.http is None or event.network.initiating_pid <= 0:
+        """Apply a process default before an action freezes its request header."""
+        if (
+            source_system is None
+            or event.http is None
+            or event.network.initiating_pid <= 0
+            or request_header_finalized
+            or event.http.user_agent_known_absent
+        ):
             return
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
 
@@ -5096,7 +5119,12 @@ class NetworkTransactionPlanner:
                 hostname=proxy_hostname,
                 domain_tags=domain_tags,
             )
-            if process_ua and event.http is not None:
+            if (
+                process_ua
+                and event.http is not None
+                and not event.http.user_agent
+                and not event.http.user_agent_known_absent
+            ):
                 event.http = replace(event.http, user_agent=process_ua)
             proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
                 self._proxy_request_presentation(
@@ -5126,6 +5154,10 @@ class NetworkTransactionPlanner:
                 apply_domain_override=apply_domain_user_agent,
                 source_identity=endpoints.src_ip,
             )
+            if event.http is not None:
+                # The existing request owns its actual wire header, including
+                # intentional absence or an application-selected/spoofed value.
+                user_agent = event.http.user_agent
             proxy_referrer = _source_native_http_referrer(
                 user_agent,
                 proxy_referrer,
@@ -5869,16 +5901,20 @@ class NetworkTransactionPlanner:
             if event.network.duration is not None
             else None
         )
-        if (
-            event.network.service
-            and event.network.protocol != "icmp"
-            and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) == 0
-        ):
-            # Zeek's conn.log service field records a protocol analyzer that
-            # confirmed payload parsing, not a well-known-port guess. Retain
-            # the requested service while planning children, then clear it at
-            # the canonical boundary when no application bytes were observed.
-            event.network.service = ""
+        from evidenceforge.generation.activity.network_transport import (
+            confirmed_service_for_payload,
+        )
+
+        # Preserve service intent throughout construction, then publish only
+        # confirmation supported by the settled canonical payload/history facts.
+        event.network.service = confirmed_service_for_payload(
+            event.network.service,
+            protocol=event.network.protocol,
+            history=event.network.history,
+            orig_bytes=event.network.orig_bytes or 0,
+            resp_bytes=event.network.resp_bytes or 0,
+            missed_bytes=event.network.missed_bytes,
+        )
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
         if event.network.protocol in {"tcp", "udp"} and not event.network.application_layer_only:
@@ -5984,6 +6020,34 @@ class NetworkTransactionPlanner:
                 )
             else:
                 application_request_time = canonical_start
+
+        if event.http is not None and event.network.application_layer_only:
+            parent = executor.state_manager.get_connection(event.network.conn_id)
+            if parent is None:
+                raise StateError("HTTP application child has no canonical capture transport")
+            capture = parent.http_capture_transaction
+            if capture is None:
+                raise StateError("HTTP application child lost its frozen physical capture basis")
+            request_offset = event.http.request_stream_offset
+            response_offset = event.http.response_stream_offset
+            if request.explicit_proxy_request_preparation is not None:
+                snapshot = request.explicit_proxy_request_preparation.snapshot.application_snapshot
+                request_offset = snapshot.reserved_initiator_bytes
+                response_offset = snapshot.reserved_responder_bytes
+            elif request.prepared_application_token is not None:
+                snapshot = request.prepared_application_token.application_token._expected_snapshot
+                if snapshot is None:
+                    raise StateError("Prepared HTTP child lost its authenticated byte offsets")
+                request_offset = snapshot.reserved_initiator_bytes
+                response_offset = snapshot.reserved_responder_bytes
+            event.http = replace(
+                event.http,
+                capture_traffic=capture.traffic,
+                capture_history=capture.history,
+                capture_transaction_id=capture.stable_id,
+                request_stream_offset=request_offset,
+                response_stream_offset=response_offset,
+            )
 
         phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
         if any((event.dns, event.http, event.ssl, event.smtp, event.proxy)) and not (

@@ -649,6 +649,8 @@ for ordinal in reversed(range(64)):
         zeek_uid=f'CHashTiming{ordinal:05d}', conn_id=f'conn-hash-{ordinal}', duration=2.0,
         source_visible_start_time=t0, source_visible_close_time=t0 + timedelta(seconds=2),
         conn_state='SF', history='ShADadFf',
+        orig_bytes=200, resp_bytes=400, orig_pkts=4, resp_pkts=4,
+        orig_ip_bytes=360, resp_ip_bytes=560,
     )
     event = OccurrenceBuilder(
         timestamp=t0, event_type='connection',
@@ -1134,6 +1136,10 @@ def test_file_rows_reserve_future_microseconds_before_sampling() -> None:
                 source_visible_close_time=close,
                 orig_bytes=300,
                 resp_bytes=500,
+                orig_pkts=4,
+                resp_pkts=4,
+                orig_ip_bytes=460,
+                resp_ip_bytes=660,
                 conn_state="SF",
                 history="ShADadFf",
             ),

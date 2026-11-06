@@ -141,6 +141,9 @@ def test_source_ingress_checkpoint_round_trip_and_legacy_mode(tmp_path: Path) ->
     restored_spool.restore_checkpoint(
         seal.head.payload, tuple(item.payload for item in seal.segments)
     )
+    from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
+
+    restore_complete_state(fresh.state_manager, capture_complete_state(dispatcher.state_manager))
     restored.assert_restored_count()
     assert restored.event_count == 1
     restored.finalize(fresh)

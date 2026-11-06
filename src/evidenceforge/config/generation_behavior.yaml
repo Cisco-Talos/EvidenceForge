@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 442
+current_revision: 471
 history_start_revision: 1
-behavior_surface_sha256: 3e158498238bdbb8473892aa6ce6dccaa540c2bc3c24cc7318f4b96a147b4a08
+behavior_surface_sha256: 1b7a5f585d8e50a95ca53b6b7ddf76a5794070ae7505fb9a57bfbc318b8c0af3
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -4885,3 +4885,344 @@ changes:
   - macos_unified_log
   summary: Require exact native SSH authentication ownership for audit-bind auth context; classify retained
     Mac startups and remove an unmodeled Chrome helper spawn.
+- revision: 443
+  id: asa-security-side-projection
+  impact: localized
+  domains:
+  - canonical_network
+  - source_observation
+  - firewall
+  formats:
+  - cisco_asa
+  summary: Project ASA foreign/local endpoint order with intact NAT pairs and derive reset I/O from configured
+    interface security sides; normalize native parser roles from matched builds.
+- revision: 444
+  id: tcp-stream-extent-and-capture-ledgers
+  impact: localized
+  domains:
+  - source_observation
+  - canonical_network
+  - checkpoint
+  formats:
+  - zeek_conn
+  summary: Separate boundary-proven TCP sequence extent from captured packet/payload ledgers; retain physical
+    and file-loss budgets through native projection, persistent SMB rebinding and explicit checkpoint
+    migration.
+- revision: 445
+  id: zeek-native-dns-smb-projection
+  impact: localized
+  domains:
+  - dns
+  - smb
+  formats:
+  - zeek_dns
+  - zeek_smb_mapping
+  summary: Render Zeek native DNS answer summaries with shared TXT wire partition and omit unobserved
+    SMB1-only mapping fields from SMB2/3.
+- revision: 446
+  id: canonical-http-wire-uri-semantics
+  impact: localized
+  domains:
+  - http
+  - proxy
+  - browser
+  formats:
+  - zeek_http
+  - proxy_access
+  - web_access
+  summary: Normalize fragments and Referer userinfo once in canonical HTTP/proxy contexts and use wire
+    resource keys for browser cache.
+- revision: 447
+  id: remote-session-observation-close-coherence
+  impact: localized
+  domains:
+  - observation
+  - sessions
+  formats:
+  - ecar
+  summary: Keep SSH and RDP login, transport and logout observation drop/delay coherent using typed protocol
+    identity and OS-aware legacy semantics.
+- revision: 448
+  id: tcp-observed-history-packet-budget
+  impact: localized
+  domains:
+  - network
+  - observation
+  - smb
+  formats:
+  - zeek_conn
+  - zeek_http
+  - zeek_files
+  - cisco_asa
+  - ecar
+  summary: Preserve observed TCP history packet minima in physical capture loss partitions and reject
+    impossible typed/persistent/checkpoint sensor ledgers.
+- revision: 449
+  id: zeek-native-icmp-connection-fields
+  impact: localized
+  domains:
+  - network
+  - observation
+  formats:
+  - zeek_conn
+  summary: Render native ICMP OTH state and omit invented TCP/UDP data history consistently in direct
+    and frozen sensor projections.
+- revision: 450
+  id: scheduled-task-principal-xml
+  impact: localized
+  domains:
+  - activity
+  formats:
+  - windows_event_security
+  summary: Render reserved machine task principals without invalid API-only ServiceAccount XML; preserve
+    SID and UPN identities and ordinary password logons.
+- revision: 451
+  id: public-leaf-issuance-validity-policy
+  impact: localized
+  domains:
+  - activity
+  - configuration
+  formats:
+  - zeek_ssl
+  - zeek_x509
+  - zeek_files
+  - zeek_ocsp
+  summary: Apply validated issuance-era public subscriber lifetime policy in canonical certificate planning;
+    preserve private and CA lifetimes and historical rotation identities.
+- revision: 452
+  id: proxy-request-serialized-header-budget
+  impact: localized
+  domains:
+  - activity
+  - network
+  formats:
+  - proxy_access
+  - zeek_conn
+  - ecar
+  summary: Finalize proxy source request totals from shared HTTP header serialization and canonical entity
+    bytes before transport and reused-channel admission.
+- revision: 453
+  id: inspected-client-tls-wire-reservations
+  impact: localized
+  domains:
+  - activity
+  - network
+  - configuration
+  formats:
+  - proxy_access
+  - zeek_conn
+  - ecar
+  - cisco_asa
+  summary: Budget fresh inspected-client TLS handshakes and AEAD records in canonical transports; reused
+    requests reserve encrypted bytes without repeating setup.
+- revision: 454
+  id: windows-frozen-lock-source-times
+  impact: localized
+  domains:
+  - observation
+  - source_timing
+  formats:
+  - windows_event_security
+  summary: Preserve authenticated lock/unlock and Type7 source timestamps through legacy admission-order
+    repair and dwell normalization in memory and spool finalization.
+- revision: 455
+  id: zeek-file-sender-locality
+  impact: localized
+  domains:
+  - source_native
+  - network
+  formats:
+  - zeek_files
+  summary: Project file sender locality from canonical direction and each sensor endpoint view for transfers
+    and TLS certificate chains.
+- revision: 456
+  id: proxy-finalized-request-user-agent
+  impact: localized
+  domains:
+  - network
+  - proxy
+  formats:
+  - zeek_http
+  - proxy_access
+  summary: Preserve bundle-finalized HTTP User-Agent across nested client transport planning and share
+    transparent request headers with proxy evidence.
+- revision: 457
+  id: sam-account-control-transition
+  impact: localized
+  domains:
+  - account_management
+  formats:
+  - windows_event_security
+  - ecar
+  summary: Derive account-change message resources once from validated SAM mask transitions; preserve
+    unknown attributes and remove contradictory caller tokens.
+- revision: 458
+  id: sensitive-logon-privilege-policy
+  impact: localized
+  domains:
+  - auth
+  - source_native
+  formats:
+  - windows_event_security
+  summary: Validate native sensitive privilege profiles, share fallback data and suppress special-logon
+    companions when no sensitive rights are assigned.
+- revision: 459
+  id: connect-probe-application-intent
+  impact: localized
+  domains:
+  - scanner
+  - network
+  formats:
+  - zeek_conn
+  - ecar
+  - cisco_asa
+  summary: Distinguish connect-only scans from explicit application probes; preserve server-first banners
+    and reject payload on failed probes before network admission.
+- revision: 460
+  id: simplex-syslog-forwarding
+  impact: localized
+  domains:
+  - baseline
+  - network
+  formats:
+  - zeek_conn
+  - ecar
+  - cisco_asa
+  summary: Keep plain syslog health and relay application traffic simplex while preserving TCP control
+    evidence and OS-aware forwarding process hints.
+- revision: 461
+  id: sudo-bootstrap-terminal-ownership
+  impact: localized
+  domains:
+  - auth
+  - process
+  - syslog
+  formats:
+  - ecar
+  - syslog
+  summary: Keep sudo full-interval terminal admission authoritative when bootstrapping a replacement session;
+    prevent weaker generic local session reuse.
+- revision: 462
+  id: posix-shell-resume-and-syslog-profile
+  impact: localized
+  domains:
+  - process-lifecycle
+  - timing
+  - baseline-network
+  formats:
+  - macos_endpoint_security
+  - ecar
+  - zeek
+  - syslog
+  summary: Use shared scoped foreground-child release timing and make inbound-profile plain syslog simplex
+    while preserving transport control and unrelated RNG draws.
+- revision: 463
+  id: midstream-known-directional-payload-budgets
+  impact: localized
+  domains:
+  - network-planning
+  - source-observation
+  formats:
+  - zeek
+  - ecar
+  - syslog
+  - cisco_asa
+  summary: Bound sampled midstream payload by each explicitly supplied directional budget, preserving
+    known zeros, unknown-direction behavior and existing random draws.
+- revision: 464
+  id: chronological-macos-audit-identity-ledger
+  impact: localized
+  domains:
+  - process-identity
+  - checkpointing
+  - source-publication
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: Resolve canonical Mac audit identity reservations through one disk-backed chronological fork/exec
+    ledger; preserve proof handles, exact rollback, checkpoint history and deferred source publication.
+- revision: 465
+  id: macos-audit-projection-native-property-encoding
+  impact: localized
+  domains:
+  - process-identity
+  - source-schema
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: Preserve source-native eCAR string property encoding while resolving chronological Mac audit
+    identities; retain integer native ES token words.
+- revision: 466
+  id: shared-http-capture-basis
+  impact: localized
+  domains:
+  - network
+  - observation
+  - checkpoint
+  formats:
+  - zeek_http
+  - zeek_files
+  - zeek_conn
+  summary: Freeze physical HTTP capture basis across reused requests; allocate file gaps from directional
+    byte spans and retain recognized HTTP body gaps.
+- revision: 467
+  id: canonical-proxy-browser-owner
+  impact: localized
+  domains:
+  - application
+  - network
+  - configuration
+  formats:
+  - proxy
+  - zeek_http
+  - ecar
+  summary: Resolve browser owner defaults, including Mac helpers, before proxy headers, affinity and wire
+    budgets; validate data-driven executable family aliases.
+- revision: 468
+  id: site-resource-and-failure-condition
+  impact: localized
+  domains:
+  - application
+  - authentication
+  - network
+  formats:
+  - zeek_http
+  - zeek_files
+  - proxy
+  - windows_event_security
+  - ecar
+  summary: Scope default web resources to their origin and explicit shared content; derive Windows failed-logon
+    status, substatus and resource reason as one canonical condition.
+- revision: 469
+  id: canonical-protocol-confirmation-and-inode-birth
+  impact: localized
+  domains:
+  - network
+  - filesystem
+  - configuration
+  formats:
+  - zeek_conn
+  - ecar
+  - macos_endpoint_security
+  summary: Require qualified directional payload before confirming fresh TCP protocols; allocate native
+    installed-file inodes in existing modeled birth chronology instead of lexical path order.
+- revision: 470
+  id: protocol-confirmation-overlay-validation
+  impact: localized
+  domains:
+  - configuration
+  formats:
+  - zeek_conn
+  summary: Preserve unknown fields and invalid directional types through protocol-policy overlay composition
+    so validation can reject them explicitly.
+- revision: 471
+  id: frozen-browser-alias-compatibility
+  impact: localized
+  domains:
+  - application
+  - configuration
+  formats:
+  - proxy
+  - zeek_http
+  summary: Retain historical browser classification when a frozen config predates the alias catalog; current
+    catalogs remain data-driven and do not change.

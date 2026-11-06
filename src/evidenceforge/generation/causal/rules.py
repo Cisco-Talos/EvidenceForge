@@ -366,7 +366,6 @@ class SupplementaryAuditEvents(ExpansionRule):
                             "password_last_set_to_event_time": True,
                             "old_uac_value": "0x15",
                             "new_uac_value": "0x10",
-                            "user_account_control": "\n\t\t\t%%2081",
                             "primary_group_id": "-",
                         },
                         timing=attribute_change_timing,

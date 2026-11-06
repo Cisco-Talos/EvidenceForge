@@ -124,8 +124,9 @@ class TestFailedLogonWindows:
         activity_gen.generate_failed_logon(disabled_user, win_system, timestamp, logon_type=4)
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.failure_status == "0xc000006d"
         assert event.auth.failure_substatus == "0xc0000072"
-        assert event.auth.failure_reason == "%%2307"
+        assert event.auth.failure_reason == "%%2313"
 
     def test_unknown_target_failed_logon_uses_unknown_user_substatus(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters

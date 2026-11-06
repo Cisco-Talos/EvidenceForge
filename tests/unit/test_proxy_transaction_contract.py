@@ -424,3 +424,57 @@ def test_output_window_admits_transport_but_suppresses_late_proxy_request() -> N
 
     connection_emitter.emit.assert_called_once()
     proxy_emitter.emit.assert_not_called()
+
+
+@pytest.mark.parametrize("method,body", [("GET", 0), ("HEAD", 0), ("POST", 8192)])
+@pytest.mark.parametrize("user_agent", ["", "ExampleBrowser/1.0 " + "X" * 600])
+def test_proxy_request_budget_contains_actual_headers_and_entity(
+    method: str, body: int, user_agent: str
+) -> None:
+    request = _request()
+    http = replace(request.http, method=method, request_body_len=body)
+    request = replace(request, http=http, orig_bytes=body)
+    proxy = replace(
+        _proxy_context(),
+        method=method,
+        cs_bytes=body + 1,
+        user_agent=user_agent,
+        referrer="https://ref.example.test/" + "q" * 300,
+    )
+    bundle = ProxyTransactionActionBundle(request, Mock())
+    final = bundle._finalize_proxy_byte_semantics(proxy)
+    target = proxy.url
+    visible_headers = (
+        f"{method} {target} HTTP/1.1\r\nHost: {proxy.host}\r\n"
+        + (f"User-Agent: {user_agent}\r\n" if user_agent else "")
+        + f"Referer: {proxy.referrer}\r\n\r\n"
+    )
+    assert final.cs_bytes >= len(visible_headers.encode()) + body
+    assert final.request_body_bytes == body
+    assert final.cs_bytes > body
+    assert bundle._finalize_proxy_byte_semantics(final).cs_bytes == final.cs_bytes
+
+
+@pytest.mark.parametrize("port", [80, 443])
+def test_reused_proxy_request_reserves_physical_bytes_without_repeating_handshake(
+    port: int,
+) -> None:
+    from evidenceforge.generation.activity.tls_realism import tls13_application_payload_budget
+
+    executor = Mock()
+    executor._scenario_end_time = None
+    executor._proxy_channel_manager.snapshot_request.return_value = Mock()
+    request = replace(_request(), dst_port=port)
+    proxy = _proxy_context()
+    bundle = ProxyTransactionActionBundle(request, executor)
+    preparation = bundle._prepare_reused_tunnel(affinity=Mock(), proxy_context=proxy)
+    assert preparation is not None
+    assert preparation.upload_body_bytes == proxy.request_body_bytes
+    assert preparation.proxy_context is proxy
+    if port == 443:
+        assert preparation.request_wire_bytes == tls13_application_payload_budget(proxy.cs_bytes)
+        assert preparation.response_wire_bytes == tls13_application_payload_budget(proxy.sc_bytes)
+        assert 0 < preparation.request_wire_bytes - proxy.cs_bytes < 400
+    else:
+        assert preparation.request_wire_bytes == proxy.cs_bytes
+        assert preparation.response_wire_bytes == proxy.sc_bytes

@@ -13,10 +13,10 @@ import pytest
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.macos_launch_item import macos_successful_exit_not_before
 from evidenceforge.generation.checkpoints.lifecycle_head import _capture, _restore
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.macos_shell_history import interactive_history_shell
 from evidenceforge.generation.timing import TemporalConstraintError
 from evidenceforge.models.exceptions import StateError
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 from tests.unit.test_macos_native_system_job import _setup
 from tests.unit.test_macos_ssh_pty_execution import _engine
 from tests.unit.test_macos_terminal_applications import _engine as _terminal_engine
@@ -108,7 +108,9 @@ def test_sleep_success_uses_actual_exec_duration_and_bounded_completion_plan(
         assert engine.state_manager.materialization_digest() == before
         if restore:
             engine.lifecycle_registry.prune_action_cohort_receipt_authorities()
-            _restore_head(engine.state_manager, _capture_head(engine.state_manager))
+            restore_complete_state(
+                engine.state_manager, capture_complete_state(engine.state_manager)
+            )
             _restore(engine.lifecycle_registry, _capture(engine.lifecycle_registry))
             assert bundle.plan_exit_time(**kwargs) == planned
         bundle.execute(replace(early, timestamp=planned))
@@ -133,7 +135,7 @@ def test_ssh_history_follows_stdin_interactivity_without_losing_process_evidence
     try:
         state, generator = engine.state_manager, engine.activity_generator
         if restore:
-            _restore_head(state, _capture_head(state))
+            restore_complete_state(state, capture_complete_state(state))
         user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
         session = next(
             item

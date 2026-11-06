@@ -7,13 +7,13 @@ import base64
 import fnmatch
 import hashlib
 import random
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.config.schemas import TlsWireBudgetConfig
+from evidenceforge.config.schemas import PublicLeafValidityConfig, TlsWireBudgetConfig
 from evidenceforge.events.contexts import SslContext, X509Context
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
@@ -55,6 +55,22 @@ def reset_tls_realism_cache() -> None:
     """Clear cached TLS realism config. Intended for tests."""
     global _CACHED_DATA
     _CACHED_DATA = None
+
+
+def public_leaf_validity_period(issuance_time: datetime) -> tuple[int, int]:
+    """Return the effective epoch-day and recommended public leaf lifetime.
+
+    The planner uses the epoch-day to anchor modeled issuance rotations. This
+    policy does not apply to private leaves or to CA certificates.
+    """
+    config = PublicLeafValidityConfig.model_validate(load_tls_realism()["public_leaf_validity"])
+    selected = config.periods[0]
+    for period in config.periods:
+        if period.effective_date > issuance_time.astimezone(UTC).date():
+            break
+        selected = period
+    epoch = datetime.combine(selected.effective_date, datetime.min.time(), tzinfo=UTC)
+    return int(epoch.timestamp()) // 86400, selected.recommended_days
 
 
 def multi_label_public_suffixes() -> set[str]:
@@ -629,6 +645,45 @@ def _tls_profile_domains(
             seen.add(domain)
             unique_domains.append(domain)
     return unique_domains
+
+
+def tls13_application_payload_budget(plaintext_bytes: int, *, message_count: int = 1) -> int:
+    """Budget TLS1.3 AEAD records for complete plaintext messages.
+
+    Each record adds a five-byte header, one inner content-type byte and a
+    sixteen-byte authentication tag. Aggregate reservations allow a partial
+    final record per message; individual admissions consume their exact bound.
+    """
+    if type(plaintext_bytes) is not int or type(message_count) is not int:
+        raise ValueError("TLS application budgets require exact integer sizes and counts")
+    if plaintext_bytes < 0 or message_count < 0 or (plaintext_bytes and not message_count):
+        raise ValueError("TLS application budgets require non-negative coherent sizes and counts")
+    if not plaintext_bytes:
+        return 0
+    records = (plaintext_bytes + 16383) // 16384 + message_count - 1
+    return plaintext_bytes + records * 22
+
+
+def inspected_tls_handshake_budget(transport_identity: str) -> tuple[int, int]:
+    """Plan one scoped fresh client-leg TLS1.3 handshake byte budget.
+
+    This is canonical transport sizing, not an assertion of a recovered packet
+    transcript. Opaque CONNECT and denied setup paths use their own contracts.
+    """
+    if not transport_identity:
+        raise ValueError("Inspected TLS handshake requires a physical transport identity")
+    profile = TlsWireBudgetConfig.model_validate(load_tls_realism().get("wire_budget", {}))
+    rng = random.Random(_stable_seed(f"inspected-client-tls-handshake:{transport_identity}"))
+    return (
+        rng.randint(
+            profile.inspected_client_handshake_bytes_min,
+            profile.inspected_client_handshake_bytes_max,
+        ),
+        rng.randint(
+            profile.inspected_server_handshake_bytes_min,
+            profile.inspected_server_handshake_bytes_max,
+        ),
+    )
 
 
 def tls_server_payload_budget(

@@ -1895,8 +1895,8 @@ class TestWindowsEventEmitter:
         assert unlock["TimeCreated"] == lock_time + timedelta(seconds=min_unlock_gap_seconds())
         assert not rendered_locks
 
-    def test_finalized_lock_lifecycle_repairs_reauth_order_and_dwell(self):
-        """Frozen cross-batch timing must still retain 4800 -> Type 7 -> 4801 order."""
+    def test_raw_lock_lifecycle_repairs_reauth_order_and_dwell(self):
+        """Raw compatibility timing must still retain 4800 -> Type 7 -> 4801 order."""
         computer = "WIN-TEST-01.corp.local"
         lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         rows = [
@@ -1908,7 +1908,6 @@ class TestWindowsEventEmitter:
                     "Computer": computer,
                     "TargetLogonId": "0x4f2a1b",
                     "SessionId": 2,
-                    "_TimingFinalized": "source-timing-v1",
                 },
             ),
             (
@@ -1919,7 +1918,6 @@ class TestWindowsEventEmitter:
                     "TimeCreated": lock_time - timedelta(seconds=29),
                     "Computer": computer,
                     "TargetLogonId": "0x4f2a1b",
-                    "_TimingFinalized": "source-timing-v1",
                 },
             ),
             (
@@ -1930,7 +1928,6 @@ class TestWindowsEventEmitter:
                     "Computer": computer,
                     "TargetLogonId": "0x4f2a1b",
                     "SessionId": 2,
-                    "_TimingFinalized": "source-timing-v1",
                 },
             ),
         ]
@@ -4208,8 +4205,8 @@ class TestZeekEmitter:
         assert conn["proto"] == "icmp"
         assert conn["id.orig_p"] == 8
         assert conn["id.resp_p"] == 0
-        assert conn["conn_state"] == "SF"
-        assert conn["history"] == "Dd"
+        assert conn["conn_state"] == "OTH"
+        assert "history" not in conn
 
     def test_dhcp_discover_renders_unassigned_client_tuple(self, format_def, temp_output):
         """Initial DHCP acquisition should not render the assigned lease as originator."""

@@ -140,6 +140,8 @@ class ExplicitProxyOpenPreparation:
     proxy_context: ProxyContext
     tunnel_group_id: str
     planned_request_count: int
+    setup_request_wire_bytes: int | None = None
+    setup_response_wire_bytes: int | None = None
 
     @property
     def client_transport_id(self) -> str:
@@ -174,6 +176,10 @@ class ExplicitProxyOpenPreparation:
                 0,
                 int(self.proxy_context.sc_bytes or 0),
             )
+            if self.setup_request_wire_bytes is not None:
+                setup_request_bytes = self.setup_request_wire_bytes
+            if self.setup_response_wire_bytes is not None:
+                setup_response_bytes = self.setup_response_wire_bytes
             future_request_count = max(0, self.planned_request_count - 1)
         else:
             setup_started_at = self.phase_plan.client_connect_at
@@ -370,8 +376,21 @@ class ProxyTransactionExecutor(Protocol):
         proxy_sys: System,
         http: HttpContext | None,
         explicit_mode: bool = False,
+        time: datetime | None = None,
+        client_user_agent: str = "",
     ) -> ProxyContext:
         """Build proxy context for a logical origin request."""
+        ...
+
+    def browser_user_agent_for_process(
+        self,
+        source_system: System,
+        pid: int,
+        *,
+        hostname: str = "",
+        domain_tags: list[str] | None = None,
+    ) -> str:
+        """Return the exact process's canonical browser identity."""
         ...
 
     def _proxy_fqdn(self, proxy_sys: System) -> str:
@@ -544,6 +563,21 @@ class ProxyTransactionActionBundle:
                 generator_utils._http_flow_payload_bytes(request_local_http)
             )
 
+        client_user_agent = ""
+        if request.proxy is None and request.source_system is not None and request.pid > 0:
+            supplied_http = request.http
+            if supplied_http is None or (
+                not supplied_http.user_agent_known_absent
+                and (
+                    not supplied_http.user_agent
+                    or generator_utils._is_browser_family_http_user_agent(supplied_http.user_agent)
+                )
+            ):
+                client_user_agent = executor.browser_user_agent_for_process(
+                    request.source_system,
+                    request.pid,
+                    hostname=request.hostname or "",
+                )
         proxy_context = request.proxy or executor._build_proxy_context(
             src_ip=request.src_ip,
             dst_ip=dst_ip,
@@ -558,6 +592,7 @@ class ProxyTransactionActionBundle:
             http=request.http,
             explicit_mode=True,
             time=request.time,
+            client_user_agent=client_user_agent,
         )
         if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
             proxy_context = self._shape_failed_connect(proxy_context)
@@ -700,7 +735,13 @@ class ProxyTransactionActionBundle:
         child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
         client_orig_bytes = child_cs_bytes
         client_resp_bytes = child_sc_bytes
-        if phase_plan.terminal_outcome == "success" and request.dst_port == 443:
+        setup_request_wire_bytes: int | None = None
+        setup_response_wire_bytes: int | None = None
+        if (
+            phase_plan.terminal_outcome in {"success", "cache_hit"}
+            and request.dst_port == 443
+            and (proxy_context.method != "CONNECT" or phase_plan.terminal_outcome == "success")
+        ):
             if proxy_context.method == "CONNECT":
                 framing_rng = random.Random(
                     _stable_seed(
@@ -712,6 +753,11 @@ class ProxyTransactionActionBundle:
                 client_orig_bytes += max(request.orig_bytes or 0, framing_rng.randint(180, 900))
                 client_resp_bytes += max(request.resp_bytes or 0, framing_rng.randint(900, 4500))
             else:
+                from evidenceforge.generation.activity.tls_realism import (
+                    inspected_tls_handshake_budget,
+                    tls13_application_payload_budget,
+                )
+
                 # Inspected HTTPS shares one client/proxy transport. Its ledger
                 # reserves the browser group's aggregate payload while each
                 # proxy row retains request-local byte semantics.
@@ -728,11 +774,22 @@ class ProxyTransactionActionBundle:
                 remaining_count = planned_request_count - 1
                 future_orig_bytes += remaining_count * generator_utils._PROXY_CS_OVERHEAD[1]
                 future_resp_bytes += remaining_count * generator_utils._PROXY_SC_OVERHEAD[1]
-                client_orig_bytes = (
-                    phase_plan.tunnel_setup_cs_bytes + child_cs_bytes + future_orig_bytes
+                handshake_orig, handshake_resp = inspected_tls_handshake_budget(request.stable_id)
+                setup_request_wire_bytes = (
+                    phase_plan.tunnel_setup_cs_bytes
+                    + handshake_orig
+                    + tls13_application_payload_budget(child_cs_bytes)
                 )
-                client_resp_bytes = (
-                    phase_plan.tunnel_setup_sc_bytes + child_sc_bytes + future_resp_bytes
+                setup_response_wire_bytes = (
+                    phase_plan.tunnel_setup_sc_bytes
+                    + handshake_resp
+                    + tls13_application_payload_budget(child_sc_bytes)
+                )
+                client_orig_bytes = setup_request_wire_bytes + tls13_application_payload_budget(
+                    future_orig_bytes, message_count=remaining_count
+                )
+                client_resp_bytes = setup_response_wire_bytes + tls13_application_payload_budget(
+                    future_resp_bytes, message_count=remaining_count
                 )
 
         client_http_orig_floor, client_http_resp_floor = generator_utils._http_flow_payload_bytes(
@@ -876,6 +933,8 @@ class ProxyTransactionActionBundle:
                 proxy_context=proxy_context,
                 tunnel_group_id=self.anchor.stable_id,
                 planned_request_count=planned_request_count,
+                setup_request_wire_bytes=setup_request_wire_bytes,
+                setup_response_wire_bytes=setup_response_wire_bytes,
             )
 
         origin_identity = NetworkConnectionIdentityCapture()
@@ -984,6 +1043,13 @@ class ProxyTransactionActionBundle:
             return None
         child_cs_bytes = max(0, int(proxy_context.cs_bytes or 0))
         child_sc_bytes = max(0, int(proxy_context.sc_bytes or 0))
+        if self.request.dst_port == 443 and proxy_context.method != "CONNECT":
+            from evidenceforge.generation.activity.tls_realism import (
+                tls13_application_payload_budget,
+            )
+
+            child_cs_bytes = tls13_application_payload_budget(child_cs_bytes)
+            child_sc_bytes = tls13_application_payload_budget(child_sc_bytes)
         proxy_hostname = self.request.proxy_chain[0].hostname if self.request.proxy_chain else ""
         return ExplicitProxyRequestPreparation(
             affinity=affinity,
@@ -1149,6 +1215,9 @@ class ProxyTransactionActionBundle:
                     request.http.request_multipart if preserve_request_entity else None
                 ),
                 response_body_len=response_body_len,
+                response_content_identity=(
+                    request.http.response_content_identity if preserve_response_entity else ""
+                ),
                 response_multipart=(
                     request.http.response_multipart if preserve_response_entity else None
                 ),
@@ -1263,6 +1332,24 @@ class ProxyTransactionActionBundle:
         finalized_cs_bytes = max(proxy_context.cs_bytes, request_body + request_overhead)
         if request.http is not None and request_body > 0:
             finalized_cs_bytes = request_body + request_overhead
+        # Source request totals must contain the fields the proxy actually
+        # observed, even for a bodyless GET or a caller-provided byte estimate.
+        # Use one local request, not the browser group's aggregate HTTP counts.
+        from evidenceforge.generation.activity.network_http import _http_request_header_len
+
+        local_http = HttpContext(
+            method=proxy_context.method,
+            host=proxy_context.host,
+            uri=proxy_context.url,
+            version="1.1",
+            user_agent=proxy_context.user_agent,
+            referrer=proxy_context.referrer,
+            request_body_len=request_body,
+            request_content_type=(request.http.request_content_type if request.http else ""),
+        )
+        finalized_cs_bytes = max(
+            finalized_cs_bytes, request_body + _http_request_header_len(local_http, 1)
+        )
         return replace(
             proxy_context,
             request_body_bytes=request_body,
@@ -1396,9 +1483,10 @@ class ProxyTransactionActionBundle:
             if egress_http.response_multipart is not None
             else "application/octet-stream"
         )
-        content_identity = (
-            f"proxy-http-response:{egress_http.host}:{egress_http.uri}:"
-            f"{egress_http.status_code}:{egress_http.response_body_len}:{mime_type}"
+        from evidenceforge.generation.actions.file_transfer import _http_content_seed_material
+
+        content_identity = egress_http.response_content_identity or _http_content_seed_material(
+            egress_http.host, egress_http.uri, egress_http.response_body_len, mime_type
         )
         egress_result = HttpResponseFileTransferActionBundle(
             HttpResponseFileTransferRequest(

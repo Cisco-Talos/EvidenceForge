@@ -73,6 +73,23 @@ from evidenceforge.utils.paths import sanitize_path_component
 logger = logging.getLogger(__name__)
 
 
+def native_zeek_connection_state(protocol: str, state: str) -> str:
+    """Project transport outcome into native Conn::conn_state semantics."""
+    return "OTH" if protocol == "icmp" else state
+
+
+def native_zeek_connection_history(protocol: str, history: str) -> str:
+    """Keep TCP/UDP histories without inventing them for native ICMP."""
+    return "" if protocol == "icmp" else history
+
+
+def native_zeek_file_sender_locality(
+    is_orig: bool, local_orig: bool | None, local_resp: bool | None
+) -> bool | None:
+    """Project Files::Info.local_orig from the actual file sender endpoint."""
+    return local_orig if is_orig else local_resp
+
+
 def direct_zeek_source_time(event: Any, key: str) -> datetime:
     """Return one stateless direct-call source timestamp from the owning adapter."""
 
@@ -157,12 +174,12 @@ def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
 
 
 def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
-    """Keep projected Zeek IP-byte counters physically possible."""
+    """Check captured packet budgets independently of TCP sequence-space extent."""
     proto = str(render_data.get("proto") or "").lower()
     header_bytes = {"tcp": 40, "udp": 28, "icmp": 28}.get(proto, 20)
     max_header_bytes = {"udp": 68}.get(proto)
     for side in ("orig", "resp"):
-        payload = render_data.get(f"{side}_bytes")
+        payload = render_data.pop(f"_captured_{side}_bytes", render_data.get(f"{side}_bytes"))
         ip_bytes = render_data.get(f"{side}_ip_bytes")
         packets = render_data.get(f"{side}_pkts")
         if not isinstance(payload, int) or not isinstance(ip_bytes, int):
@@ -623,7 +640,13 @@ class SensorMultiplexEmitter(LogEmitter):
             if field in render_data:
                 render_data[field] = value
         if "local_orig" in render_data:
-            render_data["local_orig"] = observation.local_orig
+            render_data["local_orig"] = (
+                native_zeek_file_sender_locality(
+                    render_data["is_orig"], observation.local_orig, observation.local_resp
+                )
+                if self.format_def.name == "zeek_files" and "is_orig" in render_data
+                else observation.local_orig
+            )
         if "local_resp" in render_data:
             render_data["local_resp"] = observation.local_resp
         if "tx_hosts" in render_data:
@@ -717,6 +740,7 @@ class SensorMultiplexEmitter(LogEmitter):
 
         if self.format_def.name == "zeek_conn":
             ledger = observation.traffic
+            stream = observation.tcp_stream
             packet_observed_duration = (
                 frozen_duration
                 if source_duration_key is not None
@@ -727,14 +751,29 @@ class SensorMultiplexEmitter(LogEmitter):
             render_data.update(
                 {
                     "duration": packet_observed_duration,
-                    "orig_bytes": ledger.orig.payload_bytes,
-                    "resp_bytes": ledger.resp.payload_bytes,
+                    "orig_bytes": (
+                        stream.orig_bytes
+                        if stream is not None and stream.orig_bytes is not None
+                        else ledger.orig.payload_bytes
+                    ),
+                    "resp_bytes": (
+                        stream.resp_bytes
+                        if stream is not None and stream.resp_bytes is not None
+                        else ledger.resp.payload_bytes
+                    ),
+                    "_captured_orig_bytes": ledger.orig.payload_bytes,
+                    "_captured_resp_bytes": ledger.resp.payload_bytes,
                     "orig_pkts": ledger.orig.packets,
                     "resp_pkts": ledger.resp.packets,
                     "orig_ip_bytes": ledger.orig.ip_bytes,
                     "resp_ip_bytes": ledger.resp.ip_bytes,
                     "missed_bytes": ledger.missed_bytes,
-                    "history": observation.history,
+                    "conn_state": native_zeek_connection_state(
+                        str(render_data.get("proto", "")), str(render_data.get("conn_state", "OTH"))
+                    ),
+                    "history": native_zeek_connection_history(
+                        str(render_data.get("proto", "")), observation.history
+                    ),
                 }
             )
         elif self.format_def.name == "zeek_http":

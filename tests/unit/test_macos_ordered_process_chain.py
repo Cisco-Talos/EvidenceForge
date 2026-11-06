@@ -9,9 +9,9 @@ from datetime import timedelta
 import pytest
 
 from evidenceforge.events.process_outcome import PosixProcessExit
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 from tests.unit.test_macos_descriptor_state import _table
 from tests.unit.test_macos_process_relationship_projection import _family
 from tests.unit.test_posix_job_control import _START
@@ -30,7 +30,7 @@ def test_ordered_execution_preserves_each_epoch_and_one_atomic_result(
     state.materialize_action_cohort(builder.seal())
     if restored:
         recovered = StateManager()
-        _restore_head(recovered, _capture_head(state))
+        restore_complete_state(recovered, capture_complete_state(state))
         state = recovered
     before = state.materialization_digest()
     builder = state.begin_action_cohort_materialization()
@@ -89,7 +89,7 @@ def test_ordered_execution_preserves_each_epoch_and_one_atomic_result(
         after, event_time=after.execution_started_at
     ) == table.after_exec(after.execution_started_at)
     recovered = StateManager()
-    _restore_head(recovered, _capture_head(state))
+    restore_complete_state(recovered, capture_complete_state(state))
     assert (
         recovered.get_process_identity_at(after.hostname, after.pid, after.execution_started_at)
         == after

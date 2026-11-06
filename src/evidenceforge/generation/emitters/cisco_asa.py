@@ -37,7 +37,7 @@ import os
 import re
 import tempfile
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -59,6 +59,7 @@ from evidenceforge.formats.format_def import (
     FormatDefinition,
     OutputTemplate,
 )
+from evidenceforge.generation.asa_semantics import asa_connection_direction, asa_tcp_close_reason
 from evidenceforge.generation.emitters.base import ExactPublicationError, fsync_directory
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog_family import (
@@ -717,7 +718,13 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         return 1_000_000 + int.from_bytes(compatibility_digest[:8], "big") % 999_000_000
 
     @staticmethod
-    def _compatibility_teardown_plan(net: Any, protocol: str) -> tuple[str, float]:
+    def _compatibility_teardown_plan(
+        net: Any,
+        protocol: str,
+        source: str = "",
+        destination: str = "",
+        security_levels: Mapping[str, int] | None = None,
+    ) -> tuple[str, float]:
         """Project legacy direct-emitter calls without per-flow random synthesis."""
 
         if protocol != "tcp":
@@ -726,13 +733,12 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         payload_bytes = (getattr(net, "orig_bytes", 0) or 0) + (getattr(net, "resp_bytes", 0) or 0)
         if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
             return "SYN Timeout", 30.0
-        if state in {"REJ", "RSTO"}:
-            return "TCP Reset-O", float(getattr(net, "duration", None) or 0)
-        if state == "RSTR":
-            return "TCP Reset-I", float(getattr(net, "duration", None) or 0)
-        if state == "OTH":
-            return "TCP Reset-O", float(getattr(net, "duration", None) or 0)
-        return "TCP FINs", float(getattr(net, "duration", None) or 0)
+        return (
+            asa_tcp_close_reason(
+                state, getattr(net, "history", "") or "", source, destination, security_levels or {}
+            ),
+            float(getattr(net, "duration", None) or 0),
+        )
 
     def _resolve_interface(self, ip: str, sensor_hostname: str) -> str:
         """Resolve an IP address to an ASA interface name.
@@ -1030,12 +1036,17 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 mapped_src_ip, mapped_src_port = nat.global_ip, nat.global_port
             else:
                 mapped_src_ip, mapped_src_port = net.src_ip, net.src_port
+            originator = (
+                f"{src_iface}:{net.src_ip}/{net.src_port} ({mapped_src_ip}/{mapped_src_port})"
+            )
+            responder = (
+                f"{dst_iface}:{display_dst_ip}/{display_dst_port} ({paren_dst_ip}/{paren_dst_port})"
+            )
+            foreign, local = (
+                (originator, responder) if direction == "inbound" else (responder, originator)
+            )
             message = (
-                f"Built {direction} {proto_upper} connection {conn_id} for "
-                f"{src_iface}:{net.src_ip}/{net.src_port} "
-                f"({mapped_src_ip}/{mapped_src_port}) to "
-                f"{dst_iface}:{display_dst_ip}/{display_dst_port} "
-                f"({paren_dst_ip}/{paren_dst_port})"
+                f"Built {direction} {proto_upper} connection {conn_id} for {foreign} to {local}"
             )
 
         event_data = {
@@ -1070,7 +1081,13 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             teardown_ts = observation.firewall_teardown_time
             duration_seconds = max(0.0, (teardown_ts - timestamp).total_seconds())
         else:
-            reason, duration_seconds = self._compatibility_teardown_plan(net, protocol)
+            reason, duration_seconds = self._compatibility_teardown_plan(
+                net,
+                protocol,
+                src_iface,
+                dst_iface,
+                self._sensor_security_levels.get(sensor_hostname, {}),
+            )
             teardown_ts = timestamp + timedelta(seconds=duration_seconds)
         duration = self._format_duration(duration_seconds)
         total_bytes = self._teardown_byte_count(net, protocol, conn_id)
@@ -1100,10 +1117,14 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             is_inbound_nat = nat is not None and nat.direction == "destination"
             td_dst_ip = nat.local_ip if is_inbound_nat else net.dst_ip
             td_dst_port = nat.local_port if is_inbound_nat else net.dst_port
+            direction = self._connection_direction(src_iface, dst_iface, sensor_hostname)
+            originator = f"{src_iface}:{net.src_ip}/{net.src_port}"
+            responder = f"{dst_iface}:{td_dst_ip}/{td_dst_port}"
+            foreign, local = (
+                (originator, responder) if direction == "inbound" else (responder, originator)
+            )
             message = (
-                f"Teardown {proto_upper} connection {conn_id} for "
-                f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{dst_iface}:{td_dst_ip}/{td_dst_port} "
+                f"Teardown {proto_upper} connection {conn_id} for {foreign} to {local} "
                 f"duration {duration} bytes {total_bytes}"
             )
             if reason:
@@ -1129,15 +1150,9 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     ) -> str:
         """Return ASA direction from the initiating interface security relationship."""
 
-        configured = self._sensor_security_levels.get(sensor_hostname, {})
-        conventional = {"outside": 0, "dmz": 50, "inside": 100}
-        src_level = configured.get(src_iface, conventional.get(src_iface.lower()))
-        dst_level = configured.get(dst_iface, conventional.get(dst_iface.lower()))
-        if src_level is not None and dst_level is not None and src_level != dst_level:
-            return "inbound" if src_level < dst_level else "outbound"
-        # Preserve compatibility for custom and same-security interfaces whose
-        # relationship was not declared.
-        return "inbound" if src_iface.lower() == "outside" else "outbound"
+        return asa_connection_direction(
+            src_iface, dst_iface, self._sensor_security_levels.get(sensor_hostname, {})
+        )
 
     def _emit_deny(
         self,

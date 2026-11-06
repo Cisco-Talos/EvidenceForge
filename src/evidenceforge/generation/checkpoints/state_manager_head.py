@@ -50,7 +50,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "12"
+_SCHEMA_VERSION = "13"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -62,6 +62,7 @@ _TERMINAL_FIELDS = {
 
 _INCREMENTAL_FIELDS = frozenset(
     {
+        "_macos_audit_identity_intents",
         "_linux_logind_session_used_ids",
         "_logon_id_second_ordinals",
         "_semantic_peer_ordinals",
@@ -364,6 +365,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         "9",
         "10",
         "11",
+        "12",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -917,6 +919,9 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     fresh.state.open_connections = fresh._open_connections
     manager.__dict__.clear()
     manager.__dict__.update(fresh.__dict__)
+    manager._macos_audit_identity_intents._record = lambda key, value: (
+        manager._record_incremental_checkpoint_value("_macos_audit_identity_intents", key, value)
+    )
 
 
 def _initial_incremental_records(manager: StateManager) -> list[tuple[str, object, object]]:
@@ -935,6 +940,10 @@ def _initial_incremental_records(manager: StateManager) -> list[tuple[str, objec
         for system, used_ids in manager._linux_logind_session_used_ids.items()
         for session_id in sorted(used_ids)
     )
+    records.extend(
+        ("_macos_audit_identity_intents", key, value)
+        for key, value in manager._macos_audit_identity_intents.items()
+    )
     return records
 
 
@@ -944,6 +953,21 @@ def _apply_incremental_record(
     key: object,
     value: object,
 ) -> None:
+    if field_name == "_macos_audit_identity_intents":
+        from evidenceforge.generation.macos_audit_identity import MacosAuditIdentityLedger
+
+        try:
+            MacosAuditIdentityLedger.validate(key, value)
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "Mac audit identity checkpoint fact is invalid"
+            ) from error
+        if value is None:
+            manager._macos_audit_identity_intents.pop(key, None)
+        else:
+            manager._macos_audit_identity_intents[key] = value
+        manager._macos_audit_identity_intents.drain_before_planning()
+        return
     if field_name == "_used_logon_ids":
         if type(key) is not int or value is not None:
             raise CheckpointCorruptionError("StateManager used-LogonID delta is invalid")
@@ -1085,7 +1109,7 @@ class StateManagerParticipant:
             if (
                 type(document) is not dict
                 or document.get("schema_version")
-                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10", "11"}
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10", "11", "12"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

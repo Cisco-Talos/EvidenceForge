@@ -80,12 +80,17 @@ def test_every_accepted_ordinary_command_has_one_native_exec(
         assert not records
         return
 
+    def native_version(identity: ProcessIdentity) -> int:
+        return engine.state_manager._macos_audit_identity_intents.resolve(
+            identity.hostname, identity.audit_pid_version
+        )
+
     missing = [
         arguments[0]
         for process, arguments in expected
         if not any(
             record.event.exec.target.audit_token.pid == process.pid
-            and record.event.exec.target.audit_token.pidversion == process.audit_pid_version
+            and record.event.exec.target.audit_token.pidversion == native_version(process)
             for record in records
         )
     ]
@@ -104,20 +109,19 @@ def test_every_accepted_ordinary_command_has_one_native_exec(
             record
             for record in records
             if record.event.exec.target.audit_token.pid == process.pid
-            and record.event.exec.target.audit_token.pidversion == process.audit_pid_version
+            and record.event.exec.target.audit_token.pidversion == native_version(process)
         ]
         assert len(matches) == 1, arguments
         record = matches[0]
         assert record.event.exec.target.executable.path == arguments[0]
         assert tuple(record.event.exec.args) == arguments
         assert record.process.audit_token.pid == process.pid
-        assert record.process.audit_token.pidversion != process.audit_pid_version
+        assert record.process.audit_token.pidversion != native_version(process)
         assert datetime.fromisoformat(record.time) == process.execution_started_at
         if terminal is not None:
             assert record.event.exec.target.responsible_audit_token.pid == terminal.pid
-            assert (
-                record.event.exec.target.responsible_audit_token.pidversion
-                == terminal.audit_pid_version
+            assert record.event.exec.target.responsible_audit_token.pidversion == native_version(
+                terminal
             )
 
 

@@ -20,6 +20,7 @@ from evidenceforge.events.observation import (
 )
 from evidenceforge.generation.actions.network_connection import NetworkConnectionIdentityCapture
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.checkpoints.state_values import decode_state_value, encode_state_value
 from evidenceforge.generation.http_channels import HttpChannelAffinity
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils.rng import _thread_local
@@ -278,8 +279,19 @@ def test_direct_http_reuse_owns_one_parent_and_bounded_application_children() ->
     assert request_times[2] > request_times[1]
 
     parent = http_events[0]
+    for ordinal, child in enumerate(http_events[1:], 1):
+        assert child.protocol.http.capture_traffic == parent.network.traffic
+        assert child.protocol.http.capture_history == parent.network.history
+        assert child.protocol.http.capture_transaction_id == parent.network.stable_id
+        assert child.protocol.http.request_stream_offset == ordinal * 10
+        assert child.protocol.http.response_stream_offset == ordinal * 1_000
     connection = state_manager.get_connection(parent.network.conn_id)
     assert connection is not None
+    assert connection.http_capture_transaction == parent.network
+    encoded = encode_state_value(connection)
+    assert decode_state_value(encoded) == connection
+    legacy = ["record", "open-connection", encoded[2][:17] + encoded[2][18:]]
+    assert decode_state_value(legacy).http_capture_transaction is None
     assert connection.bytes_sent == sum(event.network.orig_bytes for event in http_events)
     assert connection.bytes_received == sum(event.network.resp_bytes for event in http_events)
 

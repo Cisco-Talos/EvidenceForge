@@ -73,7 +73,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "string_fields": {"default_http_policy"},
     },
     "activity/proxy_user_agents.yaml": {
-        "dict_fields": {"domain_overrides", "workstation", "server"},
+        "dict_fields": {"domain_overrides", "workstation", "server", "browser_process_families"},
     },
     "activity/beacon_profiles.yaml": {
         "dict_fields": {"profiles"},
@@ -163,7 +163,15 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "dict_fields": {"domain_ca_overrides"},
     },
     "activity/tls_realism.yaml": {
-        "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
+        "dict_fields": {
+            "san",
+            "serial_numbers",
+            "ocsp",
+            "certificate_chains",
+            "destinations",
+            "wire_budget",
+            "public_leaf_validity",
+        },
     },
     "activity/public_dns_profiles.yaml": {
         "list_fields": {
@@ -185,6 +193,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
             "dns_tunnel_rtt",
             "dns_tunnel_rcode_weights",
             "nmap_command_probe",
+            "protocol_confirmation",
             "proxy_connect_status_messages",
             "transport_histories",
             "ssl_histories",
@@ -261,7 +270,12 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         },
     },
     "activity/http_file_profiles.yaml": {
-        "dict_fields": {"extension_mime_types", "request_profiles", "multipart"},
+        "dict_fields": {
+            "extension_mime_types",
+            "request_profiles",
+            "multipart",
+            "shared_resources",
+        },
     },
     "activity/ids_signatures.yaml": {
         "list_fields": {"signatures": None},

@@ -835,7 +835,7 @@ def test_named_type5_composes_real_windows_and_ecar_exact_publication(
         hashlib.sha256(
             next(content for path, content in source_bytes.items() if path.endswith(".xml"))
         ).hexdigest()
-        == "7fea007af11319fb40893a7484845c8012bcb5f4561198dde7525d61f43bf5ad"
+        == "2e3448ff4e5eda3c906aceb6a8df8f46070628a2ebf3f0fd18ff391280a02e66"
     )
     assert (
         hashlib.sha256(
@@ -943,7 +943,7 @@ def test_named_type5_real_multisink_retry_is_exact_once(
         hashlib.sha256(
             next(content for path, content in reference_bytes.items() if path.endswith(".xml"))
         ).hexdigest()
-        == "7fea007af11319fb40893a7484845c8012bcb5f4561198dde7525d61f43bf5ad"
+        == "2e3448ff4e5eda3c906aceb6a8df8f46070628a2ebf3f0fd18ff391280a02e66"
     )
     assert (
         hashlib.sha256(
@@ -1009,6 +1009,7 @@ def test_named_type5_engine_abort_drains_real_pending_multisink_recovery(
     ) == (2, 1, 0)
 
     engine = object.__new__(GenerationEngine)
+    engine.state_manager = state
     engine.dispatcher = dispatcher
     engine.emitters = {
         "windows_event_security": windows,

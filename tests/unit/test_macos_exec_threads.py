@@ -9,9 +9,9 @@ from datetime import timedelta
 import pytest
 
 from evidenceforge.events.identity import ProcessIdentity
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 from tests.unit.test_process_execution_state import _START, _execute, _process
 
 
@@ -77,7 +77,7 @@ def test_exec_thread_checkpoint_preserves_retirements_and_next_allocations() -> 
     worker = manager.create_thread(before.hostname, before.object_id, start_time=_START)
     after = _execute(manager, before)
     restored = StateManager()
-    _restore_head(restored, _capture_head(manager))
+    restore_complete_state(restored, capture_complete_state(manager))
     assert restored._ended_threads.get(worker.canonical_key) == manager._ended_threads.get(
         worker.canonical_key
     )

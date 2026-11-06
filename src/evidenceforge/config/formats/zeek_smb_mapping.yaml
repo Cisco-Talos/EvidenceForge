@@ -11,7 +11,7 @@ fields:
   - {name: id.resp_h, type: ip_address, required: true}
   - {name: id.resp_p, type: port, required: true}
   - {name: path, type: string, required: true}
-  - {name: service, type: string, required: true}
+  - {name: service, type: string, required: false}
   - {name: native_file_system, type: string, required: false}
   - {name: share_type, type: string, required: true}
 output:
@@ -27,7 +27,11 @@ output:
       "id.resp_h": {{ data['id.resp_h'] | tojson }},
       "id.resp_p": {{ data['id.resp_p'] | tojson }},
       "path": {{ path | tojson }},
+      {% if service is defined and service is not none %}
       "service": {{ service | tojson }},
+      {% endif %}
+      {% if native_file_system is defined and native_file_system is not none %}
       "native_file_system": {{ native_file_system | tojson }},
+      {% endif %}
       "share_type": {{ share_type | tojson }}
     }

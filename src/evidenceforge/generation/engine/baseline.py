@@ -434,7 +434,7 @@ def _profile_connection_payload_bytes(
 
     orig_bytes = rng.randint(200, 5000)
     sampled_resp_bytes = rng.randint(500, 50000)
-    if connection.get("proto", "tcp") == "udp" and connection.get("service") == "syslog":
+    if connection.get("service") == "syslog":
         return orig_bytes, 0
     return orig_bytes, sampled_resp_bytes
 
@@ -2574,6 +2574,8 @@ class BaselineMixin:
         system_pids = self._system_pids.get(sender.hostname, {})
         if _get_os_category(sender.os) == "linux":
             return system_pids.get("rsyslogd", -1), "/usr/sbin/rsyslogd"
+        if _get_os_category(sender.os) == "macos":
+            return system_pids.get("syslogd", -1), "/usr/sbin/syslogd"
         return (
             system_pids.get("svchost_net_svc", system_pids.get("svchost_netsvcs", -1)),
             r"C:\Windows\System32\svchost.exe",
@@ -2633,7 +2635,7 @@ class BaselineMixin:
             service="syslog",
             duration=duration,
             orig_bytes=transport_rng.randint(180, 3200),
-            resp_bytes=0 if route.protocol == "udp" else transport_rng.randint(40, 180),
+            resp_bytes=0,
             source_system=sender,
             pid=forwarder_pid,
             process_image=forwarder_image,
@@ -6676,7 +6678,7 @@ class BaselineMixin:
                     service="syslog",
                     duration=rng.uniform(1.0, 60.0),
                     orig_bytes=rng.randint(500, 10000),
-                    resp_bytes=0 if route.protocol == "udp" else rng.randint(50, 200),
+                    resp_bytes=0,
                     source_system=sender,
                     pid=forwarder_pid,
                     process_image=forwarder_image,
@@ -10515,8 +10517,7 @@ class BaselineMixin:
                             source_pid, source_process_image = self._syslog_forwarder_identity(
                                 syslog_route.sender
                             )
-                            if syslog_route.protocol == "udp":
-                                resp_bytes = 0
+                            resp_bytes = 0
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,

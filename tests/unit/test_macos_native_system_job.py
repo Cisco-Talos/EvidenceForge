@@ -409,8 +409,8 @@ def test_loaded_native_job_and_post_exec_group_survive_checkpoint_hydration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_profile: bool
 ) -> None:
     from evidenceforge.generation.checkpoints.lifecycle_head import _capture, _restore
-    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
     from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng, stable_uuid
+    from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 
     outputs = []
     for hydrate in (False, True):
@@ -423,9 +423,9 @@ def test_loaded_native_job_and_post_exec_group_survive_checkpoint_hydration(
                 before = engine.lifecycle_registry.get_process(process.object_id)
                 if hydrate:
                     engine.lifecycle_registry.prune_action_cohort_receipt_authorities()
-                    state_head = _capture_head(engine.state_manager)
+                    state_head = capture_complete_state(engine.state_manager)
                     lifecycle_head = _capture(engine.lifecycle_registry)
-                    _restore_head(engine.state_manager, state_head)
+                    restore_complete_state(engine.state_manager, state_head)
                     _restore(engine.lifecycle_registry, lifecycle_head)
                 assert (
                     engine.state_manager.get_process_identity(process.hostname, process.pid)

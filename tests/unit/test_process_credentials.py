@@ -10,11 +10,11 @@ import pytest
 
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
-from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.checkpoints.state_values import decode_state_value, encode_state_value
 from evidenceforge.generation.lifecycle_authority import _process_identity_payload
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
+from tests.support.state_checkpoint import capture_complete_state, restore_complete_state
 
 _START = datetime(2026, 10, 15, 12, tzinfo=UTC)
 _USER = PosixProcessCredentials(501, 501, 20, 20, audit_uid=501, audit_session_id=110007)
@@ -159,7 +159,7 @@ def test_credentials_and_execution_history_survive_checkpoint_and_exit() -> None
     manager, before = _create()
     after = _exec(manager, before, replace(_USER, effective_uid=0))
     restored = StateManager()
-    _restore_head(restored, _capture_head(manager))
+    restore_complete_state(restored, capture_complete_state(manager))
     assert restored.get_process_identity(before.hostname, before.pid) == after
     assert restored.get_process_identity_at(before.hostname, before.pid, _START) == before
     expected = _exec(manager, after, _USER, seconds=2)

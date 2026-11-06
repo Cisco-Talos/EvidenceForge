@@ -38,6 +38,7 @@ from evidenceforge.events.content_identity import (
     LocalArtifactIdentity,
     ProcessBinaryIdentity,
 )
+from evidenceforge.events.http_semantics import http_wire_referrer, http_wire_target
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -767,6 +768,11 @@ class HttpContext:
     flow_request_body_len: int | None = None
     flow_response_body_len: int | None = None
     flow_transaction_count: int = 1
+    capture_traffic: NetworkTrafficLedger | None = None
+    capture_history: str = ""
+    capture_transaction_id: str = ""
+    request_stream_offset: int = 0
+    response_stream_offset: int = 0
     status_code: int = 200
     status_msg: str = "OK"
     referrer: str = ""
@@ -780,6 +786,10 @@ class HttpContext:
     resp_mime_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if min(self.request_stream_offset, self.response_stream_offset) < 0:
+            raise ValueError("HTTP stream offsets must be non-negative")
+        object.__setattr__(self, "uri", http_wire_target(self.uri))
+        object.__setattr__(self, "referrer", http_wire_referrer(self.referrer))
         if self.request_entity is not None and self.request_entity.size != self.request_body_len:
             raise ValueError("HTTP request entity size must match request_body_len")
         if (
@@ -891,8 +901,8 @@ class SmbContext:
     previous_client_path: str = ""  # Client-native mount, drive, or UNC rename source
     previous_server_path: str = ""  # Server-local backing path rename source
     # ``filesystem`` is retained as the backing-filesystem compatibility view.
-    # Zeek must render ``advertised_filesystem`` instead because Samba commonly
-    # reports NTFS over the wire while storing data on ext4 or XFS.
+    # ``advertised_filesystem`` describes protocol capability, not an observed
+    # SMB2 TreeConnect field. Samba may advertise NTFS while storing on ext4/XFS.
     filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
     backing_filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
     advertised_filesystem: str = "NTFS"
@@ -1030,6 +1040,10 @@ class ProxyContext:
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
     transaction: ProxyTransactionPlan | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "url", http_wire_target(self.url))
+        object.__setattr__(self, "referrer", http_wire_referrer(self.referrer))
 
 
 @dataclass(slots=True)
