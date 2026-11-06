@@ -792,8 +792,9 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
         future_specs=(),
         authored_time_shift: timedelta = timedelta(0),
         session_required_until: datetime | None = None,
+        authored_nominal_time: datetime | None = None,
     ):
-        del authored_time_shift, session_required_until
+        del authored_time_shift, session_required_until, authored_nominal_time
         observed_times.append(time)
         return None
 

@@ -13,6 +13,8 @@ size_median_bytes: 1048576
 size_log_sigma: 1.2
 installation_age_seconds: {min: 86400, max: 15552000}
 build_lead_seconds: {min: 86400, max: 5184000}
+# Some packages preserve whole-second build dates; host-local times retain native precision.
+package_whole_second_probability: 0.5
 allocation_policy: dense-rounded
 allocation_unit_bytes: 4096
 permissions: 493 # 0755

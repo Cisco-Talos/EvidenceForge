@@ -10,6 +10,7 @@ import math
 import ntpath
 import posixpath
 import random
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -54,12 +55,14 @@ from evidenceforge.events.network import (
     NetworkTuple,
 )
 from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     PersistentSmbApplicationIntent,
     PersistentSmbRootIntent,
 )
+from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.smb_profiles import (
     client_auth_options,
     client_process_for_operation,
@@ -712,6 +715,20 @@ class SmbActivityActionBundle:
                         source_pid=-1,
                         source_image="",
                     )
+                    if (
+                        client_process_preparation.disposition == "materialize"
+                        and client_process_preparation.os_category == "macos"
+                        and client_system is not None
+                    ):
+                        client_process_preparation = self._materialize_macos_smb_client_process(
+                            client_process_preparation,
+                            client_system=client_system,
+                        )
+                        member_budget = (
+                            5
+                            + len(selected) * operation_member_count
+                            + int(client_process_preparation.disposition == "materialize")
+                        )
                 terminal_continuation = continuation_authority.reserve_claimed(
                     action_id=self.anchor.stable_id,
                     action_binding_digest=terminal_binding_digest,
@@ -1378,6 +1395,13 @@ class SmbActivityActionBundle:
                 and running_process is not None
                 and self.executor._is_within_scenario_window(termination_time)
             ):
+                completion = self._completed_smb_client_exit(
+                    client_system,
+                    process_plan.actor_pid,
+                    close_time,
+                    termination_time,
+                    tuple(operation_truth),
+                )
                 self.executor.generate_process_termination(
                     user=self.request.actor,
                     system=client_system,
@@ -1385,6 +1409,11 @@ class SmbActivityActionBundle:
                     pid=process_plan.actor_pid,
                     process_name=running_process.image,
                     logon_id=running_process.logon_id,
+                    **(
+                        {"exit_outcome": completion[1], "expected_process": completion[0]}
+                        if completion is not None
+                        else {}
+                    ),
                 )
         return SmbActivityResult(
             session_id=first_lease.session_id,
@@ -1864,6 +1893,109 @@ class SmbActivityActionBundle:
                 else ("process" if profile.transport_attribution == "process" else "kernel")
             ),
             lifecycle=rendered.lifecycle,
+        )
+
+    def _materialize_macos_smb_client_process(
+        self,
+        preparation: PersistentSmbClientProcessPreparation,
+        *,
+        client_system: System,
+    ) -> PersistentSmbClientProcessPreparation:
+        """Delegate mounted Mac helper startup to the canonical process lifecycle."""
+
+        if (
+            preparation.disposition != "materialize"
+            or preparation.os_category != "macos"
+            or preparation.hostname != client_system.hostname
+            or preparation.started_at is None
+        ):
+            raise StateError("Mounted Mac SMB startup requires its exact process recipe")
+        arguments = literal_shell_child_arguments(preparation.image, preparation.command_line)
+        if arguments is None:
+            raise StateError("Mounted Mac SMB helper requires a literal executable argv")
+        canonical_command_line = shlex.join(arguments)
+        existing: tuple[ProcessIdentity, Any] | None = None
+        for candidate in self.executor.state_manager.get_processes_on_system(
+            client_system.hostname
+        ):
+            identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                candidate.pid,
+            )
+            if (
+                identity is not None
+                and identity.lifecycle_group_id == preparation.lifecycle_group_id
+            ):
+                existing = identity, candidate
+                break
+        if existing is None:
+            pid = self.executor.generate_process(
+                user=self.request.actor,
+                system=client_system,
+                time=preparation.started_at,
+                logon_id=preparation.logon_id,
+                process_name=preparation.image,
+                command_line=canonical_command_line,
+                parent_pid=preparation.parent_pid,
+                suppress_command_file_effect=True,
+                allow_existing_browser_reuse=False,
+                allow_browser_launch_spacing=False,
+                concurrency_group_id=preparation.lifecycle_group_id,
+                lifecycle_group_id=preparation.lifecycle_group_id,
+                require_exact_parent=True,
+                preserve_requested_time=True,
+                arguments=arguments,
+            )
+            if pid <= 0:
+                raise StateError(
+                    "Mounted Mac SMB helper could not publish its canonical process lifecycle"
+                )
+            identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                pid,
+            )
+            process = self.executor.state_manager.get_process(
+                client_system.hostname,
+                pid,
+            )
+            if identity is None or process is None:
+                raise StateError("Mounted Mac SMB helper lost its published process identity")
+        else:
+            identity, process = existing
+        if (
+            identity.hostname != preparation.hostname
+            or identity.image != preparation.image
+            or identity.command_line != canonical_command_line
+            or identity.principal != preparation.username
+            or identity.logon_id != preparation.logon_id
+            or identity.parent_pid != preparation.parent_pid
+            or identity.lifecycle_group_id != preparation.lifecycle_group_id
+            or identity.started_at > ensure_utc(self.request.time)
+        ):
+            raise StateError("Mounted Mac SMB helper changed its canonical process intent")
+        parent = self.executor.state_manager.get_process_identity(
+            identity.hostname,
+            identity.parent_pid,
+        )
+        session = self.executor.state_manager.get_session_identity(identity.logon_id)
+        if session is None:
+            raise StateError("Mounted Mac SMB helper lost its owning local session")
+        return replace(
+            preparation,
+            disposition="reuse",
+            process_object_id=identity.object_id,
+            pid=identity.pid,
+            command_line=identity.command_line,
+            parent_pid=identity.parent_pid,
+            parent_object_id=parent.object_id if parent is not None else "",
+            session_object_id=session.object_id,
+            session_id=session.session_id,
+            logon_type=preparation.logon_type,
+            started_at=identity.started_at,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            integrity_level=process.integrity_level or preparation.integrity_level,
+            credentials=identity.credentials,
+            executable_version=identity.executable_version,
         )
 
     def _append_persistent_smb_file_operation(
@@ -4277,6 +4409,40 @@ class SmbActivityActionBundle:
                 "Persistent SMB connection acknowledgement did not retire its exact owner"
             )
 
+    def _completed_smb_client_exit(
+        self,
+        system: System,
+        pid: int,
+        completed_at: datetime,
+        termination_time: datetime,
+        operations: tuple[dict[str, Any], ...],
+    ) -> tuple[ProcessIdentity, PosixProcessExit] | None:
+        """Carry the successful operation owner's nominal natural helper result.
+
+        Unknown and failed operations retain unknown process results. The exact
+        process close service owns identity validation and native publication.
+        """
+        if (
+            self._endpoint_platform(system) != "macos"
+            or not operations
+            or any(operation.get("outcome") != "success" for operation in operations)
+            or ensure_utc(termination_time) <= ensure_utc(completed_at)
+        ):
+            return None
+        process = self.executor.state_manager.get_process_identity(system.hostname, pid)
+        if process is None:
+            return None
+        session = self.executor.state_manager.get_session(process.logon_id)
+        deadlines = (
+            self.executor.state_manager.get_session_end_time(process.logon_id),
+            session.network_close_time if session is not None else None,
+        )
+        if any(
+            ensure_utc(termination_time) >= ensure_utc(end) for end in deadlines if end is not None
+        ):
+            return None
+        return process, PosixProcessExit(exit_code=0)
+
     def _terminate_persistent_smb_operation_client(
         self,
         facts: _PersistentSmbTerminalFacts,
@@ -4330,6 +4496,13 @@ class SmbActivityActionBundle:
         )
         if not self.executor._is_within_scenario_window(termination_time):
             return
+        completion = self._completed_smb_client_exit(
+            self.request.parent_system,
+            pid,
+            facts.activity_result.completed_at,
+            termination_time,
+            facts.activity_result.operations,
+        )
         self.executor.generate_process_termination(
             user=self.request.actor,
             system=self.request.parent_system,
@@ -4337,6 +4510,11 @@ class SmbActivityActionBundle:
             pid=pid,
             process_name=running.image,
             logon_id=running.logon_id,
+            **(
+                {"exit_outcome": completion[1], "expected_process": completion[0]}
+                if completion is not None
+                else {}
+            ),
         )
 
     def _resume_persistent_windows_terminal(
@@ -5511,22 +5689,13 @@ class SmbActivityActionBundle:
     def _eligible_mappings(self, share: CompiledStorageShare) -> list[Any]:
         """Return deterministic share mappings applicable to this actor/client."""
 
-        eligible = [
-            mapping
-            for mapping in self.world.mappings
-            if mapping.share.casefold() == share.ref.casefold()
-            and (
-                not mapping.users
-                or self.request.actor.username.casefold()
-                in {user.casefold() for user in mapping.users}
+        return list(
+            self.world.applicable_mappings(
+                share.ref,
+                username=self.request.actor.username,
+                hostname=self.request.parent_system.hostname,
             )
-            and (
-                not mapping.systems
-                or self.request.parent_system.hostname.casefold()
-                in {system.casefold() for system in mapping.systems}
-            )
-        ]
-        return sorted(eligible, key=lambda mapping: mapping.id.casefold())
+        )
 
     def _selected_mapping(self, share: CompiledStorageShare) -> Any | None:
         """Resolve an explicit or unambiguous platform presentation mapping."""

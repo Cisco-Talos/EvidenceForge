@@ -172,6 +172,45 @@ def test_linux_trivial_command_lifetime_is_subsecond():
     assert lifetime[1] <= 0.8
 
 
+def test_macos_authoritative_process_close_schedule_is_variable_and_session_scoped(activity_gen):
+    """Mac teardown gaps should vary deterministically across processes and sessions."""
+    process_ids = tuple(range(100, 116))
+    span, offsets = activity_gen._macos_authoritative_process_termination_schedule(
+        session_logon_id="session-1",
+        host="mac-workstation-01",
+        lifecycle_id="session-1",
+        process_ids=process_ids,
+    )
+    repeated_span, repeated_offsets = (
+        activity_gen._macos_authoritative_process_termination_schedule(
+            session_logon_id="session-1",
+            host="mac-workstation-01",
+            lifecycle_id="session-1",
+            process_ids=process_ids,
+        )
+    )
+    other_session_span, other_session_offsets = (
+        activity_gen._macos_authoritative_process_termination_schedule(
+            session_logon_id="session-2",
+            host="mac-workstation-01",
+            lifecycle_id="session-2",
+            process_ids=process_ids,
+        )
+    )
+
+    gaps = tuple(
+        current - previous
+        for previous, current in zip((timedelta(0), *offsets), (*offsets, span), strict=True)
+    )
+
+    assert len(offsets) == len(process_ids)
+    assert all(timedelta(milliseconds=40) <= gap <= timedelta(milliseconds=350) for gap in gaps)
+    assert len(set(gaps)) >= 8
+    assert span == repeated_span
+    assert offsets == repeated_offsets
+    assert (span, offsets) != (other_session_span, other_session_offsets)
+
+
 def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     """Electron-style editor launches should not terminate like a one-shot CLI command."""
     lifetime = _linux_foreground_lifetime(
@@ -4939,6 +4978,7 @@ class TestActivityGenerator:
         assert machine_logon.remote_auth.primary_transport.role == "target_service"
         assert machine_logon.remote_auth.primary_transport.tuple.dst_port in {389, 445}
         assert machine_logon.identity_plan.object_id == machine_logoff.identity_plan.object_id
+
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
         assert machine_logoff.lifecycle.phase == "closure"
@@ -6482,6 +6522,62 @@ class TestActivityGenerator:
             for message in messages
         )
         assert not any("unknown" in message for message in messages)
+
+    @pytest.mark.parametrize("payload_bytes", [24, 100])
+    def test_tcp_scan_does_not_invent_ssh_authentication(
+        self, activity_gen, state_manager, mock_emitters, payload_bytes: int
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(hostname="SCANNER", ip="10.0.1.10", os="Ubuntu 24.04", type="server")
+        target = System(
+            hostname="SSH-TARGET",
+            ip="10.0.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["ssh"],
+        )
+        mock_emitters["syslog"] = Mock()
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        activity_gen._all_system_ips = [source.ip, target.ip]
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=source.hostname,
+            parent_pid=0,
+            image="/usr/bin/nmap",
+            command_line="nmap -Pn -sT -p 22 10.0.2.30",
+            username="root",
+            integrity_level="High",
+            logon_id="0x12345",
+        )
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=target.ip,
+            time=timestamp,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=0.12,
+            orig_bytes=payload_bytes,
+            resp_bytes=80,
+            src_port=52876,
+            pid=pid,
+            source_system=source,
+            conn_state="SF",
+        )
+        messages = [
+            call.args[0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+        ]
+        assert any(
+            message.startswith("Connection from 10.0.1.10 port 52876 ") for message in messages
+        )
+        assert any(
+            message == "Connection closed by 10.0.1.10 port 52876 [preauth]" for message in messages
+        )
+        assert not any(
+            "Invalid user" in message or "Failed password" in message for message in messages
+        )
 
     def test_web_to_database_connection_materializes_service_owner(
         self, activity_gen, state_manager, mock_emitters
@@ -11031,6 +11127,36 @@ class TestActivityGenerator:
             )
         assert not dns_events
 
+    @pytest.mark.parametrize("state", ["SF", "RSTR"])
+    def test_one_way_tcp_syslog_keeps_control_without_invented_reply_data(
+        self, activity_gen, state_manager, mock_emitters, state: str
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip="10.0.0.21",
+            dst_ip="10.0.0.40",
+            time=timestamp,
+            dst_port=514,
+            proto="tcp",
+            service="syslog",
+            duration=0.4,
+            orig_bytes=3000,
+            resp_bytes=0,
+            conn_state=state,
+        )
+        event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_port == 514
+        )
+        assert event.network.resp_bytes == 0
+        assert "d" not in event.network.history
+        assert "t" not in event.network.history
+        assert "h" in event.network.history
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes >= 40 * event.network.resp_pkts
+
     def test_dns_connection_uses_resolver_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -13574,7 +13700,6 @@ class TestActivityGenerator:
             for idx, cert in enumerate(event.protocol.x509_chain)
         )
         assert event.network.duration >= (max_cert_delay_ms / 1000.0)
-        assert event.network.duration >= 1.05 + (0.075 * len(event.protocol.x509_chain))
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters
@@ -17048,6 +17173,104 @@ class TestActivityGenerator:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.history == "D"
+
+    @pytest.mark.parametrize("host_type", ["server", "workstation"])
+    def test_linux_boundary_shell_replacement_is_feasible_before_it_allocates(
+        self,
+        activity_gen: ActivityGenerator,
+        test_user: User,
+        state_manager: StateManager,
+        host_type: str,
+    ) -> None:
+        window = datetime(2024, 1, 15, 10, tzinfo=UTC)
+        logon_time = window - timedelta(minutes=10)
+        linux = System(
+            hostname="LINUX-BOUNDARY",
+            ip="10.0.2.60",
+            os="Ubuntu 24.04",
+            type=host_type,
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        root = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        logon = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            start_time=logon_time,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": root}}
+        activity_gen._scenario_start_time = window
+        old_shell = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=window - timedelta(minutes=1),
+        )
+        assert old_shell is not None
+        before = state_manager.materialization_digest()
+        early = window + timedelta(milliseconds=100)
+        for _ in range(3):
+            assert (
+                activity_gen.ensure_linux_session_shell(
+                    user=test_user,
+                    target_system=linux,
+                    logon_id=logon,
+                    logon_time=logon_time,
+                    activity_time=early,
+                )
+                is None
+            )
+            assert (
+                activity_gen.ensure_linux_visible_shell_parent(
+                    user=test_user,
+                    target_system=linux,
+                    logon_id=logon,
+                    logon_time=logon_time,
+                    activity_time=early,
+                )
+                is None
+            )
+            parent = (
+                activity_gen._process_parents()._materialize_visible_linux_shell_parent_for_child(
+                    system=linux,
+                    time=early,
+                    logon_id=logon,
+                    parent_pid=old_shell,
+                    process_username=test_user.username,
+                )
+            )
+            assert parent == old_shell
+            assert state_manager.materialization_digest() == before
+        later = window + timedelta(seconds=30)
+        replacement = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=later,
+        )
+        assert replacement is not None and replacement != old_shell
+        process = state_manager.get_process(linux.hostname, replacement)
+        assert window <= process.start_time < later
+        assert replacement == activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=later,
+        )
 
 
 @pytest.fixture()

@@ -285,45 +285,45 @@ client_profiles:
       browse:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /bin/ls
-        command_line_template: 'ls -la "{client_path}"'
+        command_line_template: '/bin/ls -la "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
       read:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /bin/cat
-        command_line_template: 'cat "{client_path}"'
+        command_line_template: '/bin/cat "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
       create:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /usr/bin/tee
-        command_line_template: 'tee "{client_path}"'
+        command_line_template: '/usr/bin/tee "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
       update:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /usr/bin/tee
-        command_line_template: 'tee "{client_path}"'
+        command_line_template: '/usr/bin/tee "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
       copy:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /bin/cp
-        command_line_template: 'cp "{source_path}" "{destination_path}"'
+        command_line_template: '/bin/cp "{source_path}" "{destination_path}"'
         username_template: "{username}"
         lifecycle: operation
         operand_mode: transfer
       move:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /bin/mv
-        command_line_template: 'mv "{source_path}" "{destination_path}"'
+        command_line_template: '/bin/mv "{source_path}" "{destination_path}"'
         username_template: "{username}"
         lifecycle: operation
         operand_mode: transfer
       delete:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /bin/rm
-        command_line_template: 'rm "{client_path}"'
+        command_line_template: '/bin/rm "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
 

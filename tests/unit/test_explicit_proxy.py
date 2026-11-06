@@ -4561,9 +4561,20 @@ class TestExplicitProxyVisibility:
         assert [
             (event.network.orig_bytes, event.network.resp_bytes) for event in client_events
         ] == [(846, 1615), (636, 932), (566, 697)]
-        assert [
-            (event.network.orig_bytes, event.network.resp_bytes) for event in origin_events
-        ] == [(768, 6219), (619, 3601), (792, 5520)]
+        from evidenceforge.generation.activity.tls_realism import tls_server_payload_budget
+
+        for event, (expected_orig, prior_resp_floor) in zip(
+            origin_events, [(768, 6219), (619, 3601), (792, 5520)], strict=True
+        ):
+            wire_floor = tls_server_payload_budget(
+                zeek_uid=event.network.zeek_uid,
+                ssl=event.protocol.ssl,
+                chain=event.protocol.x509_chain,
+                service=event.network.service,
+                application_bytes=event.protocol.http.response_body_len,
+            )
+            assert event.network.orig_bytes == expected_orig
+            assert event.network.resp_bytes == max(prior_resp_floor, wire_floor)
         assert [
             (event.protocol.proxy.cs_bytes, event.protocol.proxy.sc_bytes) for event in proxy_events
         ] == [(367, 1439), (316, 789), (335, 567)]
@@ -4666,7 +4677,11 @@ class TestExplicitProxyVisibility:
         assert census.reserved_channel_ids == 0
         assert census.reserved_affinities == 0
         assert census.reserved_origin_transport_ids == 0
-        assert census.application.open_channels == 0
+        # Timing may admit an independent direct OCSP request. All three proxy
+        # channels are closed above; unrelated HTTP channels have their own owner.
+        assert census.application.open_channels == (
+            generator._http_channel_manager.census().open_transport_views
+        )
         assert census.application.active_operations == 0
         assert census.application.prepared_admissions == 0
         assert census.application.claimed_admissions == 0
@@ -6962,3 +6977,67 @@ class TestExplicitProxyVisibility:
         assert conn_event.protocol.ssl.cert_chain_fuids == tuple(
             cert.fuid for cert in conn_event.protocol.x509_chain
         )
+
+
+@pytest.mark.parametrize(
+    ("filename", "version", "expected"),
+    [
+        ("chrome.exe", "120.0.6099.130", "Chrome/120.0.0.0"),
+        ("firefox.exe", "126.0.2", "Firefox/126.0"),
+        ("msedge.exe", "125.0.2535.51", "Edg/125.0.0.0"),
+        ("cmd.exe", "10.0.22631.1", ""),
+    ],
+)
+def test_windows_root_binds_loaded_release_for_browser_and_nonbrowser(
+    monkeypatch: pytest.MonkeyPatch, filename: str, version: str, expected: str
+) -> None:
+    from evidenceforge.events.content_identity import (
+        BinaryReleaseIdentity,
+        BinaryReleaseKey,
+        PeVersionInfo,
+    )
+    from evidenceforge.events.process_executable import ProcessExecutableVersion
+
+    generator, _ = _generator([])
+    user, _, parent_pid = _seed_proxy_client_user_session(generator)
+    host = generator._ip_to_system["10.0.1.10"]
+    image = rf"C:\Program Files\Test\{filename}"
+    binary = BinaryReleaseIdentity(
+        BinaryReleaseKey("test.loaded", version, "retained", "x64", "windows", filename),
+        pe_version_info=PeVersionInfo(
+            version, "Test executable", "Test product", "Vendor", filename
+        ),
+    )
+    monkeypatch.setattr(
+        generator.dispatcher, "resolve_process_binary_identity", lambda *_args, **_kwargs: binary
+    )
+    monkeypatch.setattr(
+        generator.dispatcher, "resolve_loaded_process_binary_identity", lambda _identity: binary
+    )
+    session = generator.state_manager.get_process(host.hostname, parent_pid).logon_id
+    pid = generator.generate_process(
+        user=user,
+        system=host,
+        time=datetime(2024, 1, 15, 10, tzinfo=UTC),
+        logon_id=session,
+        process_name=image,
+        command_line=image,
+        parent_pid=parent_pid,
+    )
+    identity = generator.state_manager.get_process_identity(host.hostname, pid)
+    assert identity.executable_version == ProcessExecutableVersion.from_binary(binary)
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+
+    restored = StateManager()
+    _restore_head(restored, _capture_head(generator.state_manager))
+    assert (
+        restored.get_process_identity(host.hostname, pid).executable_version
+        == identity.executable_version
+    )
+    first = generator.browser_user_agent_for_process(host, pid, hostname="one.example")
+    second = generator.browser_user_agent_for_process(host, pid, hostname="two.example")
+    assert first == second
+    if expected:
+        assert expected in first
+    else:
+        assert first == ""

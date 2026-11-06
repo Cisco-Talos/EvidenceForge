@@ -99,6 +99,74 @@ class TestTlsIssuers:
         issuer = pick_issuer(rng, "www.linkedin.com")
         assert "DigiCert SHA2 Extended Validation" in issuer["name"]
 
+    def test_reddit_uses_current_lets_encrypt_issuer_at_observation_time(self):
+        issuer = pick_issuer(
+            random.Random(42),
+            "www.reddit.com",
+            event_time=datetime(2026, 11, 2, tzinfo=UTC),
+        )
+        assert issuer["name"] == "CN=YR1, O=Let's Encrypt, C=US"
+
+    def test_expired_reddit_override_falls_back_for_future_observation(self):
+        issuer = pick_issuer(
+            random.Random(42),
+            "www.reddit.com",
+            event_time=datetime(2030, 1, 1, tzinfo=UTC),
+        )
+        assert issuer["name"] not in {
+            "CN=YR1, O=Let's Encrypt, C=US",
+            "CN=YR2, O=Let's Encrypt, C=US",
+        }
+
+    def test_expired_domain_override_falls_back_to_valid_weighted_issuer(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from evidenceforge.generation.activity import tls_issuers, tls_realism
+
+        expired_name = "CN=Old CA"
+        valid_name = "CN=Current CA"
+        monkeypatch.setattr(
+            tls_issuers,
+            "load_tls_issuers",
+            lambda: {
+                "issuers": [
+                    {
+                        "name": expired_name,
+                        "weight": 0,
+                        "validity_days_min": 90,
+                        "validity_days_max": 90,
+                        "not_before_max_days": 30,
+                        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+                    },
+                    {
+                        "name": valid_name,
+                        "weight": 1,
+                        "validity_days_min": 90,
+                        "validity_days_max": 90,
+                        "not_before_max_days": 30,
+                        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+                    },
+                ],
+                "domain_ca_overrides": {"*.reddit.com": expired_name},
+            },
+        )
+        monkeypatch.setattr(
+            tls_realism,
+            "certificate_authority_profile",
+            lambda subject: (
+                {"not_valid_before": 0, "not_valid_after": 1} if subject == expired_name else None
+            ),
+        )
+
+        issuer = pick_issuer(
+            random.Random(42),
+            "www.reddit.com",
+            event_time=datetime(2026, 11, 2, tzinfo=UTC),
+        )
+
+        assert issuer["name"] == valid_name
+
     def test_expired_issuer_is_excluded_for_post_expiration_event_time(self):
         rng = random.Random(42)
         issuer = pick_issuer(rng, "", event_time=datetime(2026, 2, 1, tzinfo=UTC))

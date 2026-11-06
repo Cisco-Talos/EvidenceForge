@@ -354,9 +354,9 @@ class RuntimeContentIdentityManager:
         application profile once. A typed system owner receives an explicit
         runtime system profile and never masquerades as a user installation.
         An explicit Mac filesystem observation supplies object and length facts;
-        any independently authored values must agree. Otherwise missing byte
-        length is represented as zero (unknown modeled length),
-        and executable MIME is derived only from the explicit platform flag.
+        any independently authored values must agree. Missing non-executable
+        length remains unknown. Unresolved executable images receive a deterministic
+        positive size from the runtime executable profile catalog.
         """
 
         normalized_action = str(action).strip().casefold()
@@ -470,7 +470,18 @@ class RuntimeContentIdentityManager:
         )
         seed_ref = authored_content_seed_ref.strip() or (f"runtime-file-content:{stable_source_id}")
         mime_type = authored_mime_type.strip() or _runtime_mime_type(platform, executable)
-        size_bytes = 0 if authored_size_bytes is None else authored_size_bytes
+        size_bytes = authored_size_bytes
+        if size_bytes is None and executable:
+            from evidenceforge.generation.activity.runtime_executable_profiles import (
+                runtime_executable_size_bytes,
+            )
+
+            size_bytes = runtime_executable_size_bytes(
+                platform=platform,
+                stable_id=stable_source_id,
+            )
+        if size_bytes is None:
+            size_bytes = 0
         descriptor = RuntimeArtifactDescriptor(
             hostname=hostname,
             principal=principal,

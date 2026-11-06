@@ -504,7 +504,19 @@ def _validate_binding_disposition(
     batch = state_plan.batch
     patch = state_plan.existing_session_patch
     roles = state_plan.existing_session_process_roles_patch
-    if batch is None or not batch.processes:
+    if batch is None:
+        if (
+            not state_authority.allocation_free_rdp_reconnect
+            or kind is not DeferredSessionKind.RDP
+            or disposition is not DeferredSessionBindingDisposition.ACTIVE_SESSION
+            or patch is None
+            or roles is not None
+            or patch.lifecycle_disposition
+            is not ConnectionExistingSessionLifecycleDisposition.EXISTING
+        ):
+            raise StateError("Allocation-free composition requires an exact ACTIVE RDP patch")
+        return
+    if not batch.processes:
         raise StateError("Strict deferred session composition requires process members")
     if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
         if batch.session is None or patch is not None or roles is not None:
@@ -1221,7 +1233,9 @@ def _composition_integrity_preimage(
             state_authority.binding_disposition,
             state_authority.bound_at,
             id(state_authority.batch),
-            state_authority.batch.publication_token,
+            state_authority.batch.publication_token
+            if state_authority.batch is not None
+            else "allocation-free-rdp",
             id(state_authority.existing_session_patch),
             id(state_authority.existing_session_process_roles_patch),
         )

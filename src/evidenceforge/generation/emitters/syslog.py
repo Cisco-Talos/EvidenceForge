@@ -5623,15 +5623,7 @@ class SyslogEmitter(HostMultiplexEmitter):
                 primary_writer.buffer = normalized
 
     def _normalize_logind_session_ids(self) -> None:
-        """Rewrite visible logind New-session IDs in final rendered order.
-
-        systemd-logind session IDs are source-local syslog presentation state.
-        The generator can emit events out of final sorted order, so the final
-        syslog renderer owns the last mile: preserve the original relative
-        regime, make New-session rows monotonic per host/logind PID, and carry
-        the rewritten ID into matching Removed-session rows when both are
-        visible in the collection window.
-        """
+        """Retain shared identities while visiting legacy host buffers."""
         with self._writers_lock:
             for host_key, rows in self._sorted_lines_by_host().items():
                 if not rows:
@@ -5692,101 +5684,13 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
-        """Return lines with monotonic logind New-session IDs for one host.
+        """Preserve canonical session identity, including raw supplied rows.
 
-        Canonical SSH sessions can expose the same logind session ID in eCAR.
-        Preserve already-monotonic syslog IDs so renderer finalization does not
-        split that cross-source identity; only repair invalid, duplicate, or
-        backward-moving rows.
+        Session allocation belongs to StateManager. Observation ordering cannot
+        authorize reassignment of an ID also carried by endpoint/session evidence.
         """
-        first_by_pid: dict[str, int] = {}
-        for line in lines:
-            match = _LOGIND_NEW_SESSION_RE.search(line)
-            if match is None:
-                continue
-            pid = _logind_pid(match)
-            session = _parse_logind_session_id(match.group("session"))
-            if session is None:
-                continue
-            first_by_pid[pid] = min(session, first_by_pid.get(pid, session))
-
-        if not first_by_pid:
-            return lines
-
-        latest_new_by_pid: dict[str, int] = {}
-        visible_new_keys = {
-            (_logind_pid(match), match.group("session"))
-            for line in lines
-            if (match := _LOGIND_NEW_SESSION_RE.search(line)) is not None
-        }
-        prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
-        rewritten_by_original: dict[tuple[str, str], int] = {}
-        orphan_removals_seen: set[tuple[str, str]] = set()
-        normalized: list[str] = []
-        for index, line in enumerate(lines):
-            new_match = _LOGIND_NEW_SESSION_RE.search(line)
-            if new_match is not None:
-                pid = _logind_pid(new_match)
-                original_session = new_match.group("session")
-                parsed_session = _parse_logind_session_id(original_session)
-                if parsed_session is None:
-                    normalized.append(line)
-                    continue
-                latest_session = latest_new_by_pid.get(pid)
-                if latest_session is None or parsed_session > latest_session:
-                    rewritten = parsed_session
-                else:
-                    step_seed = _stable_seed(
-                        f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
-                    )
-                    rewritten = latest_session + 1 + (step_seed % 3)
-                    line = (
-                        f"{line[: new_match.start('session')]}"
-                        f"{rewritten}"
-                        f"{line[new_match.end('session') :]}"
-                    )
-                latest_new_by_pid[pid] = rewritten
-                rewritten_by_original[(pid, original_session)] = rewritten
-                normalized.append(line)
-                continue
-
-            removed_match = _LOGIND_REMOVED_SESSION_RE.search(line)
-            if removed_match is not None:
-                key = (_logind_pid(removed_match), removed_match.group("session"))
-                rewritten = rewritten_by_original.get(key)
-                if rewritten is None:
-                    pid = key[0]
-                    original_session_id = _parse_logind_session_id(key[1])
-                    if original_session_id is None:
-                        normalized.append(line)
-                        continue
-                    collides_with_visible_new = key in visible_new_keys
-                    duplicates_orphan = key in orphan_removals_seen
-                    orphan_removals_seen.add(key)
-                    if collides_with_visible_new or duplicates_orphan:
-                        step_seed = _stable_seed(
-                            "syslog_logind_prewindow_session_step:"
-                            f"{host_key}:{pid}:{key[1]}:{index}"
-                        )
-                        rewritten = (
-                            prewindow_next_by_pid.get(
-                                pid,
-                                max(2, first_by_pid.get(pid, original_session_id + 1)) - 1,
-                            )
-                            - 1
-                            - (step_seed % 3)
-                        )
-                        while rewritten == original_session_id:
-                            rewritten -= 1
-                        prewindow_next_by_pid[pid] = rewritten
-                if rewritten is not None:
-                    line = (
-                        f"{line[: removed_match.start('session')]}"
-                        f"{rewritten}"
-                        f"{line[removed_match.end('session') :]}"
-                    )
-            normalized.append(line)
-        return normalized
+        del host_key
+        return lines
 
     @staticmethod
     def _backfill_missing_logind_pam_openers_for_lines(

@@ -140,7 +140,12 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     remote_auth_transport_max_duration_seconds,
 )
-from evidenceforge.generation.timing import TimingScope, uniform_distribution
+from evidenceforge.generation.timing import (
+    TimingSampler,
+    TimingScope,
+    TriangularDistribution,
+    uniform_distribution,
+)
 from evidenceforge.generation.world_model import (
     HostCapability,
     WorldModel,
@@ -152,6 +157,7 @@ from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.timing import hawkes_timestamps
 
 if TYPE_CHECKING:
     from evidenceforge.generation.checkpoints.models import CheckpointCursor
@@ -497,6 +503,39 @@ def _baseline_success_target_for_guarded_port(
     if not candidates:
         return None
     return rng.choice(candidates)
+
+
+def _baseline_smb_arrival_offsets(
+    hostname: str,
+    current_hour: datetime,
+    interval_low: float,
+    interval_high: float,
+    generation_seed: int,
+) -> tuple[float, ...]:
+    """Plan bounded host-hour SMB opportunities independently of traversal."""
+    from evidenceforge.generation.activity.host_activity_profiles import smb_arrival_profile
+
+    profile = smb_arrival_profile()
+    width = max(1, int(interval_high - interval_low))
+    interval = max(1.0, interval_low + _stable_seed(f"smb_iv_{hostname}") % width)
+    expected = 3600.0 / interval
+    beta = 1.0 / profile.excitation_decay_seconds
+    alpha = beta * profile.branching_ratio
+    arrival_rng = random.Random(
+        _stable_seed(
+            f"baseline_smb_arrivals:{generation_seed}:{hostname}:{ensure_utc(current_hour).isoformat()}"
+        )
+    )
+    offsets, _state = hawkes_timestamps(
+        num_events=math.ceil(expected * profile.candidate_ceiling_multiplier)
+        + profile.minimum_candidate_ceiling,
+        duration=3600.0,
+        mu=(1.0 - profile.branching_ratio) / interval,
+        alpha=alpha,
+        beta=beta,
+        rng=arrival_rng,
+    )
+    return tuple(offsets)
 
 
 def _ntp_sync_interval_seconds(
@@ -983,6 +1022,49 @@ def _extra_syslog_effective_limit(
     sampled_fraction = target_rng.lognormvariate(math.log(median_fraction), 0.48)
     target = round(configured_limit * sampled_fraction * role_factor)
     return max(1, min(configured_limit, target))
+
+
+def _extra_syslog_arrival_offsets(
+    system: System,
+    entry: dict[str, Any],
+    window_start: datetime,
+    window_end: datetime,
+    sampler: TimingSampler,
+) -> tuple[float, ...] | None:
+    """Plan optional bounded-noise opportunities without consuming admission state.
+
+    The count is a binomial target beneath the cap. Sorted timing draws make the
+    next admitted ordinal eligible throughout the window rather than at its start.
+    Actual selection opportunities may leave part of this target unobserved.
+    """
+    probability = entry.get("window_occurrence_probability")
+    if probability is None:
+        return None
+    ceiling = int(entry.get("max_per_host_window", 0) or 0)
+    span = (ensure_utc(window_end) - ensure_utc(window_start)).total_seconds()
+    if ceiling <= 0 or span <= 0:
+        return ()
+    key = _extra_syslog_limit_key(system.hostname, entry)
+    identity = f"{key}:{ensure_utc(window_start).isoformat()}:{span}"
+    count_rng = random.Random(
+        _stable_seed(f"syslog_window_count:{sampler.generation_seed}:{identity}")
+    )
+    target = sum(count_rng.random() < float(probability) for _ in range(ceiling))
+    mode = float(entry.get("window_arrival_mode", 0.5))
+    distribution = TriangularDistribution(minimum=0.0, mode=span * mode, maximum=span)
+    return tuple(
+        sorted(
+            sampler.sample_value(
+                distribution,
+                relationship_key="baseline.syslog.bounded_window_arrival",
+                scope=TimingScope(
+                    stable_id=identity, host=system.hostname, source="syslog", ordinal=i
+                ),
+                sample_key="arrival_offset_seconds",
+            )
+            for i in range(target)
+        )
+    )
 
 
 def _networkmanager_message_timestamp(ts: datetime) -> str:
@@ -1819,6 +1901,8 @@ def _cron_workload_process(
 
 def _schedule_applies_to_system(sched: dict[str, Any], system: Any, has_web_role: bool) -> bool:
     """Return whether a Linux schedule matches host role and service/package state."""
+    if sched.get("execution_scope", "system") != "system":
+        return False
     roles = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
     services = {str(service).lower() for service in (getattr(system, "services", []) or [])}
 
@@ -8696,11 +8780,7 @@ class BaselineMixin:
         # omitted only on the terminal pass instead of risking a partial family.
         if os_cat == "windows" and persona_name and not terminal_pass:
             _pn = persona_name.lower()
-            servers = [
-                s
-                for s in self.scenario.environment.systems
-                if s.type in ("server", "domain_controller")
-            ]
+            servers = self.world_model.windows_management_targets(system, servers_only=True)
             if _pn in ("sysadmin", "security_analyst") and rng.random() < 0.15 and servers:
                 target_server = rng.choice(servers)
                 admin_alias = f"{user.username}-admin"
@@ -8751,6 +8831,10 @@ class BaselineMixin:
                     process_pid=session.explorer_pid if session else 0,
                 )
             elif _pn == "help_desk" and rng.random() < 0.08:
+                management_hosts = {
+                    target.hostname
+                    for target in self.world_model.windows_management_targets(system)
+                }
                 non_admins = [
                     u
                     for u in self.scenario.environment.users
@@ -8758,6 +8842,7 @@ class BaselineMixin:
                     and (u.persona or "").lower()
                     not in ("sysadmin", "security_analyst", "help_desk")
                     and u.username != user.username
+                    and u.primary_system in management_hosts
                 ]
                 if non_admins:
                     target_user = rng.choice(non_admins)
@@ -9406,7 +9491,6 @@ class BaselineMixin:
         dc_ips = self._infra_ips.get("dc", [])
         if isinstance(dc_ips, str):
             dc_ips = [dc_ips]
-        hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
         systems_by_ip = {system.ip: system for system in self.scenario.environment.systems}
         storage_world = getattr(self.activity_generator, "_storage_world", None)
         storage_shares = tuple(getattr(storage_world, "shares", ()))
@@ -9435,15 +9519,13 @@ class BaselineMixin:
                 interval_low,
                 interval_high,
             )
-            interval_range = max(1, interval_high - interval_low)
-            interval = interval_low + (_stable_seed(f"smb_iv_{system.hostname}") % interval_range)
-            scheduled_second = _stable_seed(f"smb_ph_{system.hostname}") % interval
-            while scheduled_second < hour_start_sec:
-                scheduled_second += interval
-
-            while scheduled_second < hour_start_sec + 3600:
-                offset = scheduled_second - hour_start_sec + rng.gauss(0, interval * 0.02)
-                offset = max(0.0, min(3599.0, offset))
+            for offset in _baseline_smb_arrival_offsets(
+                system.hostname,
+                current_hour,
+                interval_low,
+                interval_high,
+                getattr(self, "generation_seed", 0),
+            ):
                 timestamp = current_hour + timedelta(seconds=offset)
                 target_ip = rng.choice(smb_targets)
                 target_system = systems_by_ip.get(target_ip)
@@ -9503,6 +9585,22 @@ class BaselineMixin:
                 )
                 share_ref = ""
                 operation: Literal["browse", "read", "update"] = "browse"
+                if _get_os_category(system.os) == "macos":
+                    # This producer models interactive mounted file access, not
+                    # an implicit mount or domain-controller policy refresh.
+                    server_shares = [
+                        share
+                        for share in server_shares
+                        if actor is not None
+                        and any(
+                            mapping.mount
+                            for mapping in storage_world.applicable_mappings(
+                                share.ref, username=actor.username, hostname=system.hostname
+                            )
+                        )
+                    ]
+                    if not server_shares:
+                        continue
                 if actor is not None and server_shares:
                     dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
                     selected_share = rng.choice(dc_shares or server_shares)
@@ -9533,7 +9631,6 @@ class BaselineMixin:
                     )
                 )
                 sequence += 1
-                scheduled_second += interval
 
         return tuple(
             sorted(
@@ -9658,7 +9755,7 @@ class BaselineMixin:
         rng: random.Random,
         dc_ips: list[str],
     ) -> None:
-        """Preserve the established Windows-only baseline SMB RNG path."""
+        """Execute Windows-only SMB through the shared occurrence arrival owner."""
 
         from evidenceforge.models.scenario import (
             SmbActivityEventSpec,
@@ -9675,16 +9772,13 @@ class BaselineMixin:
             interval_low,
             interval_high,
         )
-        interval_range = max(1, interval_high - interval_low)
-        interval = interval_low + (_stable_seed(f"smb_iv_{system.hostname}") % interval_range)
-        scheduled_second = _stable_seed(f"smb_ph_{system.hostname}") % interval
-        hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-        while scheduled_second < hour_start_sec:
-            scheduled_second += interval
-
-        while scheduled_second < hour_start_sec + 3600:
-            offset = scheduled_second - hour_start_sec + rng.gauss(0, interval * 0.02)
-            offset = max(0.0, min(3599.0, offset))
+        for offset in _baseline_smb_arrival_offsets(
+            system.hostname,
+            current_hour,
+            interval_low,
+            interval_high,
+            getattr(self, "generation_seed", 0),
+        ):
             timestamp = current_hour + timedelta(seconds=offset)
             target_ip = rng.choice(smb_targets)
             target_system = next(
@@ -9723,7 +9817,6 @@ class BaselineMixin:
                 start=timestamp,
                 end=timestamp + timedelta(seconds=duration),
             ):
-                scheduled_second += interval
                 continue
 
             actor = None
@@ -9780,7 +9873,6 @@ class BaselineMixin:
                     activity_source="baseline",
                 )
                 if preparation.closed_at > self.end_time:
-                    scheduled_second += interval
                     continue
                 canonical_duration = preparation.duration
             close_bound = self._baseline_network_close_bound_seconds(
@@ -9800,7 +9892,6 @@ class BaselineMixin:
                 start=timestamp,
                 end=timestamp + timedelta(seconds=close_bound),
             ):
-                scheduled_second += interval
                 continue
             self.state_manager.set_current_time(timestamp)
             if preparation is not None:
@@ -9821,7 +9912,6 @@ class BaselineMixin:
                     source_system=system,
                     pid=4,
                 )
-            scheduled_second += interval
 
     def _emit_ecar_file_churn(
         self,
@@ -10980,18 +11070,10 @@ class BaselineMixin:
                 and exact_browser_process
             ):
                 user_agent_override: str | None = None
-                from evidenceforge.generation.activity.proxy_user_agents import (
-                    stable_browser_user_agent_for_process,
-                )
-
                 if selected_process is not None:
-                    process_identity = selected_process.ecar_object_id or (
-                        f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
-                    )
-                    user_agent_override = stable_browser_user_agent_for_process(
+                    user_agent_override = self.activity_generator.browser_user_agent_for_process(
                         system,
-                        selected_process.image,
-                        process_identity,
+                        selected_process.pid,
                         hostname=hostname,
                         domain_tags=list(conn.get("dns_tags") or []),
                     )
@@ -11093,19 +11175,8 @@ class BaselineMixin:
         session_ua = ""
         selected_process = self.state_manager.get_process(system.hostname, persona_pid)
         if selected_process is not None:
-            from evidenceforge.generation.activity.proxy_user_agents import (
-                stable_browser_user_agent_for_process,
-            )
-
-            process_identity = selected_process.ecar_object_id or (
-                f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
-            )
-            session_ua = stable_browser_user_agent_for_process(
-                system,
-                selected_process.image,
-                process_identity,
-                hostname=hostname,
-                domain_tags=list(domain_tags),
+            session_ua = self.activity_generator.browser_user_agent_for_process(
+                system, selected_process.pid, hostname=hostname, domain_tags=list(domain_tags)
             )
         if not session_ua and user_agent_override is not None:
             session_ua = user_agent_override
@@ -12121,6 +12192,22 @@ class BaselineMixin:
                             continue
                     elif entry.get("max_per_host_window"):
                         continue
+                    arrivals = (
+                        _extra_syslog_arrival_offsets(
+                            system,
+                            entry,
+                            self.start_time,
+                            self.end_time,
+                            self.activity_generator.timing_runtime.sampler,
+                        )
+                        if entry.get("window_occurrence_probability") is not None
+                        else None
+                    )
+                    if arrivals is not None:
+                        admitted = self._extra_syslog_entry_counts.get(limit_key, 0)
+                        offset = (ensure_utc(ts) - ensure_utc(self.start_time)).total_seconds()
+                        if admitted >= len(arrivals) or offset < arrivals[admitted]:
+                            continue
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease

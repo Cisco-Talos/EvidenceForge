@@ -84,6 +84,51 @@ def modeled() -> _Fixture:
     return _Fixture(provider, state, root.identity, start, end)
 
 
+def test_directory_metadata_is_deterministic_and_host_path_scoped() -> None:
+    scenario = _scenario(two_macs=True)
+    start, end = resolve_time_window(scenario.time_window)
+    deployments = _deployments(scenario)
+    installed = _compile(scenario, deployments)
+    assert installed is not None
+    identities = IdentityDirectory.from_scenario(scenario)
+    profile = load_macos_execution_metadata_profile()
+    assert profile is not None
+
+    producers = [
+        MacosExecutionMetadataProducer(
+            installed.filesystem,
+            identities,
+            profile,
+            window_start=start,
+            window_end=end,
+        )
+        for _ in range(2)
+    ]
+    observations = {
+        (host, path): producers[0].directory(host, path, start)
+        for host in ("MAC-01", "MAC-02")
+        for path in ("/", "/Users/alex")
+    }
+    repeated = {key: producers[1].directory(*key, start) for key in observations}
+
+    assert {key: value.metadata.canonical_json() for key, value in observations.items()} == {
+        key: value.metadata.canonical_json() for key, value in repeated.items()
+    }
+    for host in ("MAC-01", "MAC-02"):
+        host_inodes = [observations[host, path].metadata.inode for path in ("/", "/Users/alex")]
+        assert len(set(host_inodes)) == len(host_inodes)
+        for path in ("/", "/Users/alex"):
+            metadata = observations[host, path].metadata
+            age_seconds = start.timestamp() - metadata.born.seconds
+            assert profile.directory_inode_range.min <= metadata.inode
+            assert metadata.inode <= profile.directory_inode_range.max
+            assert profile.directory_age_range.min <= age_seconds
+            assert age_seconds <= profile.directory_age_range.max
+    assert {
+        observations["MAC-01", path].metadata.inode for path in ("/", "/Users/alex")
+    }.isdisjoint(observations["MAC-02", path].metadata.inode for path in ("/", "/Users/alex"))
+
+
 def _terminal(
     fixture: _Fixture,
     *,

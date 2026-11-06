@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
 _ORIGIN_DURATION_FLOOR_SECONDS = 0.04
 _TLS_ORIGIN_DURATION_FLOOR_SECONDS = 0.85
-_ORIGIN_PHASE_SETUP_FLOOR_SECONDS = 0.001001
 
 
 def proxy_transaction_close_bound_seconds(
@@ -119,7 +118,9 @@ def proxy_transaction_close_bound_seconds(
     runtime_origin_duration_floor_seconds = (
         _TLS_ORIGIN_DURATION_FLOOR_SECONDS if dst_port == 443 else _ORIGIN_DURATION_FLOOR_SECONDS
     )
-    minimum_origin_duration_seconds = _ORIGIN_PHASE_SETUP_FLOOR_SECONDS
+    minimum_origin_duration_seconds = max(
+        0.000002, timing.origin_request_after_setup_ms.maximum / 1000 + 0.000001
+    )
     if dst_port == 443:
         minimum_origin_duration_seconds += timing.tls_after_origin_connect_ms.maximum / 1000.0
     effective_origin_duration_seconds = max(
@@ -319,7 +320,15 @@ class ProxyPhasePlanner:
                     )
                     response_anchor = tls_complete_at
                 if proxy.method != "CONNECT":
-                    origin_request_at = response_anchor + timedelta(milliseconds=1)
+                    origin_request_at = response_anchor + max(
+                        timedelta(microseconds=1),
+                        self._sample(
+                            timing.origin_request_after_setup_ms,
+                            relationship_key="proxy.origin_request_after_setup",
+                            scope=timing_scope,
+                            sample_key="origin_request",
+                        ),
+                    )
                     response_anchor = origin_request_at
                 # Overlay timing may place TLS/request setup beyond the sampled
                 # origin service duration. Extend the owner transport before

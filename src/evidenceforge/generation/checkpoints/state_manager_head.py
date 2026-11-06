@@ -50,7 +50,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "11"
+_SCHEMA_VERSION = "12"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -363,6 +363,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         "8",
         "9",
         "10",
+        "11",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -442,7 +443,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         fresh._refresh_connection_lifecycle(connection)
 
     expiring = document["expiring"]
-    if document["schema_version"] not in {"10", _SCHEMA_VERSION}:
+    if document["schema_version"] not in {"10", "11", _SCHEMA_VERSION}:
         if type(expiring) is not dict or set(expiring) != set(_EXPIRING_FIELDS) - {
             "_macos_policy_refusals"
         }:
@@ -485,7 +486,8 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         _restore_grouped(getattr(fresh, name), grouped[name], name)
 
     temporal = document["temporal"]
-    if type(temporal) is not dict or set(temporal) != set(_TEMPORAL_ALLOCATION_FIELDS):
+    expected_temporal = set(_TEMPORAL_ALLOCATION_FIELDS)
+    if type(temporal) is not dict or set(temporal) != expected_temporal:
         raise CheckpointCorruptionError("StateManager checkpoint allocation indexes changed")
     for name in _TEMPORAL_ALLOCATION_FIELDS:
         indexes: dict[object, TemporalAllocationIndex] = {}
@@ -614,7 +616,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         streams = session.ssh_command_streams
         if streams is not None:
             if (
-                document["schema_version"] not in {"9", "10", _SCHEMA_VERSION}
+                document["schema_version"] not in {"9", "10", "11", _SCHEMA_VERSION}
                 or not ssh
                 or origin is None
                 or session.effective_uid != origin.audit_uid
@@ -1083,7 +1085,7 @@ class StateManagerParticipant:
             if (
                 type(document) is not dict
                 or document.get("schema_version")
-                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10"}
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10", "11"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

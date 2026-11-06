@@ -1,0 +1,17 @@
+{
+  "new_entries": 58,
+  "new_events": 103,
+  "process_events": 65,
+  "native_process_coverage": "complete",
+  "baseline": "Original low/medium/medium profile retained; no process-family suppression",
+  "hosts": [
+    "MAC-MROSS-01",
+    "MAC-MROSS-02"
+  ],
+  "terminal_apps": [
+    "Apple Terminal",
+    "iTerm2"
+  ],
+  "epoch": "2026-11-02T13:00:00Z",
+  "original_workload": "Preserved; raw Apache date text updated to match the epoch"
+}

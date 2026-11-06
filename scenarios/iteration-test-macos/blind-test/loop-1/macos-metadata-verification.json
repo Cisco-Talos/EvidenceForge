@@ -1,0 +1,104 @@
+{
+  "MAC-MROSS-01.meridianhcs.local": {
+    "reversals": [
+      {
+        "previous": {
+          "line": 103,
+          "time": "2026-11-02T17:13:57.143786000Z",
+          "mach_time": 25248891450864,
+          "pid": 71340,
+          "version": 102,
+          "start": "2026-11-02T17:13:57.134459Z"
+        },
+        "next": {
+          "line": 104,
+          "time": "2026-11-02T17:26:16.202102000Z",
+          "mach_time": 25266628850448,
+          "pid": 72649,
+          "version": 92,
+          "start": "2026-11-02T17:26:16.202102Z"
+        }
+      }
+    ],
+    "timestamp_observations": 104,
+    "all_fractions_under_1000ns": true
+  },
+  "MAC-MROSS-02.meridianhcs.local": {
+    "reversals": [
+      {
+        "previous": {
+          "line": 9,
+          "time": "2026-11-02T13:05:36.214210000Z",
+          "mach_time": 55995269141040,
+          "pid": 18386,
+          "version": 51,
+          "start": "2026-11-02T13:05:36.202399Z"
+        },
+        "next": {
+          "line": 10,
+          "time": "2026-11-02T13:11:56.322327000Z",
+          "mach_time": 56004391735848,
+          "pid": 18976,
+          "version": 10,
+          "start": "2026-11-02T13:11:56.322327Z"
+        }
+      },
+      {
+        "previous": {
+          "line": 42,
+          "time": "2026-11-02T13:37:29.212060000Z",
+          "mach_time": 56041181089440,
+          "pid": 21374,
+          "version": 54,
+          "start": "2026-11-02T13:37:29.205202Z"
+        },
+        "next": {
+          "line": 43,
+          "time": "2026-11-02T13:43:12.427761000Z",
+          "mach_time": 56049418266264,
+          "pid": 21921,
+          "version": 37,
+          "start": "2026-11-02T13:43:12.427761Z"
+        }
+      },
+      {
+        "previous": {
+          "line": 113,
+          "time": "2026-11-02T16:00:34.228817000Z",
+          "mach_time": 56247221491608,
+          "pid": 45389,
+          "version": 111,
+          "start": "2026-11-02T16:00:34.218785Z"
+        },
+        "next": {
+          "line": 114,
+          "time": "2026-11-02T16:01:53.409650000Z",
+          "mach_time": 56249121831600,
+          "pid": 45512,
+          "version": 98,
+          "start": "2026-11-02T16:01:53.409650Z"
+        }
+      },
+      {
+        "previous": {
+          "line": 118,
+          "time": "2026-11-02T16:24:40.809792000Z",
+          "mach_time": 56281939435008,
+          "pid": 47654,
+          "version": 109,
+          "start": "2026-11-02T16:24:40.796693Z"
+        },
+        "next": {
+          "line": 119,
+          "time": "2026-11-02T16:45:41.055193000Z",
+          "mach_time": 56312185324632,
+          "pid": 49718,
+          "version": 100,
+          "start": "2026-11-02T16:45:41.055193Z"
+        }
+      }
+    ],
+    "timestamp_observations": 124,
+    "all_fractions_under_1000ns": true
+  }
+}

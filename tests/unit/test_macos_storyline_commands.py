@@ -233,7 +233,9 @@ def test_authored_command_uses_free_time_before_later_baseline_booking(tmp_path:
 
 
 @pytest.mark.parametrize("native_mode", ["absent", "visible", "filtered"])
-def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mode: str) -> None:
+def test_pty_ssh_shell_commands_own_real_forks_and_history(
+    tmp_path: Path, native_mode: str
+) -> None:
     from tests.unit.test_macos_installed_provisioning import _scenario
 
     scenario = _scenario()
@@ -254,6 +256,7 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             )
         ]
     engine = GenerationEngine(scenario, tmp_path, generation_seed=328)
+    engine._chronological_es_delivery = True
     try:
         engine._initialize()
         generator = engine.activity_generator
@@ -263,6 +266,7 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             engine.start_time + timedelta(minutes=10),
             source_ip="192.0.2.200",
             duration=300,
+            pty=True,
             emit_session_close=True,
             defer_session_close=True,
         )
@@ -274,20 +278,25 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             "/bin/ps aux",
             '/usr/bin/find /Users/alex/Documents -maxdepth 2 -type f -name "*.pdf"',
         ]
-        results = [
-            engine._execute_typed_event(
-                ProcessEventSpec(process_name=command.split()[0], command_line=command),
-                user,
-                system,
-                engine.start_time + timedelta(minutes=11, seconds=index * 20),
-                "SSH discovery",
-                {"process"},
+        results = []
+        for index, command in enumerate(commands):
+            requested = engine.start_time + timedelta(minutes=11, seconds=index * 20)
+            engine._flush_story_process_terminations(release_time=requested)
+            results.append(
+                engine._execute_typed_event(
+                    ProcessEventSpec(process_name=command.split()[0], command_line=command),
+                    user,
+                    system,
+                    requested,
+                    "SSH discovery",
+                    {"process"},
+                )
             )
-            for index, command in enumerate(commands)
-        ]
+        engine._flush_story_process_terminations(release_time=engine.end_time)
         for result in results:
             assert result.get("pid", 0) > 0, result
         generator.finalize_ssh_session_lifecycles(engine.end_time)
+        engine._finalize_macos_process_coverage()
     finally:
         engine._close_emitters()
     history = list(tmp_path.rglob("*.zsh_history"))
@@ -304,21 +313,28 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             for row in rows
             if row.get("pid") == result["pid"] and row.get("object") == "PROCESS"
         ]
-        assert [row["action"] for row in process] == ["CREATE", "MODIFY", "TERMINATE"]
+        assert [row["action"] for row in process] == ["CREATE", "MODIFY", "MODIFY", "TERMINATE"]
+        assert process[1]["properties"]["operation"] == "job_control"
         assert process[0]["properties"]["image_path"] == "/bin/zsh"
-        assert process[1]["properties"]["image_path"] == command.split()[0]
+        assert process[2]["properties"]["image_path"] == command.split()[0]
     paths = list(tmp_path.rglob("macos_endpoint_security.ndjson"))
     assert len(paths) == int(native_mode == "visible")
     if native_mode == "visible":
         records = [json.loads(line) for line in paths[0].read_text().splitlines()]
-        assert len(records) == 13
-        assert sum(row["event_type"] == 11 for row in records) == 7
-        assert sum(row["event_type"] == 9 for row in records) == 4
-        assert sum(row["event_type"] == 15 for row in records) == 2
-        completed = [row for row in records if row["event_type"] == 15]
+        assert len(records) == 29
+        assert sum(row["event_type"] == 11 for row in records) == 10
+        assert sum(row["event_type"] == 9 for row in records) == 10
+        assert sum(row["event_type"] == 15 for row in records) == 9
+        command_pids = {result["pid"] for result in results}
+        completed = [
+            row
+            for row in records
+            if row["event_type"] == 15 and row["process"]["audit_token"]["pid"] in command_pids
+        ]
         assert {row["process"]["executable"]["path"] for row in completed} == {
             "/usr/bin/id",
             "/usr/bin/sw_vers",
+            "/bin/ps",
         }
         assert all(row["event"]["exit"]["stat"] == 0 for row in completed)
         submissions = {
@@ -341,7 +357,7 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             )
             assert execution["target"]["executable"]["path"] == command.split()[0]
             assert [item["fd"] for item in execution["fds"]] == [0, 1, 2]
-            assert all(item["fdtype"] == 6 for item in execution["fds"])
+            assert all(item["fdtype"] == 1 for item in execution["fds"])
 
 
 @pytest.mark.parametrize("after_write", [False, True])

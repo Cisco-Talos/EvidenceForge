@@ -2426,7 +2426,9 @@ class CausalityScorer(DimensionScorer):
                 key=lambda flow: abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()),
             )
             total += 1
-            if _normalize_ts(nearest_flow.timestamp) < login_time:
+            # eCAR timestamps serialize at millisecond precision; equal timestamps
+            # cannot establish which observation occurred first.
+            if _normalize_ts(nearest_flow.timestamp) <= login_time:
                 correct += 1
             elif len(failures) < 10:
                 failures.append(

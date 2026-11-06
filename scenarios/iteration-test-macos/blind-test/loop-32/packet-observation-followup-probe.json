@@ -1,0 +1,4457 @@
+{
+  "directional_comparisons": 318,
+  "rows": [
+    {
+      "tuple": [
+        "10.10.2.40",
+        55197,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C6ZGqabkzA3MZAP7aH",
+      "dmz_uid": "CuelGwj9XUmAQD8UjX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        56919,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CjYUFaAmsRqIohaTElL",
+      "dmz_uid": "CSruFkv5xn5B8DkNPge",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        61400,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cou8srhi2IpqVYqlWP",
+      "dmz_uid": "CJ6B5MykytXx6mlIUj",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 36
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        45554,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CnIrCZaBewWUGsoNH",
+      "dmz_uid": "C4sP9MtKYphQeDcjP",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        52277,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CrKFqXa92OQAUoSGml",
+      "dmz_uid": "CsCdItbE9nwEiETBT7",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 34
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        52295,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CsHOkNK2wEFb6JJxyi",
+      "dmz_uid": "C6AHphBSnpVZYzLrPM",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        54091,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CfEchiMcWmopoML44o",
+      "dmz_uid": "ClmqvmITVD40Ws9nlf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 36
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        54091,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CfEchiMcWmopoML44o",
+      "dmz_uid": "ClmqvmITVD40Ws9nlf",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        57281,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMRqxOXIciZyfRU8QG",
+      "dmz_uid": "Ckxxwu19FU9vOsMgQf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        61727,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7iLFAJ6b6aEqydxGt1",
+      "dmz_uid": "ClAgucIGlzObgeksdhH",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        53139,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C6bYu5n4SGuIDy52r",
+      "dmz_uid": "C8FDtRGVEBIwDcaDf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        51598,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CDJrjCK7WRdsmIejv0y",
+      "dmz_uid": "Cp16eiYQu9hNSDlKNAG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        57384,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CjfAszLF0F8AXRvjIg",
+      "dmz_uid": "CIwG2lQUJ3TfBT2nZb",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        60606,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C2HME351R1jukR2Geo3",
+      "dmz_uid": "CCX9wb0GdVRjZJPkF7h",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 20
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        40755,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPh1ZFoFEy0Hde9hF",
+      "dmz_uid": "C7e5wDbuCmFzCJbvU",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        53941,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuStGDjOvkRLobaqOF",
+      "dmz_uid": "Cs1fhhPEz7MIAGzFxi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        34398,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CxrXDPiHNGNFaT4RX6",
+      "dmz_uid": "CGWCIMFOEO8dpHU291",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 28
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        57209,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C243L9pgaYtek4Ft9Ui",
+      "dmz_uid": "CT9blJX7OTFZQzNJgpf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        52605,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CKSFr4DjjOyxPxnUs",
+      "dmz_uid": "CADIRsd2iUAYJmmmm",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59221,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAWoYPpo485tqh97h3",
+      "dmz_uid": "CGwjOLyHbnb76LImYT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59221,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAWoYPpo485tqh97h3",
+      "dmz_uid": "CGwjOLyHbnb76LImYT",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        57907,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CHu8ptDAJEb54DbV9",
+      "dmz_uid": "CfagOYNEI4F8oHXkY",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        33305,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CBP87PT5o43tUFLeeqb",
+      "dmz_uid": "CJYOM3KuukDVRZpGmx8",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.2.20",
+        59406,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CeTxJYRyoUyXzvLOeWr",
+      "dmz_uid": "CYJtmNlK3KJ3QwPsTKF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        38055,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CT8vLF0KNpkTpkMS8M",
+      "dmz_uid": "CW8VoRmZCj7KEnkOjh",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.2.27",
+        51662,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CtBiECEiXLrIHCOZe",
+      "dmz_uid": "CPGYx6UjHmY0gad7O",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        53732,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CYMykExX7do2PJgXuy",
+      "dmz_uid": "CDabGhNPTSLJeGnHpE",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        58352,
+        "10.10.3.20",
+        22,
+        "tcp"
+      ],
+      "core_uid": "C9iHsn6BB1ZAiUOe5j",
+      "dmz_uid": "CB36Gkw5G62AWfQOzt",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        50604,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "core_uid": "CzKC9r6yBBDXz2xSZFQ",
+      "dmz_uid": "CiRfXaof5fiWsQnzimN",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        47275,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C2EwAJjjE3hC0fBZyw9",
+      "dmz_uid": "C5XJYJLoAUGvj26xcGO",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        54368,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CkjYQJiUrkXIHBinaV",
+      "dmz_uid": "CnCROYh984iT19OrDn",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        40908,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7HF3kcHmvC09pi8hHn",
+      "dmz_uid": "CiRgIA4jp6bNV1E2dsG",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 33
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        51203,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CT31EL3uCFgDcFLCgH",
+      "dmz_uid": "CqbXJ2O3yxoPNRDDud",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        58795,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cn6pg8TCLQDGoMbHQqn",
+      "dmz_uid": "CzRvQQBlbZqEG0oDlak",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 22
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        54193,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CrIavK22gBxBHJ2nz",
+      "dmz_uid": "Cl2U9WbMZLhQ6tfGB",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        65066,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CfIvBHp2PInu2N9g8W",
+      "dmz_uid": "CVOCDKZVBBW4B1VmSH",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        36763,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C1CnPsZnxtssefNE6G",
+      "dmz_uid": "CW6EHtBHDGdy0d9PlQ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        57236,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4Ia8kAxnW87Rpeljn",
+      "dmz_uid": "CCdsT1XPB3tVlA4QYX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        57236,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4Ia8kAxnW87Rpeljn",
+      "dmz_uid": "CCdsT1XPB3tVlA4QYX",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        54783,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ChvdRjtPkiuXJHHz6",
+      "dmz_uid": "CVHHoWut91bYKENQL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        51518,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CNpjU48gAOPviVHXzEU",
+      "dmz_uid": "CKlWp5kM11GjaDu4aB0",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.2.25",
+        55395,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "Cz4eGDN3TXhxXPH7B",
+      "dmz_uid": "C7yOZLGE8YYfWIMkD",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        50203,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "CJd4qJdgBM1g5fpMOT",
+      "dmz_uid": "CkFzz6n51pqeGFpD3B",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        51770,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9Rk6LlSpCrveJWcuNe",
+      "dmz_uid": "CUCqfNlDCpoWkgXbutv",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.2.25",
+        53691,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCm9AYqA2x56Ekm88P",
+      "dmz_uid": "CxG0YfLCnzZIgNnH51",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        47150,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cu3jsFTKyN2IlhjPe",
+      "dmz_uid": "C4eIkekczpo74itsS",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        36954,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COTgavwxDaz7Gmju4O",
+      "dmz_uid": "CqOlIOArhoGisVPr2l",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        34718,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CiwSivMT3vNymmQjgO",
+      "dmz_uid": "CHN1PHe8DoqrlUtPmJ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 36
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        54052,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Crtoy76ssNPDxXP1wy",
+      "dmz_uid": "CtFbC7QtDy72uVErOP",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        54052,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Crtoy76ssNPDxXP1wy",
+      "dmz_uid": "CtFbC7QtDy72uVErOP",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        59592,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CaZIJh4iBOk0YmwuBkN",
+      "dmz_uid": "CiTBfFSSztm4lF8mRON",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        50874,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cobh69UA7MP24V3H5y",
+      "dmz_uid": "CTWAZoajgwSSyHR7mT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 19
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        43210,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CqIOZtxnVHotLMEB8x",
+      "dmz_uid": "Cfbqd833A7BZNEVnsa",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        61595,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMATPj7IhOWb9Uurkk",
+      "dmz_uid": "CgfoyTFBLVjnYMAM5S",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        61595,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMATPj7IhOWb9Uurkk",
+      "dmz_uid": "CgfoyTFBLVjnYMAM5S",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59532,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cq37KprFv9tlWBozuY",
+      "dmz_uid": "CNhNsUYWxWXpVmJuAt",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        50507,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CIZUt0sDiH4CnRPDmv",
+      "dmz_uid": "CsJXmx1GgFk7CowYD2",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        51039,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CKYR7Pw4MTxU1Wc8Pn",
+      "dmz_uid": "CPrjfWbILuuE2KJCij",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        58535,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0sDf1CQoxDDRwQYXIV",
+      "dmz_uid": "CEIAfO572mHeTSB0Ezy",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 35
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        54071,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CizCsypbJPMc3U67BN8",
+      "dmz_uid": "CfCKDyssIJWlFFraqFC",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 21
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        56198,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cv1cUm6T1rrXOdDMZ",
+      "dmz_uid": "CElHhHPsfYDnYBtex",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        56198,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cv1cUm6T1rrXOdDMZ",
+      "dmz_uid": "CElHhHPsfYDnYBtex",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.3.10",
+        51221,
+        "10.10.2.21",
+        445,
+        "tcp"
+      ],
+      "core_uid": "CCC2reBcaAXBntOKS",
+      "dmz_uid": "CIXcijKFrceVGrPoG",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        36364,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CesvTzjHYn8eO0dglOw",
+      "dmz_uid": "CNwqdkY736dp18VpYCk",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        44002,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CmlHlQ9EgpR5pLRQKc",
+      "dmz_uid": "Cxj8rRq82ICI6xdQ7C",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 19
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        35179,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CpOMl4AsQXEYeIyLPH",
+      "dmz_uid": "Ci79ZMHKbcubE5WLwK",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 34
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        50298,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CcNEcmyXD0SWObIzB7",
+      "dmz_uid": "CwlTqiWqqbdX5VLLUI",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        61198,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CdUFNRn7mxKbeFF8NAl",
+      "dmz_uid": "CgHXoUpI1wvngNXZNHA",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        64280,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C78dsO0HrcEb6mIodZ",
+      "dmz_uid": "CoFUUlZ9DZAjpHmG7D",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        61897,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ct7VGvMvXlYbTU80bL",
+      "dmz_uid": "CLb2vC17mmAbhfFaVx",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        56248,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMTUAIZ3d0prKvivLJG",
+      "dmz_uid": "C7Id0ffKbi5fnCRghxm",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        59413,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CVsPlV3E3JYBgZRepI",
+      "dmz_uid": "C6X2SWVi5lizG87PpJ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62030,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CkUYQe2KaggBHqkxEb",
+      "dmz_uid": "CzMsc0ttuL4OHN01Jz",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        61744,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CgDl7QK80xSpSuodNm",
+      "dmz_uid": "Cv6vPbXHiG9dV3fUNu",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 22
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62478,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ChSWfTHgJS5DvywmA",
+      "dmz_uid": "Ct0EWnBr0tq1G74ZW",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        63282,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CLbxGxeycrNAGthYoq",
+      "dmz_uid": "C63In2vYM8aQnVYIRY",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        51426,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ChZJHL8K0APQiy0Fhrx",
+      "dmz_uid": "CgPkOxewOAcJrC2U56G",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        54560,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CJ54wLKnBP19XKxn9p",
+      "dmz_uid": "CpYrYwvhvFql8gFNtd",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        60457,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPxOw26GgOAzoOZdAN",
+      "dmz_uid": "CDdqwguWQOOhjnQbN0",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49516,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CbERcDs4OuOXbMXTPpE",
+      "dmz_uid": "CorQK9nGpYIB248l1gC",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        56552,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CH97xlRw8qVHdSdWIw",
+      "dmz_uid": "CpHOCrHkx2z3i52rOJ",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62932,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CSNMfwgQtW0akT2naA",
+      "dmz_uid": "CMjEJeAAWoRQGxBZgU",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        61644,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CLEruo3T7e3n5NaAYc",
+      "dmz_uid": "CUPdIMHWj0iMUelyBX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 32
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52820,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C35XhdeN9DlBzkyXj0",
+      "dmz_uid": "C4oL1bl7xrPlO8I148",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52820,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C35XhdeN9DlBzkyXj0",
+      "dmz_uid": "C4oL1bl7xrPlO8I148",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        47833,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9njxYoeOx3GimrQnn",
+      "dmz_uid": "CD3bHcyTDokNRmUSJ5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 39
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        59233,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CKyxk7xEYdbb9Ov63aW",
+      "dmz_uid": "CVBm7PKwRoeJFTiia4r",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        62424,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMGoTVkR6IQBtuNcXV",
+      "dmz_uid": "CWDjUaFkU3Onllaj3Y",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 22
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        49677,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAVP2As9wLG8qz4NC",
+      "dmz_uid": "CarV0WQ6CWdbJobds",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 33
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        61874,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5boJhmCGeGOrpfOdE",
+      "dmz_uid": "CPRKVavDyxgW9G0eIH",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        65006,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAj9BrV4gmZBBZXnuq",
+      "dmz_uid": "CCl85qp0n3BUAN7HBQ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        64747,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CYrzQGJa1loTq327DP",
+      "dmz_uid": "CSpHE2gY5Igg73xT23",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        64482,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5FSYVZcvrF8tCwWOYA",
+      "dmz_uid": "C8GKx1FNAkeInEONiNE",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 38
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        62190,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C6NqaxjyDqMuAPfrQk",
+      "dmz_uid": "CSIvSFQFxDr4bi2oGn",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 35
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        47089,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CxH0MJJ8Zv8qEnePtS",
+      "dmz_uid": "CXnpDzZ8Esm6HBVidR",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        47536,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cj2MyfqCcP229YlbE1",
+      "dmz_uid": "Cm75Ox7mKKvzBu73Zn",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        33745,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7LAUuNSpf9CGF8hu",
+      "dmz_uid": "CbGLFO3oSS66CC7Kh",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62461,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuOIQq8ZTCvFYukjPB",
+      "dmz_uid": "CL2lWF29YxkKU2fqQi",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59732,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cv4erHhvGhhYk7Actj8",
+      "dmz_uid": "CsvBfCfnQ6WFC7dEOwe",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62416,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CG5stJxLA0pWXzaCNN",
+      "dmz_uid": "CfulP9RtWDTW6I34JV",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        60377,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CJ1QKaTMcy5tncghKv",
+      "dmz_uid": "C8x23gx2VUME82WXI1",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        61042,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMqATNY3ZR7OGe6791U",
+      "dmz_uid": "CWnSoH4ROUa6QYSgcHV",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 31
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        54726,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cn6z7utMBsuY0zOIsA",
+      "dmz_uid": "CJxOvs11uj55NioMD1",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.2.21",
+        54775,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cu6aQfdjhluVdU05zF2",
+      "dmz_uid": "CmyxIhr7tlruB9FU1D4",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        36558,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4wpMzI4Q1xLxNfyMS",
+      "dmz_uid": "CA9qTBZcp9JienkWZd",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        53812,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CGByC05kLsnezF4iD6",
+      "dmz_uid": "C8CaL3ZK1oaJo3iKqt",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        49990,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Com75OhcKskL93D1Sy",
+      "dmz_uid": "CZhvhkzzY2o3PJmUhf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        58957,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C2fMAQO1RhIKcBbRGc",
+      "dmz_uid": "CRPjIKZFv7bb7PBxV4",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.2.27",
+        62938,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CEJ3fc6eoZHDPY8IvdC",
+      "dmz_uid": "CTGKSR9DcWUWUAFr4pE",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        53552,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCVDxNYsgWQs5Z6jok",
+      "dmz_uid": "CIqyabNLL9SkC68yIG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 20
+    },
+    {
+      "tuple": [
+        "10.10.2.26",
+        46473,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CB2ckBHVzgZ4zFvld",
+      "dmz_uid": "CdHVTuM6gcj4QIFKJ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        63868,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C6H7NRVU2P2UfG21FB",
+      "dmz_uid": "C03tAT5tBswplzFIoK",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        56917,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cs0rJgemzIlDDRcP2z",
+      "dmz_uid": "C2VNTa6RjcJeVfDFb8",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62728,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ck1J88ACER6L2xtKZ0",
+      "dmz_uid": "C8waw1Dzou7cTDXdy5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62728,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ck1J88ACER6L2xtKZ0",
+      "dmz_uid": "C8waw1Dzou7cTDXdy5",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        58581,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CjFlu6UI3VzgY2Gskc",
+      "dmz_uid": "CLyr2CPIBQbUkhJ22h",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        58581,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CjFlu6UI3VzgY2Gskc",
+      "dmz_uid": "CLyr2CPIBQbUkhJ22h",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        51662,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CfgOhmus22xLJfB0pH",
+      "dmz_uid": "CNZVAg3hIFSIcsdnGB",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        56670,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAnehgIHBI7BiBCrF08",
+      "dmz_uid": "CXzsI74fURCaOa2Yk7H",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        46212,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cn78MQtGG0nFD53eUcf",
+      "dmz_uid": "C3E8BdnvZSaNxR5K5nR",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        50822,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CB1aSLSlhEv9pVArW7",
+      "dmz_uid": "ChKoVaVRpMQlpNV1Wo",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        64022,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CA0ki8Y2sYGFwFBDlf",
+      "dmz_uid": "C6CX6JjrJTYRHWRt8E",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 34
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        58250,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cu6OpTh3Vcld0kqfEWz",
+      "dmz_uid": "CCb5Gnqtir7SqLHOjh5",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        60411,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CtxSQmJW1GQTD0oqpu",
+      "dmz_uid": "CPNYFWyV14HlgcCppb",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 38
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52045,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9rHtJ14LhLLQxJA8n",
+      "dmz_uid": "CScxpTORV4dck4F4xr",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62270,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCQpzBGanWvRzBAivL3",
+      "dmz_uid": "CLlWnz6SlnGHORtDO92",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62270,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCQpzBGanWvRzBAivL3",
+      "dmz_uid": "CLlWnz6SlnGHORtDO92",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52987,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CRqdWBv6NUoTpdabF",
+      "dmz_uid": "COIqeaOhJPTQLuPec",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        60869,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C3fK3f9HCHFJPOgOje",
+      "dmz_uid": "CQbFyyQSrADF7blKMC",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        62255,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CfxZNJCY0cvJRahwyW",
+      "dmz_uid": "CZJjY1FKmQ98AZiJDD",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59778,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7CV4yNxfB2ObNWF3j",
+      "dmz_uid": "CX5dWjAsQ8xarg3WGH",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        55911,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CnFmL6G7RZrCa0p8s6",
+      "dmz_uid": "Co3rmESM5pQ1WnzFLW",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        64267,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUmVAAvQqFm70n7DTh",
+      "dmz_uid": "CIrWT98h59Jr4SzMqk",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        61699,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ce1sANoBxD3RDnsqC2",
+      "dmz_uid": "C45yCQcDctKZKRijzp",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 26
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        49385,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "CweeJCwBUGnPP5CwTbh",
+      "dmz_uid": "CpYdFsogM7jIsA0cYDz",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        52011,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQY8uiDqp2MMHM2e2R",
+      "dmz_uid": "C23fAReWjm7OHPVS6B",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        56597,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPHbgJUtHn4MRJsC1k",
+      "dmz_uid": "CvYrFCt7VqFEzxreLL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 20
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        63519,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CkEF9h9c8OmGApeeEQ",
+      "dmz_uid": "CSqb0JfhjGY6OZHmht",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        52641,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CeeaPH8bTM2tCZxcNtP",
+      "dmz_uid": "C59vdZZR6wN6eCY9iRN",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        56218,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "CsjREfOl5b4FlI9sZR",
+      "dmz_uid": "C6vS3Arqo16BVqhGF6",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        38790,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "CbDyUFV98QQvfHhkfQ",
+      "dmz_uid": "C4TsrskRV9KD8OloZa",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49747,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQDDVfXNwHkHIpz5z5",
+      "dmz_uid": "CYS1hc7TCkkojDsJQX",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 32
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        56850,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCgqseDUK9zVFAtFFC",
+      "dmz_uid": "CuxEQJfbGFfXtCPfL2",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        63320,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CD4zuqOqN0UEsR8Ed",
+      "dmz_uid": "C8vFN1Q7eM2F1Emlv",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        49969,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CeekPGVGdCzYOvYHnS",
+      "dmz_uid": "CpPVS5u6N5BXKJZcLm",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        56323,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5YlCiBzrf1YxCR4d",
+      "dmz_uid": "C7iJOK9tOFUZAG3Nr",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        34255,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C8Q5GxODOp72r20qtx",
+      "dmz_uid": "C3khdbtpUGObqADvPB",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        50383,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CGzpxs70BQH939a5mML",
+      "dmz_uid": "CXvLCnVazCW6W1fG05m",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        58100,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CRuIHwZMykMxOIEg9a",
+      "dmz_uid": "C5SUI9xBcMeO64wwDT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        57783,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ch0RgUCUNcqh34YdDnA",
+      "dmz_uid": "CNv4H3F85d34Y5ldRno",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        61061,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COk3RCfB23mbsqXKE",
+      "dmz_uid": "CxQm2FGJZsDfn9DDY",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        49768,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPTsRKSFgBpl6OWRa0v",
+      "dmz_uid": "Cns6M8OaztTwaiH72lN",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        63909,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAZf0tJno1oBvAy8AR",
+      "dmz_uid": "Cb4jHPVjvrAL6HtP42",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        37807,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cl5j10MdUrDP3o2JYDq",
+      "dmz_uid": "COf0aCGeAfiXLPZXzDy",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        59662,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cq4027PhndG0w5OMX2z",
+      "dmz_uid": "CynaBOJ0WBGg4dDcVW6",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        33662,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CHOAKEcwokyo0sLyqz",
+      "dmz_uid": "C7peN2fsH9wlSs2KDd",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        50772,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CXkT4RBc1WM7Tr82Fgv",
+      "dmz_uid": "CzEnGFZXhaccBOQisCs",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        38491,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQ5kqwDtYB83oh69j67",
+      "dmz_uid": "CxE2VUjtRjq97DUu8RG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        48669,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cp3moA1CAbDt9ZK4LU",
+      "dmz_uid": "CkwUbks97jEKvu3VJe",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 29
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        54457,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUGwhW0KrLaRhmVElzz",
+      "dmz_uid": "CLFmhZe70VErusH8HbE",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 38
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        54381,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CzwRfTuhC1ik1gw9Myf",
+      "dmz_uid": "Ci2VLWt2r2H7kA3jJsT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        51060,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ClYfjWJ6ZBIX2PYyda",
+      "dmz_uid": "CAJBJNHhkWGbDPA6dT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        50966,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Co3aGNzpdV4VEJ5q6z",
+      "dmz_uid": "CqOWpFOf7ZJ8ufs0io",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        53011,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CmWMNk55hOMgv2YsDT",
+      "dmz_uid": "CPKCpfgs2WUJAF5N0L",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        57224,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCYxzwkCDOZwKizUQ0",
+      "dmz_uid": "CjwO33H8qJia0byp6Y",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        56743,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CYvyeDOiEGjf12jgIbJ",
+      "dmz_uid": "C8sCjPeFD1m3L4dgpEj",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 25
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52377,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ctrb3bEEIL9cX7rBG",
+      "dmz_uid": "CmVeWvPioIQb8XW1v",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        51450,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5sDkv4Be59y9GtyKB",
+      "dmz_uid": "CL3F0VHBzN4W0KrC8f",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 33
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        33032,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CHZkYNF3euXIuriHZBJ",
+      "dmz_uid": "CA6wxtxjZDSNwco65Q5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        33032,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CHZkYNF3euXIuriHZBJ",
+      "dmz_uid": "CA6wxtxjZDSNwco65Q5",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 25
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        41402,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CB6TLLepwLP0oolIk",
+      "dmz_uid": "Cf5NKnOR1wZT4XYCQ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        56102,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ctm9IHFXEvaMB1BmTu",
+      "dmz_uid": "CrCkmAKBIBhaw9I2jF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        55198,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ChBXWEg5DVz8NdAe6K8",
+      "dmz_uid": "CLRzxmsxAw4GDtLahkJ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        43485,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cyif0DqGRossfjThhx",
+      "dmz_uid": "CqSFL3pvmw3v5DriKG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        56681,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5kTtqAKiL5hoBjliO",
+      "dmz_uid": "CuMJfBrPCQaqGNBG8A",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 25
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        62100,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CX8CNWwI1rGbjQAPa",
+      "dmz_uid": "CTOXdWfVxC3abqb8Z",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 37
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        50369,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C6CpPSihBRgVXDzgL2",
+      "dmz_uid": "CxAiAdErIvJQgd1xHf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        53732,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CinOJZxvW8L5gAudD",
+      "dmz_uid": "CIhDEjthftNV1n6At",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.33",
+        54172,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CtpGt2ukt2uv2H5EQC",
+      "dmz_uid": "CBPAFtva73g09ORpKA",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        58867,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9M3B58iw02kTYi67L",
+      "dmz_uid": "CKECHDzgrIRFe8UUey",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        55054,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CoM5FKdJ3Oh1POYjc1",
+      "dmz_uid": "CXGYHDzWsBvrCJA3c5",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        36811,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CX0ny2abYC8dHeno817",
+      "dmz_uid": "CoLgkALO1t9nwCOdmBr",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        58233,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMyKHFreYyixutB15",
+      "dmz_uid": "CicuoPwkHxtlrlpzr",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.2.30",
+        58859,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CC6CD9lavGdmYCaDDV",
+      "dmz_uid": "CMBJQD6WuZSbosP0mI",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        58592,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CgH0tFQA8NNJrsckiSm",
+      "dmz_uid": "C1LLAVbk7fXdRIO8fL5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        58133,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CcDKiRAx0MiUCY1Ihu",
+      "dmz_uid": "COf593IJZjjUoDCWej",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        33040,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CqepbcVJs44qQOvTqZ",
+      "dmz_uid": "Cf1t1GjBCU1sNIK3QI",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        38837,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CMvHXmgTBN9zSOW6jgc",
+      "dmz_uid": "CiD3WqOJQ6Yy2t4geNg",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 36
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        48692,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C8u8SKIC9xar4GcTsiL",
+      "dmz_uid": "C6NrylyHzIPsc47f9O2",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        33451,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CrxCsylMx4Hi0RP8lU",
+      "dmz_uid": "CXu5y1N44u0N4MGGv8",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        58030,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CanSyqylOIVLK7ppe",
+      "dmz_uid": "C26vYv42ZqLBtDd9r",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.3.20",
+        38618,
+        "10.10.2.25",
+        22,
+        "tcp"
+      ],
+      "core_uid": "CQZSjTodqclZ1xZBskK",
+      "dmz_uid": "C88MSwF1UMHqUB8zJmu",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 36
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        64944,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CICBVZHlZVt09jNYKP5",
+      "dmz_uid": "CxGuMeljszKZ4LzLV5g",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        33422,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CE19cjGQNLnZSGfwZE",
+      "dmz_uid": "CDDBO5eBFXbN08xFtF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        49006,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9it3njxpz6V2AFFCL",
+      "dmz_uid": "ClQ8JMN1hwREjDGKLC",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        57877,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CpABd76arKtLpm0HJ0f",
+      "dmz_uid": "CMDoVNUCVy02QwNqCX5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.31",
+        51817,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CU05lJeEhnVy2j1Tns",
+      "dmz_uid": "CAwjTWGt3k7fgJqD4H",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 26
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        52362,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0gzaZjuA2c7IhePA2",
+      "dmz_uid": "CbGT0wnCAJE1CDuaSV",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 29
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49512,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cpek1vM3Wm7dBaXrkn6",
+      "dmz_uid": "Cf0TkfdItV61I1zDxvt",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52608,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CVAGKPyE3QexygYR3",
+      "dmz_uid": "Cmq54dTBEg2jGxqwv",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49466,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7HD7EVYyJNCSuv4PJ0",
+      "dmz_uid": "CDkk6B9BlMwIDqDw4cf",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        35241,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CGpWl6UuZiBCPSzSbUo",
+      "dmz_uid": "CXCLMBOXIDDsgWGaw9D",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        58788,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0bAKaTqC8f2FG67Zr",
+      "dmz_uid": "CWDA9lwOKGDlPETxkX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 14
+    },
+    {
+      "tuple": [
+        "10.10.2.27",
+        57394,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CnHHtjqP7uUL5NxbDwL",
+      "dmz_uid": "CHlTVO7WlU1NIxCtIYw",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        53275,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CspfBEEfYTBiiFNKHG",
+      "dmz_uid": "CjS6ZMkpkxunZ2yLjy",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        55250,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cs5r0zyy6FbEqOF4dE",
+      "dmz_uid": "CxSjRRYLZz171HMZkQ",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52574,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CLqCkdudJmEUPywxLE",
+      "dmz_uid": "CBPWJV3TPymeqNDeTC",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        58121,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C5NdIJJwReMuKC4Jst",
+      "dmz_uid": "CvHl4iJALSPSAoBhsa",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        50930,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C8l7f1Jpm27orfNOSf",
+      "dmz_uid": "CCeaiyq7JcQHK14vFr",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 39
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        58739,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCjHwmeHrHD39UQb50",
+      "dmz_uid": "CXd74dPS5Ub6gJDo4M",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        54846,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CV3yO8s2NhnR685KJef",
+      "dmz_uid": "CS3IM6nzMI6RA2coHPI",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        62116,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "CKnSZEeGhuHM15kkel",
+      "dmz_uid": "COpiJ6cNnUg830u9EI",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 17
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        53038,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COseMIed4JbIBC0vI6",
+      "dmz_uid": "CBcYSXx87xsgRHBDAL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        51527,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CcennmGtOoNuMMxLE0H",
+      "dmz_uid": "C42nBY7Xh6yZZOv2gEG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        50673,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CU0SetBemtzeecoE1FQ",
+      "dmz_uid": "CUonIyI1eht4AFOgOyt",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        50202,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9wAhnfxUZjPTEG6I5Q",
+      "dmz_uid": "ClkZbWg5UG1zbOY3BdY",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        44887,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CygtFjEYqDWDy27u1DP",
+      "dmz_uid": "CuqUCS5GJcQgJw04qVu",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        57087,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COvojKCsF0K2doNFIq",
+      "dmz_uid": "C8CJjXRPTIyg3OQUhi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        57087,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COvojKCsF0K2doNFIq",
+      "dmz_uid": "C8CJjXRPTIyg3OQUhi",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        65128,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CCG7i9bVQuXdyA3KDY",
+      "dmz_uid": "CYaZ7sU5BzkHTvxiBF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        53119,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CVFc2YqPaCI0PUDFNN",
+      "dmz_uid": "CIkvTh0hwrWZxDyOFI",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 19
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        51445,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CwGILNCoefArblie41",
+      "dmz_uid": "C6v0pBudJ7mYE6Mo6J",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        46044,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9qfkxwan09KiyCBok",
+      "dmz_uid": "CRBkdQQfqPa8vZvZ3O",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        48347,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CFegOfVgqkVgEq5Fo7",
+      "dmz_uid": "Ceqoyau9FLHzBZXRLX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.2.25",
+        51754,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cj9t8AyaWWIKyFdqI",
+      "dmz_uid": "CfX3Lnua7sZPcFAqf",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        53314,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CFgZUxTupBYJAoDQy8",
+      "dmz_uid": "CVtoXoNbf0aGwZxhSc",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        38138,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cj0Qbf6KJ9DDZN1Gk",
+      "dmz_uid": "C00duc9Z4rqkqHT4C",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        38687,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "COqBsBb4cTBYquLVvG",
+      "dmz_uid": "CCAqwcqcXqyYEiVoyx",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        60353,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CJ8o61a9l779pViCMa",
+      "dmz_uid": "CuRsTo0Ir9kJAJtl9y",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 37
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        49689,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CIOfNib2DykSvMyFGE",
+      "dmz_uid": "CJYVf3TlPglUJ7RjAm",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        50205,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CVTBAPbzoK2rBhWjtV",
+      "dmz_uid": "CH5vkzRBnsp5ElnZaK",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        60107,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0XKnMt64JIOmBHF93",
+      "dmz_uid": "CJb7FGraxSH9q4gX2B",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        48126,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CFlaMOMlpUxIAUeJvv",
+      "dmz_uid": "C6XtxRKmU4J94wA53R",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        53218,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuDu9tcgvugBvI3rJ2",
+      "dmz_uid": "COyoF0aObz88yHMq1l",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        52811,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C01xVNJjTFiyhSuBqd9",
+      "dmz_uid": "CcBymuiujw4RB6cXt2c",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.2.20",
+        58811,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cg1OsBshVrB34fuT8He",
+      "dmz_uid": "C4rdZWYRlIGgtUmMPoi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.2.21",
+        36234,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CzBpMD38Lm6qMXPo2v",
+      "dmz_uid": "CH2l7tw5klpgYwoybX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        59017,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CqMvtpqbM1c76oKvcV",
+      "dmz_uid": "CLsP4amcecfNwymfUJ",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        62566,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CcEgihAYFgcGvEicUq",
+      "dmz_uid": "CBy1MZNOJUMBOH5EsW",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 38
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        41407,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4O6V7mTol5PzoVr4A",
+      "dmz_uid": "CEKl0I6S3JMUeKLvv1",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        55914,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ctfd5PKh8kbUO3M77",
+      "dmz_uid": "CrMVNtfi4PuMxFHpy",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        64565,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0gOjfdLwPSsU4PNtLK",
+      "dmz_uid": "CdSFyzFAdyO55wuiVd2",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.2.40",
+        52216,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CDuVIlCyNeX3AqMrjtb",
+      "dmz_uid": "CxX5H1FYCF6cihd2qlv",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 28
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        59258,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CmnZbFxoTfXO1z7QSZ",
+      "dmz_uid": "C4BeS7Zl75D9ZNAdzi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        53838,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CSjvmUuwBJTSesSrRc",
+      "dmz_uid": "Cs1ZL7q46VV8H0yY5o",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        51354,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CqGoPEfFndSuCUbBKk8",
+      "dmz_uid": "C06cii9NjAHGH6IMsbU",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 20
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        34463,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CgqJFV6h8jynmoVLkQL",
+      "dmz_uid": "ClwFeY5Y3GH2DGN2aGL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        40128,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CA0SkchX98LcbljEX9t",
+      "dmz_uid": "CXvb5O72hCcgau2YXuS",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 32
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        57939,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CzRKYwIfxUnWEWRUL6",
+      "dmz_uid": "CEYvzfmF1HNKklMdw2",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        46434,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPSiD1JTdAVrFCggh3",
+      "dmz_uid": "CVyckZnLETLQI55mHa",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        39124,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ci6e0tYgYQvNGsIR93",
+      "dmz_uid": "CyBN0cdZmhkfbU9WmD",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        37464,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAkp0Qnco2nBMBV9rf",
+      "dmz_uid": "CqJ9ZPxq7zPyb2Mwf2",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        39253,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CFabpPK92jmY1C2zjgI",
+      "dmz_uid": "CPDrEPQoUAVjfkuDRSg",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        50832,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C0MyOLtoTPABVxWSuJE",
+      "dmz_uid": "CA1hXAHSGQ125zG3f6k",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        41744,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUuGei3KtTS1WGyXIAq",
+      "dmz_uid": "CaY4xPm3Q6XWyycyoJj",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        60780,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C66XryTOukWLR8BVCC",
+      "dmz_uid": "C8xjGCgdOlH16kty73",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        60780,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C66XryTOukWLR8BVCC",
+      "dmz_uid": "C8xjGCgdOlH16kty73",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 26
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        45484,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Ccu4uvFGJFBW4Yf8OxH",
+      "dmz_uid": "Cn3VA6w9x9Jjg6xlQfZ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 21
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        54867,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CvE0HDbTjpEcvMsvddE",
+      "dmz_uid": "CmCbyJBSz7ArwtmRoNe",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        49479,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CsiZ7ShJspg6KM2C5s",
+      "dmz_uid": "CjKYNvKiL5iFHXGO15",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        64797,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CNe9zpsrcFRUONRLLKB",
+      "dmz_uid": "CjD3YfBtpOshxpf8n0Q",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        57432,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CjQeQqj7AqGnE7ooF2Y",
+      "dmz_uid": "CpKWbRycOXPvE8m3CUl",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        65467,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CB1is0PSkDjJYRWwZmz",
+      "dmz_uid": "Ch7AD6DSTRMU3sf2ePR",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        55366,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPtuCq7mHalvFZs12W",
+      "dmz_uid": "CKEe74tDmmLftbl4jL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        55366,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CPtuCq7mHalvFZs12W",
+      "dmz_uid": "CKEe74tDmmLftbl4jL",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 13
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        54972,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CyM7VcWOvciZkJx3Ab",
+      "dmz_uid": "CmFIcC7p9mBVbY9XWR",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 28
+    },
+    {
+      "tuple": [
+        "10.10.2.27",
+        61299,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUxDYzoKpiZ3E9o61",
+      "dmz_uid": "Cm5cN8j8G6rmUnVmG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 28
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        65023,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cji1UsffAmCPYWHCUR",
+      "dmz_uid": "CeGCGbiyMR5qfVHYuT",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 21
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        53387,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CDs9WDtoZzJBkeBmD9",
+      "dmz_uid": "CheZzb4fFvoZK2XFDD",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 20
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        55559,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4i3T3xvgdiYCUT6pw",
+      "dmz_uid": "CmT1QkTUVuH1kVDsY9",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 24
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49993,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CvElNpOIJCihIcFz1o",
+      "dmz_uid": "CJ7ZU4rcIorFCu3LSE",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        54089,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CnwFA1c5XuvxOPNWPw",
+      "dmz_uid": "Ckbw4hOYvcgVutSzBK",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59932,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CKdMSE8N95rYZAO542",
+      "dmz_uid": "C7gfyMnoEqy9dnQ0KW",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 27
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        57251,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CkkyBCifedfS9ISrWH",
+      "dmz_uid": "CFjyGNQwaicFjx5AYH",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 26
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        36438,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C9dSdQt3iCGMHRlQS",
+      "dmz_uid": "CeHoSABszA6PMPBSm",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.2.25",
+        46776,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CGLNBZkv1ztwVgnY9Gt",
+      "dmz_uid": "Cx1g7CfvM7ZPIIMNi2d",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 31
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        51299,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CYORrSzQ4cpF0pMMGUB",
+      "dmz_uid": "CCIZCjKeqKsAYR3cv42",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.32",
+        62110,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CYoZMZjo7a9E4BGlWr5",
+      "dmz_uid": "CuEQeIDcGE9uPG11o61",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        50574,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CY8i3hxfKno08VZ4W6b",
+      "dmz_uid": "CYzAbKYaxwGKW8EyV4o",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        36779,
+        "10.10.3.10",
+        80,
+        "tcp"
+      ],
+      "core_uid": "C7tpMeQ5HaBTHOqC1ZG",
+      "dmz_uid": "Csh1lFAFJmydONvHYeO",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 26
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        40592,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuLEdlsBqyFIe0aWFp",
+      "dmz_uid": "CHC6Ekt79yyerTg8Wr",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        40592,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuLEdlsBqyFIe0aWFp",
+      "dmz_uid": "CHC6Ekt79yyerTg8Wr",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        48873,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CIbNSYIEGGXfmuqvrqx",
+      "dmz_uid": "CmMEvxWnE6XU0Wg7unF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 3
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        54622,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C8MgeA7UHrrGnCw53mK",
+      "dmz_uid": "CqW2Ngfc6OhYIg5a9ZL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 23
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        57407,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CRpmZyoll0JB4nXLgU",
+      "dmz_uid": "Ce6ukrBKdM4SOtnoy6",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        51635,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CK4kQHuRFCuV8pQQ1R",
+      "dmz_uid": "CiqTNbJGZpA4qq4YGY",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        56763,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CySGET4PPHzMj47vxt",
+      "dmz_uid": "C4CFDpmKzFbBkAEig7",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 30
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        33977,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CmSHbsIooGWp3U2KIq",
+      "dmz_uid": "CxGKPTj1MnQaptzgmf",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 38
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        57096,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUW2EHxxICj0clyaiC",
+      "dmz_uid": "Co9BpbrkA1A9sVCF0p",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        58028,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CEkPaB7oRPiRaQf0yd",
+      "dmz_uid": "C9yGhoKtPpwJoHWw0A",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        33436,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CBfiaDD6wIe6qaPfM3",
+      "dmz_uid": "C3TumpCvBR9NRC6loF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        59514,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C72rNUDeEANpJf8I6R",
+      "dmz_uid": "CDlmbAWv0mWJIp1S6W",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        54403,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CEd5SDzjjtvDH98VfH",
+      "dmz_uid": "CLKra3D6k2lPBIbOQi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 35
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        56739,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C7mH2xjbVWnIqquT6w",
+      "dmz_uid": "CijhiDdOi1TvtjXXPK",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        49232,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CUBjKkCJOlyUmi90nT",
+      "dmz_uid": "CE2LDoiVHZ6i4uPqHV",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 18
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        64462,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CWCAuxIbtnjmjxgG1Wi",
+      "dmz_uid": "Cvfgl8zPUZiPIMxcbxV",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        56320,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CbfpKjsYgJbUmG5Tfp",
+      "dmz_uid": "CthOGwHJ49K4j51gfc",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        63464,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "ChtBzRwxGGipsyiYgU",
+      "dmz_uid": "CFGiWBCP9bZ9VJQjI2",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 6
+    },
+    {
+      "tuple": [
+        "10.10.1.22",
+        41898,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CDWfYtHIhrLjSD1s9d",
+      "dmz_uid": "Cye80VErIL8qaMcPT8",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 12
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        59009,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CWX3cXmB2nA50tMEXq",
+      "dmz_uid": "CcP9LO6E3C3X1v1OmS",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 7
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        61147,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CuWBp1nroapKqjvjAoA",
+      "dmz_uid": "CbLVoOS16s5A0xKVQ1l",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 11
+    },
+    {
+      "tuple": [
+        "10.10.2.11",
+        58322,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cv7sD5VAzJ5M6ipPnEy",
+      "dmz_uid": "C8t9BNkqEnJVWTEAatZ",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 22
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        57086,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CoCRR6DkBh8fuO5zHG",
+      "dmz_uid": "CFeJj2GxwniGr70mgB",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 21
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        60075,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQwiGveeyYu22YLWLp",
+      "dmz_uid": "C0ofWxhVkC83D0FCA9",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        60075,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQwiGveeyYu22YLWLp",
+      "dmz_uid": "C0ofWxhVkC83D0FCA9",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 15
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        58258,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CRSqNqxUcRqhP53H5Q",
+      "dmz_uid": "CysKDPUPvshHnExWvs",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 16
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        52328,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cmii4ILD2FvmYOdO9",
+      "dmz_uid": "CT2gWDaYFvR8clRb5",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        57018,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CAjgG2I7nMzDbPuCFi",
+      "dmz_uid": "CjtgdjIookTd0eEDGO",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        64109,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CqZQVwfESK2BDECX4g",
+      "dmz_uid": "CeyCHexpbEPeKwDO2q",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        49265,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CZAV7Aat883JqcE82K",
+      "dmz_uid": "CGvLlFaTGWuVgwN8SQ",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 1
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        57971,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CcKmu5gjenKmB77DA4",
+      "dmz_uid": "CO35UrQlGl8Jp3sBM6",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 21
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59889,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cb8Vex8KwoQH8W0QmyI",
+      "dmz_uid": "CiVAJY0A1qFIiTXsSds",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 4
+    },
+    {
+      "tuple": [
+        "10.10.1.42",
+        59889,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "Cb8Vex8KwoQH8W0QmyI",
+      "dmz_uid": "CiVAJY0A1qFIiTXsSds",
+      "direction": "resp",
+      "packet_difference": 1,
+      "ip_byte_difference": 9
+    },
+    {
+      "tuple": [
+        "10.10.1.41",
+        54868,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CmhpfI0O0wht8eBfER",
+      "dmz_uid": "CF5lTUSWnm5y2qpBtF",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 31
+    },
+    {
+      "tuple": [
+        "10.10.1.35",
+        64240,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CrefBuBq4XVqzFg7a5",
+      "dmz_uid": "C8u6yYBkXvsk13byUi",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 5
+    },
+    {
+      "tuple": [
+        "10.10.1.99",
+        34637,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CQUGyQSZw2HAH3sez8",
+      "dmz_uid": "Cm7zxVLsiA3wJ92KtL",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 10
+    },
+    {
+      "tuple": [
+        "10.10.1.21",
+        57995,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "C4RJo0AF09qDEsfCV3N",
+      "dmz_uid": "C5fRdO1W7LuGGTE3paG",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 8
+    },
+    {
+      "tuple": [
+        "10.10.2.10",
+        53102,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "core_uid": "CVbdW4BxjoRkoOcAr",
+      "dmz_uid": "C2TG4Kq9M4dwEfNyX",
+      "direction": "orig",
+      "packet_difference": 1,
+      "ip_byte_difference": 2
+    }
+  ]
+}

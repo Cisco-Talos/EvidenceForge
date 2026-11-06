@@ -213,6 +213,7 @@ schedules:
 
   - service: tracker-miner-fs
     id: linux-tracker-miner-timer
+    execution_scope: user
     release_policy: host_build
     product_id: linux-host
     variant: core-os

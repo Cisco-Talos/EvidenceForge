@@ -1189,12 +1189,11 @@ class _PreparedSshClosePlan:
             raise TypeError("Exact SSH close plan authentication state changed type")
         macos = type(self.auth_state) is _SshMacAuthState
         if self.authoritative_end_plan is not None and (
-            not macos
-            or type(self.authoritative_end_plan) is not SessionEndPlan
+            type(self.authoritative_end_plan) is not SessionEndPlan
             or not self.authoritative_end_plan.is_authoritative
             or not self.authoritative_end_plan.storyline_event_id
         ):
-            raise ValueError("Exact SSH authored closure requires a Mac storyline end owner")
+            raise ValueError("Exact SSH authored closure requires a storyline end owner")
         if self.target_host.os_category != ("macos" if macos else "linux"):
             raise ValueError("Exact SSH close authentication crossed its platform owner")
         if macos != (self.logind_remove_time is None):
@@ -2489,7 +2488,7 @@ class _PreparedSshCloseContinuation:
         if self.plan.authoritative_end_plan is not None:
             session = state.get_session(self.plan.logon_id)
             if session is None or session.end_plan != self.plan.authoritative_end_plan:
-                raise StateError("Exact Mac SSH authored close lost its State end owner")
+                raise StateError("Exact SSH authored close lost its State end owner")
 
     def require_application_owner_shape(self) -> None:
         """Require the exact built-in manager and its original shared registry."""
@@ -3381,6 +3380,14 @@ class SshSessionActionBundle:
                 # already-durable terminal continuation.
                 self.executor._defer_ssh_session_close(continuation)
                 continuation.prepared.drain_receiver_startup(self.executor)
+            if type(prepared.auth_state) is _SshLinuxAuthState:
+                # Exact deferred publication commits the canonical transport and
+                # session graph through the network contract, so it must also
+                # publish the bundle-owned Linux sshd/PAM lifecycle that the
+                # compatibility path emits after building the same session.
+                event = self._build_session_event(state, prepared.auth_state.receiver)
+                self._dispatch_linux_connection_message(state, event, prepared.auth_state)
+                self._dispatch_linux_auth_messages(state, event, prepared.auth_state)
             self._remember_deferred_open_tuple(state, prepared)
             if self.request.emit_session_close:
                 close_bundle = (
@@ -4121,7 +4128,7 @@ class SshSessionActionBundle:
     ) -> _PreparedSshClosePlan | None:
         """Freeze an action-owned close before the network owner may commit."""
 
-        if not self.request.bundle_owns_close:
+        if not self.request.emit_session_close:
             return None
         source_process = (
             None
@@ -4389,7 +4396,7 @@ class SshSessionActionBundle:
             else _linux_uid_for_user(request.user.username),
             network_close_time=state.close_time,
             source_ready_time=logind_time,
-            closure_owned_by_bundle=request.bundle_owns_close,
+            closure_owned_by_bundle=request.emit_session_close,
             end_plan=request.session_end_plan,
         )
         if environment is not None:

@@ -1288,7 +1288,9 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                 )
             )
 
-    if getattr(event, "macos_ssh_authentication", None) is not None:
+    if getattr(event, "macos_ssh_authentication", None) is not None or (
+        contract.kind is EventKind.PROCESS_AUDIT_BIND and getattr(event, "auth", None) is not None
+    ):
         from evidenceforge.events.identity import ProcessIdentity
         from evidenceforge.events.macos_logging import MacosSshAuthentication
 

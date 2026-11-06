@@ -127,6 +127,7 @@ from evidenceforge.generation.activity.network_transport import (
     _icmp_echo_duration,
     _icmp_echo_payload_size,
     _preserve_explicit_tcp_payload_overrides,
+    _tcp_history_consistent_with_payload,
     _tcp_ip_byte_count,
     _tcp_packet_counts_from_payload_and_history,
     _tcp_payload_bytes_consistent_with_history,
@@ -228,8 +229,6 @@ _DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US = 12_001
 _TLS_COMPLETED_EXTENSION_MAXIMUM_US = 8_000_000
 _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH = 3
 _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS = 0.005
-_TLS_CERTIFICATE_MINIMUM_BASE_SECONDS = 1.05
-_TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS = 0.075
 _NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_US = 997
 _NTP_RTT_MAXIMUM_US = 300_001
 _NTP_PROCESSING_MAXIMUM_US = 10_001
@@ -281,11 +280,7 @@ def _tls_certificate_duration_floor_bound_seconds() -> float:
         certificate_analyzer_delay_bound_ms(maximum_position=maximum_position) / 1_000
         + _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS
     )
-    chain_floor_seconds = _TLS_CERTIFICATE_MINIMUM_BASE_SECONDS + (
-        _TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS
-        * _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH
-    )
-    return max(analyzer_floor_seconds, chain_floor_seconds)
+    return analyzer_floor_seconds
 
 
 def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
@@ -1112,13 +1107,16 @@ class NetworkTransactionPlanner:
         if not specs:
             return ()
         batch = root.state_plan.batch
-        if batch is None:
+        if batch is None and (
+            authority.strict_state_authority is None
+            or not authority.strict_state_authority.allocation_free_rdp_reconnect
+        ):
             raise StateError("Deferred session dependent specifications lost their State batch")
         if batch is not authority.state_batch:
             raise StateError("Deferred session dependent specifications changed their State owner")
         members = (
-            *((batch.session,) if batch.session is not None else ()),
-            *batch.processes,
+            *((batch.session,) if batch is not None and batch.session is not None else ()),
+            *(batch.processes if batch is not None else ()),
             *(
                 (root.state_plan.existing_session_patch,)
                 if root.state_plan.existing_session_patch is not None
@@ -1456,6 +1454,23 @@ class NetworkTransactionPlanner:
                 floor_slack_maximum_seconds,
             )
         return duration + self._tls_completed_extension_seconds(request)
+
+    def _http_request_phase_delay(self, request: NetworkConnectionRequest) -> timedelta:
+        """Sample one canonical first-request delay without millisecond quantization."""
+        from evidenceforge.generation.activity.network_params import http_request_phase_config
+
+        profile = http_request_phase_config()
+        return self._timing_runtime.sampler.sample_timedelta(
+            TruncatedLognormalDistribution(
+                median=profile.median_ms * 1_000,
+                sigma=profile.sigma,
+                minimum=profile.minimum_ms * 1_000,
+                maximum=profile.maximum_ms * 1_000,
+            ),
+            relationship_key="network.http.first_request_after_transport",
+            scope=self._timing_scope(request),
+            sample_key="request_phase",
+        )
 
     def _http_floor_slack_seconds(self, request: NetworkConnectionRequest) -> float:
         """Sample positive source-admission slack above an HTTP duration floor."""
@@ -1915,11 +1930,29 @@ class NetworkTransactionPlanner:
         """Fit canonical application objects and framing inside transport payload."""
 
         network = event.network
-        if network is None or network.protocol != "tcp" or network.conn_state != "SF":
+        if network is None or network.protocol != "tcp":
+            return False
+        dns_payload_state = event.dns is not None and network.conn_state in {
+            "SF",
+            "S2",
+            "S3",
+            "RSTO",
+            "RSTR",
+            "OTH",
+        }
+        if network.conn_state != "SF" and not dns_payload_state:
             return False
 
         orig_floor = 0
         resp_floor = 0
+        if dns_payload_state:
+            _duration, orig_floor, resp_floor = _dns_payload_accounting(
+                dns=event.dns,
+                duration=network.duration,
+                orig_bytes=network.orig_bytes,
+                resp_bytes=network.resp_bytes,
+                proto="tcp",
+            )
         if event.http is not None:
             http_orig, http_resp = _http_flow_payload_bytes(event.http)
             orig_floor = max(orig_floor, http_orig)
@@ -1974,11 +2007,13 @@ class NetworkTransactionPlanner:
             network.orig_bytes,
             network.orig_pkts,
             accounting_rng,
+            retransmitted="T" in (network.history or ""),
         )
         network.resp_ip_bytes = _tcp_ip_byte_count(
             network.resp_bytes,
             network.resp_pkts,
             accounting_rng,
+            retransmitted="t" in (network.history or ""),
         )
         return True
 
@@ -4047,6 +4082,7 @@ class NetworkTransactionPlanner:
                     duration=duration,
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
+                    proto=protocol_evidence.proto,
                 )
                 if protocol_evidence.dns.rtt is not None:
                     duration = self._dns_transport_duration_seconds(
@@ -4074,6 +4110,7 @@ class NetworkTransactionPlanner:
                     duration=duration,
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
+                    proto=protocol_evidence.proto,
                 )
             else:
                 duration = self._sample_duration_seconds(
@@ -4436,12 +4473,14 @@ class NetworkTransactionPlanner:
                 orig_pkts,
                 rng,
                 overhead_override=facts.packet_overhead_bytes,
+                retransmitted="T" in (history or ""),
             )
             resp_ip_bytes = _tcp_ip_byte_count(
                 resp_bytes,
                 resp_pkts,
                 rng,
                 overhead_override=facts.packet_overhead_bytes,
+                retransmitted="t" in (history or ""),
             )
         else:
             orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
@@ -4659,6 +4698,12 @@ class NetworkTransactionPlanner:
         ):
             prepare_generic_smb_responder = True
 
+        if protocol_evidence.proto == "tcp":
+            # Zeek history collapses repeated ACK/data flags. Removing a data
+            # flag does not remove an observed packet: retain its already
+            # sampled physical budget, compatible with another pure ACK.
+            history = _tcp_history_consistent_with_payload(history, orig_bytes, resp_bytes)
+
         event = _NetworkOccurrenceDraft(
             timestamp=time,
             parent_action_group_id=facts.parent_action_group_id,
@@ -4868,11 +4913,13 @@ class NetworkTransactionPlanner:
                         event.network.orig_bytes,
                         event.network.orig_pkts,
                         rng,
+                        retransmitted="T" in (event.network.history or ""),
                     )
                     event.network.resp_ip_bytes = _tcp_ip_byte_count(
                         event.network.resp_bytes,
                         event.network.resp_pkts,
                         rng,
+                        retransmitted="t" in (event.network.history or ""),
                     )
             event.network.duration = self._dns_transport_duration_seconds(
                 request,
@@ -4978,33 +5025,8 @@ class NetworkTransactionPlanner:
         domain_tags: list[str],
     ) -> str:
         """Return the stable browser identity for one canonical process PID."""
-        process = self._executor.state_manager.get_process(
-            source_system.hostname,
-            pid,
-        )
-        if process is None:
-            return ""
-        from evidenceforge.generation.activity.proxy_user_agents import (
-            stable_browser_user_agent_for_process,
-        )
-
-        process_identity = process.ecar_object_id or (
-            f"{process.pid}:{process.start_time.isoformat()}"
-        )
-        release_version = ""
-        deployments = getattr(self._executor.dispatcher, "deployment_registry", None)
-        version = getattr(process, "executable_version", None)
-        if deployments is not None and version is not None:
-            binary = deployments.binary_release_by_content_id(version.content_id)
-            if binary is not None:
-                release_version = binary.key.version
-        return stable_browser_user_agent_for_process(
-            source_system,
-            process.image,
-            process_identity,
-            hostname=hostname,
-            domain_tags=domain_tags,
-            release_version=release_version,
+        return self._executor.browser_user_agent_for_process(
+            source_system, pid, hostname=hostname, domain_tags=domain_tags
         )
 
     def _bind_browser_user_agent_to_process(
@@ -5552,11 +5574,13 @@ class NetworkTransactionPlanner:
                 event.network.orig_bytes,
                 event.network.orig_pkts,
                 rng,
+                retransmitted="T" in (event.network.history or ""),
             )
             event.network.resp_ip_bytes = _tcp_ip_byte_count(
                 event.network.resp_bytes,
                 event.network.resp_pkts,
                 rng,
+                retransmitted="t" in (event.network.history or ""),
             )
 
     def _plan_network_protocol_evidence(
@@ -5941,16 +5965,9 @@ class NetworkTransactionPlanner:
                         canonical_start + minimum_request_gap,
                     )
                 else:
-                    delay_ms = 12 + (
-                        _stable_seed(
-                            "http_request_after_transport:"
-                            f"{event.network.src_ip}:{event.network.src_port}:"
-                            f"{event.network.dst_ip}:{event.network.dst_port}:"
-                            f"{canonical_start.isoformat()}"
-                        )
-                        % 74
+                    application_request_time = canonical_start + self._http_request_phase_delay(
+                        request
                     )
-                    application_request_time = canonical_start + timedelta(milliseconds=delay_ms)
                 if canonical_close is not None:
                     available = canonical_close - canonical_start
                     application_request_time = min(
@@ -7047,7 +7064,7 @@ class NetworkTransactionPlanner:
             publication_inputs.generic_ssh_preauth_pid is not None
             and endpoints.target_system is not None
         ):
-            executor._emit_generic_ssh_preauth_failure_syslog(
+            executor._emit_generic_ssh_preauth_syslog(
                 target_system=endpoints.target_system,
                 target_host=endpoints.dst_host_ctx,
                 time=publication_inputs.event.timestamp,

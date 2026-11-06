@@ -9,7 +9,6 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 from scripts import macos_gui_launch_reference as kit
 
 from tests.unit.test_macos_gui_launch_reference import _CANARY, _IMAGE, _raws, _rows
@@ -71,8 +70,9 @@ def test_chain_filter_retains_launcher_and_fork_only_after_exact_owned_app_exec(
     assert report.launcher_entitlements.only_controlled_marker == "FAIL"
     assert report.launcher_signing_identifier == "EXPECTED_XPCPROXY"
     assert _CANARY not in report.model_dump_json()
-    with pytest.raises(ValidationError):
-        kit.decode_endpoint_security_record(first.decode())
+    # Opaque property-list entitlements are wire-valid even when they are not
+    # the controlled probe's entitlement marker.
+    assert kit.decode_endpoint_security_record(first.decode()).event_type == 9
     assert len(kit._app_case_rows(tracker.records["finder"], _IMAGE)) == 2
 
 

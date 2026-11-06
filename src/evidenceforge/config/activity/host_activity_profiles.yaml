@@ -1,3 +1,10 @@
+# Modeled SMB bursts; existing rate multipliers own mean frequency.
+smb_arrivals:
+  branching_ratio: 0.35
+  excitation_decay_seconds: 45
+  candidate_ceiling_multiplier: 12
+  minimum_candidate_ceiling: 16
+
 # Host/persona/role activity multipliers for baseline realism.
 #
 # These profiles are intentionally coarse. They shape broad source families

@@ -875,6 +875,31 @@ def test_real_ssh_caller_publishes_exact_cisco_transport_lifecycle(
     assert len(zeek_rows) == 1
 
 
+def test_real_exact_ssh_caller_publishes_linux_auth_syslog_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """Exact deferred SSH must retain the bundle-owned server auth observations."""
+
+    reset_thread_rng(42)
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    fixture = _fixture(tmp_path, extra_emitters={"syslog": syslog})
+
+    _uid, _logon_id = _execute_real_caller(fixture)
+
+    syslog.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+    )
+    assert "Connection from 10.0.0.10 port 50001" in rendered
+    assert "Accepted password for analyst" in rendered
+    assert "pam_unix(sshd:session): session opened for user analyst" in rendered
+    assert "New session" in rendered
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    fixture.close_and_read()
+    syslog.close()
+
+
 def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5562,3 +5587,37 @@ def test_filtered_ssh_close_rejects_new_projection_owner_until_original_absence_
     fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=1))
     assert fixture.generator.ssh_close_journal_census().total_pending == 0
     fixture.close_and_read()
+
+
+def test_authoritative_linux_ssh_logoff_retires_exact_application_owner(tmp_path: Path) -> None:
+    """An authored Linux close owns both endpoint teardown and the SSH sidecar."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(minutes=20)
+    end_plan = SessionEndPlan(deadline, "explicit_storyline", "close-ssh")
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=end_plan,
+    )
+    _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+    fixture.generator.generate_logoff(
+        fixture.user,
+        fixture.target,
+        deadline,
+        logon_id,
+        from_storyline=True,
+        session_end_plan=end_plan,
+    )
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    rows, _network = fixture.close_and_read()
+    target_sessions = [
+        row
+        for row in rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_sessions] == ["LOGIN", "LOGOUT"]

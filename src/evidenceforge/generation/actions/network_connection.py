@@ -1392,7 +1392,7 @@ class DeferredSessionNetworkAuthority:
                 self.existing_state_patch is not existing_state_patch
             ):
                 raise ValueError("Deferred network strict State patch was replaced")
-            session_plan = state_batch.session
+            session_plan = state_batch.session if state_batch is not None else None
             session_identity = (
                 session_plan.identity
                 if session_plan is not None
@@ -1678,8 +1678,43 @@ class DeferredSessionNetworkAuthority:
 
         if type(self.bound_at) is not datetime:
             raise TypeError("Deferred RDP dependent authority changed its binding-time type")
-        if self.strict_state_authority is None or self.state_batch is None:
+        if self.strict_state_authority is None:
             raise ValueError("Deferred RDP dependent occurrences require strict State authority")
+        if self.state_batch is None:
+            patch = self.existing_state_patch
+            if (
+                not self.strict_state_authority.allocation_free_rdp_reconnect
+                or patch is None
+                or len(specs) != 1
+            ):
+                raise ValueError("Allocation-free RDP requires one exact reconnect occurrence")
+            spec = specs[0]
+            generation = (
+                self.application_intent.expected_generation
+                if type(self.application_intent) is DeferredRdpApplicationIntent
+                else self.application_token.expected_generation
+                if type(self.application_token) is RdpSessionAdmissionToken
+                else 0
+            )
+            if (
+                type(spec.event_type) is not EventKind
+                or spec.event_type is not EventKind.RDP_RECONNECT
+                or type(spec.canonical_time) is not datetime
+                or spec.canonical_time != ensure_utc(self.bound_at)
+                or type(spec.member_references) is not tuple
+                or spec.member_references != (patch.after.identity.object_id,)
+                or type(spec.publication_ordinal) is not int
+                or spec.publication_ordinal != 1
+                or type(spec.occurrence_id) is not str
+                or spec.occurrence_id
+                != stable_uuid(
+                    "rdp-deferred-reconnect-occurrence",
+                    patch.after.identity.object_id,
+                    str(generation),
+                )
+            ):
+                raise ValueError("Allocation-free RDP reconnect changed exact dependent semantics")
+            return specs
         session = self.state_batch.session
         processes = self.state_batch.processes
         if self.binding_disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION:

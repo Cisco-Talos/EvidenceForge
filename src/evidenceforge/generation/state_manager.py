@@ -1869,7 +1869,7 @@ class DeferredSessionStateAuthority:
     protocol: DeferredSessionProtocol
     binding_disposition: DeferredSessionBindingDisposition
     bound_at: datetime
-    batch: MaterializationBatchPlan
+    batch: MaterializationBatchPlan | None
     existing_session_patch: ConnectionExistingSessionPatch | None
     existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None
     _owner: "StateManager" = field(repr=False, compare=False)
@@ -1888,8 +1888,13 @@ class DeferredSessionStateAuthority:
         if type(self.bound_at) is not datetime:
             raise TypeError("Deferred session State authority requires an exact binding time")
         object.__setattr__(self, "bound_at", ensure_utc(self.bound_at))
-        if type(self.batch) is not MaterializationBatchPlan:
-            raise TypeError("Deferred session State authority requires an exact batch")
+        if (
+            type(self.batch) is not MaterializationBatchPlan
+            and not self.allocation_free_rdp_reconnect
+        ):
+            raise TypeError(
+                "Deferred session State authority requires an exact batch or ACTIVE RDP patch"
+            )
         if self.existing_session_patch is not None and (
             type(self.existing_session_patch) is not ConnectionExistingSessionPatch
         ):
@@ -1907,6 +1912,17 @@ class DeferredSessionStateAuthority:
             raise TypeError("Deferred session State authority capability has an unsupported type")
         if type(self._integrity_token) is not str or not self._integrity_token:
             raise TypeError("Deferred session State authority requires an integrity token")
+
+    @property
+    def allocation_free_rdp_reconnect(self) -> bool:
+        """Identify the closed existing-session-only RDP State shape."""
+        return bool(
+            self.batch is None
+            and self.protocol is DeferredSessionProtocol.RDP
+            and self.binding_disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION
+            and type(self.existing_session_patch) is ConnectionExistingSessionPatch
+            and self.existing_session_process_roles_patch is None
+        )
 
     @property
     def publication_token(self) -> str:
@@ -1968,7 +1984,7 @@ def _deferred_session_state_authority_integrity_token(
     protocol: DeferredSessionProtocol,
     binding_disposition: DeferredSessionBindingDisposition,
     bound_at: datetime,
-    batch: MaterializationBatchPlan,
+    batch: MaterializationBatchPlan | None,
     existing_session_patch: ConnectionExistingSessionPatch | None,
     existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
     owner_identity: int,
@@ -1983,7 +1999,7 @@ def _deferred_session_state_authority_integrity_token(
         protocol.value,
         binding_disposition.value,
         bound_at,
-        batch.publication_token,
+        batch.publication_token if batch is not None else "allocation-free-rdp",
         (existing_session_patch._integrity_token if existing_session_patch is not None else ""),
         (
             existing_session_process_roles_patch.publication_token
@@ -10814,7 +10830,7 @@ class StateManager:
 
         preview_rng = _random_from_state(rng_state)
         sampled_initial = preview_rng.randint(20, 250)
-        normalized_time = ensure_utc(event_time).replace(microsecond=0)
+        normalized_time = ensure_utc(event_time)
         current_initial = self._linux_logind_session_initials.get(system)
         initial = current_initial if current_initial is not None else sampled_initial
         initial_patch = initial if current_initial is None else None
@@ -10845,6 +10861,42 @@ class StateManager:
                 % 3
             )
             candidate = earlier_max + bump
+        future_min = (
+            allocations.min_value_after(normalized_time) if allocations is not None else None
+        )
+        if future_min is not None:
+            lower = earlier_max if earlier_max is not None else 0
+            upper = future_min
+
+            def available(value: int) -> bool:
+                return (
+                    lower < value < upper
+                    and value not in used
+                    and not allocations.matches_elapsed_delta(
+                        normalized_time, value, tolerance=0.0, integral_seconds=True
+                    )
+                )
+
+            # Split retained identity space to leave room on both temporal sides.
+            midpoint = (lower + upper) // 2
+            selected = next(
+                (
+                    value
+                    for values in (
+                        range(max(lower + 1, midpoint), upper),
+                        range(lower + 1, midpoint),
+                    )
+                    for value in values
+                    if available(value)
+                ),
+                None,
+            )
+            if selected is None:
+                raise StateError(
+                    "Linux logind identity interval exhausted between existing sessions "
+                    f"on {system}: lower={lower}, upper={upper}"
+                )
+            candidate = selected
         salt = 0
         while candidate in used or (
             allocations is not None
@@ -20619,7 +20671,7 @@ class StateManager:
         protocol: DeferredSessionProtocol,
         binding_disposition: DeferredSessionBindingDisposition,
         bound_at: datetime,
-        batch: MaterializationBatchPlan,
+        batch: MaterializationBatchPlan | None,
         existing_session_patch: ConnectionExistingSessionPatch | None = None,
         existing_session_process_roles_patch: (
             ConnectionExistingSessionProcessRolesPatch | None
@@ -20630,7 +20682,13 @@ class StateManager:
         with self._capability_minting_guard("prepare_deferred_session_state_authority"):
             capability = _DeferredSessionStateAuthorityCapability()
             owner_identity = id(self)
-            admission_epoch = batch.admission_epoch
+            if batch is None and type(existing_session_patch) is not ConnectionExistingSessionPatch:
+                raise StateError("Allocation-free deferred State requires an exact session patch")
+            admission_epoch = (
+                batch.admission_epoch
+                if batch is not None
+                else existing_session_patch._admission_epoch
+            )
             integrity = _deferred_session_state_authority_integrity_token(
                 self._materialization_secret,
                 protocol=protocol,
@@ -20739,7 +20797,14 @@ class StateManager:
             raise StateError("Deferred session State authority belongs to another owner")
         if payload._capability.payload is not payload:
             raise StateError("Deferred session State authority is not its exact capability")
-        if payload._admission_epoch != payload.batch.admission_epoch:
+        expected_epoch = (
+            payload.batch.admission_epoch
+            if payload.batch is not None
+            else payload.existing_session_patch._admission_epoch
+            if payload.allocation_free_rdp_reconnect
+            else -1
+        )
+        if payload._admission_epoch != expected_epoch:
             raise StateError("Deferred session State authority changed its admission epoch")
         expected = _deferred_session_state_authority_integrity_token(
             self._materialization_secret,
@@ -20755,9 +20820,12 @@ class StateManager:
         )
         if not _authority_values_match(payload.publication_token, expected):
             raise StateError("Deferred session State authority integrity validation failed")
-        self.validate_materialization_batch(payload.batch)
-        if not payload.batch.processes:
-            raise StateError("Deferred session State authority requires process members")
+        if payload.batch is not None:
+            self.validate_materialization_batch(payload.batch)
+            if not payload.batch.processes:
+                raise StateError("Deferred session State authority requires process members")
+        elif not payload.allocation_free_rdp_reconnect:
+            raise StateError("Deferred State without allocation requires an ACTIVE RDP patch")
         self._validate_deferred_session_state_authority_semantics(payload)
         if outer_authority is None:
             if payload._capability.outer_authority is not None and not allow_bound_without_outer:
@@ -20783,6 +20851,18 @@ class StateManager:
         batch = payload.batch
         patch = payload.existing_session_patch
         roles = payload.existing_session_process_roles_patch
+        if batch is None:
+            if not payload.allocation_free_rdp_reconnect or patch is None:
+                raise StateError("Allocation-free deferred State requires ACTIVE RDP")
+            if (
+                patch.lifecycle_disposition
+                is not ConnectionExistingSessionLifecycleDisposition.EXISTING
+                or patch.after.identity.session_kind != "rdp"
+                or payload.bound_at != patch.after.source_ready_time
+            ):
+                raise StateError("Allocation-free RDP reconnect changed its live-session binding")
+            self._validate_connection_existing_session_patch_preimage(patch)
+            return
         if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
             if patch is not None or roles is not None or batch.session is None:
                 raise StateError(

@@ -147,6 +147,15 @@ class TestRemoteAuthenticationOrderingProbe:
 
         assert CausalityScorer._score_ecar_remote_auth_ordering([flow, login])[:2] == (1, 1)
 
+    def test_treats_same_millisecond_flow_and_login_as_order_ambiguous(self):
+        flow = _record("ecar", self._fields("FLOW"), ts=T0)
+        login = _record("ecar", self._fields("USER_SESSION"), ts=T0)
+
+        total, correct, failures = CausalityScorer._score_ecar_remote_auth_ordering([login, flow])
+
+        assert (total, correct) == (1, 1)
+        assert not failures
+
     def test_reports_exact_flow_login_inversion(self):
         flow = _record(
             "ecar",

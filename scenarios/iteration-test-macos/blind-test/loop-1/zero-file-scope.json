@@ -1,0 +1,15 @@
+[
+  {
+    "source": "zeek-core/files.json",
+    "line": 625,
+    "fuid": "FZgEgCqVzTxAGQgCiu",
+    "protocol": "SMB",
+    "mismatched_hashes": [
+      "md5",
+      "sha1",
+      "sha256"
+    ],
+    "gaps": 0,
+    "overflow": 0
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "cim_callers": 1,
+  "unsupported_credential_parameter": 1,
+  "session_scoped_callers": 0,
+  "examples": [
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "guid": "{7b2a0e3f-9aa6-6ae8-4602-0010c471d5d9}",
+      "command": "powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem -ComputerName 'MAIL-FIN-01' -Credential 'marcus.chen-admin'\""
+    }
+  ]
+}

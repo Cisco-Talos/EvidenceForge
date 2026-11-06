@@ -19,6 +19,7 @@ from evidenceforge.generation.timing import (
     TimingRuntime,
 )
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,20 @@ def _tcp_payload_bytes_consistent_with_history(
     return normalized_orig, normalized_resp
 
 
+def _tcp_history_consistent_with_payload(
+    history: str | None, orig_bytes: int | None, resp_bytes: int | None
+) -> str | None:
+    """Remove data observations when canonical directional payload is explicitly zero."""
+    if not history or history == "-":
+        return history
+    absent_markers = ""
+    if orig_bytes is not None and orig_bytes <= 0:
+        absent_markers += "DT"
+    if resp_bytes is not None and resp_bytes <= 0:
+        absent_markers += "dt"
+    return "".join(marker for marker in history if marker not in absent_markers)
+
+
 def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
     """Return whether responder payload requires prior originator payload."""
     normalized_service = (service or "").strip().lower()
@@ -304,8 +319,14 @@ def _align_tcp_network_payload_with_history(
         net.resp_bytes,
         net.history,
     )
+    history = _tcp_history_consistent_with_payload(net.history, orig_bytes, resp_bytes)
+    history_changed = history != net.history
+    if history_changed:
+        net.history = history
     if not changed and orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
-        return False
+        # Collapsed native history is not an exhaustive packet list. Keep the
+        # physical budget and its independent randomized ACK/options texture.
+        return history_changed
 
     net.orig_bytes = orig_bytes
     net.resp_bytes = resp_bytes
@@ -315,8 +336,18 @@ def _align_tcp_network_payload_with_history(
         net.history,
         rng,
     )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    net.orig_ip_bytes = _tcp_ip_byte_count(
+        net.orig_bytes,
+        net.orig_pkts,
+        rng,
+        retransmitted="T" in (net.history or ""),
+    )
+    net.resp_ip_bytes = _tcp_ip_byte_count(
+        net.resp_bytes,
+        net.resp_pkts,
+        rng,
+        retransmitted="t" in (net.history or ""),
+    )
     return True
 
 
@@ -347,8 +378,18 @@ def _preserve_explicit_tcp_payload_overrides(
         net.history,
         rng,
     )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    net.orig_ip_bytes = _tcp_ip_byte_count(
+        net.orig_bytes,
+        net.orig_pkts,
+        rng,
+        retransmitted="T" in (net.history or ""),
+    )
+    net.resp_ip_bytes = _tcp_ip_byte_count(
+        net.resp_bytes,
+        net.resp_pkts,
+        rng,
+        retransmitted="t" in (net.history or ""),
+    )
     return True
 
 
@@ -358,14 +399,33 @@ def _tcp_ip_byte_count(
     rng: random.Random,
     *,
     overhead_override: int | None = None,
+    retransmitted: bool = False,
 ) -> int:
     """Return MTU-bounded TCP IP-byte accounting with header texture."""
     if packet_count <= 0:
         return 0
-    payload = payload_bytes or 0
+    unique_payload = payload_bytes or 0
+    repeated_payload = (
+        min(
+            unique_payload,
+            _tcp_effective_mss_bytes(
+                random.Random(_stable_seed(f"tcp-retransmission-wire:{rng.getstate()}"))
+            ),
+        )
+        if retransmitted and unique_payload > 0
+        else 0
+    )
+    payload = unique_payload + repeated_payload
     mtu_ceiling = packet_count * 1500
+    # IPv4/TCP headers occupy whole 32-bit words. Clamping the IP total
+    # to the MTU ceiling independently of an odd payload invents fractional
+    # header words; bound only the optional header contribution instead.
+    header_capacity = ((mtu_ceiling - payload) // 4) * 4
+    if header_capacity < packet_count * 40:
+        raise ValueError("TCP packet count cannot contain payload and minimum IP/TCP headers")
     if overhead_override is not None:
-        return min(payload + packet_count * overhead_override, mtu_ceiling)
+        header_bytes = min(packet_count * overhead_override, header_capacity)
+        return payload + (header_bytes // 4) * 4
     overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
     option_extra = 0
     if packet_count > 1:
@@ -376,7 +436,8 @@ def _tcp_ip_byte_count(
         )
         max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
         option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
-    return min(payload + packet_count * overhead + option_extra, mtu_ceiling)
+    header_bytes = min(packet_count * overhead + option_extra, header_capacity)
+    return payload + (header_bytes // 4) * 4
 
 
 def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:

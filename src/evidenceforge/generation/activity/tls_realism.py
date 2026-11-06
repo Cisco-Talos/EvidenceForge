@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.schemas import TlsWireBudgetConfig
+from evidenceforge.events.contexts import SslContext, X509Context
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
 from evidenceforge.generation.timing import (
@@ -627,3 +629,61 @@ def _tls_profile_domains(
             seen.add(domain)
             unique_domains.append(domain)
     return unique_domains
+
+
+def tls_server_payload_budget(
+    *,
+    zeek_uid: str,
+    ssl: SslContext,
+    chain: tuple[X509Context, ...] | list[X509Context],
+    service: str = "",
+    application_bytes: int = 0,
+) -> int:
+    """Compute a conservative full TLS 1.2 responder payload budget.
+
+    Protocol sizes follow RFC 5246 and the signed ECDHE structures in RFC 4492.
+    Optional extension/ticket bytes are scoped to the connection so repeat
+    reconciliation returns the same budget, without sharing RNG state.
+    """
+    if not chain or ssl.resumed or ssl.version == "TLSv13":
+        return max(0, application_bytes)
+    profile = TlsWireBudgetConfig.model_validate(load_tls_realism().get("wire_budget", {}))
+    rng = random.Random(_stable_seed(f"tls-server-wire:{zeek_uid}:{ssl.cipher}"))
+    cert_bytes = sum(certificate_file_size(cert) for cert in chain)
+    # Handshake header + vector length + each certificate's uint24 length.
+    certificate_message = 4 + 3 + 3 * len(chain) + cert_bytes
+    # ServerHello header, fixed fields, a full session ID and extension vector.
+    server_hello = (
+        4 + 38 + 32 + 2 + rng.randint(profile.extension_bytes_min, profile.extension_bytes_max)
+    )
+    cipher = ssl.cipher or ""
+    key_exchange = 0
+    if "DHE" in cipher:
+        leaf = chain[0]
+        key_bytes = (leaf.certificate_key_length + 7) // 8
+        signature = key_bytes if "RSA" in cipher else 2 * key_bytes + 8
+        # Bounded named-curve public point or finite-field prime/public values.
+        parameters = 133 + 4 if "ECDHE" in cipher else 2 * 256 + 7
+        key_exchange = 4 + parameters + 4 + signature
+    # ServerHelloDone + CCS + Finished (verify data, nonce and AEAD tag),
+    # with five record headers. This is a conservative bound, not a PCAP.
+    completion = 4 + 1 + 4 + 12 + 8 + 16 + 5 * 5
+    ticket = 4 + 6 + rng.randint(profile.ticket_bytes_min, profile.ticket_bytes_max)
+    dialogue = (
+        rng.randint(profile.starttls_dialogue_bytes_min, profile.starttls_dialogue_bytes_max)
+        if service in {"smtp", "imap", "pop3", "ftp"}
+        else 0
+    )
+    # Encrypted application data needs a record header, nonce and authentication tag.
+    application = max(0, application_bytes)
+    if application:
+        application += ((application + 16383) // 16384) * (5 + 8 + 16)
+    return (
+        certificate_message
+        + server_hello
+        + key_exchange
+        + completion
+        + ticket
+        + dialogue
+        + application
+    )

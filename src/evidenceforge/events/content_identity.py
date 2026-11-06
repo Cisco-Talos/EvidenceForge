@@ -613,7 +613,15 @@ class FileContentIdentity:
         object.__setattr__(
             self,
             "digests",
-            ContentDigests.derive("file-content", content_key),
+            (
+                ContentDigests(
+                    md5=hashlib.md5(b"", usedforsecurity=False).hexdigest(),
+                    sha1=hashlib.sha1(b"").hexdigest(),
+                    sha256=hashlib.sha256(b"").hexdigest(),
+                )
+                if self.size_bytes == 0
+                else ContentDigests.derive("file-content", content_key)
+            ),
         )
 
     @property

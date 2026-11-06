@@ -145,3 +145,56 @@ def test_sudo_finalizer_repairs_observation_jitter_to_command_open_close() -> No
     assert "session closed" in normalized[2]
     assert "2024-03-18T12:00:00.101000Z" in normalized[1]
     assert "2024-03-18T12:00:00.102000Z" in normalized[2]
+
+
+@pytest.mark.parametrize("source", ["baseline", "storyline"])
+def test_sudo_phase_plan_uses_microseconds_and_keeps_zero_runtime_order(source: str) -> None:
+    from dataclasses import replace
+
+    from evidenceforge.generation.actions.linux_sudo_session import (
+        linux_sudo_intrinsic_close_headroom,
+    )
+    from evidenceforge.generation.timing import TimingRuntime
+
+    base = _request()
+    gaps: list[int] = []
+    for index in range(40):
+        request = replace(
+            base, time=base.time + timedelta(seconds=index), source=source, runtime=timedelta(0)
+        )
+
+        def execute(
+            seed: int, request: LinuxSudoSessionRequest = request
+        ) -> tuple[list[datetime], list[datetime]]:
+            executor = Mock()
+            executor.generate_linux_sudo_processes.return_value = (
+                7001,
+                7002,
+                timedelta(0),
+                "pts/1",
+            )
+            runtime = TimingRuntime(reference_time=base.time, generation_seed=seed)
+            LinuxSudoSessionActionBundle(executor, request, timing_runtime=runtime).execute()
+            times = [call.kwargs["time"] for call in executor.generate_syslog_event.call_args_list]
+            create = executor.generate_linux_sudo_processes.call_args.kwargs
+            exits = [
+                call.kwargs["time"] for call in executor.terminate_linux_sudo_process.call_args_list
+            ]
+            assert (
+                create["sudo_time"]
+                < times[0]
+                < times[1]
+                < create["child_time"]
+                < exits[0]
+                < times[2]
+                < exits[1]
+            )
+            assert exits[1] <= request.time + linux_sudo_intrinsic_close_headroom()
+            return times, exits
+
+        times, exits = execute(38)
+        assert (times, exits) == execute(38)
+        assert times != execute(39)[0]
+        gaps.append(round((times[1] - times[0]).total_seconds() * 1e6))
+    assert len(set(gaps)) == 40
+    assert sum(gap % 1000 == 0 for gap in gaps) <= 1

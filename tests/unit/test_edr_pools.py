@@ -300,6 +300,57 @@ class TestFilePaths:
 
         assert effect is None
 
+    def test_powershell_temp_churn_requires_command_file_output(self):
+        temp_path = r"C:\Users\alice\AppData\Local\Temp\tmp{rand}.tmp"
+
+        diagnostic = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -Command Test-Connection -ComputerName dc01 -Count 2",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+            path_templates=[temp_path],
+            actions=["create"],
+            weights=[1],
+        )
+        file_output = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -Command Get-Process | Export-Csv C:\\temp\\processes.csv",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+            path_templates=[temp_path],
+            actions=["create"],
+            weights=[1],
+        )
+
+        assert diagnostic is None
+        assert file_output is not None
+        assert "tmp" in file_output[1]
+
+    def test_process_preflight_powershell_temp_effect_requires_file_output(self):
+        process = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        diagnostic = select_file_side_effect(
+            process_name=process,
+            command_line="powershell.exe -Command Test-Connection -ComputerName dc01 -Count 2",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+        )
+        file_output = select_file_side_effect(
+            process_name=process,
+            command_line=(
+                "powershell.exe -Command Get-Process | Export-Csv C:\\temp\\processes.csv"
+            ),
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+        )
+
+        assert diagnostic is None
+        assert file_output is not None
+        assert "\\appdata\\local\\temp\\tmp" in file_output[1].lower()
+
     def test_generic_windows_paths_exclude_unowned_system_temp_template(self):
         """Generic churn must not assign one Windows Temp grammar to arbitrary processes."""
         paths = get_file_paths("windows")

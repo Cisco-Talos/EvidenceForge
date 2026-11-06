@@ -1,0 +1,20 @@
+{
+  "zeek-core": {
+    "successful_https": 216,
+    "near_1_2_seconds": 0,
+    "tls_files_checked": 175,
+    "tls_files_outside_connection": 0
+  },
+  "zeek-dmz": {
+    "successful_https": 2632,
+    "near_1_2_seconds": 0,
+    "tls_files_checked": 1040,
+    "tls_files_outside_connection": 0
+  },
+  "zeek-db": {
+    "successful_https": 16,
+    "near_1_2_seconds": 0,
+    "tls_files_checked": 26,
+    "tls_files_outside_connection": 0
+  }
+}

@@ -4,12 +4,13 @@
 """Bounded Mac SMB client evidence through the production action owner."""
 
 import json
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from evidenceforge.events.content_identity import UnresolvedBinaryIdentity
+from evidenceforge.events.content_identity import BinaryReleaseIdentity
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.network_connection import PersistentSmbRootIntent
@@ -18,6 +19,14 @@ from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.state_manager import MaterializationBatchPlan, StateManager
 from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng
 from tests.support.macos_smb import macos_smb_scenario
+
+
+@pytest.fixture(autouse=True)
+def authored_smb_seed_scope() -> Iterator[None]:
+    """Initialize frozen native sources under the fixture's authored seed too."""
+    with generation_seed_scope(99):
+        reset_thread_rng()
+        yield
 
 
 @pytest.mark.slow
@@ -32,6 +41,7 @@ def test_mac_mounted_read_correlates_client_network_and_server(
 ) -> None:
     scenario = macos_smb_scenario(scenarios_dir, server_platform=server_platform)
     engine = GenerationEngine(scenario, tmp_path)
+    engine._chronological_es_delivery = True
     observed: list[ProcessIdentity] = []
     original = PersistentSmbRootIntent.client_process_identity
 
@@ -46,12 +56,9 @@ def test_mac_mounted_read_correlates_client_network_and_server(
         binary = engine.activity_generator.dispatcher.resolve_process_binary_identity(
             identity.hostname, identity.principal, identity.image, "macos"
         )
-        if explicit_actor:
-            assert identity.executable_version == ProcessExecutableVersion.from_binary(binary)
-        else:
-            # The existing cat profile has no compiled release; unknown stays unknown.
-            assert type(binary) is UnresolvedBinaryIdentity
-            assert identity.executable_version is None
+        # Mounted helpers now use the canonical native process owner's release.
+        assert type(binary) is BinaryReleaseIdentity
+        assert identity.executable_version == ProcessExecutableVersion.from_binary(binary)
         snapshot = owner.client_process.identity_snapshot()
         assert type(owner.client_process).from_identity_snapshot(snapshot) == owner.client_process
         observed.append(identity)
@@ -115,6 +122,8 @@ def test_mac_mounted_read_correlates_client_network_and_server(
                     == restored.executable_version
                     == identity.executable_version
                 )
+        # Drive the same chronological source publication/finalization as the CLI.
+        engine._finalize_macos_process_coverage()
     finally:
         engine._close_emitters()
     rows = {
@@ -200,6 +209,7 @@ def test_mac_mounted_operations_preserve_effects_and_actor_ownership(
         ]
     scenario = Scenario.model_validate(data)
     engine = GenerationEngine(scenario, tmp_path)
+    engine._chronological_es_delivery = True
     try:
         engine._initialize()
         generator = engine.activity_generator
@@ -224,6 +234,8 @@ def test_mac_mounted_operations_preserve_effects_and_actor_ownership(
             if operation == "denied":
                 assert generator.state_manager.get_state_summary()["smb_mutations"] == before
                 assert all(item["fuid"] is None for item in result.operations)
+        # Drive the same chronological source publication/finalization as the CLI.
+        engine._finalize_macos_process_coverage()
     finally:
         engine._close_emitters()
     client_file = next(path for path in tmp_path.rglob("ecar.json") if "TEST-01." in str(path))

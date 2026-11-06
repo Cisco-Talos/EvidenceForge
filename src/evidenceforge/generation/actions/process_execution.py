@@ -282,6 +282,7 @@ class ProcessExecutionRequest:
     lifecycle_group_id: str = ""
     source_visible_by: datetime | None = None
     require_exact_parent: bool = field(default=False, kw_only=True)
+    preserve_requested_time: bool = field(default=False, kw_only=True)
     new_posix_session: bool = field(default=False, kw_only=True)
     arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
     exec_script: MacosExecScript | None = field(default=None, kw_only=True)
@@ -373,6 +374,17 @@ class ProcessExecutionRequest:
             raise ValueError("Explicit Mac process argv requires a fresh exact-parent launch")
         if type(self.new_posix_session) is not bool:
             raise ValueError("New POSIX launch session requires an exact boolean")
+        if type(self.preserve_requested_time) is not bool:
+            raise ValueError("Exact process start-time intent requires an exact boolean")
+        if self.preserve_requested_time and (
+            platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.source_visible_by is not None
+            or self.reuse_intent is not None
+        ):
+            raise ValueError(
+                "Exact process start-time intent requires a fresh exact-parent Mac launch"
+            )
         if self.new_posix_session and (
             not self.require_exact_parent
             or self.reuse_intent is not None
@@ -400,6 +412,7 @@ class ProcessExecutionRequest:
         concurrency_suffix = f":{self.concurrency_group_id}" if self.concurrency_group_id else ""
         lifecycle_suffix = f":{self.lifecycle_group_id}" if self.lifecycle_group_id else ""
         exact_parent_suffix = ":exact_parent" if self.require_exact_parent else ""
+        preserve_time_suffix = ":preserve_time" if self.preserve_requested_time else ""
         session_suffix = ":new_posix_session" if self.new_posix_session else ""
         arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
         script_suffix = f":script={self.exec_script!r}" if self.exec_script is not None else ""
@@ -435,7 +448,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}{responsibility_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{preserve_time_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}{responsibility_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

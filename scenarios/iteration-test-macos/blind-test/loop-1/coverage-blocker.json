@@ -1,0 +1,92 @@
+{
+  "status": "COMPLETE_COVERAGE_GATE_FAILED",
+  "behavior_revision": 391,
+  "first_rejected_host": "MAC-MROSS-01",
+  "forks": {
+    "expected": 44,
+    "published": 44
+  },
+  "execs": {
+    "expected": 57,
+    "published": 50
+  },
+  "unresolved_aggregate_starts": 7,
+  "examples": [
+    "/bin/ls",
+    "/usr/bin/tee",
+    "/bin/cat",
+    "/bin/cat",
+    "/bin/cat",
+    "/usr/bin/tee",
+    "/bin/cat"
+  ],
+  "owning_path": "Mounted SMB operation helper materialization",
+  "assessment_status": "User approved a separate partial-coverage diagnostic assessment",
+  "private_native_logs_read": false,
+  "all_hosts": [
+    {
+      "hostname": "MAC-MROSS-01",
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 44,
+        "expected_execs": 57,
+        "published_forks": 44,
+        "published_execs": 50,
+        "fork_identities_match": true,
+        "exec_identities_match": false,
+        "aggregate_births": 7,
+        "aggregate_examples": [
+          "/bin/ls",
+          "/usr/bin/tee",
+          "/bin/cat",
+          "/bin/cat",
+          "/bin/cat",
+          "/usr/bin/tee",
+          "/bin/cat"
+        ],
+        "complete": false,
+        "expected_exits": 50,
+        "observed_exits": 50,
+        "known_exits": 42,
+        "published_exits": 42,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": false
+      }
+    },
+    {
+      "hostname": "MAC-MROSS-02",
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 54,
+        "expected_execs": 70,
+        "published_forks": 54,
+        "published_execs": 65,
+        "fork_identities_match": true,
+        "exec_identities_match": false,
+        "aggregate_births": 5,
+        "aggregate_examples": [
+          "/bin/cat",
+          "/bin/cat",
+          "/bin/cat",
+          "/bin/cat",
+          "/bin/cat"
+        ],
+        "complete": false,
+        "expected_exits": 58,
+        "observed_exits": 58,
+        "known_exits": 52,
+        "published_exits": 52,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": false
+      }
+    }
+  ],
+  "total_missing_native_execs": 12,
+  "total_unpublished_native_exits": 14,
+  "exit_metadata_gaps": 12,
+  "exit_outcome_unknown": 2
+}

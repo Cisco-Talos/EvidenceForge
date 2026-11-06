@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 import shlex
 from dataclasses import dataclass, replace
@@ -35,6 +36,7 @@ from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
     from evidenceforge.generation.state_manager import (
@@ -124,18 +126,35 @@ class MacosExecutionMetadataProducer:
                 # Shared system homes are not user-owned directory evidence.
                 paths[host].pop(account.home, None)
                 ambiguous.add((host, account.home))
-        born_at = window_start - timedelta(seconds=profile.directory_age_seconds)
-        delta = born_at - datetime(1970, 1, 1, tzinfo=UTC)
-        born = MacosFileTime(
-            seconds=delta.days * 86400 + delta.seconds, nanoseconds=delta.microseconds * 1000
-        )
         directories: dict[tuple[str, str], MacosDirectoryMetadata] = {}
         for host, candidates in sorted(paths.items()):
-            volume = filesystem.directory_volume(host, profile.directory_first_inode)
+            inode_range = profile.directory_inode_range
+            inode_rng = random.Random(
+                _stable_seed(f"macos-execution-directory-inode:{host.casefold()}")
+            )
+            inode_span = len(candidates)
+            if inode_range.max - inode_range.min + 1 < inode_span:
+                raise StateError("Mac directory inode range is too small for modeled directories")
+            first_inode = inode_rng.randint(inode_range.min, inode_range.max - inode_span + 1)
+            volume = filesystem.directory_volume(host, first_inode)
             if volume.device == profile.terminal.device:
                 raise StateError("Modeled devfs cannot reuse the installed filesystem device")
             for offset, (path, (uid, gid)) in enumerate(sorted(candidates.items())):
-                inode = profile.directory_first_inode + offset
+                inode = first_inode + offset
+                age_rng = random.Random(
+                    _stable_seed(
+                        f"macos-execution-directory-age:{host.casefold()}:{path.casefold()}"
+                    )
+                )
+                age = age_rng.randint(
+                    profile.directory_age_range.min, profile.directory_age_range.max
+                )
+                born_at = window_start - timedelta(seconds=age)
+                delta = born_at - datetime(1970, 1, 1, tzinfo=UTC)
+                born = MacosFileTime(
+                    seconds=delta.days * 86400 + delta.seconds,
+                    nanoseconds=delta.microseconds * 1000,
+                )
                 directories[host, path] = MacosDirectoryMetadata(
                     volume_id=volume.volume_id,
                     file_object_id=f"{host}:{volume.volume_id}:{inode}",
@@ -159,7 +178,7 @@ class MacosExecutionMetadataProducer:
         self._accounts = MappingProxyType(accounts)
         self._filesystem = filesystem
         self._directories = MappingProxyType(directories)
-        self._known_from = born_at
+        self._known_from = window_start - timedelta(seconds=profile.directory_age_range.max)
         self._known_until = window_end
 
     def command_completion(

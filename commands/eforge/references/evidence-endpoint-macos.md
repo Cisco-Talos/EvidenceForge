@@ -39,7 +39,7 @@ APFS image, general native filesystem-event or Mac SMB-server source is implemen
 Use `eforge info formats --json` to inspect the CLI actually being used. The current
 checkout exposes both native Mac format IDs above and `zsh_history`. Do not conclude
 that an older installed CLI has this branch's capabilities from its product version alone.
-Selecting a format or output target does not establish SOF-ELK or Splunk ingestion support.
+Selecting a format or output target does not establish SOF-ELK® or Splunk ingestion support.
 
 ## Complete process starts and explicit limits
 

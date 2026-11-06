@@ -35,6 +35,7 @@ _PHASE_KEYS = (
     "policy_decision_after_request_ms",
     "dns_query_after_decision_ms",
     "tls_after_origin_connect_ms",
+    "origin_request_after_setup_ms",
     "origin_service_ms",
     "client_flush_after_response_ms",
     "terminal_response_after_decision_ms",

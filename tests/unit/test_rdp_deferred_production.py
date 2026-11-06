@@ -4196,6 +4196,7 @@ class _OrderedEngineRecoveryDispatcher:
 
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
+        self.macos_es_ingress = None
 
     def drain_exact_projection_recoveries(self) -> tuple[object, ...]:
         """Record one recovery drain."""
@@ -4292,3 +4293,59 @@ def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
     assert calls.index("source-finalize") < calls.index("emitter-close")
     assert calls.index("emitter-close") < calls.index("source-closed")
     assert engine._finalization_complete
+
+
+def test_unmodeled_rdp_reconnect_preserves_session_and_existing_process_identities(
+    tmp_path: Path,
+) -> None:
+    """A same-peer reconnect without a source host has no process allocation or re-key."""
+    deadline = _START + timedelta(hours=4)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        modeled_source=False,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    original = harness.state.get_session_identity(harness.logon_id)
+    processes = tuple(
+        harness.state.get_process_identity_by_object_id(key)
+        for key in harness.terminal_process_object_ids
+    )
+    counters = dict(harness.state._pid_counters)
+    harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    reconnect_at = harness.disconnect_at + timedelta(seconds=1)
+    uid, logon_id = harness.generator._execute_rdp_session_bundle(
+        user=User(username="analyst", full_name="Security Analyst", email="analyst@example.test"),
+        target_system=harness.generator._ip_to_system["10.20.0.10"],
+        time=reconnect_at,
+        source_ip="198.51.100.25",
+        source_system=None,
+        source_port=50002,
+        logon_id=harness.logon_id,
+    )
+    assert uid and logon_id == harness.logon_id
+    assert harness.state.get_session_identity(logon_id) == original
+    assert harness.state._pid_counters == counters
+    assert (
+        tuple(
+            harness.state.get_process_identity_by_object_id(key)
+            for key in harness.terminal_process_object_ids
+        )
+        == processes
+    )
+    current = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert current.generation.ordinal == disconnected.generation.ordinal + 1
+    restored = StateManager()
+    # Exercise the existing State serializer using its authoritative participant payload.
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+
+    _restore_head(restored, _capture_head(harness.state))
+    assert restored.get_session_identity(logon_id) == original
+    harness.generator.finalize_rdp_session_lifecycles(deadline)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+    rendered = "\n".join(f.read_text() for f in (harness.output_root / "windows").rglob("*.xml"))
+    assert len(_xml_events(rendered, 4624)) == 1
+    assert len(_xml_events(rendered, 4778)) == 1
+    assert len(_xml_events(rendered, 4779)) == 2

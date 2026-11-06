@@ -383,11 +383,17 @@
                 "type": "string"
               },
               {
+                "additionalProperties": {
+                  "$ref": "#/$defs/NativeEntitlementValue"
+                },
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
             "default": null,
-            "description": "Explicit modeled no-entitlements fact; null leaves it unknown",
+            "description": "Explicit absence or a bounded Boolean/integer/string/string-array/nested object; null is unknown",
             "title": "Entitlements"
           }
         },
@@ -396,6 +402,31 @@
         ],
         "title": "MacCodeSignatureEntry",
         "type": "object"
+      },
+      "NativeEntitlementValue": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/$defs/NativeEntitlementValue"
+            },
+            "type": "object"
+          }
+        ]
       },
       "PlatformConfig": {
         "additionalProperties": false,
@@ -671,6 +702,21 @@
         "default": false,
         "title": "Singleton Per Session",
         "type": "boolean"
+      },
+      "installed_with": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Helper installed with one independent application; inherits its placement eligibility",
+        "title": "Installed With"
       }
     },
     "required": [

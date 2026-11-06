@@ -5580,7 +5580,7 @@ class EventDispatcher:
         principal = process.username or (event.auth.username if event.auth is not None else "")
         resolved = prepared_binary
         loaded_identity = None
-        if platform == "macos":
+        if platform in {"macos", "windows"}:
             identities = event.identity_plan
             candidates = (identities.subject, identities.actor) if identities is not None else ()
             loaded_identity = next(
@@ -14695,7 +14695,7 @@ class EventDispatcher:
             )
         resolved_binary = (
             self.resolve_loaded_process_binary_identity(actor)
-            if platform_name == "macos" and actor.executable_version is not None
+            if actor.executable_version is not None
             else self.resolve_process_binary_identity(
                 host.hostname,
                 process.username,
@@ -14708,8 +14708,7 @@ class EventDispatcher:
         # against the exact State-owned loaded version, not Python object identity.
         matching_binary = resolved_binary is binary
         if (
-            platform_name == "macos"
-            and actor.executable_version is not None
+            actor.executable_version is not None
             and actor.executable_version.identity_kind == "local_artifact"
             and type(resolved_binary) is LocalArtifactBinaryIdentity
             and type(binary) is LocalArtifactBinaryIdentity
@@ -14767,11 +14766,11 @@ class EventDispatcher:
 
         state_plan = getattr(root, "state_plan", None)
         batch = getattr(state_plan, "batch", None)
-        if batch is None:
+        if state_plan is None:
             return ()
         return (
-            *((batch.session,) if batch.session is not None else ()),
-            *batch.processes,
+            *((batch.session,) if batch is not None and batch.session is not None else ()),
+            *(batch.processes if batch is not None else ()),
             *(
                 (state_plan.existing_session_patch,)
                 if state_plan.existing_session_patch is not None

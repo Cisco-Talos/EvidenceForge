@@ -35,6 +35,49 @@ def test_explicit_argument_identity_preserves_omitted_request_defaults() -> None
     explicit = replace(request, arguments=("/usr/bin/login", "-fp", "alex"))
     assert explicit.stable_id != request.stable_id
     assert explicit.stable_id == replace(explicit).stable_id
+    preserved_time = replace(request, preserve_requested_time=True)
+    assert preserved_time.stable_id != request.stable_id
+
+
+def test_exact_requested_time_requires_fresh_exact_parent_mac_launch() -> None:
+    with pytest.raises(ValueError, match="Exact process start-time intent"):
+        replace(_request(), source_visible_by=_TIME, preserve_requested_time=True)
+    with pytest.raises(ValueError, match="Exact process start-time intent"):
+        replace(_request(), require_exact_parent=False, preserve_requested_time=True)
+
+
+def test_process_bundle_keeps_exact_mac_start_anchor_without_storyline_origin() -> None:
+    state = StateManager()
+    _seed_launchd(state)
+    generator = ActivityGenerator(state, {}, dispatcher=EventDispatcher(state, {}))
+    user, system = _user(), _system()
+    logon = generator.generate_logon(user, system, _TIME)
+    shell_pid = generator.ensure_macos_session_shell(
+        user,
+        system,
+        logon,
+        _TIME + timedelta(seconds=30),
+    )
+    assert shell_pid is not None
+    requested_time = _TIME + timedelta(seconds=45)
+
+    pid = generator.generate_process(
+        user,
+        system,
+        requested_time,
+        logon,
+        "/usr/bin/ls",
+        "/usr/bin/ls -la /Users/alex",
+        parent_pid=shell_pid,
+        require_exact_parent=True,
+        preserve_requested_time=True,
+        arguments=("/usr/bin/ls", "-la", "/Users/alex"),
+    )
+
+    identity = state.get_process_identity(system.hostname, pid)
+    assert identity is not None
+    assert identity.started_at == requested_time
+    assert identity.execution_started_at == requested_time
 
 
 def test_explicit_launch_responsibility_participates_in_intent_identity() -> None:

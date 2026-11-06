@@ -3227,8 +3227,8 @@ class TestCanHandleDefault:
         assert (tmp_path / "linux01.example.test" / "2024" / "syslog.log").exists()
         assert (tmp_path / "linux01.example.test" / "2025" / "syslog.log").exists()
 
-    def test_syslog_normalizes_logind_session_ids_in_rendered_order(self, tmp_path):
-        """Rendered New-session IDs should not move backward after final syslog sort."""
+    def test_raw_syslog_preserves_logind_ids_after_timestamp_sort(self, tmp_path):
+        """Raw escape-hatch IDs remain literal; canonical allocation owns chronology."""
         from datetime import UTC, datetime
 
         from evidenceforge.formats import load_format
@@ -3272,8 +3272,8 @@ class TestCanHandleDefault:
             if "New session" in line
         ]
         removed_session = int(lines[2].split("Removed session ", 1)[1].rstrip("."))
-        assert new_sessions == sorted(new_sessions)
-        assert removed_session == new_sessions[0]
+        assert new_sessions == [7616, 7608]
+        assert removed_session == 7616
 
     def test_syslog_normalizes_kernel_uptime_in_rendered_order(self, tmp_path):
         """Kernel bracket uptime should not regress after final syslog sorting."""
@@ -3335,8 +3335,8 @@ class TestCanHandleDefault:
         assert len(lines) == 1
         assert f"New session {oversized_session} of user root." in lines[0]
 
-    def test_syslog_rewrites_prewindow_logind_removals_below_visible_news(self, tmp_path):
-        """Pre-window removes should not reuse a later visible New-session ID."""
+    def test_raw_syslog_does_not_rekey_prewindow_logind_removals(self, tmp_path):
+        """A raw session reference cannot be replaced by an emitter-created identity."""
         from datetime import UTC, datetime
 
         from evidenceforge.formats import load_format
@@ -3378,11 +3378,10 @@ class TestCanHandleDefault:
         new_session = int(lines[1].split("New session ", 1)[1].split(" ", 1)[0])
         later_removed = int(lines[2].split("Removed session ", 1)[1].rstrip("."))
 
-        assert first_removed < new_session
-        assert later_removed == new_session
+        assert first_removed == new_session == later_removed == 12945
 
-    def test_syslog_rewrites_duplicate_prewindow_logind_removals_uniquely(self, tmp_path):
-        """Removed-only logind rows should not collapse to one duplicate session ID."""
+    def test_raw_syslog_preserves_repeated_prewindow_session_references(self, tmp_path):
+        """Repeated raw references are not new canonical sessions to allocate."""
         from datetime import UTC, datetime
 
         from evidenceforge.formats import load_format
@@ -3426,8 +3425,8 @@ class TestCanHandleDefault:
         ]
         new_session = int(lines[-1].split("New session ", 1)[1].split(" ", 1)[0])
 
-        assert len(removed_sessions) == len(set(removed_sessions))
-        assert all(session < new_session for session in removed_sessions)
+        assert removed_sessions == [12940, 12940]
+        assert new_session == 12945
 
     def test_syslog_sorts_same_second_ssh_lifecycle(self, tmp_path):
         """Same-second SSH syslog groups should keep lifecycle order."""

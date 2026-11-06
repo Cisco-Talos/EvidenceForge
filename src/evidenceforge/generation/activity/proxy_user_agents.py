@@ -400,6 +400,9 @@ def stable_browser_user_agent_for_process(
         if family == "chrome":
             # Chromium's reduced UA retains the installed major version.
             user_agent = re.sub(r"Chrome/\d+(?:\.\d+)*", f"Chrome/{major}.0.0.0", user_agent)
+        elif family == "edge":
+            user_agent = re.sub(r"Edg/\d+(?:\.\d+)*", f"Edg/{major}.0.0.0", user_agent)
+            user_agent = re.sub(r"Chrome/\d+(?:\.\d+)*", f"Chrome/{major}.0.0.0", user_agent)
         elif family == "firefox":
             user_agent = re.sub(r"Firefox/\d+(?:\.\d+)*", f"Firefox/{major}.0", user_agent)
             user_agent = re.sub(r"rv:\d+(?:\.\d+)*", f"rv:{major}.0", user_agent)

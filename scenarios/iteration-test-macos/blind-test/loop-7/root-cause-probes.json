@@ -1,0 +1,111 @@
+{
+  "ssh_failed_auth_flow_order": [
+    {
+      "host": "MAIL-EDGE-01",
+      "principal": "jennifer.walsh",
+      "source_ip": "10.10.2.11",
+      "source_port": "64466",
+      "matched": true,
+      "flow_timestamp_ms": 1793633828372,
+      "auth_timestamp_ms": 1793633828470,
+      "auth_after_flow_ms": 98,
+      "flow_id": "fa7c25cf-e041-49a7-b8f3-c4f752ed8efa"
+    },
+    {
+      "host": "DB-PROD-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.40",
+      "source_port": "35427",
+      "matched": true,
+      "flow_timestamp_ms": 1793636942303,
+      "auth_timestamp_ms": 1793636942356,
+      "auth_after_flow_ms": 53,
+      "flow_id": "8fda400f-b90e-484b-aae6-2e46fbef19a2"
+    },
+    {
+      "host": "WEB-EXT-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.10",
+      "source_port": "52886",
+      "matched": true,
+      "flow_timestamp_ms": 1793636940342,
+      "auth_timestamp_ms": 1793636940353,
+      "auth_after_flow_ms": 11,
+      "flow_id": "d0522706-a5ff-4c0d-b66a-7241423e7c17"
+    },
+    {
+      "host": "LOG-MON-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.11",
+      "source_port": "54896",
+      "matched": true,
+      "flow_timestamp_ms": 1793636946184,
+      "auth_timestamp_ms": 1793636946204,
+      "auth_after_flow_ms": 20,
+      "flow_id": "be109f4a-8759-4526-be19-46a92da7ac9d"
+    },
+    {
+      "host": "PROXY-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.30",
+      "source_port": "37986",
+      "matched": true,
+      "flow_timestamp_ms": 1793636952598,
+      "auth_timestamp_ms": 1793636952616,
+      "auth_after_flow_ms": 18,
+      "flow_id": "9802a3f2-4944-4e0b-9e5b-4dc201937ece"
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.25",
+      "source_port": "43943",
+      "matched": true,
+      "flow_timestamp_ms": 1793636961304,
+      "auth_timestamp_ms": 1793636961322,
+      "auth_after_flow_ms": 18,
+      "flow_id": "73c66f0e-5d3a-4133-a92e-d50cc1a3797e"
+    },
+    {
+      "host": "FILE-LNX-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.26",
+      "source_port": "34593",
+      "matched": true,
+      "flow_timestamp_ms": 1793636954051,
+      "auth_timestamp_ms": 1793636954148,
+      "auth_after_flow_ms": 97,
+      "flow_id": "3e39e84c-0a0d-428b-addf-0416cecfc119"
+    },
+    {
+      "host": "APP-INT-01",
+      "principal": "svc_mgmt",
+      "source_ip": "10.10.2.21",
+      "source_port": "50902",
+      "matched": true,
+      "flow_timestamp_ms": 1793636947950,
+      "auth_timestamp_ms": 1793636947978,
+      "auth_after_flow_ms": 28,
+      "flow_id": "919cf20a-041a-43ba-8b8e-273b92fbfea9"
+    }
+  ],
+  "ssh_matched_count": 8,
+  "ssh_count": 8,
+  "ssh_inversions": 0,
+  "sysmon_executable_hashes": [
+    {
+      "image": "C:\\Windows\\System32\\curl.exe",
+      "host": "WS-AJOHNSON-01",
+      "hashes": "SHA1=F4427DBE0F585AAB77413D90E3FFFBDBBECF9A7B,MD5=80C79DBF0A671F292253C9CF3E4A7FC5,SHA256=F89A6D415611533F531523C858DE993D3AD220EBB4571BCCD87F2AA82988191C",
+      "nonempty_triplet": true
+    },
+    {
+      "image": "C:\\Windows\\System32\\DeviceSyncSvc.exe",
+      "host": "DC-01",
+      "hashes": "SHA1=DF3F0D1C4E05A213C6372EFFDBD238F84195E328,MD5=D7B56B761455384799E8ECC8F032E400,SHA256=DDC0CE0EB838C97F29A8FC686079BE953D81E67716BEB8517CBDD2D34635D7F9",
+      "nonempty_triplet": true
+    }
+  ],
+  "manifest_data_file_count": 120,
+  "blind_copy_sha256_verified_file_count": 120
+}

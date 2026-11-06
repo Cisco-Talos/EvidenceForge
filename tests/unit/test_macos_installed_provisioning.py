@@ -542,3 +542,37 @@ assert not thread.is_alive() and values == [inside]
         timeout=30,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_installed_time_precision_separates_build_from_local_placement() -> None:
+    import random
+
+    from evidenceforge.generation.macos_installed_provisioning import _time
+
+    at = datetime(2026, 11, 2, 13, tzinfo=UTC)
+    local = [_time(at, random.Random(index)) for index in range(40)]
+    assert len({value.nanoseconds for value in local}) == 40
+    assert max(value.nanoseconds for value in local) > 900_000_000
+    assert min(value.nanoseconds for value in local) < 100_000_000
+    assert all(value.seconds == local[0].seconds for value in local)
+    assert _time(at, random.Random(3), whole_second_probability=1).nanoseconds == 0
+    assert _time(at, random.Random(3)) == _time(at, random.Random(3))
+
+
+def test_two_host_installed_stat_precision_preserves_shared_build_and_chronology() -> None:
+    scenario = _scenario(two_macs=True)
+    deployments = _deployments(scenario)
+    compiled = _compile(scenario, deployments)
+    for path in ("/bin/zsh", "/usr/bin/id"):
+        observations = []
+        for host in ("MAC-01", "MAC-02"):
+            process = _process(deployments, scenario, host, path)
+            metadata = compiled.filesystem.observe(
+                deployments, process, observed_at=process.started_at
+            ).metadata
+            assert metadata.born.nanoseconds >= 1000
+            assert metadata.accessed.nanoseconds >= 1000
+            assert metadata.modified.seconds < metadata.born.seconds <= metadata.accessed.seconds
+            observations.append(metadata)
+        assert observations[0].modified == observations[1].modified
+        assert observations[0].born != observations[1].born

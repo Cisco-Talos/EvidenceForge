@@ -1,0 +1,21 @@
+{
+  "files": 120,
+  "hosts": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "transitions": 98,
+      "reversals": 0,
+      "min_delta": 4,
+      "median_delta": 1024,
+      "max_delta": 1024,
+      "examples": []
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "transitions": 120,
+      "reversals": 0,
+      "min_delta": 2,
+      "median_delta": 1024,
+      "max_delta": 1024,
+      "examples": []
+    }
+  }
+}

@@ -166,7 +166,11 @@ class ProcessEvidencePreparer:
                     )
                 semantic_key = f"{system.hostname}:{payload.path.casefold()}"
                 subject = EntityIdentity(
-                    object_id=stable_uuid("file-identity", semantic_key),
+                    object_id=(
+                        payload.artifact_publication.record.artifact.artifact_id
+                        if payload.artifact_publication is not None
+                        else stable_uuid("file-identity", semantic_key)
+                    ),
                     kind="file",
                     hostname=system.hostname,
                     semantic_key=semantic_key,

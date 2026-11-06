@@ -55,11 +55,23 @@ class MacosInstalledProvisioning:
     unavailable: tuple[MacosUnprovisionedInstallation, ...]
 
 
-def _time(value: datetime, rng: random.Random) -> MacosFileTime:
+def _time(
+    value: datetime,
+    rng: random.Random,
+    *,
+    whole_second_probability: float = 0.0,
+) -> MacosFileTime:
+    """Resolve modeled fractional placement once at the installed-file owner.
+
+    The supplied datetime gives the integer age slot, not a measured timestamp.
+    Package build dates may preserve whole seconds; local install/access timestamps
+    otherwise span the filesystem's full nanosecond range.
+    """
     delta = value - datetime(1970, 1, 1, tzinfo=UTC)
+    fraction = 0 if rng.random() < whole_second_probability else rng.randrange(1_000_000_000)
     return MacosFileTime(
         seconds=delta.days * 86400 + delta.seconds,
-        nanoseconds=delta.microseconds * 1000 + rng.randrange(1000),
+        nanoseconds=fraction,
     )
 
 
@@ -109,6 +121,7 @@ def _file_spec(
             + build_rng.randint(profile.build_lead_seconds.min, profile.build_lead_seconds.max)
         ),
         build_rng,
+        whole_second_probability=profile.package_whole_second_probability,
     )
     accessed = (
         born if age == 1 else _time(window_start - timedelta(seconds=rng.randint(1, age - 1)), rng)

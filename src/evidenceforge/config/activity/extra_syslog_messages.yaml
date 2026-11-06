@@ -29,6 +29,8 @@ programs:
   - app: dbus-daemon
     weight: 1
     max_per_host_window: 8
+    window_occurrence_probability: 0.65
+    window_arrival_mode: 0.5
     messages:
       - "[system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.{}'"
       - "[system] Successfully activated service 'org.freedesktop.resolve1' for ':1.{}'"
@@ -236,6 +238,8 @@ programs:
     system_types: [workstation]
     weight: 2
     max_per_host_window: 6
+    window_occurrence_probability: 0.65
+    window_arrival_mode: 0.5
     params:
       action_id:
         - org.freedesktop.systemd1.manage-units
@@ -280,6 +284,8 @@ programs:
     system_types: [server]
     weight: 1
     max_per_host_window: 3
+    window_occurrence_probability: 0.65
+    window_arrival_mode: 0.5
     params:
       action_id:
         - org.freedesktop.systemd1.manage-units

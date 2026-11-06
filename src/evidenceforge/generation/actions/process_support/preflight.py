@@ -671,6 +671,20 @@ class ProcessPreflightPlanner:
                         platform,
                     ) == canonical_native_path(selection.actor.image, platform)
                     executable = same_as_actor_image and effective_architecture is not None
+                    authored_size_bytes = None
+                    if effect.spec.instance_key == "semantic-command-file" and payload.action in {
+                        FileEffectAction.CREATE,
+                        FileEffectAction.MODIFY,
+                    }:
+                        from evidenceforge.generation.activity.process_output_profiles import (
+                            process_output_size_bytes,
+                        )
+
+                        authored_size_bytes = process_output_size_bytes(
+                            process_name=selection.actor.image,
+                            command_line=selection.actor.command_line,
+                            stable_id=f"{anchor.action_id}:{effect.spec.instance_key}:{payload.path}",
+                        )
                     observed_at = effect.spec.occurrence_times[0]
                     deadline = (
                         self._runtime_executable_deadline(observed_at, platform)
@@ -707,6 +721,7 @@ class ProcessPreflightPlanner:
                         deployment_registry=deployment_registry,
                         actor_image=selection.actor.image,
                         executable=executable,
+                        authored_size_bytes=authored_size_bytes,
                     )
                     if publication is not None:
                         newly_reserved.append(publication)

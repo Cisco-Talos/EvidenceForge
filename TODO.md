@@ -72,6 +72,18 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P0 — Native Mac mounted-SMB helper coverage:** The new Mac-heavy iteration-test
+  reaches finalization but complete ES coverage rejects mounted-share `ls`/`cat`/`tee`
+  helper starts. The SMB process recipe still materializes aggregate process state outside
+  the qualified native fork/exec publication path. Repair the owning SMB/process contract;
+  do not remove traffic or weaken complete coverage. The user approved a separately labeled
+  partial diagnostic assessment for initial scores, not process-coverage acceptance. See the
+  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
+- [ ] **P0 — Native Mac identity chronology:** The initial Mac-heavy iteration-test
+  panel independently found five backward fork/exec PID-version allocations while
+  native clocks and child birth times advance. Fix allocation at the canonical
+  process/timeline owner and preserve every token reference; source sorting alone
+  does not repair identity truth. See the same assessment worklog and report.
 - [x] **P0 — Mac process-start coverage:** The bounded two-Mac workstation matrix now
   reconciles every in-window canonical fork/exec, rejects unsupported starts, and passes
   combined exact recovery/filter equivalence with positive background activity. The quiet
@@ -120,6 +132,27 @@ without turning `TODO.md` back into a high-conflict work journal.
   renewed authenticity claim. See the same coverage worklog and the
   [next GUI launch reference proposal](docs/design/macos-workstation-feasibility/gui-launch-reference-plan.md).
 
+- [ ] **P1 — Baseline-volume feasibility warning:** Replace the storyline-count-only
+  warning with an estimate that accounts for environment size, collection duration,
+  benign authored activity and evidence expansion. Reconcile the validator's
+  500:1 low-intensity target with the evaluator's 200:1 target through one owned
+  policy, and distinguish the rough record-to-storyline proxy from actual
+  benign-to-attack volume. The Mac-inclusive iteration benchmark warns at 107
+  entries despite its preceding output scoring 100 for volume adequacy (1208:1).
+  Keep its baseline unchanged while this diagnostic repair is deferred; see the
+  [promotion worklog](docs/worklog/2026-11-05-iteration-test-promotion.md).
+- [ ] **P1 — Canonical HTTP request-target normalization:** Separate browser navigation
+  URLs from network targets before proxy/HTTP evidence is constructed. Loop 42 found
+  five ordinary-browser proxy GET request lines carrying a client-side URL fragment;
+  RFC 9110 §7.1 excludes fragments from the target URI. Preserve full navigation URLs
+  only in appropriate client telemetry. See the
+  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
+- [ ] **P1 — Native TCP counter projections:** Separate Zeek's sequence-derived
+  stream totals from captured packet/payload and file-completeness ledgers, including
+  application children sharing a transport. Loop 41 found 580 matched completed sensor
+  pairs whose byte deficits equal modeled capture gaps. Preserve physical capture
+  partitions and add a source-observation contract; see the
+  [assessment worklog](docs/worklog/2026-11-04-iteration-test-macos-assessment.md).
 - [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
   The Mac benchmark independently confirms two contradictions; 16 rows are reported.
   The loss method is unchanged from the branch base. Repair the network observation owner,

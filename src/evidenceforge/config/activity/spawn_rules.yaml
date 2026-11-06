@@ -533,7 +533,6 @@ macos:
     max_children: 3
     children:
       - Google Chrome Helper (Renderer)
-      - Google Chrome Helper (GPU)
       - Google Chrome Helper
   launchd:
     command_templates: [/sbin/launchd]

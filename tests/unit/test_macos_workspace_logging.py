@@ -194,7 +194,9 @@ def test_workspace_collection_does_not_change_session_or_uptime(
         )
 
 
-def test_workspace_wall_clock_skew_does_not_rebase_native_uptime(scenarios_dir: Path) -> None:
+def test_workspace_native_clock_pair_does_not_receive_independent_wall_skew(
+    scenarios_dir: Path,
+) -> None:
     _, event = _request_event(scenarios_dir)
     planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
     delta = planner.endpoint_clock_adjustment_for_host(
@@ -203,7 +205,7 @@ def test_workspace_wall_clock_skew_does_not_rebase_native_uptime(scenarios_dir: 
     projected = planner.plan_event(
         event, "macos_unified_log", observation_delay=timedelta(seconds=2)
     )
-    assert projected.timestamp == event.timestamp + delta + timedelta(seconds=2)
+    assert projected.timestamp == event.timestamp + timedelta(seconds=2)
     assert delta != timedelta(0)
     assert projected.macos_workspace.native == event.macos_workspace.native
 

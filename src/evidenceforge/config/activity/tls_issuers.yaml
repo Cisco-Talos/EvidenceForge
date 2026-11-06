@@ -28,6 +28,22 @@ issuers:
     key_types:
       - {type: "ecdsa", length: 256, weight: 100}
 
+  - name: "CN=YR1, O=Let's Encrypt, C=US"
+    weight: 10
+    validity_days_min: 84
+    validity_days_max: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "rsa", length: 2048, weight: 100}
+
+  - name: "CN=YR2, O=Let's Encrypt, C=US"
+    weight: 10
+    validity_days_min: 84
+    validity_days_max: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "rsa", length: 2048, weight: 100}
+
   - name: "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
     weight: 18
     validity_days_min: 365
@@ -167,7 +183,7 @@ domain_ca_overrides:
   "*.zoom.us": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
   "*.salesforce.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
   "*.cloudflare.com": "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
-  "*.reddit.com": "CN=R3, O=Let's Encrypt, C=US"
+  "*.reddit.com": "CN=YR1, O=Let's Encrypt, C=US"
   "*.amazonaws.com": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
   "*.awsstatic.com": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
   "*.amazon.com": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"

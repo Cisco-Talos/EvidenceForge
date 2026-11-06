@@ -1,0 +1,12 @@
+{
+  "source": "scenarios/iteration-test",
+  "authored_source_sha256": {
+    "scenario.yaml": "071a3425d48b5f2ae20eef495f4c3cccfc1d2fabe835ce73614e18ab6b7418c4",
+    "environment.yaml": "a047bfbf29fdd1442fd0a918cb0de511f533834e0d1c20599be7916220059fa2",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "variant": "scenarios/iteration-test-macos",
+  "scope": "Initial assessment only; no realism repair loop",
+  "epoch_change": "2024-03-18 07:00 CDT to 2026-11-02 07:00 CST; same weekday and six-hour duration"
+}

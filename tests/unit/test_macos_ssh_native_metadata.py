@@ -33,6 +33,7 @@ def test_real_ssh_metadata_inheritance_authentication_native_forks_and_close(
     if native:
         scenario.output.logs.append({"format": "macos_endpoint_security"})
     engine = GenerationEngine(scenario, tmp_path, generation_seed=328)
+    engine._chronological_es_delivery = True
     try:
         engine._initialize()
         state = engine.state_manager
@@ -61,28 +62,45 @@ def test_real_ssh_metadata_inheritance_authentication_native_forks_and_close(
         assert "USER=alex" in shell.environment and "USER=root" not in shell.environment
         assert shell.execution_directory.native_path == "/Users/alex"
         assert shell.exec_image.dyld_exec_path == "/bin/zsh"
-        # A complete fork source does not invent a complete native exec FD table.
-        assert state.process_descriptors_at(shell, event_time=shell.execution_started_at) is None
+        # The SSH channel owns the shell standard streams before execution.
+        descriptors = state.process_descriptors_at(shell, event_time=shell.execution_started_at)
+        assert descriptors is not None
+        assert descriptors.native_last_fd == 2
         restored = StateManager()
         _restore_head(restored, _capture_head(state))
         assert restored.get_process_identity("MAC-01", shell.pid) == shell
         generator.finalize_ssh_session_lifecycles(engine.end_time)
         assert state.get_session(session.logon_id) is None
         assert state.get_process("MAC-01", shell.pid) is None
+        engine._finalize_macos_process_coverage()
     finally:
         engine._close_emitters()
     paths = list(tmp_path.rglob("macos_endpoint_security.ndjson"))
     assert len(paths) == int(native)
     if native:
         records = [json.loads(line) for line in paths[0].read_text().splitlines()]
-        assert len(records) == 3
         for record in records:
             decode_endpoint_security_record(json.dumps(record))
-            assert record["event_type"] == 11 and record["version"] == 11
-        assert records[0]["process"]["audit_token"]["auid"] == 2**32 - 1
-        assert records[0]["process"]["audit_token"]["asid"] == root.credentials.audit_session_id
-        assert records[1]["process"]["audit_token"]["auid"] == 501
-        assert records[2]["event"]["fork"]["child"]["audit_token"]["auid"] == 501
+            assert record["version"] == 11
+        forks = [record for record in records if record["event_type"] == 11]
+        shell_fork = next(
+            record
+            for record in forks
+            if record["event"]["fork"]["child"]["audit_token"]["pid"] == shell.pid
+        )
+        assert shell_fork["process"]["audit_token"]["auid"] == 501
+        assert shell_fork["event"]["fork"]["child"]["audit_token"]["auid"] == 501
+        assert any(
+            record["process"]["audit_token"]["auid"] == 2**32 - 1
+            and record["process"]["audit_token"]["asid"] == root.credentials.audit_session_id
+            for record in forks
+        )
+        shell_exits = [
+            record
+            for record in records
+            if record["event_type"] == 15 and record["process"]["audit_token"]["pid"] == shell.pid
+        ]
+        assert len(shell_exits) == 1
 
 
 def test_old_execution_policy_preserves_unknown_audit_and_responsibility(modeled: _Fixture) -> None:

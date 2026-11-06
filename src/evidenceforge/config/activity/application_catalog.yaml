@@ -3740,6 +3740,30 @@ applications:
     categories: [macos_command]
     personas: []
     system_types: [workstation]
+  - id: macos-cat
+    display_name: macOS file content reader
+    platforms:
+      macos:
+        image_path: /bin/cat
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.cat, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/bin/cat "{file_path}"']
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-tee
+    display_name: macOS file writer
+    platforms:
+      macos:
+        image_path: /usr/bin/tee
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.tee, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/usr/bin/tee "{file_path}"']
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
   - id: macos-du
     display_name: macOS directory size query
     platforms:

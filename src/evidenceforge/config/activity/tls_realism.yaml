@@ -192,6 +192,19 @@ certificate_chains:
       key_length: 2048
       child_signature_algorithms: ["sha256WithRSAEncryption"]
     - subject_patterns:
+        - "CN=YR1, O=Let's Encrypt, C=US"
+        - "CN=YR2, O=Let's Encrypt, C=US"
+      issuer_family: rsa_public_ca
+      key_type: rsa
+      key_length: 2048
+      child_signature_algorithms: ["sha256WithRSAEncryption"]
+    - subject_patterns:
+        - "CN=Root YR, O=ISRG, C=US"
+      issuer_family: rsa_public_ca
+      key_type: rsa
+      key_length: 4096
+      child_signature_algorithms: ["sha256WithRSAEncryption"]
+    - subject_patterns:
         - "CN=E1, O=Let's Encrypt, C=US"
         - "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
         - "CN=Cloudflare Inc ECC*"
@@ -234,6 +247,18 @@ certificate_chains:
       not_valid_after: 1757952000    # 2025-09-15 16:00:00Z
       key_type: ecdsa
       key_length: 256
+    - subject: "CN=YR1, O=Let's Encrypt, C=US"
+      issuer: "CN=Root YR, O=ISRG, C=US"
+      not_valid_before: 1756857600  # 2025-09-03 00:00:00Z
+      not_valid_after: 1851551999   # 2028-09-02 23:59:59Z
+      key_type: rsa
+      key_length: 2048
+    - subject: "CN=YR2, O=Let's Encrypt, C=US"
+      issuer: "CN=Root YR, O=ISRG, C=US"
+      not_valid_before: 1756857600  # 2025-09-03 00:00:00Z
+      not_valid_after: 1851551999   # 2028-09-02 23:59:59Z
+      key_type: rsa
+      key_length: 2048
     - subject: "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
       issuer: "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
       not_valid_before: 1433376000   # 2015-06-04
@@ -413,6 +438,17 @@ certificate_chains:
       issuer_patterns: ["CN=R3, O=Let's Encrypt, C=US"]
       intermediates:
         - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+    - name: lets_encrypt_y_rsa
+      issuer_patterns:
+        - "CN=YR1, O=Let's Encrypt, C=US"
+        - "CN=YR2, O=Let's Encrypt, C=US"
+      intermediates:
+        - "CN=Root YR, O=ISRG, C=US"
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+    - name: lets_encrypt_y_root
+      issuer_patterns: ["CN=Root YR, O=ISRG, C=US"]
+      intermediates:
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
     - name: lets_encrypt_ecdsa
       issuer_patterns: ["CN=E1, O=Let's Encrypt, C=US"]
       intermediates:
@@ -582,3 +618,12 @@ destinations:
         - cdn.jsdelivr.net
         - static.akamai.net
         - media.akamai.net
+
+# Optional full-handshake wire material; mandatory RFC message sizes are computed.
+wire_budget:
+  extension_bytes_min: 32
+  extension_bytes_max: 192
+  ticket_bytes_min: 0
+  ticket_bytes_max: 512
+  starttls_dialogue_bytes_min: 120
+  starttls_dialogue_bytes_max: 400

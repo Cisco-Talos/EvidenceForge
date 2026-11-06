@@ -1,0 +1,14 @@
+schema_version: "1.0"
+profiles:
+  windows:
+    size_log10:
+      min: 4.3
+      max: 6.4
+  linux:
+    size_log10:
+      min: 4.0
+      max: 6.2
+  macos:
+    size_log10:
+      min: 4.0
+      max: 6.3

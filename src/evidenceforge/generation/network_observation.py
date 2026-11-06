@@ -3731,32 +3731,48 @@ class NetworkObservationPlanner:
         timing: NetworkSensorObservationTiming,
         rng: random.Random,
     ) -> tuple[DirectionalTrafficLedger, int]:
-        if canonical.payload_bytes <= 0:
+        if canonical.payload_bytes <= 1 or canonical.packets <= 1:
+            return canonical, 0
+        # This family models partial capture. Unknown/raw ledgers lacking TCP
+        # header or MTU truth cannot authorize a new physical loss projection.
+        overhead = canonical.ip_bytes - canonical.payload_bytes
+        if overhead < 40 * canonical.packets or canonical.ip_bytes > 1500 * canonical.packets:
             return canonical, 0
         fraction = rng.uniform(
             timing.capture_loss_min_fraction,
             timing.capture_loss_max_fraction,
         )
         missed = min(
-            canonical.payload_bytes,
+            canonical.payload_bytes - 1,
             timing.capture_loss_max_missed_bytes,
             max(1, int(round(canonical.payload_bytes * fraction))),
         )
         payload = canonical.payload_bytes - missed
+        minimum_lost = max(1, math.ceil(missed / 1460))
+        maximum_lost = min(
+            canonical.packets - 1,
+            canonical.packets - max(1, math.ceil(payload / 1460)),
+        )
+        if maximum_lost < minimum_lost:
+            return canonical, 0
         lost_packets = min(
-            canonical.packets,
-            max(1, int(round(canonical.packets * fraction))),
+            maximum_lost, max(minimum_lost, int(round(canonical.packets * fraction)))
         )
         packets = canonical.packets - lost_packets
-        header_bytes = max(0, canonical.ip_bytes - canonical.payload_bytes)
-        lost_headers = min(
-            header_bytes,
-            int(round(header_bytes * fraction)),
-        )
-        ip_bytes = canonical.ip_bytes - missed - lost_headers
-        if ip_bytes > 0 and packets == 0:
-            packets = 1
-        return DirectionalTrafficLedger(payload, packets, max(payload, ip_bytes)), missed
+        # Non-unique wire bytes include headers and any retransmitted payload.
+        # Bound both sides of the partition, instead of scaling headers by a
+        # byte fraction independently of the integer number of lost packets.
+        lower = max(40 * lost_packets, canonical.ip_bytes - missed - 1500 * packets)
+        upper = min(overhead - 40 * packets, 1500 * lost_packets - missed)
+        quantum = 4 if overhead % 4 == 0 else 1
+        lower = math.ceil(lower / quantum) * quantum
+        upper = math.floor(upper / quantum) * quantum
+        if lower > upper:
+            return canonical, 0
+        preferred = round(overhead * lost_packets / canonical.packets / quantum) * quantum
+        lost_nonunique = min(upper, max(lower, preferred))
+        ip_bytes = canonical.ip_bytes - missed - lost_nonunique
+        return DirectionalTrafficLedger(payload, packets, ip_bytes), missed
 
 
 RUNTIME_OWNED_ZEEK_FORMATS = frozenset(

@@ -388,9 +388,9 @@ def test_unknown_entitlement_names_and_values_stay_hidden_and_types_stay_exact()
     assert empty.matches_installed_code == "PASS" and empty.representation == "NULL"
 
 
-def test_full_shape_is_distinct_from_shape_excluding_unknown_entitlements() -> None:
+def test_full_shape_is_distinct_from_shape_excluding_invalid_entitlements() -> None:
     rows = _chain()[:3]
-    rows[2]["event"]["exec"]["entitlements"] = {CANARY: {CANARY: CANARY}}
+    rows[2]["event"]["exec"]["entitlements"] = [CANARY]
     phase = kit.analyze(_raws(rows), _manifest(), PROFILE, URL, HOME)[-1]
     assert phase.native_shape == "FAIL" and phase.shape_excluding_entitlements == "PASS"
     assert CANARY not in phase.model_dump_json()

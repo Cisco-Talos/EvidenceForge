@@ -236,6 +236,29 @@ class StorageWorldModel:
         except KeyError as exc:
             raise KeyError(f"unknown storage file set {ref!r}") from exc
 
+    def applicable_mappings(
+        self, share_ref: str, *, username: str, hostname: str
+    ) -> tuple[CompiledStorageMapping, ...]:
+        """Resolve exact share presentation for one actor on one client host."""
+        return tuple(
+            sorted(
+                (
+                    mapping
+                    for mapping in self.mappings
+                    if mapping.share.casefold() == share_ref.casefold()
+                    and (
+                        not mapping.users
+                        or username.casefold() in {user.casefold() for user in mapping.users}
+                    )
+                    and (
+                        not mapping.systems
+                        or hostname.casefold() in {system.casefold() for system in mapping.systems}
+                    )
+                ),
+                key=lambda mapping: mapping.id.casefold(),
+            )
+        )
+
     def select_file_set(
         self,
         ref: str,

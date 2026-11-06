@@ -1,0 +1,23 @@
+{
+  "loop": 43,
+  "accepted_reviews": 4,
+  "scores": [
+    32,
+    54,
+    68,
+    62
+  ],
+  "average": 54,
+  "deliberation_average": 63.75,
+  "all_hard_criteria_passed": true,
+  "files_verified": 117,
+  "all_data_copies_byte_identical": true,
+  "authored_inputs_unchanged": true,
+  "historical_scores_unchanged": true,
+  "prior_average": 47,
+  "svg_xml_valid": true,
+  "dashboard_ending_loop": 43,
+  "dashboard_window": 20,
+  "report_links_valid": true,
+  "exact_panel_briefings_preserved": true
+}

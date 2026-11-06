@@ -97,6 +97,9 @@ def schedule_applies_to_host(
 ) -> bool:
     """Return whether a schedule is installed on one exact modeled Linux host."""
 
+    # This boundary builds machine-owned timers, not per-user services.
+    if schedule.execution_scope != "system":
+        return False
     rhel_like = _is_rhel_like(os_name)
     if schedule.distro == "debian" and rhel_like:
         return False

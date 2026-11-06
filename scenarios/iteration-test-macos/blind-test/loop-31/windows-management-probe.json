@@ -1,0 +1,31 @@
+{
+  "native_management_commands": 5,
+  "linux_targets": [],
+  "examples": [
+    [
+      "WS-PPATEL-01.meridianhcs.local/ecar.json",
+      594,
+      "mmc.exe compmgmt.msc /computer=FILE-SRV-01"
+    ],
+    [
+      "WS-PPATEL-01.meridianhcs.local/ecar.json",
+      623,
+      "mmc.exe compmgmt.msc /computer=DC-02"
+    ],
+    [
+      "WS-AJOHNSON-01.meridianhcs.local/ecar.json",
+      1096,
+      "runas.exe /netonly /user:marcus.chen \"cmd.exe /d /q\""
+    ],
+    [
+      "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      466,
+      "runas.exe /netonly /user:marcus.chen-admin \"cmd.exe /c dir \\\\FILE-SRV-01\\ADMIN$\""
+    ],
+    [
+      "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      540,
+      "runas.exe /netonly /user:marcus.chen \"cmd.exe /c dir \\\\DC-01\\ADMIN$\""
+    ]
+  ]
+}

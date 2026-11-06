@@ -4462,6 +4462,17 @@ class SourceTimingPlanner:
                 if isinstance(identity, ProcessIdentity)
                 else None
             )
+            if event.event_type == "process_exec" and isinstance(identity, ProcessIdentity):
+                predecessor = plan.actor
+                predecessor_time = (
+                    self._runtime_process_execution_times.get(
+                        (family, source_instance, predecessor.execution_id)
+                    )
+                    if isinstance(predecessor, ProcessIdentity)
+                    else None
+                )
+                if predecessor_time is not None:
+                    floor = max(floor, predecessor_time) if floor is not None else predecessor_time
         else:
             identity = next(
                 (
@@ -4485,7 +4496,12 @@ class SourceTimingPlanner:
             )
             if credential_floor is not None:
                 floor = max(floor, credential_floor) if floor is not None else credential_floor
-        if floor is None or preferred > floor:
+        rendered_precision_collision = bool(
+            event.event_type == "process_exec"
+            and floor is not None
+            and int(preferred.timestamp() * 1_000) <= int(floor.timestamp() * 1_000)
+        )
+        if floor is None or (preferred > floor and not rendered_precision_collision):
             return preferred
         self.timing_runtime.audit.record_repair("ecar.process.execution_order")
         return self._sample_after_floor(
@@ -4498,6 +4514,7 @@ class SourceTimingPlanner:
                 lifecycle_id=identity.lifecycle_group_id,
             ),
             maximum_us=4_000,
+            minimum_us=1_000 if event.event_type == "process_exec" else 0,
         )
 
     def _runtime_endpoint_event_time(
@@ -4976,6 +4993,16 @@ class SourceTimingPlanner:
         phase: str,
     ) -> str:
         identity = event.identity_plan
+        if (
+            event.event_type == "process_exec"
+            and identity is not None
+            and isinstance(identity.subject, ProcessIdentity)
+        ):
+            # Exec transitions share one process object but have distinct
+            # source-visible execution epochs. Repair jitter must be keyed to
+            # that epoch or every transition that meets the same lifecycle
+            # floor receives an identical timestamp.
+            return f"{identity.subject.execution_id}:{phase}"
         if identity is not None and identity.object_id:
             return f"{str(identity.object_id)}:{phase}"
         if event.occurrence_id:
@@ -5092,9 +5119,18 @@ class SourceTimingPlanner:
                 self._admitted_ecar_remote_transports,
                 self._admitted_ecar_transport_transactions,
             )
-            if anchor is None and event.event_type == "ssh_session":
+            failed_ssh_auth = (
+                event.event_type == "failed_logon"
+                and event.auth is not None
+                and event.auth.session_kind == "ssh"
+            )
+            if anchor is None and (event.event_type == "ssh_session" or failed_ssh_auth):
                 anchor = self._ssh_transport_anchor(event)
-                relationship = "ecar.ssh_session_after_transport"
+                relationship = (
+                    "ecar.failed_ssh_auth_after_transport"
+                    if failed_ssh_auth
+                    else "ecar.ssh_session_after_transport"
+                )
             if event.auth is not None and event.auth.session_kind == "smb":
                 smb_anchor = self._smb_transport_anchor(event)
                 if smb_anchor is not None:
@@ -6162,11 +6198,14 @@ class SourceTimingPlanner:
         relationship_key: str,
         scope: TimingScope,
         maximum_us: int,
+        minimum_us: int = 0,
     ) -> datetime:
         """Sample admissible positive slack rather than clamping onto a floor."""
 
+        if minimum_us < 0 or maximum_us <= minimum_us:
+            raise ValueError("Timing repair slack requires 0 <= minimum < maximum")
         return floor + self.timing_runtime.sampler.sample_timedelta(
-            self._right_skew_distribution(0, maximum_us),
+            self._right_skew_distribution(minimum_us, maximum_us),
             relationship_key=relationship_key,
             scope=scope,
             sample_key="repair_slack",
@@ -7924,6 +7963,12 @@ class SourceTimingPlanner:
             source_time = canonical_time - delta - micro_noise
         else:
             source_time = canonical_time + delta + micro_noise
+        if source_key == "source.macos_unified_log":
+            # Unified Log observations carry both a wall timestamp and a boot-relative
+            # Mach timestamp. The native observation already owns that clock pair;
+            # adding an independent endpoint-clock projection would make the two
+            # serialized timestamps disagree.
+            return source_time
         return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
 
     def _coherent_ecar_process_create_latency(

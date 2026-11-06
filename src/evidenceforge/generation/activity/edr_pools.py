@@ -1114,6 +1114,14 @@ def select_file_side_effect(
             str(path) for path in paths if "{machine_id}" not in str(path) or machine_id
         ]
         path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
+        if (
+            os_category == "windows"
+            and exe in {"powershell.exe", "pwsh.exe", "powershell", "pwsh"}
+            and not _powershell_command_has_file_output(command_line)
+        ):
+            path_templates = [
+                path for path in path_templates if "\\appdata\\local\\temp\\tmp" not in path.lower()
+            ]
         if not path_templates:
             return None
         if (
@@ -1193,6 +1201,13 @@ def select_ambient_file_churn_effect(
     candidates = [path for path in candidates if "{machine_id}" not in path or machine_id]
     if os_category == "windows":
         candidates = file_path_templates_for_process(candidates, process_name)
+        executable = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if executable in {"powershell.exe", "pwsh.exe", "powershell", "pwsh"} and not (
+            _powershell_command_has_file_output(command_line)
+        ):
+            candidates = [
+                path for path in candidates if "\\appdata\\local\\temp\\tmp" not in path.lower()
+            ]
         candidates = [
             candidate
             for candidate in candidates
@@ -1288,6 +1303,26 @@ def _exclude_paths(paths: list[Any], suffixes: tuple[str, ...]) -> list[Any]:
 def _is_windows_powershell_history_path(path: str) -> bool:
     normalized = path.replace("/", "\\").lower()
     return normalized.endswith("\\powershell\\psreadline\\consolehost_history.txt")
+
+
+def _powershell_command_has_file_output(command_line: str) -> bool:
+    """Return whether a PowerShell command has visible file-output semantics."""
+    command = command_line.lower()
+    markers = (
+        "out-file",
+        "set-content",
+        "add-content",
+        "export-csv",
+        "export-clixml",
+        "compress-archive",
+        "new-item",
+        "copy-item",
+        "move-item",
+        "invoke-webrequest",
+        "-outfile",
+        " >",
+    )
+    return any(marker in command for marker in markers)
 
 
 def _allows_psreadline_history(exe: str, command_line: str, user: str) -> bool:

@@ -1,0 +1,37 @@
+{
+  "native_management_commands": 4,
+  "linux_targets": [
+    [
+      "WS-PPATEL-01.meridianhcs.local/ecar.json",
+      476,
+      "powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem -ComputerName 'FILE-LNX-01' -Credential 'priya.patel-admin'\""
+    ],
+    [
+      "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      483,
+      "powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem -ComputerName 'LOG-MON-01' -Credential 'marcus.chen-admin'\""
+    ]
+  ],
+  "examples": [
+    [
+      "WS-PPATEL-01.meridianhcs.local/ecar.json",
+      476,
+      "powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem -ComputerName 'FILE-LNX-01' -Credential 'priya.patel-admin'\""
+    ],
+    [
+      "WS-AJOHNSON-01.meridianhcs.local/ecar.json",
+      961,
+      "runas.exe /netonly /user:marcus.chen \"cmd.exe /d /q\""
+    ],
+    [
+      "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      483,
+      "powershell.exe -NoProfile -Command \"Get-CimInstance Win32_OperatingSystem -ComputerName 'LOG-MON-01' -Credential 'marcus.chen-admin'\""
+    ],
+    [
+      "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      592,
+      "runas.exe /netonly /user:marcus.chen \"cmd.exe /c dir \\\\DC-01\\ADMIN$\""
+    ]
+  ]
+}

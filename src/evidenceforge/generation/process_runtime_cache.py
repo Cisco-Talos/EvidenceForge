@@ -1292,6 +1292,8 @@ _SCENARIO_COMPILED_FIELDS = (
     "_proxy_routes",
 )
 _OCCURRENCE_OR_DRAIN_FIELDS = (
+    "_macos_finder_startups",
+    "_macos_terminal_startups",
     "_process_close_in_progress",
     "_expanding_types",
     "_postfix_queue_states",

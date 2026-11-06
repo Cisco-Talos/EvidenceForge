@@ -1014,7 +1014,7 @@ def _publish_prepared_file_occurrences(
         ...,
     ],
 ) -> None:
-    """Publish prepared file projections, then commit every artifact token last."""
+    """Prepare every file projection, commit artifacts, then publish their evidence."""
 
     publication_list: list[LocalArtifactPublishToken] = []
     seen_reservations: set[int] = set()
@@ -1061,14 +1061,15 @@ def _publish_prepared_file_occurrences(
                     executor,
                     occurrence,
                     artifact_publication=publication,
-                )
+                ),
+                artifact_publications=(publication,) if publication is not None else (),
             )
             for occurrence, publication in planned
         )
-        for prepared in prepared_dispatches:
-            publish_prepared(prepared)
         for commit in commits:
             commit.commit()
+        for prepared in prepared_dispatches:
+            publish_prepared(prepared)
 
 
 def _reconcile_exact_effects(

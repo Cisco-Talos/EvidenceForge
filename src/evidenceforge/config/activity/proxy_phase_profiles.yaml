@@ -42,6 +42,9 @@ phase_timing:
   tls_after_origin_connect_ms:
     min: 18
     max: 180
+  origin_request_after_setup_ms:
+    min: 2
+    max: 45
   origin_service_ms:
     min: 35
     max: 650

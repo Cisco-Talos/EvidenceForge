@@ -332,6 +332,7 @@ def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any
         "policy_decision_after_request_ms",
         "dns_query_after_decision_ms",
         "tls_after_origin_connect_ms",
+        "origin_request_after_setup_ms",
         "origin_service_ms",
         "client_flush_after_response_ms",
         "terminal_response_after_decision_ms",
@@ -1114,12 +1115,18 @@ def _validate_effective_configuration(
         load_process_access_patterns,
     )
     from evidenceforge.generation.activity.process_network import load_process_network_map
+    from evidenceforge.generation.activity.process_output_profiles import (
+        load_process_output_profiles,
+    )
     from evidenceforge.generation.activity.proxy_phase_profiles import load_proxy_phase_profiles
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.public_identity_profiles import (
         load_public_identity_profiles,
+    )
+    from evidenceforge.generation.activity.runtime_executable_profiles import (
+        load_runtime_executable_profiles,
     )
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
@@ -1220,6 +1227,26 @@ def _validate_effective_configuration(
                 "ERROR",
                 "smb_profiles.yaml",
                 f"invalid SMB profiles config: {exc}",
+            )
+        )
+    try:
+        load_process_output_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "process_output_profiles.yaml",
+                f"invalid process output profile: {exc}",
+            )
+        )
+    try:
+        load_runtime_executable_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "runtime_executable_profiles.yaml",
+                f"invalid runtime executable profile: {exc}",
             )
         )
     storage_catalog_data = _load_catalog_config()
@@ -3102,6 +3129,7 @@ def _validate_reachability(
         "dba",
         "webadmin",
         "security",
+        "help_desk_server",
     }
     from evidenceforge.generation.activity.bash_commands import load_bash_commands
 
@@ -4022,6 +4050,7 @@ def _collect_network_parameter_schema_checks(
     """Validate network parameter families at the original loader and diagnostic boundary."""
     from evidenceforge.config.schemas import (
         DnsTunnelRttConfig,
+        HttpRequestPhaseConfig,
         HttpTransportFloorSlackConfig,
         NmapCommandProbeConfig,
         OuiEntry,
@@ -4067,6 +4096,13 @@ def _collect_network_parameter_schema_checks(
             result.issues.append(
                 Issue("ERROR", "network_params.yaml (http_transport_floor_slack)", err)
             )
+        err = validate_entry(
+            net_params.get("http_request_phase", {}),
+            HttpRequestPhaseConfig,
+            "network_params.yaml (http_request_phase)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (http_request_phase)", err))
         schema_checks.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
         schema_checks.append(
             (

@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.config.schemas import SmbProfilesConfig
+from evidenceforge.generation.activity.application_catalog import load_catalog
+from evidenceforge.generation.activity.macos_execution_metadata import (
+    load_macos_execution_metadata_profile,
+)
 from evidenceforge.generation.activity.smb_profiles import (
     advertised_filesystem_default,
     client_process_for_operation,
@@ -37,7 +41,22 @@ def test_mac_smb_profile_has_native_operation_actors_and_no_transport_pid() -> N
     }.items():
         actor = client_process_for_operation(profile, operation)
         assert actor is not None and actor.image == image
+        assert actor.command_line_template.startswith(f"{image} ")
         assert actor.lifecycle == "operation"
+    applications_by_image = {
+        application["platforms"]["macos"]["image_path"]: application["platforms"]["macos"]
+        for application in load_catalog()["applications"]
+        if "macos" in application.get("platforms", {})
+    }
+    for image in ("/bin/ls", "/bin/cat", "/usr/bin/tee"):
+        assert applications_by_image[image]["code_signature"]["entitlements"] == "absent"
+    rules = {
+        name
+        for rule in load_macos_execution_metadata_profile().code_validation
+        if rule.product_id == "apple-macos"
+        for name in rule.artifact_names
+    }
+    assert {"ls", "cat", "tee"}.issubset(rules)
 
 
 def test_old_smb_profiles_remain_valid_and_mac_serving_remains_unavailable() -> None:

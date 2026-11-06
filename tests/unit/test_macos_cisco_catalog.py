@@ -27,7 +27,11 @@ def test_mac_cisco_gui_keeps_ui_release_distinct_from_vpn_core() -> None:
     )
     assert release.key.product_id == "cisco-secure-client-ui"
     assert release.key.artifact_name == "Cisco Secure Client"
-    assert release.mach_o_image is None and release.code_signature is None
+    assert release.mach_o_image is not None
+    assert release.mach_o_image.architecture == "arm64"
+    assert release.code_signature is not None
+    assert release.code_signature.signing_id == "com.cisco.secureclient.gui"
+    assert release.code_signature.team_id == "DE8Y96K9QP"
     assert app.compatibility_group == "remote_access_stack"
     assert app.compatibility_option == "cisco_secure_client"
     assert not platform.children

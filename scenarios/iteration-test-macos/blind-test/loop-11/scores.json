@@ -1,0 +1,62 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 11,
+  "automated_eval": {
+    "score": 96.88057672525589,
+    "status": "PASS",
+    "records": 141247,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 96.70699759999317,
+      "causality": 97.00112241100582,
+      "timing": 92.26773361253073
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Likely curated or synthetic telemetry",
+      "verdict_confidence": 68,
+      "synthetic_confidence": 58,
+      "interpretation": "mixed",
+      "report_path": "threat-hunter-report.md"
+    },
+    "detection_engineer": {
+      "assessment": "Likely synthetic",
+      "verdict_confidence": 82,
+      "synthetic_confidence": 78,
+      "interpretation": "likely synthetic",
+      "report_path": "detection-engineer-report.md"
+    },
+    "network_forensics": {
+      "assessment": "Inconclusive, slight synthetic lean",
+      "verdict_confidence": 70,
+      "synthetic_confidence": 44,
+      "interpretation": "mixed",
+      "report_path": "network-forensics-report.md"
+    },
+    "host_forensics": {
+      "assessment": "Indeterminate, slight synthetic lean",
+      "verdict_confidence": 56,
+      "synthetic_confidence": 55,
+      "interpretation": "mixed",
+      "report_path": "host-forensics-report.md"
+    },
+    "average_synthetic_confidence": 58.75,
+    "average_interpretation": "mixed"
+  },
+  "deliberation": {
+    "triggered": true,
+    "reason": "Initial synthetic-confidence spread was 34 points, exceeding the 30-point trigger.",
+    "average_synthetic_confidence": 64.5,
+    "average_interpretation": "mixed",
+    "report_path": "deliberation.md",
+    "revised_positions": {
+      "threat_hunter": {"verdict_confidence": 78, "synthetic_confidence": 70},
+      "detection_engineer": {"verdict_confidence": 70, "synthetic_confidence": 64},
+      "network_forensics": {"verdict_confidence": 72, "synthetic_confidence": 52},
+      "host_forensics": {"verdict_confidence": 74, "synthetic_confidence": 72}
+    },
+    "average_verdict_confidence": 73.5
+  }
+}

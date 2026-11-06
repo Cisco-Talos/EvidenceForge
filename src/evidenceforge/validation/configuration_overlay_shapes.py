@@ -18,16 +18,14 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "list_fields": {"profiles": "profile"},
     },
     "activity/macos_execution_metadata.yaml": {
-        "dict_fields": {"terminal"},
+        "dict_fields": {"terminal", "directory_inode_range", "directory_age_range"},
         "string_fields": {"schema_version", "profile"},
         "string_list_fields": {"user_environment", "root_environment"},
         "scalar_fields": {
             "cpu_subtype": int,
-            "directory_first_inode": int,
             "directory_permissions": int,
             "directory_size_bytes": int,
             "directory_allocated_blocks": int,
-            "directory_age_seconds": int,
             "first_pipe_id": int,
         },
     },
@@ -86,6 +84,14 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     },
     "activity/process_network_map.yaml": {
         "list_fields": {"mappings": None},
+    },
+    "activity/process_output_profiles.yaml": {
+        "dict_fields": {"profiles"},
+        "scalar_fields": {"schema_version": str},
+    },
+    "activity/runtime_executable_profiles.yaml": {
+        "dict_fields": {"profiles"},
+        "scalar_fields": {"schema_version": str},
     },
     "activity/email_background.yaml": {
         "list_fields": {

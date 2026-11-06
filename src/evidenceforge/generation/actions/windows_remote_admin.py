@@ -764,9 +764,15 @@ class ExplicitCredentialUseActionBundle:
         if basename_lower == "mmc.exe":
             return f"{basename} compmgmt.msc /computer={target_server}"
         if basename_lower in {"powershell.exe", "pwsh.exe"}:
+            principal_literal = target_username.replace("'", "''")
+            server_literal = target_server.replace("'", "''")
             return (
-                f'{basename} -NoProfile -Command "Get-CimInstance Win32_OperatingSystem '
-                f"-ComputerName '{target_server}' -Credential '{target_username}'\""
+                f'{basename} -NoProfile -Command "'
+                f"$cred = Get-Credential -UserName '{principal_literal}' "
+                "-Message 'Remote inventory'; "
+                f"$session = New-CimSession -ComputerName '{server_literal}' -Credential $cred; "
+                "try { Get-CimInstance -ClassName Win32_OperatingSystem -CimSession $session } "
+                'finally { Remove-CimSession -CimSession $session }"'
             )
         return f'{basename} "{target_server}"'
 

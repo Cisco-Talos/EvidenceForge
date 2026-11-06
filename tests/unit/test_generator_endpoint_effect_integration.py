@@ -708,6 +708,9 @@ def test_process_artifacts_commit_before_timing_and_projection(
         "process_create",
         "file_create",
     ]
+    file_event = next(event for event in _events(emitter) if event.event_type == "file_create")
+    assert file_event.file.artifact_identity is not None
+    assert file_event.identity_plan.object_id == file_event.file.artifact_identity.artifact_id
     census = artifact_registry.census()
     assert census.prepared_publications == 0
     assert census.claimed_publications == 0

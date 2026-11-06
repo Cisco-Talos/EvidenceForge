@@ -43,6 +43,36 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  linux.sudo.process_lead:
+    class: source_latency
+    position: before
+    min_ms: 30
+    max_ms: 100
+  linux.sudo.pam_open:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 300
+  linux.sudo.close_tail:
+    class: teardown
+    position: after
+    min_ms: 120
+    max_ms: 950
+  linux.sudo.parent_exit:
+    class: teardown
+    position: after
+    min_ms: 10
+    max_ms: 50
+  linux.sudo.child_ready:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 4
+  linux.sudo.child_close_lead:
+    class: teardown
+    position: before
+    min_ms: 1
+    max_ms: 8
   macos.workspace_request:
     # Modeled ordering budget, not empirically calibrated login latency.
     class: human_workflow
@@ -233,6 +263,12 @@ relationships:
     position: before
     min_ms: 1
     max_ms: 20
+  # Session- and process-scoped intervals for authoritative Mac session teardown.
+  macos.authoritative_process_termination_gap:
+    class: teardown
+    position: before
+    min_ms: 40
+    max_ms: 350
   # Selected readiness gap, not measured Finder startup latency.
   macos.finder_preimage_before_exec:
     class: causal_prerequisite

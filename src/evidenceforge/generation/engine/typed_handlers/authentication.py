@@ -183,6 +183,21 @@ def handle_logoff(
     if paired_close is not None:
         logon_id, session_end_plan = paired_close
         target_session = self.state_manager.get_session(logon_id)
+        if target_session is None:
+            # A later activity in this hour can already drain the exact RDP
+            # lifecycle owner. Reuse its canonical completion, never emit a
+            # second close or accept an unrelated/early-ended session.
+            identity = self.state_manager.get_session_identity(logon_id)
+            if (
+                identity is not None
+                and identity.hostname == system.hostname
+                and identity.session_kind == "rdp"
+                and self.state_manager.get_session_end_plan(logon_id) == session_end_plan
+                and self.state_manager.get_session_end_time(logon_id)
+                == session_end_plan.canonical_end
+            ):
+                context.malicious_event["logon_id"] = logon_id
+                return context.malicious_event
         if target_session is None or target_session.system != system.hostname:
             raise StateError(
                 f"Explicit storyline logoff {session_end_plan.storyline_event_id} "

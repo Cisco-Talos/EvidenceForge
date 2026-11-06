@@ -1,0 +1,290 @@
+{
+  "builds": [
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "dmz",
+      "second_interface": "outside",
+      "count": 2342
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "inside",
+      "second_interface": "dmz",
+      "count": 2133
+    },
+    {
+      "direction": "inbound",
+      "protocol": "UDP",
+      "first_interface": "dmz",
+      "second_interface": "inside",
+      "count": 1089
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 1539
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "dmz",
+      "second_interface": "inside",
+      "count": 1328
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "inside",
+      "second_interface": "inside",
+      "count": 27
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "inside",
+      "second_interface": "outside",
+      "count": 26
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "inside",
+      "count": 15
+    },
+    {
+      "direction": "inbound",
+      "protocol": "UDP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 12
+    },
+    {
+      "direction": "outbound",
+      "protocol": "UDP",
+      "first_interface": "inside",
+      "second_interface": "outside",
+      "count": 5
+    },
+    {
+      "direction": "inbound",
+      "protocol": "UDP",
+      "first_interface": "outside",
+      "second_interface": "inside",
+      "count": 1
+    },
+    {
+      "direction": "outbound",
+      "protocol": "UDP",
+      "first_interface": "dmz",
+      "second_interface": "outside",
+      "count": 2
+    }
+  ],
+  "outbound_dmz_reset_matches": [
+    {
+      "zeek_state": "RSTO",
+      "asa_reason": "TCP Reset-O",
+      "count": 41
+    },
+    {
+      "zeek_state": "RSTR",
+      "asa_reason": "TCP Reset-I",
+      "count": 19
+    }
+  ],
+  "examples": [
+    {
+      "connection_id": "1681607",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 34199,
+        "mapped": "203.14.220.1/59211",
+        "dst_if": "outside",
+        "dst": "52.84.148.34",
+        "dp": 443,
+        "line": 134
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 135
+      },
+      "zeek_line": 56,
+      "zeek_uid": "CapgpoaDasdvOO1ipgT",
+      "conn_state": "RSTO",
+      "history": "ShAR"
+    },
+    {
+      "connection_id": "1681663",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 33235,
+        "mapped": "203.14.220.1/53953",
+        "dst_if": "outside",
+        "dst": "23.45.127.51",
+        "dp": 443,
+        "line": 291
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 293
+      },
+      "zeek_line": 122,
+      "zeek_uid": "C89RiO9krNMSQXCt3F",
+      "conn_state": "RSTO",
+      "history": "ShADaR"
+    },
+    {
+      "connection_id": "1681700",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 51978,
+        "mapped": "203.14.220.1/37703",
+        "dst_if": "outside",
+        "dst": "44.238.149.75",
+        "dp": 443,
+        "line": 402
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 404
+      },
+      "zeek_line": 162,
+      "zeek_uid": "CGYrTRD1tByXZ988TM",
+      "conn_state": "RSTO",
+      "history": "ShADaR"
+    },
+    {
+      "connection_id": "1681777",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 43397,
+        "mapped": "203.14.220.1/60728",
+        "dst_if": "outside",
+        "dst": "185.125.188.60",
+        "dp": 443,
+        "line": 601
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 602
+      },
+      "zeek_line": 256,
+      "zeek_uid": "CcoQASHEIxTpDKOHJQ",
+      "conn_state": "RSTO",
+      "history": "ShADaR"
+    },
+    {
+      "connection_id": "1681796",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 39915,
+        "mapped": "203.14.220.1/60950",
+        "dst_if": "outside",
+        "dst": "23.72.50.168",
+        "dp": 443,
+        "line": 652
+      },
+      "teardown": {
+        "reason": "TCP Reset-I",
+        "line": 653
+      },
+      "zeek_line": 276,
+      "zeek_uid": "CTmpxWI45lpinVyoV4",
+      "conn_state": "RSTR",
+      "history": "ShADadrg"
+    },
+    {
+      "connection_id": "1681807",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 38347,
+        "mapped": "203.14.220.1/58488",
+        "dst_if": "outside",
+        "dst": "104.16.251.86",
+        "dp": 443,
+        "line": 679
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 683
+      },
+      "zeek_line": 291,
+      "zeek_uid": "CuAY7GenaN5PBeq7MA",
+      "conn_state": "RSTO",
+      "history": "ShADaR"
+    },
+    {
+      "connection_id": "1681818",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 40312,
+        "mapped": "203.14.220.1/59027",
+        "dst_if": "outside",
+        "dst": "54.230.0.126",
+        "dp": 443,
+        "line": 714
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 720
+      },
+      "zeek_line": 303,
+      "zeek_uid": "Cv2k2srlQgNcWWrjN9Z",
+      "conn_state": "RSTO",
+      "history": "ShAR"
+    },
+    {
+      "connection_id": "1681828",
+      "build": {
+        "direction": "outbound",
+        "proto": "tcp",
+        "src_if": "dmz",
+        "src": "10.10.3.20",
+        "sp": 33194,
+        "mapped": "203.14.220.1/57707",
+        "dst_if": "outside",
+        "dst": "104.16.65.130",
+        "dp": 443,
+        "line": 746
+      },
+      "teardown": {
+        "reason": "TCP Reset-O",
+        "line": 747
+      },
+      "zeek_line": 314,
+      "zeek_uid": "CAjlpiNPwznxsLIM6M",
+      "conn_state": "RSTO",
+      "history": "ShADaRG"
+    }
+  ],
+  "primary_references": [
+    "https://www.cisco.com/c/en/us/td/docs/security/asa/syslog/asa-syslog/syslog-messages-302003-to-342008.html",
+    "https://www.cisco.com/c/en/us/support/docs/security/pix-500-series-security-appliances/15243-19.html"
+  ]
+}

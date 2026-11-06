@@ -193,7 +193,11 @@ class IdentityLifecyclePlanner:
         if event.file is not None:
             semantic_key = f"{hostname}:{event.file.path.casefold()}"
             return EntityIdentity(
-                object_id=stable_uuid("file-identity", semantic_key),
+                object_id=(
+                    event.file.artifact_identity.artifact_id
+                    if event.file.artifact_identity is not None
+                    else stable_uuid("file-identity", semantic_key)
+                ),
                 kind="file",
                 hostname=hostname,
                 semantic_key=semantic_key,

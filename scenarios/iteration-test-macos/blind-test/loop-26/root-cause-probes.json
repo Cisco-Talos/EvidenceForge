@@ -1,0 +1,14 @@
+{
+  "zeek-db": {
+    "non_word_aligned_clean_directions": 0,
+    "at_mtu_ceiling": 0
+  },
+  "zeek-core": {
+    "non_word_aligned_clean_directions": 0,
+    "at_mtu_ceiling": 0
+  },
+  "zeek-dmz": {
+    "non_word_aligned_clean_directions": 0,
+    "at_mtu_ceiling": 0
+  }
+}

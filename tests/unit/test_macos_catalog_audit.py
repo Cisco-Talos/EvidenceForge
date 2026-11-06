@@ -139,7 +139,9 @@ def test_acrobat_mac_launch_uses_existing_unspecified_release_semantics() -> Non
     )
     assert release.key.product_id == "acrobat"
     assert release.key.version == release.key.build == "unspecified"
-    assert release.code_signature is None
+    assert release.code_signature is not None
+    assert release.code_signature.signing_id == "com.adobe.Acrobat.Pro"
+    assert release.code_signature.team_id == "JQ525L2MZD"
     assert not get_parent_config("macos", "AdobeAcrobat")["children"]
     assert app.platforms["windows"].image_path.endswith("Acrobat.exe")
 
@@ -158,7 +160,9 @@ def test_webex_mac_launch_uses_public_package_release_and_existing_personas() ->
     assert platform.deployment.version == "46.10.0.36042"
     assert platform.deployment.build == "36042"
     assert tuple(platform.deployment.architectures) == ("arm64",)
-    assert platform.code_signature is None
+    assert platform.code_signature is not None
+    assert platform.code_signature.signing_id == "Cisco-Systems.Spark"
+    assert platform.code_signature.team_id == "DE8Y96K9QP"
     assert not get_parent_config("macos", "Webex")["children"]
     assert "webex" in {
         item["id"] for item in get_apps_for_persona("analyst", "macos", "user_app", "workstation")
@@ -183,7 +187,9 @@ def test_globalprotect_mac_launch_preserves_stack_selection_and_excludes_unmodel
     assert tuple(platform.deployment.architectures) == ("arm64",)
     assert app.compatibility_group == "remote_access_stack"
     assert app.compatibility_option == "globalprotect"
-    assert platform.code_signature is None
+    assert platform.code_signature is not None
+    assert platform.code_signature.signing_id == "com.paloaltonetworks.GlobalProtect.client"
+    assert platform.code_signature.team_id == "PXPZ95SK77"
     assert not platform.children
     assert not get_parent_config("macos", "GlobalProtect")["children"]
     assert "globalprotect" in {
@@ -281,7 +287,9 @@ def test_tableau_mac_launch_uses_arm64_tahoe_release_and_preserves_windows_varia
         "2026.1",
         "20261.26.0226.1626",
     )
-    assert release.code_signature is None
+    assert release.code_signature is not None
+    assert release.code_signature.signing_id == "com.tableausoftware.tableaudesktop"
+    assert release.code_signature.team_id == "QJ4XPRK37C"
     assert not platform.children and not platform.loaded_modules
     assert not get_parent_config("macos", "Tableau")["children"]
     assert "Tableau" in get_parent_config("macos", "launchd")["children"]

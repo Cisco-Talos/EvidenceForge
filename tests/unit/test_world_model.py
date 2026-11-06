@@ -2069,6 +2069,7 @@ def test_ssh_bootstrap_does_not_attach_to_historical_ended_owner(
     historical_activity = historical.last_activity_time
 
     activity_generator = Mock()
+    activity_generator._network_transaction_runtime = None
 
     def execute_ssh_session_bundle(**kwargs):
         replacement_logon_id = state_manager.create_session(
@@ -2126,3 +2127,68 @@ def test_align_rdp_source_after_future_session_preserves_naive_time_awareness(
     )
 
     assert aligned.tzinfo is None
+
+
+@pytest.mark.parametrize("seconds", [1, 10, 30])
+def test_automatic_ssh_bootstrap_keeps_prerequisite_inside_runtime_fence(
+    planner: WorldPlanner,
+    activity_generator: ActivityGenerator,
+    systems: dict[str, System],
+    users: dict[str, User],
+    monkeypatch: pytest.MonkeyPatch,
+    seconds: int,
+) -> None:
+    from types import SimpleNamespace
+
+    fence = datetime(2024, 1, 15, 10, tzinfo=UTC)
+    activity_generator._network_transaction_runtime = SimpleNamespace(watermark=fence)
+    bootstrap = Mock(return_value=None)
+    monkeypatch.setattr(planner, "_bootstrap_ssh_session", bootstrap)
+    command_time = fence + timedelta(seconds=seconds)
+    seed = 9
+    lead = random.Random(seed).uniform(6.0, 12.0)
+
+    planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["DB-01"],
+        time=command_time,
+        rng=random.Random(seed),
+        session_kind="ssh",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    assert bootstrap.call_args.args[2] == max(fence, command_time - timedelta(seconds=lead))
+    assert bootstrap.call_args.args[3] == command_time
+
+
+@pytest.mark.parametrize("servers_only", [False, True])
+def test_native_windows_management_targets_respect_platform_and_scope(
+    world_model: WorldModel, systems: dict[str, System], servers_only: bool
+) -> None:
+    candidates = world_model.windows_management_targets(
+        systems["WKS-01"], servers_only=servers_only
+    )
+    expected = {"APP-01", "DC-01"}
+    if not servers_only:
+        expected.add("WKS-02")
+    assert {host.hostname for host in candidates} == expected
+
+
+def test_native_windows_management_has_no_linux_samba_fallback() -> None:
+    scenario = _make_scenario()
+    source = scenario.environment.systems[0]
+    scenario.environment.systems = [
+        source,
+        System(
+            hostname="SAMBA",
+            ip="10.10.20.99",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba"],
+        ),
+        System(hostname="MAC", ip="10.10.20.98", os="macOS 15", type="workstation"),
+    ]
+    world = WorldModel(scenario, "corp.local")
+    assert world.windows_management_targets(source) == []
+    assert world.hosts["SAMBA"].supports(HostCapability.SMB_SERVER)

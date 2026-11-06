@@ -24,7 +24,10 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import LocalArtifactIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     FileContext,
@@ -35,6 +38,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.identity import (
     EntityIdentity,
+    EventIdentityPlan,
     ProcessIdentity,
     SessionIdentity,
     ThreadIdentity,
@@ -358,3 +362,46 @@ def test_flow_actor_is_canonical_or_omitted_as_complete_group() -> None:
     planner.plan(stale_flow)
     assert stale_flow.identity_plan is None
     assert stale_flow.identity_plan is None
+
+
+@pytest.mark.parametrize("platform", ["windows", "linux", "macos"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_file_lifecycle_preserves_canonical_artifact_identity(
+    platform: str, explicit: bool
+) -> None:
+    state, planner, logon_id, parent_pid, child_pid = _identity_state()
+    path = r"C:\Temp\out.txt" if platform == "windows" else "/tmp/out.txt"
+    artifact = LocalArtifactIdentity(
+        hostname="WS-01",
+        principal="analyst",
+        platform=platform,
+        user_profile_id="analyst-profile",
+        application_profile_id="transfer-profile",
+        application_id="scp",
+        family="transfer",
+        source_object_id="source-object",
+        native_path=path,
+    )
+    event = OccurrenceBuilder(
+        timestamp=state.get_process("WS-01", child_pid).start_time + timedelta(seconds=2),
+        event_type="file_create",
+        src_host=_host(),
+        auth=AuthContext(username="analyst", logon_id=logon_id),
+        process=_process_context(child_pid, parent_pid, logon_id),
+        file=FileContext(path=path, action="create", artifact_identity=artifact),
+        identity_plan=(
+            EventIdentityPlan(
+                subject=EntityIdentity(
+                    object_id=artifact.artifact_id,
+                    kind="file",
+                    hostname="WS-01",
+                    semantic_key=f"WS-01:{path.casefold()}",
+                )
+            )
+            if explicit
+            else None
+        ),
+    )
+    planner.plan(event)
+    assert event.identity_plan.object_id == artifact.artifact_id
+    assert event.identity_plan.actor.pid == child_pid

@@ -615,6 +615,20 @@ class WorldModel:
             and host.system.ip != excluded_ip
         ]
 
+    def windows_management_targets(
+        self, source_system: System, *, servers_only: bool = False
+    ) -> list[System]:
+        """Place automatic native Windows management on compatible remote hosts."""
+
+        return [
+            host.system
+            for host in self.hosts.values()
+            if host.os_category == "windows"
+            and host.system.hostname != source_system.hostname
+            and host.system.ip != source_system.ip
+            and (not servers_only or host.is_server)
+        ]
+
     def _collect_db_servers(self) -> list[DatabaseEndpoint]:
         endpoints: list[DatabaseEndpoint] = []
         for system in self.systems_by_role.get("database", []):
@@ -1476,6 +1490,14 @@ class WorldPlanner:
                 # process evidence. Give that source-native sequence room before
                 # the first user-visible command tied to the session.
                 logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+                # Automatic bootstrap may place its prerequisite before the
+                # first warm-up instant. The canonical runtime cannot admit
+                # that history; retain the available lead inside its fence.
+                network_runtime = getattr(
+                    self.activity_generator, "_network_transaction_runtime", None
+                )
+                if network_runtime is not None:
+                    logon_time = max(logon_time, network_runtime.watermark)
             elif (
                 plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux"
             ):

@@ -656,7 +656,7 @@ def test_network_planner_clears_unconfirmed_service_without_payload() -> None:
     assert event.network.traffic.orig.payload_bytes == 0
     assert event.network.traffic.resp.payload_bytes == 0
     assert event.network.service == ""
-    assert event.network.history in {"DAd", "DdA", "ADad"}
+    assert event.network.history == "A"
     assert "C" not in event.network.history and "c" not in event.network.history
 
 

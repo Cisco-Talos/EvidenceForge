@@ -133,7 +133,6 @@ def _get_role_pool(
         and persona_lower in data
     ):
         return persona_lower
-
     # Built-in alias mappings that depend on server_role context
     if persona_lower in ("developer",):
         if server_role == "db":
@@ -146,6 +145,8 @@ def _get_role_pool(
     if persona_lower in ("data_analyst", "analyst"):
         return "dba"
     if persona_lower == "help_desk":
+        if not workstation_like and "help_desk_server" in data:
+            return "help_desk_server"
         return "sysadmin"
 
     # Exact match: persona has its own command pool in the YAML

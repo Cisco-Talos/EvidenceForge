@@ -1,7 +1,6 @@
 # Application, process, and endpoint overlays
 
 Inspect the relevant packaged YAML and overlay before editing; similar-looking families can merge differently.
-
 ## Contents
 
 - [Applications](#applications)
@@ -10,7 +9,6 @@ Inspect the relevant packaged YAML and overlay before editing; similar-looking f
 - [System and endpoint telemetry](#system-and-endpoint-telemetry)
 - [Installed software identity](#installed-software-identity)
 - [RSAT](#rsat)
-
 ## Applications
 
 `application_catalog.yaml` contains an `applications` list keyed by `id`. Matching IDs deep-merge;
@@ -91,7 +89,6 @@ Application entry fields:
 
 `personas` controls eligibility; a persona's `application_usage` list is descriptive only. Ask for
 exact persona access rather than deriving it from title or risk.
-
 ## Deployment and release identity
 
 Choose the deployment discriminator from the identity actually known at the catalog boundary:
@@ -124,7 +121,6 @@ one synthetic CodeDirectory hash per configured signed release/architecture, sep
 whole-file hashes. These are modeled identifiers, not hashes measured from vendor binaries.
 Signing metadata establishes neither trust, notarization, nor successful execution; policy outcomes
 and runtime signing flags remain separate. Old catalog entries need no changes.
-
 ## Process relationships
 
 ### `spawn_rules.yaml`
@@ -133,19 +129,21 @@ Deep-merges OS parent mappings: command templates, lifetime, spawn delay, max ch
 Names resolve through catalogs; adding an application does not imply a parent. Mac `short_timing` models
 exact-template runtime using positive finite `minimum`, `median`, `maximum` seconds and `sigma`
 (minimum ≤ median ≤ maximum). Query/build/I/O profiles differ; native metadata and result gates remain.
-
 ### `process_network_map.yaml`
 
 Appends `mappings`. Each mapping associates an executable with a network service/port behavior used
 for process-to-network correlation. Add one only when the application actually owns that traffic.
 Avoid duplicate executables: runtime indexing is last-wins. `ambient` defaults to true; false requires concrete network intent for launch correlation and generic attribution, including configured application lists. Parsed endpoints and explicit canonical connection/PID intent remain valid. Local CLI queries cannot justify unrelated SaaS traffic.
+### Output and fallback executable sizes
 
+`process_output_profiles.yaml` keyed-merges archive `profiles` with typed
+`output_size_log10` bounds. `runtime_executable_profiles.yaml` keyed-merges platform
+`profiles` with `size_log10` bounds. Keep both at their canonical content owners.
 ### `system_processes.yaml`
 
 Deep-merges `scheduled_tasks`, `system_services`, `system_binaries`, `common_loaded_modules`, and
 `process_loaded_modules`. Use this file for OS/service processes, not user applications. Preserve
 source-native image paths, parent symbols, host-role eligibility, rarity, cooldown, and lifecycle.
-
 ### `service_process_profiles.yaml`
 
 Deep-merges `families`. Each family defines one resident OS-native service manager and named workers
@@ -153,7 +151,6 @@ that must reuse that manager across generation entry paths. Manager and worker e
 stable `key`, source-native `image`, `command_line`, `username`, and `parent_key`; worker
 `parent_key` values must be `manager`. Use this family only for durable master/worker ancestry such
 as Postfix or IIS, not for interactive invocations of the same executable.
-
 ### ProcessAccess and CreateRemoteThread
 
 - `process_access_patterns.yaml`: `baseline_pairs` append; each pair owns plausible source/target
@@ -163,7 +160,6 @@ as Postfix or IIS, not for interactive invocations of the same executable.
   merge behavior. Source/target images must exist in seeded process state.
 - `calltrace_patterns.yaml`: every supplied top-level `patterns` or `source_families` section replaces
   the entire packaged section. Copy the complete section before changing it.
-
 ## System and endpoint telemetry
 
 ### `sysmon_filters.yaml`
@@ -171,7 +167,6 @@ as Postfix or IIS, not for interactive invocations of the same executable.
 Every supplied event section (`network_connect`, `image_loaded`, `file_create`, `registry_event`, or
 `dns_query`) replaces that whole packaged section. Omitted sections remain defaults. A valid filter
 can still erase useful coverage, so compare the effective section before writing.
-
 ### `edr_pools.yaml`
 
 Every supplied top-level section replaces that section in full. Supported sections include:
@@ -187,7 +182,6 @@ Use `{user}`, `{rand}`, `{hex}`, and other placeholders already supported by the
 Keep Windows paths in Windows sections and Linux paths in Linux sections. Process-aware side effects
 belong in `file_side_effect_profiles`; do not put package-manager state, `/proc/<pid>`, protected
 event logs, or another owner's artifacts into generic churn pools.
-
 ## Installed software identity
 
 `installed_software_products` is source-native inventory metadata, not an executable release or an
@@ -208,7 +202,6 @@ Keep `product_id` stable across display-name changes. `version` and `build` are 
 dimensions, `architectures` is non-empty and unique, and `scope` is `machine` or `user`. Do not use
 an installed-software row to imply that an application executable, service, task, or module was
 deployed; those facts come from their typed deployment owners.
-
 ## RSAT
 
 `rsat_tools.yaml` contains `tools` keyed by `id`. Matching tools merge; new IDs append. Each complete
@@ -222,7 +215,6 @@ tools:
 ```
 
 Use `_replace: true` when a matching tool's list must replace rather than extend.
-
 ## Verification
 
 Check referenced personas, executables, parent/child relationships, modules, services, and unique

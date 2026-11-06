@@ -388,6 +388,28 @@ help_desk:
   - "ls -la ~/.config/autostart 2>/dev/null"
   - "tail -50 ~/.xsession-errors 2>/dev/null"
 
+help_desk_server:
+  - "who -u"
+  - "last -10"
+  - "getent passwd | tail -20"
+  - "getent group sudo"
+  - "loginctl list-sessions"
+  - "journalctl -u sshd --since '1 hour ago' --no-pager | tail -30"
+  - "journalctl -u {service} --since '1 hour ago' --no-pager | tail -20"
+  - "grep -i 'failed password' /var/log/auth.log | tail -20"
+  - "df -h"
+  - "free -h"
+  - "uptime"
+  - "ip -br addr"
+  - "ip route"
+  - "resolvectl status 2>/dev/null | head -30"
+  - "systemctl --failed --no-pager"
+  - "systemctl status {service} --no-pager"
+  - "journalctl -p warning --since today --no-pager | tail -30"
+  - "ls -ld /home/* 2>/dev/null | head"
+  - "du -sh /home/* 2>/dev/null | sort -h | tail"
+  - "find /var/tmp -maxdepth 1 -type f -mtime -1 -ls 2>/dev/null | head"
+
 data_analyst:
   - "psql -c '\\l'"
   - "psql -c '\\dt'"
@@ -489,7 +511,6 @@ workflows:
         - ["find . -name '*.csv' -o -name '*.xlsx' | head", "ls -lh ~/Downloads 2>/dev/null | head"]
         - ["head -5 data.csv 2>/dev/null", "wc -l data.csv 2>/dev/null"]
         - ["psql -c 'SELECT now(), current_database(), current_user'", "env | grep -E 'ODBC|PG|MYSQL|SQL' | head"]
-
 # QWERTY keyboard adjacency map for generative typo model.
 # Each key maps to its physical neighbors on a standard US keyboard.
 typo_model:

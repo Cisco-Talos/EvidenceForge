@@ -9433,6 +9433,44 @@ class ActivityGenerator:
             return f"{assigned_user}@{ad_domain}"
         return assigned_user
 
+    def browser_user_agent_for_process(
+        self,
+        source_system: System,
+        pid: int,
+        *,
+        hostname: str = "",
+        domain_tags: list[str] | None = None,
+    ) -> str:
+        """Select browser identity from the exact loaded executable version."""
+        if self.state_manager.get_process(source_system.hostname, pid) is None:
+            return ""
+        identity = self.state_manager.get_process_identity(source_system.hostname, pid)
+        if identity is None:
+            return ""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            _browser_family_for_process,
+            stable_browser_user_agent_for_process,
+        )
+
+        if not _browser_family_for_process(identity.image):
+            return ""
+        version = ""
+        if identity.executable_version is not None:
+            binary = self.dispatcher.resolve_loaded_process_binary_identity(identity)
+            metadata = getattr(binary, "pe_version_info", None)
+            if metadata is not None:
+                version = metadata.file_version
+            else:
+                version = getattr(getattr(binary, "key", None), "version", "")
+        return stable_browser_user_agent_for_process(
+            source_system,
+            identity.image,
+            identity.object_id,
+            hostname=hostname,
+            domain_tags=domain_tags,
+            release_version=version,
+        )
+
     def _proxy_user_agent_for_context(
         self,
         rng: random.Random,
@@ -11477,8 +11515,18 @@ class ActivityGenerator:
                 history,
                 rng,
             )
-            orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, orig_pkts, rng)
-            resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, resp_pkts, rng)
+            orig_ip_bytes = _tcp_ip_byte_count(
+                orig_bytes,
+                orig_pkts,
+                rng,
+                retransmitted="T" in (history or ""),
+            )
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                rng,
+                retransmitted="t" in (history or ""),
+            )
             duration = (
                 (timing_runtime or self.timing_runtime)
                 .sampler.sample_timedelta(
@@ -11639,19 +11687,50 @@ class ActivityGenerator:
 
         from evidenceforge.generation.activity.tls_realism import (
             certificate_analyzer_delay_ms,
-            certificate_file_size,
+            tls_server_payload_budget,
         )
 
+        if event.ssl is None:
+            return False
         changed = False
-        cert_bytes = sum(certificate_file_size(cert) for cert in event.x509_chain)
-        min_resp_bytes = cert_bytes + 280
+        min_resp_bytes = tls_server_payload_budget(
+            zeek_uid=net.zeek_uid,
+            ssl=event.ssl,
+            chain=event.x509_chain,
+            service=net.service or "",
+            application_bytes=event.http.response_body_len if event.http is not None else 0,
+        )
         resp_bytes = net.resp_bytes or 0
+        orig_pkts = net.orig_pkts
+        orig_ip_bytes = net.orig_ip_bytes or 0
         resp_pkts = net.resp_pkts
         resp_ip_bytes = net.resp_ip_bytes or 0
         if resp_bytes < min_resp_bytes:
             resp_bytes = min_resp_bytes
-            resp_pkts = max(resp_pkts, max(1, (resp_bytes // 1460) + 1))
-            resp_ip_bytes = max(resp_ip_bytes, resp_bytes + (resp_pkts * 40))
+            wire_rng = random.Random(
+                _stable_seed(f"tls-wire-accounting:{net.zeek_uid}:{resp_bytes}")
+            )
+            required_orig, required_resp = _tcp_packet_counts_from_payload_and_history(
+                net.orig_bytes,
+                resp_bytes,
+                net.history,
+                wire_rng,
+            )
+            if orig_pkts < required_orig:
+                orig_pkts = required_orig
+                orig_ip_bytes = _tcp_ip_byte_count(
+                    net.orig_bytes,
+                    orig_pkts,
+                    wire_rng,
+                    retransmitted="T" in (net.history or ""),
+                )
+            resp_pkts = max(resp_pkts, required_resp)
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                wire_rng,
+                retransmitted="t" in (net.history or ""),
+            )
             changed = True
 
         max_cert_delay = max(
@@ -11665,9 +11744,7 @@ class ActivityGenerator:
             for idx, cert in enumerate(event.x509_chain)
         )
         min_duration = (max_cert_delay / 1000.0) + 0.005
-        # Reserve room for files.log and x509.log chain rows before the conn
-        # emitter applies its own source-native TLS duration floor.
-        min_duration = max(min_duration, 1.05 + (0.075 * len(event.x509_chain)))
+        # The sampled analyzer readiness owns the required close, not chain count.
         duration = net.duration
         if duration is None or duration < min_duration:
             duration = min_duration
@@ -11689,13 +11766,15 @@ class ActivityGenerator:
                 closed_at=closed_at,
                 phase_times=phase_times,
                 traffic=NetworkTrafficLedger(
-                    orig=net.traffic.orig,
+                    orig=DirectionalTrafficLedger(net.orig_bytes or 0, orig_pkts, orig_ip_bytes),
                     resp=DirectionalTrafficLedger(resp_bytes, resp_pkts, resp_ip_bytes),
                     missed_orig_bytes=net.traffic.missed_orig_bytes,
                     missed_resp_bytes=net.traffic.missed_resp_bytes,
                 ),
             )
         else:
+            net.orig_pkts = orig_pkts
+            net.orig_ip_bytes = orig_ip_bytes
             net.resp_bytes = resp_bytes
             net.resp_pkts = resp_pkts
             net.resp_ip_bytes = resp_ip_bytes
@@ -15663,6 +15742,7 @@ class ActivityGenerator:
         """Freeze and validate generic session process closes without mutation."""
 
         authoritative = authoritative_end_plan is not None
+        os_category = _get_os_category(system.os)
         termination_gaps_ms = (
             []
             if authoritative
@@ -15679,10 +15759,21 @@ class ActivityGenerator:
                 for process in processes
             ]
         )
+        macos_close_offsets: tuple[timedelta, ...] | None = None
         if authoritative:
-            termination_span = timedelta(
-                milliseconds=min(3000, max(250, 100 * (len(processes) + 1)))
-            )
+            if os_category == "macos":
+                termination_span, macos_close_offsets = (
+                    self._macos_authoritative_process_termination_schedule(
+                        session_logon_id=session.logon_id,
+                        host=session.system,
+                        lifecycle_id=session.lifecycle_group_id or session.logon_id,
+                        process_ids=tuple(process.pid for process in processes),
+                    )
+                )
+            else:
+                termination_span = timedelta(
+                    milliseconds=min(3000, max(250, 100 * (len(processes) + 1)))
+                )
         else:
             final_margin_ms = 1000 if uses_ssh_transport_close_margin else 150
             termination_span = timedelta(
@@ -15705,7 +15796,6 @@ class ActivityGenerator:
         latest_planned_child_close: dict[str, datetime] = {}
         plans: list[_GenericLogoffProcessClosePlan] = []
         cumulative_gap_ms = 0
-        os_category = _get_os_category(system.os)
         deadline = (
             ensure_utc(authoritative_end_plan.canonical_end)
             if authoritative_end_plan is not None
@@ -15731,8 +15821,11 @@ class ActivityGenerator:
                 raise StateError("Generic logoff process lifecycle prestate drifted")
 
             if authoritative:
-                slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
-                terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
+                if macos_close_offsets is not None:
+                    terminate_at = termination_start + macos_close_offsets[ordinal]
+                else:
+                    slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
+                    terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
             else:
                 terminate_at = termination_start + timedelta(milliseconds=cumulative_gap_ms)
                 cumulative_gap_ms += termination_gaps_ms[ordinal]
@@ -16036,6 +16129,74 @@ class ActivityGenerator:
             )
         return tuple(plans), projected_session_frontier
 
+    def _macos_authoritative_process_termination_schedule(
+        self,
+        *,
+        session_logon_id: str,
+        host: str,
+        lifecycle_id: str,
+        process_ids: tuple[int, ...],
+    ) -> tuple[timedelta, tuple[timedelta, ...]]:
+        """Plan deterministic, process-scoped close gaps before an exact session end."""
+
+        if (
+            type(session_logon_id) is not str
+            or not session_logon_id
+            or type(host) is not str
+            or not host
+            or type(lifecycle_id) is not str
+            or not lifecycle_id
+            or type(process_ids) is not tuple
+            or any(type(pid) is not int or pid <= 0 for pid in process_ids)
+        ):
+            raise StateError(
+                "Mac authoritative process-close planning requires an exact session process set"
+            )
+
+        if not process_ids:
+            return timedelta(0), ()
+
+        relationship_key = "macos.authoritative_process_termination_gap"
+        window = _activity_get_timing_window(
+            relationship_key,
+            default_min_ms=40,
+            default_max_ms=350,
+            default_position="before",
+        )
+        first_close_offset = self._sample_activity_gap(
+            relationship_key=relationship_key,
+            stable_id=f"{session_logon_id}:initial-close-margin",
+            minimum_ms=window.min_ms,
+            maximum_ms=window.max_ms,
+            host=host,
+            source="macos_session_termination",
+            lifecycle_id=lifecycle_id,
+            ordinal=0,
+            sample_key="initial_close_margin",
+            mode_fraction=0.35,
+        )
+        process_gaps = tuple(
+            self._sample_activity_gap(
+                relationship_key=relationship_key,
+                stable_id=f"{session_logon_id}:{pid}",
+                minimum_ms=window.min_ms,
+                maximum_ms=window.max_ms,
+                host=host,
+                source="macos_session_termination",
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+                sample_key="process_close_gap",
+                mode_fraction=0.35,
+            )
+            for ordinal, pid in enumerate(process_ids)
+        )
+        offsets: list[timedelta] = []
+        elapsed = first_close_offset
+        for gap in process_gaps:
+            offsets.append(elapsed)
+            elapsed += gap
+        return elapsed, tuple(offsets)
+
     def _execute_bundle_owned_rdp_logoff(
         self,
         request: LogoffRequest,
@@ -16093,12 +16254,10 @@ class ActivityGenerator:
             raise StateError("Bundle-owned RDP logoff returned before exact session closure")
         return True
 
-    def _execute_macos_ssh_authored_logoff(self, request: LogoffRequest) -> bool:
+    def _execute_exact_ssh_authored_logoff(self, request: LogoffRequest) -> bool:
         """Consume one matching authored close through its retained SSH owner."""
         from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
 
-        if _get_os_category(request.system.os) != "macos":
-            return False
         with self._ssh_close_journal_lock:
             matches = tuple(
                 item
@@ -16108,7 +16267,7 @@ class ActivityGenerator:
         if not matches:
             return False
         if len(matches) != 1:
-            raise StateError("Mac SSH authored close has ambiguous continuation ownership")
+            raise StateError("Exact SSH authored close has ambiguous continuation ownership")
         continuation = matches[0]
         plan = continuation.plan
         if (
@@ -16120,7 +16279,7 @@ class ActivityGenerator:
             or request.system.hostname != plan.target_host.hostname
             or request.system.ip != plan.target_host.ip
         ):
-            raise StateError("Mac SSH logoff differs from its exact authored close owner")
+            raise StateError("SSH logoff differs from its exact authored close owner")
         session = self.state_manager.get_session(request.logon_id)
         if session is not None and (
             session.end_plan != plan.authoritative_end_plan
@@ -16128,13 +16287,13 @@ class ActivityGenerator:
             or session.system != plan.target_host.hostname
             or session.username != plan.username
         ):
-            raise StateError("Mac SSH authored close lost its live session end owner")
+            raise StateError("Exact SSH authored close lost its live session end owner")
         self._finalize_exact_ssh_close_continuation(continuation)
         return True
 
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
-        if self._execute_macos_ssh_authored_logoff(request):
+        if self._execute_exact_ssh_authored_logoff(request):
             return
         pending_linux_sudo = self._claim_pending_linux_sudo_logoff(request)
         if pending_linux_sudo is not None:
@@ -17043,6 +17202,7 @@ class ActivityGenerator:
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
+        preserve_requested_time: bool = False,
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
         exec_script: MacosExecScript | None = None,
@@ -17173,6 +17333,7 @@ class ActivityGenerator:
             command_line=command_line,
             parent_pid=parent_pid,
             require_exact_parent=require_exact_parent,
+            preserve_requested_time=preserve_requested_time,
             new_posix_session=new_posix_session,
             arguments=arguments,
             exec_script=exec_script,
@@ -18697,7 +18858,7 @@ class ActivityGenerator:
             termination_time=termination_time,
         )
 
-    def _emit_generic_ssh_preauth_failure_syslog(
+    def _emit_generic_ssh_preauth_syslog(
         self,
         *,
         target_system: System,
@@ -18709,7 +18870,7 @@ class ActivityGenerator:
         attempted_username: str | None,
         duration: float | None,
     ) -> None:
-        """Emit source-native sshd auth companions for generic preauth transport."""
+        """Observe preauth transport without inventing unrequested authentication."""
         if target_host is None or not source_ip or source_ip == "-" or source_port <= 0:
             return
 
@@ -18783,27 +18944,15 @@ class ActivityGenerator:
                 )
                 close_subject = f"invalid user {attempted_username}"
         else:
-            rows.extend(
-                [
-                    (
-                        invalid_delta_ms + process_floor_shift_ms,
-                        5,
-                        f"Invalid user unknown from {source_ip} port {source_port}",
-                    ),
-                    (
-                        failed_delta_ms + process_floor_shift_ms,
-                        4,
-                        f"Failed password for invalid user unknown "
-                        f"from {source_ip} port {source_port} ssh2",
-                    ),
-                ]
-            )
-            close_subject = "invalid user unknown"
+            # A listener inferred from TCP/22 does not establish userauth.
+            close_subject = ""
+            close_delta_ms = max(connection_delta_ms + 1, int((duration or 0.0) * 1000) + 20)
+        close_prefix = f"{close_subject} " if close_subject else ""
         rows.append(
             (
                 close_delta_ms + process_floor_shift_ms,
                 6,
-                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+                f"Connection closed by {close_prefix}{source_ip} port {source_port} [preauth]",
             )
         )
         for delta_ms, severity, message in rows:
@@ -25794,6 +25943,23 @@ class ActivityGenerator:
         del self._macos_terminal_startups[key]
         return shell.pid
 
+    @staticmethod
+    def _linux_shell_start_with_visibility_floor(
+        *,
+        candidate: datetime,
+        activity_time: datetime,
+        readiness_gap: timedelta,
+        logon_time: datetime | None,
+        window_floor: datetime | None,
+    ) -> datetime | None:
+        """Reject a replacement that cannot become ready after its visible floor."""
+        latest = activity_time - readiness_gap
+        if window_floor is not None and latest < window_floor:
+            return None
+        if candidate > latest and (logon_time is None or latest > logon_time):
+            return latest
+        return candidate
+
     def ensure_linux_session_shell(
         self,
         user: User,
@@ -25868,12 +26034,14 @@ class ActivityGenerator:
             f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
         )
         bash_time = logon_time + timedelta(milliseconds=180 + (shell_seed % 1200))
+        visible_floor: datetime | None = None
         if (
             scenario_start is not None
             and activity_time >= scenario_start
             and bash_time < scenario_start
         ):
             scenario_floor = scenario_start + timedelta(milliseconds=400 + (shell_seed % 2500))
+            visible_floor = scenario_floor
             pre_command_gap = timedelta(seconds=4 + (shell_seed % 75))
             bash_time = max(scenario_floor, activity_time - pre_command_gap)
         session_root = (
@@ -25893,9 +26061,16 @@ class ActivityGenerator:
         ):
             bash_time = ensure_utc(session_root.start_time) + timedelta(milliseconds=120)
         readiness_gap = timedelta(milliseconds=2200 + (shell_seed % 5200))
-        latest_bash_time = activity_time - readiness_gap
-        if bash_time > latest_bash_time and latest_bash_time > logon_time:
-            bash_time = latest_bash_time
+        resolved_start = self._linux_shell_start_with_visibility_floor(
+            candidate=bash_time,
+            activity_time=activity_time,
+            readiness_gap=readiness_gap,
+            logon_time=logon_time,
+            window_floor=visible_floor,
+        )
+        if resolved_start is None:
+            return None
+        bash_time = resolved_start
 
         if source_visible_by is not None:
             source_bound = self._linux_local_session_shell_source_bound(
@@ -26177,17 +26352,26 @@ class ActivityGenerator:
         scenario_start = getattr(self, "_scenario_start_time", None)
         if scenario_start is not None:
             scenario_start = ensure_utc(scenario_start)
+        visible_floor: datetime | None = None
         if (
             scenario_start is not None
             and activity_time >= scenario_start
             and shell_time < scenario_start
         ):
             scenario_floor = scenario_start + timedelta(milliseconds=350 + (shell_seed % 2200))
+            visible_floor = scenario_floor
             pre_command_gap = timedelta(seconds=3 + (shell_seed % 60))
             shell_time = max(scenario_floor, activity_time - pre_command_gap)
-        latest_shell_time = activity_time - readiness_gap
-        if shell_time > latest_shell_time and (base_time is None or latest_shell_time > base_time):
-            shell_time = latest_shell_time
+        resolved_start = self._linux_shell_start_with_visibility_floor(
+            candidate=shell_time,
+            activity_time=activity_time,
+            readiness_gap=readiness_gap,
+            logon_time=base_time,
+            window_floor=visible_floor,
+        )
+        if resolved_start is None:
+            return None
+        shell_time = resolved_start
 
         shell_pid = self.generate_process(
             user=user,
@@ -26480,6 +26664,8 @@ class ActivityGenerator:
         system: System,
         time: datetime,
         command: str,
+        *,
+        logon_id: str | None = None,
     ) -> None:
         """Dispatch a Linux bash-history event at an already scheduled command time."""
         if _get_os_category(system.os) == "macos":
@@ -26500,7 +26686,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="bash_command",
             src_host=self._build_host_context(system),
-            auth=AuthContext(username=user.username),
+            auth=AuthContext(username=user.username, logon_id=logon_id),
             shell=ShellContext(command=command),
         )
 
@@ -33454,6 +33640,7 @@ class ActivityGenerator:
 
         LinuxSudoSessionActionBundle(
             executor=self,
+            timing_runtime=self.timing_runtime,
             request=LinuxSudoSessionRequest(
                 system=system,
                 time=time,

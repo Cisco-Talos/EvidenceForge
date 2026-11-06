@@ -57,12 +57,6 @@ def _close(
         timestamp=at,
         integrity_level="System" if identity.principal == "root" else "Medium",
     )
-    event.auth = AuthContext(
-        username=identity.principal,
-        logon_id=identity.logon_id,
-        session_id=session.session_id,
-        logon_type=10,
-    )
     event.identity_plan = EventIdentityPlan(subject=identity, session=session)
     suffix = "receiver-terminate" if root else f"receiver-descendant:{identity.object_id}"
     return builder.seal(), event, f"ssh-close:synthetic:{suffix}"
@@ -101,9 +95,9 @@ def test_mac_terminal_rejects_changed_platform_and_receiver_ownership(
     elif damage == "platform":
         event.src_host.os_category = "linux"
     elif damage == "sid":
-        event.auth.user_sid = "S-1-5-21-123"
+        event.auth = AuthContext(username=roles.shell.principal, user_sid="S-1-5-21-123")
     elif damage == "session":
-        event.auth.logon_id = "foreign"
+        event.auth = AuthContext(username=roles.shell.principal, logon_id="foreign")
     elif damage == "audit":
         state.get_session(roles.shell.logon_id).audit_origin = None
     else:

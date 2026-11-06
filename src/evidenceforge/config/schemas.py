@@ -1180,6 +1180,7 @@ class SystemdScheduleEntry(BaseModel, extra="forbid", frozen=True):
     product_id: str | None = None
     variant: str | None = None
     type: Literal["systemd_timer", "cron"]
+    execution_scope: Literal["system", "user"] = "system"
     frequency: Literal["daily", "weekly", "30min"]
     typical_hour: int
     jitter_minutes: int
@@ -1248,7 +1249,16 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
     max_per_host_window: int | None = Field(default=None, gt=0)
+    window_occurrence_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    window_arrival_mode: float = Field(default=0.5, gt=0.0, lt=1.0)
     episode_pair_budgets: list[int] | None = None
+
+    @model_validator(mode="after")
+    def scheduled_noise_has_a_ceiling(self) -> Self:
+        """Require an explicit finite cap for stochastic-window arrivals."""
+        if self.window_occurrence_probability is not None and self.max_per_host_window is None:
+            raise ValueError("window_occurrence_probability requires max_per_host_window")
+        return self
 
     @field_validator("episode_pair_budgets")
     @classmethod
@@ -1742,9 +1752,29 @@ class TlsDestinationsConfig(BaseModel, extra="forbid"):
         return v
 
 
+class TlsWireBudgetConfig(BaseModel, extra="forbid", frozen=True):
+    """Optional TLS server wire material, beyond mandatory protocol framing."""
+
+    extension_bytes_min: int = Field(default=32, ge=0, le=65535)
+    extension_bytes_max: int = Field(default=192, ge=0, le=65535)
+    ticket_bytes_min: int = Field(default=0, ge=0, le=65535)
+    ticket_bytes_max: int = Field(default=512, ge=0, le=65535)
+    starttls_dialogue_bytes_min: int = Field(default=120, ge=0, le=65535)
+    starttls_dialogue_bytes_max: int = Field(default=400, ge=0, le=65535)
+
+    @model_validator(mode="after")
+    def ordered_ranges(self) -> Self:
+        """Reject inverted optional wire ranges before planning."""
+        for name in ("extension_bytes", "ticket_bytes", "starttls_dialogue_bytes"):
+            if getattr(self, f"{name}_min") > getattr(self, f"{name}_max"):
+                raise ValueError(f"{name}_min must not exceed {name}_max")
+        return self
+
+
 class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
+    wire_budget: TlsWireBudgetConfig = Field(default_factory=TlsWireBudgetConfig)
     san: TlsSanConfig
     serial_numbers: TlsSerialNumberConfig
     ocsp: TlsOcspConfig
@@ -2323,6 +2353,22 @@ class PublicDnsResolverEntry(BaseModel, extra="forbid"):
     ip: IPvAnyAddress
     operator: str
     weight: int = Field(gt=0)
+
+
+class HttpRequestPhaseConfig(BaseModel, extra="forbid", frozen=True):
+    """Modeled first-request delay after transport open, in milliseconds."""
+
+    minimum_ms: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    median_ms: float = Field(default=28.0, gt=0, allow_inf_nan=False)
+    maximum_ms: float = Field(default=180.0, gt=0, le=30_000, allow_inf_nan=False)
+    sigma: float = Field(default=0.65, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        """Keep a nondegenerate finite request-phase interval."""
+        if not self.minimum_ms < self.median_ms < self.maximum_ms:
+            raise ValueError("HTTP phase requires minimum_ms < median_ms < maximum_ms")
+        return self
 
 
 class HttpTransportFloorSlackConfig(BaseModel, extra="forbid", frozen=True):
@@ -4218,6 +4264,20 @@ class MacosTerminalDeviceProfile(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosExecutionMetadataRange(BaseModel, extra="forbid", frozen=True):
+    """Bounded deterministic draws for host- and path-scoped Mac directory facts."""
+
+    min: int = Field(strict=True, ge=1, lt=2**63)
+    max: int = Field(strict=True, ge=1, lt=2**63)
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        """Reject inverted ranges before metadata allocation."""
+        if self.min > self.max:
+            raise ValueError("Mac execution metadata range min must not exceed max")
+        return self
+
+
 class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
     """Explicit modeled execution outcomes for a bounded installed artifact set."""
 
@@ -4511,11 +4571,11 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     cpu_subtype: int = Field(strict=True, ge=-(2**31), lt=2**31)
     user_environment: tuple[str, ...]
     root_environment: tuple[str, ...]
-    directory_first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    directory_inode_range: MacosExecutionMetadataRange
     directory_permissions: int = Field(strict=True, ge=0, le=0o777)
     directory_size_bytes: int = Field(strict=True, ge=0, lt=2**31)
     directory_allocated_blocks: int = Field(strict=True, ge=0, lt=2**31)
-    directory_age_seconds: int = Field(strict=True, gt=0, lt=2**31)
+    directory_age_range: MacosExecutionMetadataRange
     first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
     code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
     system_audit_origin: Literal["default_unattributed"] | None = None
@@ -4576,6 +4636,8 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:
         """Preserve unknown policy in older inputs and reject overlapping rules."""
+        if self.directory_age_range.max >= 2**31:
+            raise ValueError("Mac directory age range must fit bounded timedelta seconds")
         selectors = [
             (rule.product_id, name) for rule in self.code_validation for name in rule.artifact_names
         ]
@@ -4680,6 +4742,7 @@ class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
     size_log_sigma: float = Field(strict=True, gt=0, le=3)
     installation_age_seconds: MacosProvisioningRange
     build_lead_seconds: MacosProvisioningRange
+    package_whole_second_probability: float = Field(default=0.5, ge=0, le=1)
     allocation_policy: Literal["dense-rounded"]
     allocation_unit_bytes: int = Field(strict=True, gt=0, lt=2**31, multiple_of=512)
     permissions: int = Field(strict=True, ge=0, le=0o7777)
@@ -5015,10 +5078,20 @@ class HostActivityFirewallDenyConfig(BaseModel, extra="forbid"):
         return v
 
 
+class SmbArrivalProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded self-exciting baseline SMB arrival policy."""
+
+    branching_ratio: float = Field(default=0.35, ge=0, lt=0.85, allow_inf_nan=False)
+    excitation_decay_seconds: float = Field(default=45.0, gt=0, le=600, allow_inf_nan=False)
+    candidate_ceiling_multiplier: int = Field(default=12, ge=4, le=100)
+    minimum_candidate_ceiling: int = Field(default=16, ge=4, le=1000)
+
+
 class HostActivityProfilesConfig(BaseModel, extra="forbid"):
     """Root schema for host_activity_profiles.yaml."""
 
     rate_families: HostActivityRateFamiliesConfig
+    smb_arrivals: SmbArrivalProfile = Field(default_factory=SmbArrivalProfile)
     host_types: dict[str, HostActivityProfileEntry]
     role_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)
     persona_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)

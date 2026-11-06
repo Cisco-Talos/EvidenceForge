@@ -1,0 +1,27 @@
+{
+  "behavior_revision": 392,
+  "pytest": {
+    "passed": 401,
+    "deselected": 1,
+    "elapsed_seconds": 19.25
+  },
+  "ruff_check": "PASS",
+  "ruff_format_check": "PASS",
+  "git_diff_check": "PASS",
+  "generation_behavior_manifest": "PASS",
+  "private_native_logs_read": false,
+  "generation_log_read": false,
+  "config_validation": {
+    "errors": 0,
+    "warnings": [
+      "Existing Google Chrome Helper (GPU) catalog/spawn child warning"
+    ]
+  },
+  "targeted_slow": {
+    "ssh": 3,
+    "rdp": 1,
+    "status": "PASS"
+  },
+  "source_regression_after_revision_392": "2 paired RDP logoff tests passed",
+  "source_commit": "uncommitted"
+}

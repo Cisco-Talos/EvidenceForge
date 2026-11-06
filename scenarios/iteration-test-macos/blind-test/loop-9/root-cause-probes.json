@@ -1,0 +1,448 @@
+{
+  "mac_fork_exec_lifecycle_precision": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "fork_exec_row_count": 98,
+      "pid_timestamp_collision_count": 16,
+      "collisions": [
+        {
+          "pid": 42171,
+          "timestamp_ms": 1793624864584,
+          "rows": [
+            {
+              "pid": 42171,
+              "timestamp_ms": 1793624864584,
+              "operation": "fork",
+              "execution_id": "cb534f62-5b5a-4ea5-b11f-67341b041f82:exec:0"
+            },
+            {
+              "pid": 42171,
+              "timestamp_ms": 1793624864584,
+              "operation": "exec",
+              "execution_id": "cb534f62-5b5a-4ea5-b11f-67341b041f82:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 42172,
+          "timestamp_ms": 1793624864622,
+          "rows": [
+            {
+              "pid": 42172,
+              "timestamp_ms": 1793624864622,
+              "operation": "fork",
+              "execution_id": "179b50f4-8f8c-47cc-94e7-17bf2eb27d0f:exec:0"
+            },
+            {
+              "pid": 42172,
+              "timestamp_ms": 1793624864622,
+              "operation": "exec",
+              "execution_id": "179b50f4-8f8c-47cc-94e7-17bf2eb27d0f:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 42842,
+          "timestamp_ms": 1793625229495,
+          "rows": [
+            {
+              "pid": 42842,
+              "timestamp_ms": 1793625229495,
+              "operation": "fork",
+              "execution_id": "9b18f828-94d0-4940-820b-f30010ddbd81:exec:0"
+            },
+            {
+              "pid": 42842,
+              "timestamp_ms": 1793625229495,
+              "operation": "exec",
+              "execution_id": "9b18f828-94d0-4940-820b-f30010ddbd81:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 46283,
+          "timestamp_ms": 1793627418077,
+          "rows": [
+            {
+              "pid": 46283,
+              "timestamp_ms": 1793627418077,
+              "operation": "fork",
+              "execution_id": "84b7862e-4929-461d-883a-5ee096208b41:exec:0"
+            },
+            {
+              "pid": 46283,
+              "timestamp_ms": 1793627418077,
+              "operation": "exec",
+              "execution_id": "84b7862e-4929-461d-883a-5ee096208b41:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 46450,
+          "timestamp_ms": 1793627525236,
+          "rows": [
+            {
+              "pid": 46450,
+              "timestamp_ms": 1793627525236,
+              "operation": "fork",
+              "execution_id": "386db40d-22c5-47aa-9fdc-17d79256e557:exec:0"
+            },
+            {
+              "pid": 46450,
+              "timestamp_ms": 1793627525236,
+              "operation": "exec",
+              "execution_id": "386db40d-22c5-47aa-9fdc-17d79256e557:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 50180,
+          "timestamp_ms": 1793629031320,
+          "rows": [
+            {
+              "pid": 50180,
+              "timestamp_ms": 1793629031320,
+              "operation": "fork",
+              "execution_id": "e998d209-342b-43de-819d-3e66920135e7:exec:0"
+            },
+            {
+              "pid": 50180,
+              "timestamp_ms": 1793629031320,
+              "operation": "exec",
+              "execution_id": "e998d209-342b-43de-819d-3e66920135e7:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 51632,
+          "timestamp_ms": 1793629465315,
+          "rows": [
+            {
+              "pid": 51632,
+              "timestamp_ms": 1793629465315,
+              "operation": "fork",
+              "execution_id": "784e668b-0cc3-45b8-8f14-e70edd416bd5:exec:0"
+            },
+            {
+              "pid": 51632,
+              "timestamp_ms": 1793629465315,
+              "operation": "exec",
+              "execution_id": "784e668b-0cc3-45b8-8f14-e70edd416bd5:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 54229,
+          "timestamp_ms": 1793630327778,
+          "rows": [
+            {
+              "pid": 54229,
+              "timestamp_ms": 1793630327778,
+              "operation": "fork",
+              "execution_id": "f7459814-525a-482c-80a1-ba8ea8deab1f:exec:0"
+            },
+            {
+              "pid": 54229,
+              "timestamp_ms": 1793630327778,
+              "operation": "exec",
+              "execution_id": "f7459814-525a-482c-80a1-ba8ea8deab1f:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 59108,
+          "timestamp_ms": 1793632238401,
+          "rows": [
+            {
+              "pid": 59108,
+              "timestamp_ms": 1793632238401,
+              "operation": "fork",
+              "execution_id": "36221058-396c-4aba-a7dd-6e59c53f06a6:exec:0"
+            },
+            {
+              "pid": 59108,
+              "timestamp_ms": 1793632238401,
+              "operation": "exec",
+              "execution_id": "36221058-396c-4aba-a7dd-6e59c53f06a6:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 60326,
+          "timestamp_ms": 1793633015781,
+          "rows": [
+            {
+              "pid": 60326,
+              "timestamp_ms": 1793633015781,
+              "operation": "fork",
+              "execution_id": "6c4c0618-0fd4-43af-9d52-b58dccac7196:exec:0"
+            },
+            {
+              "pid": 60326,
+              "timestamp_ms": 1793633015781,
+              "operation": "exec",
+              "execution_id": "6c4c0618-0fd4-43af-9d52-b58dccac7196:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 62098,
+          "timestamp_ms": 1793633879211,
+          "rows": [
+            {
+              "pid": 62098,
+              "timestamp_ms": 1793633879211,
+              "operation": "fork",
+              "execution_id": "c91b3c8a-3abc-4fa6-9864-1ac5c7ef3061:exec:0"
+            },
+            {
+              "pid": 62098,
+              "timestamp_ms": 1793633879211,
+              "operation": "exec",
+              "execution_id": "c91b3c8a-3abc-4fa6-9864-1ac5c7ef3061:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 64366,
+          "timestamp_ms": 1793635321205,
+          "rows": [
+            {
+              "pid": 64366,
+              "timestamp_ms": 1793635321205,
+              "operation": "fork",
+              "execution_id": "c864142e-20c8-4598-9c00-698cf59330b6:exec:0"
+            },
+            {
+              "pid": 64366,
+              "timestamp_ms": 1793635321205,
+              "operation": "exec",
+              "execution_id": "c864142e-20c8-4598-9c00-698cf59330b6:exec:1"
+            }
+          ]
+        }
+      ]
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "fork_exec_row_count": 118,
+      "pid_timestamp_collision_count": 19,
+      "collisions": [
+        {
+          "pid": 18381,
+          "timestamp_ms": 1793624733651,
+          "rows": [
+            {
+              "pid": 18381,
+              "timestamp_ms": 1793624733651,
+              "operation": "fork",
+              "execution_id": "6c03e4e8-7d10-48b2-adb7-32d0737c11df:exec:0"
+            },
+            {
+              "pid": 18381,
+              "timestamp_ms": 1793624733651,
+              "operation": "exec",
+              "execution_id": "6c03e4e8-7d10-48b2-adb7-32d0737c11df:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 18976,
+          "timestamp_ms": 1793625116647,
+          "rows": [
+            {
+              "pid": 18976,
+              "timestamp_ms": 1793625116647,
+              "operation": "fork",
+              "execution_id": "e2196a6a-7fa1-4da3-b883-9c0fe2f3e44c:exec:0"
+            },
+            {
+              "pid": 18976,
+              "timestamp_ms": 1793625116647,
+              "operation": "exec",
+              "execution_id": "e2196a6a-7fa1-4da3-b883-9c0fe2f3e44c:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 18979,
+          "timestamp_ms": 1793625116742,
+          "rows": [
+            {
+              "pid": 18979,
+              "timestamp_ms": 1793625116742,
+              "operation": "exec",
+              "execution_id": "7adc1a1d-0f1d-4a5e-8625-1b3a1e4226ce:exec:2"
+            },
+            {
+              "pid": 18979,
+              "timestamp_ms": 1793625116742,
+              "operation": "exec",
+              "execution_id": "7adc1a1d-0f1d-4a5e-8625-1b3a1e4226ce:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 18989,
+          "timestamp_ms": 1793625121604,
+          "rows": [
+            {
+              "pid": 18989,
+              "timestamp_ms": 1793625121604,
+              "operation": "fork",
+              "execution_id": "a10a052d-4e04-4850-8713-5d260cbdc2b4:exec:0"
+            },
+            {
+              "pid": 18989,
+              "timestamp_ms": 1793625121604,
+              "operation": "exec",
+              "execution_id": "a10a052d-4e04-4850-8713-5d260cbdc2b4:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 19022,
+          "timestamp_ms": 1793625142430,
+          "rows": [
+            {
+              "pid": 19022,
+              "timestamp_ms": 1793625142430,
+              "operation": "fork",
+              "execution_id": "8985e1dc-3a70-4a1a-a0f1-de4f8bb8b113:exec:0"
+            },
+            {
+              "pid": 19022,
+              "timestamp_ms": 1793625142430,
+              "operation": "exec",
+              "execution_id": "8985e1dc-3a70-4a1a-a0f1-de4f8bb8b113:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 19097,
+          "timestamp_ms": 1793625190429,
+          "rows": [
+            {
+              "pid": 19097,
+              "timestamp_ms": 1793625190429,
+              "operation": "fork",
+              "execution_id": "c72267f8-56dd-4753-a46f-5262d038538f:exec:0"
+            },
+            {
+              "pid": 19097,
+              "timestamp_ms": 1793625190429,
+              "operation": "exec",
+              "execution_id": "c72267f8-56dd-4753-a46f-5262d038538f:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 21921,
+          "timestamp_ms": 1793626992685,
+          "rows": [
+            {
+              "pid": 21921,
+              "timestamp_ms": 1793626992685,
+              "operation": "exec",
+              "execution_id": "c98a543e-b459-4bf3-9841-e387979aaa7d:exec:1"
+            },
+            {
+              "pid": 21921,
+              "timestamp_ms": 1793626992685,
+              "operation": "exec",
+              "execution_id": "c98a543e-b459-4bf3-9841-e387979aaa7d:exec:2"
+            }
+          ]
+        },
+        {
+          "pid": 26590,
+          "timestamp_ms": 1793628710647,
+          "rows": [
+            {
+              "pid": 26590,
+              "timestamp_ms": 1793628710647,
+              "operation": "fork",
+              "execution_id": "39e51f32-f4a2-4789-9ae9-9686106384fb:exec:0"
+            },
+            {
+              "pid": 26590,
+              "timestamp_ms": 1793628710647,
+              "operation": "exec",
+              "execution_id": "39e51f32-f4a2-4789-9ae9-9686106384fb:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 26742,
+          "timestamp_ms": 1793628740632,
+          "rows": [
+            {
+              "pid": 26742,
+              "timestamp_ms": 1793628740632,
+              "operation": "fork",
+              "execution_id": "518c9e30-feba-495d-b615-84678b1e7ef3:exec:0"
+            },
+            {
+              "pid": 26742,
+              "timestamp_ms": 1793628740632,
+              "operation": "exec",
+              "execution_id": "518c9e30-feba-495d-b615-84678b1e7ef3:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 30592,
+          "timestamp_ms": 1793629615792,
+          "rows": [
+            {
+              "pid": 30592,
+              "timestamp_ms": 1793629615792,
+              "operation": "fork",
+              "execution_id": "5eb5298b-40e1-4886-9d05-ba1cac1756c2:exec:0"
+            },
+            {
+              "pid": 30592,
+              "timestamp_ms": 1793629615792,
+              "operation": "exec",
+              "execution_id": "5eb5298b-40e1-4886-9d05-ba1cac1756c2:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 30777,
+          "timestamp_ms": 1793629648793,
+          "rows": [
+            {
+              "pid": 30777,
+              "timestamp_ms": 1793629648793,
+              "operation": "fork",
+              "execution_id": "17998274-acc4-46c1-984a-50c741903f2a:exec:0"
+            },
+            {
+              "pid": 30777,
+              "timestamp_ms": 1793629648793,
+              "operation": "exec",
+              "execution_id": "17998274-acc4-46c1-984a-50c741903f2a:exec:1"
+            }
+          ]
+        },
+        {
+          "pid": 37280,
+          "timestamp_ms": 1793631135771,
+          "rows": [
+            {
+              "pid": 37280,
+              "timestamp_ms": 1793631135771,
+              "operation": "fork",
+              "execution_id": "1b5b7e23-b519-4efa-845b-510629c8c568:exec:0"
+            },
+            {
+              "pid": 37280,
+              "timestamp_ms": 1793631135771,
+              "operation": "exec",
+              "execution_id": "1b5b7e23-b519-4efa-845b-510629c8c568:exec:1"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

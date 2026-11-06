@@ -15,6 +15,7 @@ from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
 from evidenceforge.config.schemas import (
     DnsTunnelRttConfig,
+    HttpRequestPhaseConfig,
     HttpTransportFloorSlackConfig,
     NmapCommandProbeConfig,
 )
@@ -92,6 +93,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
     for family in ("transport_histories", "ssl_histories"):
         if isinstance(overlay.get(family), dict):
             result[family] = {**default.get(family, {}), **overlay[family]}
+    if isinstance(overlay.get("http_request_phase"), dict):
+        result["http_request_phase"] = {
+            **default.get("http_request_phase", {}),
+            **overlay["http_request_phase"],
+        }
     if isinstance(overlay.get("http_transport_floor_slack"), dict):
         result["http_transport_floor_slack"] = {
             **default.get("http_transport_floor_slack", {}),
@@ -197,6 +203,13 @@ def nmap_command_probe_config() -> NmapCommandProbeConfig:
     """Return validated bounded planning settings for nmap process effects."""
 
     return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
+
+
+def http_request_phase_config() -> HttpRequestPhaseConfig:
+    """Read validated continuous first-request phase policy."""
+    return HttpRequestPhaseConfig.model_validate(
+        load_network_params().get("http_request_phase", {})
+    )
 
 
 def http_transport_floor_slack_config() -> HttpTransportFloorSlackConfig:

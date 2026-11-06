@@ -474,6 +474,23 @@ class ProcessExecutionService:
             retained = self._prepare_browser_helper(request, admission, launch, parent)
             self.finder_startups[request.stable_id] = retained
             return self._continue_finder(request.stable_id, retained)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and request.require_exact_parent
+            and request.suppress_command_file_effect
+            and not request.ensure_file_event
+            and request.source_visible_by is None
+            and request.effect_plan is None
+            and admission.endpoint is None
+            and not request.requested_endpoint_effects
+        ):
+            request = replace(
+                request,
+                effect_plan=ExecutionEffectPlan(
+                    ActionAnchor("process_execution", request.stable_id, source=request.source),
+                    (),
+                ),
+            )
         root = self._prepare_root(request, admission, launch)
         if root.birth_event is not None:
             launch = replace(
@@ -1016,6 +1033,7 @@ class ProcessExecutionService:
         if (
             admission.actor is None
             and not request.from_storyline
+            and not request.preserve_requested_time
             and request.source_visible_by is None
         ):
             spaced_time = self.scheduling._space_one_shot_cli_launch(
@@ -1134,6 +1152,7 @@ class ProcessExecutionService:
         collection_end = getattr(self.dispatcher, "output_end_time", None)
         if (
             not request.from_storyline
+            and not request.preserve_requested_time
             and request.source_visible_by is None
             and _get_os_category(request.system.os) == "macos"
             and collection_end is not None
@@ -1251,7 +1270,8 @@ class ProcessExecutionService:
         )
         binary: ProcessBinaryIdentity | None = None
         executable_version: ProcessExecutableVersion | None = None
-        if _get_os_category(request.system.os) == "macos":
+        platform = _get_os_category(request.system.os)
+        if platform in {"macos", "windows"}:
             publication = (
                 request.prepared_effects.process_binary_publication
                 if request.prepared_effects is not None
@@ -1261,7 +1281,10 @@ class ProcessExecutionService:
                 publication.record.binary
                 if publication is not None
                 else self.dispatcher.resolve_process_binary_identity(
-                    request.system.hostname, launch.actor.username, launch.actor.image, "macos"
+                    request.system.hostname,
+                    launch.actor.username,
+                    launch.actor.image,
+                    cast(Platform, platform),
                 )
             )
             if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:

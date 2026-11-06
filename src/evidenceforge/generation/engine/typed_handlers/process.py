@@ -316,6 +316,7 @@ def handle_process(
             process_name=process_name,
             command_line=command_line,
             output_file=output_file,
+            logon_id=process_logon_id,
             rng=rng,
         )
         prepared_shell_command = self.activity_generator._prepare_bash_history_command(
@@ -327,6 +328,7 @@ def handle_process(
             system,
             time,
             prepared_shell_command,
+            logon_id=process_logon_id,
         )
         malicious_event["time"] = time
     if os_category == "macos" and not finder:

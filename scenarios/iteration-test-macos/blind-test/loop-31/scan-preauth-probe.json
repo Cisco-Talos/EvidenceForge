@@ -1,0 +1,47 @@
+{
+  "scan_processes": 1,
+  "scan_flows": 1263,
+  "unknown_auth_from_scan_host": [
+    [
+      "LOG-MON-01.meridianhcs.local/syslog.log",
+      119,
+      "<85>1 2026-11-02T14:40:37.032705Z LOG-MON-01 sshd 705201 - - Invalid user unknown from 10.10.3.10 port 42865"
+    ],
+    [
+      "LOG-MON-01.meridianhcs.local/syslog.log",
+      120,
+      "<84>1 2026-11-02T14:40:37.187705Z LOG-MON-01 sshd 705201 - - Failed password for invalid user unknown from 10.10.3.10 port 42865 ssh2"
+    ],
+    [
+      "PROXY-01.meridianhcs.local/syslog.log",
+      121,
+      "<85>1 2026-11-02T14:27:37.067775Z PROXY-01 sshd 2379416 - - Invalid user unknown from 10.10.3.10 port 39664"
+    ],
+    [
+      "PROXY-01.meridianhcs.local/syslog.log",
+      122,
+      "<84>1 2026-11-02T14:27:37.239775Z PROXY-01 sshd 2379416 - - Failed password for invalid user unknown from 10.10.3.10 port 39664 ssh2"
+    ],
+    [
+      "FILE-LNX-01.meridianhcs.local/syslog.log",
+      179,
+      "<85>1 2026-11-02T14:40:35.659329Z FILE-LNX-01 sshd 2700893 - - Invalid user unknown from 10.10.3.10 port 47335"
+    ],
+    [
+      "FILE-LNX-01.meridianhcs.local/syslog.log",
+      180,
+      "<84>1 2026-11-02T14:40:35.810329Z FILE-LNX-01 sshd 2700893 - - Failed password for invalid user unknown from 10.10.3.10 port 47335 ssh2"
+    ],
+    [
+      "APP-INT-01.meridianhcs.local/syslog.log",
+      105,
+      "<85>1 2026-11-02T14:40:39.370878Z APP-INT-01 sshd 2946353 - - Invalid user unknown from 10.10.3.10 port 58416"
+    ],
+    [
+      "APP-INT-01.meridianhcs.local/syslog.log",
+      106,
+      "<84>1 2026-11-02T14:40:39.781878Z APP-INT-01 sshd 2946353 - - Failed password for invalid user unknown from 10.10.3.10 port 58416 ssh2"
+    ]
+  ],
+  "unnamed_preauth_closures": []
+}

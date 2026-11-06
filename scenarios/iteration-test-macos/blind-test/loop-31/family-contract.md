@@ -1,0 +1,3 @@
+# Automatic Windows management target placement
+
+Owner: WorldModel platform placement, consumed by baseline intent selection. Automatic Win32 management and Windows help-desk activity select distinct modeled Windows hosts. Server-only administration includes Windows servers/DCs; help-desk selection includes Windows workstations. Explicit scenario credential attempts and generic service-account authentication remain unchanged because Linux Samba and failed attempts are legitimate. Both baseline persona entry paths share the world selector; no command rewriting or emitter filtering. Siblings: Windows DC/server/workstation, Linux Samba, macOS, self-target exclusion, empty candidate sets. Low risk; source-domain eligibility is not proof of remote service success.

@@ -232,6 +232,18 @@ _FAMILIES = (
         "Process-to-network correlation mappings.",
     ),
     _family(
+        "activity/process_output_profiles.yaml",
+        "keyed-entry",
+        "config-apps-processes.md",
+        "Logical file-size distributions for command-owned archive outputs.",
+    ),
+    _family(
+        "activity/runtime_executable_profiles.yaml",
+        "keyed-entry",
+        "config-apps-processes.md",
+        "Fallback executable content-size distributions by platform.",
+    ),
+    _family(
         "activity/proxy_phase_profiles.yaml",
         "deep-mapping",
         "config-dns-network.md",

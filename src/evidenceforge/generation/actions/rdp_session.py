@@ -629,8 +629,8 @@ class _PreparedDeferredRdpReconnect:
     identity_capture: NetworkConnectionIdentityCapture
     session_identity: SessionIdentity
     existing_session_patch: ConnectionExistingSessionPatch
-    source_plan: ProcessMaterializationPlan
-    source_session_identity: SessionIdentity
+    source_plan: ProcessMaterializationPlan | None
+    source_session_identity: SessionIdentity | None
     lifecycle_continuation: _PreparedRdpLifecycleContinuation
 
 
@@ -898,6 +898,17 @@ class RdpSessionActionBundle:
                 duration=duration,
                 reconnect_time=logon_time,
             )
+        if self._request.logon_id:
+            existing_identity = self._executor.state_manager.get_session_identity(
+                self._request.logon_id
+            )
+            if (
+                existing_identity is not None
+                and self._executor._rdp_session_manager.get(existing_identity.object_id) is not None
+            ):
+                raise StateError(
+                    "An established RDP session requires exact reconnect authority; its identity cannot be re-keyed"
+                )
         source_pid = self._materialize_source_process(
             user=user,
             source_system=source_system,
@@ -1168,8 +1179,7 @@ class RdpSessionActionBundle:
 
         if (
             not self._request.logon_id
-            or source_system is None
-            or _get_os_category(source_system.os) != "windows"
+            or (source_system is not None and _get_os_category(source_system.os) != "windows")
             or _get_os_category(self._request.target_system.os) != "windows"
             or not self._has_exact_deferred_projection_owners()
         ):
@@ -1187,16 +1197,18 @@ class RdpSessionActionBundle:
         from evidenceforge.events.rdp import RdpSessionState
 
         prior = self._executor._rdp_session_manager.get(session_identity.object_id)
-        source_session = self._executor._active_user_interactive_windows_session(
-            user,
-            source_system,
-            self._request.time,
+        source_session = (
+            self._executor._active_user_interactive_windows_session(
+                user, source_system, self._request.time
+            )
+            if source_system is not None
+            else None
         )
         return bool(
             prior is not None
             and prior.state is RdpSessionState.DISCONNECTED
             and prior.identity.affinity.source_address == self._request.source_ip.casefold()
-            and source_session is not None
+            and (source_system is None or source_session is not None)
         )
 
     def _exact_source_binding(
@@ -1649,7 +1661,7 @@ class RdpSessionActionBundle:
         *,
         user: User,
         source_ip: str,
-        source_system: System,
+        source_system: System | None,
         source_port: int,
         duration: float,
         reconnect_time: datetime,
@@ -1711,10 +1723,12 @@ class RdpSessionActionBundle:
                 src_port=source_port,
                 emit_dns=False,
                 source_system=source_system,
-                pid=prepared.source_plan.identity.pid,
+                pid=prepared.source_plan.identity.pid if prepared.source_plan is not None else -1,
                 conn_state="SF",
                 hostname=self._request.target_system.hostname,
-                process_image=prepared.source_plan.identity.image,
+                process_image=prepared.source_plan.identity.image
+                if prepared.source_plan is not None
+                else None,
                 preserve_dst_ip=True,
                 preserve_start_time=True,
                 suppress_source_pid_inference=True,
@@ -1774,12 +1788,12 @@ class RdpSessionActionBundle:
         *,
         user: User,
         source_ip: str,
-        source_system: System,
+        source_system: System | None,
         source_port: int,
         reconnect_time: datetime,
         transport_close: datetime,
     ) -> _PreparedDeferredRdpReconnect:
-        """Prepare one source-only ACTIVE RDP State/application owner graph."""
+        """Prepare an exact ACTIVE RDP graph with optional source allocation."""
 
         state = self._executor.state_manager
         session_identity = state.get_session_identity(self._request.logon_id)
@@ -1790,40 +1804,44 @@ class RdpSessionActionBundle:
 
         if prior is None or prior.state is not RdpSessionState.DISCONNECTED:
             raise StateError("Exact RDP reconnect requires one disconnected logical session")
-        source_session = self._executor._active_user_interactive_windows_session(
-            user,
-            source_system,
-            self._request.time,
-        )
-        if source_session is None:
-            raise StateError("Exact RDP reconnect requires a live source interactive session")
-        source_session_identity = state.get_session_identity(source_session.logon_id)
-        if source_session_identity is None:
-            raise StateError("Exact RDP reconnect lost its source session identity")
+        source_session_identity: SessionIdentity | None = None
+        source_plan: ProcessMaterializationPlan | None = None
+        batch = None
+        if source_system is not None:
+            source_session = self._executor._active_user_interactive_windows_session(
+                user,
+                source_system,
+                self._request.time,
+            )
+            if source_session is None:
+                raise StateError("Exact RDP reconnect requires a live source interactive session")
+            source_session_identity = state.get_session_identity(source_session.logon_id)
+            if source_session_identity is None:
+                raise StateError("Exact RDP reconnect lost its source session identity")
 
-        parent_pid = source_session.explorer_pid or source_session.process_tree_root or 4
-        source_start = ensure_utc(reconnect_time)
-        batch_builder = state.begin_materialization_batch()
-        source_plan = batch_builder.plan_process(
-            system=source_system.hostname,
-            parent_pid=parent_pid,
-            image=r"C:\Windows\System32\mstsc.exe",
-            command_line=f"mstsc.exe /v:{self._request.target_system.hostname}",
-            username=user.username,
-            integrity_level="Medium",
-            os_category="windows",
-            logon_id=source_session_identity.logon_id,
-            lifecycle_group_id=stable_uuid(
-                "rdp-reconnect-source-lifecycle",
-                self._request.stable_id,
-            ),
-            parent_lifecycle_group_id=source_session_identity.lifecycle_group_id,
-            start_time=source_start,
-            require_session=True,
-            auth_session_id=source_session_identity.session_id,
-            auth_logon_type=2,
-        )
-        batch = batch_builder.seal()
+            parent_pid = source_session.explorer_pid or source_session.process_tree_root or 4
+            source_start = ensure_utc(reconnect_time)
+            batch_builder = state.begin_materialization_batch()
+            source_plan = batch_builder.plan_process(
+                system=source_system.hostname,
+                parent_pid=parent_pid,
+                image=r"C:\Windows\System32\mstsc.exe",
+                command_line=f"mstsc.exe /v:{self._request.target_system.hostname}",
+                username=user.username,
+                integrity_level="Medium",
+                os_category="windows",
+                logon_id=source_session_identity.logon_id,
+                lifecycle_group_id=stable_uuid(
+                    "rdp-reconnect-source-lifecycle",
+                    self._request.stable_id,
+                ),
+                parent_lifecycle_group_id=source_session_identity.lifecycle_group_id,
+                start_time=source_start,
+                require_session=True,
+                auth_session_id=source_session_identity.session_id,
+                auth_logon_type=2,
+            )
+            batch = batch_builder.seal()
         existing_patch = state.prepare_connection_live_session_patch(
             session_identity,
             source_ip=source_ip,
@@ -1843,7 +1861,7 @@ class RdpSessionActionBundle:
         elevated = self._rdp_user_is_elevated(user)
         application_intent = DeferredRdpApplicationIntent(
             manager=self._executor._rdp_session_manager,
-            source_host=source_system.hostname,
+            source_host=source_system.hostname if source_system is not None else source_ip,
             target_host=self._request.target_system.hostname,
             principal=user.username,
             hard_deadline=prior.identity.hard_deadline,
@@ -1859,13 +1877,13 @@ class RdpSessionActionBundle:
                 else ""
             ),
             allow_omitted_transport_actor=True,
-            source_identity=source_plan.identity,
+            source_identity=source_plan.identity if source_plan is not None else None,
             source_session_identity=source_session_identity,
             prior_session=prior,
             expected_generation=prior.generation.ordinal + 1,
         )
         dependent_occurrences = (
-            self._rdp_process_occurrence(source_plan, 1),
+            *((self._rdp_process_occurrence(source_plan, 1),) if source_plan is not None else ()),
             DeferredSessionDependentOccurrenceSpec(
                 occurrence_id=stable_uuid(
                     "rdp-deferred-reconnect-occurrence",
@@ -1875,7 +1893,7 @@ class RdpSessionActionBundle:
                 event_type=EventKind.RDP_RECONNECT,
                 canonical_time=ensure_utc(reconnect_time),
                 member_references=(session_identity.object_id,),
-                publication_ordinal=2,
+                publication_ordinal=2 if source_plan is not None else 1,
             ),
         )
         authority = DeferredSessionNetworkAuthority(
@@ -1900,7 +1918,7 @@ class RdpSessionActionBundle:
             target_system=self._request.target_system,
             user=user,
             source_system=source_system,
-            source_identity=source_plan.identity,
+            source_identity=source_plan.identity if source_plan is not None else None,
             source_session_identity=source_session_identity,
             hard_deadline=prior.identity.hard_deadline,
             action_source_deadline=self._action_source_deadline(),

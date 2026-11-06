@@ -1,0 +1,27 @@
+{
+  "family": "Linux storyline shell-history ownership",
+  "output": "/private/tmp/eforge-iteration-test-macos-loop-13",
+  "observations": [
+    {
+      "host": "DB-PROD-01.meridianhcs.local",
+      "session": "root SSH from 10.10.2.30",
+      "accepted_auth_utc": "2026-11-02T18:15:23.014736Z",
+      "pam_session_open_utc": "2026-11-02T18:15:23.078703Z",
+      "systemd_session_ready_utc": "2026-11-02T18:15:23.782296Z",
+      "bash_history_first_entry_utc": "2026-11-02T18:15:26Z",
+      "auth_context_logon_id": "0x1185fcb9",
+      "matching_ecar_session_id": "279174",
+      "result": "PASS: first authored process is after session readiness and uses the owning logon ID; optional friction is omitted because the ready-to-process runway is too short"
+    }
+  ],
+  "evaluation": {
+    "total_records": 133413,
+    "overall_score": 96.69735121882162,
+    "pillars": {
+      "Parseability": 100.0,
+      "Plausibility": 96.79941796948748,
+      "Causality": 95.9151083523695,
+      "Timing": 92.59359819178687
+    }
+  }
+}

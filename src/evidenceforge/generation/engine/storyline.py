@@ -3225,9 +3225,18 @@ class StorylineMixin:
         process_name: str,
         command_line: str,
         output_file: str | None,
+        logon_id: str,
         rng: random.Random,
     ) -> datetime | None:
-        """Emit bounded bash-history texture before an authored Linux process."""
+        """Emit session-owned bash-history preparation before an authored Linux process."""
+        session = self.state_manager.get_session_at(logon_id, time)
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.username != actor.username
+            or str(getattr(session, "session_kind", "")).casefold() not in {"interactive", "ssh"}
+        ):
+            return None
         commands = _linux_storyline_shell_friction_commands(
             username=actor.username,
             process_name=process_name,
@@ -3238,12 +3247,17 @@ class StorylineMixin:
         if not commands:
             return None
 
+        ready_at = ensure_utc(session.source_ready_time or session.start_time)
         lead_seconds = max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(
             5.0,
             35.0,
         )
         first_anchor = time - timedelta(seconds=lead_seconds)
         spacing_seconds = lead_seconds / (len(commands) + 1)
+        session_floor = ready_at + timedelta(milliseconds=250 + rng.randint(0, 650))
+        if first_anchor < session_floor:
+            first_anchor = session_floor
+            spacing_seconds = rng.uniform(1.2, 3.4)
         shell_key = (system.hostname, actor.username)
         prior_completion = getattr(self, "_storyline_shell_available_at", {}).get(shell_key)
         if prior_completion is not None:
@@ -3251,9 +3265,9 @@ class StorylineMixin:
             if first_anchor < earliest_anchor:
                 first_anchor = earliest_anchor
                 spacing_seconds = rng.uniform(1.6, 4.8)
-            latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
-            if latest_candidate >= ensure_utc(time) - timedelta(seconds=1):
-                return None
+        latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
+        if latest_candidate >= ensure_utc(time) - timedelta(milliseconds=700):
+            return None
         latest_scheduled: datetime | None = None
         for command_index, command in enumerate(commands):
             scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))
@@ -3266,6 +3280,7 @@ class StorylineMixin:
                 system,
                 scheduled,
                 prepared_command,
+                logon_id=logon_id,
             )
             latest_scheduled = scheduled
         return latest_scheduled
