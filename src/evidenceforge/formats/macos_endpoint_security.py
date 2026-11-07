@@ -250,10 +250,15 @@ class ESExecV11(ESExec):
         description="Required null or a bounded entitlement property object"
     )
 
-    @field_validator("entitlements", mode="before")
+    @field_validator("entitlements", mode="plain")
     @classmethod
     def bounded_entitlements(cls, value: object) -> object:
-        """Admit bounded exact values independently of generation-profile qualification."""
+        """Validate once, retaining empty object/array tags in the frozen value.
+
+        Union coercion after freezing would reinterpret an empty named-tuple
+        object as a string-array tuple. The shared freezer owns every bound and
+        exact property type, so its immutable result is already authoritative.
+        """
         return freeze_entitlements(value) if value is not None else None
 
     @field_serializer("entitlements")

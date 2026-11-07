@@ -315,11 +315,9 @@ def test_setup_and_provenance_use_mocked_native_commands_only(
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
     monkeypatch.setattr(
-        kit.pwd,
-        "getpwuid",
-        lambda _uid: SimpleNamespace(
-            pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20
-        ),
+        kit,
+        "_current_account",
+        lambda: SimpleNamespace(pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20),
     )
     manifest = _manifest()
     monkeypatch.setattr(

@@ -295,14 +295,12 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     root = kit.prepare(tmp_path / "fresh")
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
-    monkeypatch.setattr(kit.os, "getuid", lambda: 501)
-    monkeypatch.setattr(kit.os, "getgid", lambda: 20)
+    monkeypatch.setattr(kit.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(kit.os, "getgid", lambda: 20, raising=False)
     monkeypatch.setattr(
-        kit.pwd,
-        "getpwuid",
-        lambda _uid: SimpleNamespace(
-            pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20
-        ),
+        kit,
+        "_current_account",
+        lambda: SimpleNamespace(pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20),
     )
     manifest = _manifest()
     monkeypatch.setattr(

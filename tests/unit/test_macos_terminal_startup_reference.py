@@ -348,11 +348,9 @@ def test_setup_and_verification_accept_an_installed_public_app_without_running_c
     monkeypatch.setattr(kit.reference, "_codec_digest", lambda: "a" * 64)
     monkeypatch.setitem(kit.PATHS, "apple", str(app))
     monkeypatch.setattr(
-        kit.pwd,
-        "getpwuid",
-        lambda _uid: SimpleNamespace(
-            pw_uid=501, pw_gid=20, pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}"
-        ),
+        kit,
+        "_current_account",
+        lambda: SimpleNamespace(pw_uid=501, pw_gid=20, pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}"),
     )
     commands: list[str] = []
 

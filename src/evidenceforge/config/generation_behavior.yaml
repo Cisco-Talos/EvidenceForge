@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 483
+current_revision: 484
 history_start_revision: 1
-behavior_surface_sha256: ad287a0fe54ecb28b351a074e283bc5f8c9ea03a71564d6b1cb70bbb591652f6
+behavior_surface_sha256: 4ad229a04f89d8796f2f85423def50afc5f9a124040c02d1bac3741d1816495a
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5393,3 +5393,12 @@ changes:
   formats: []
   summary: Samples baseline dispatch, foreground lifetimes, Mac boot/helper/session phases and filesystem
     work through semantic timing scopes; byte-size samplers remain separately bounded non-temporal operations.
+- revision: 484
+  id: preserve-empty-native-entitlement-object-tags
+  impact: localized
+  domains:
+  - macos-native-source-serialization
+  formats:
+  - macos_endpoint_security
+  summary: Retains shared freezer-validated immutable object/array tags without a second Pydantic union
+    coercion, preserving empty nested entitlement objects on the native wire.

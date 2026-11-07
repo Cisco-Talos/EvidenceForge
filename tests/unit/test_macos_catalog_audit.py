@@ -34,7 +34,7 @@ def test_mac_catalog_audit_covers_original_entries_and_admitted_variants() -> No
             assert decision["availability"] == "supported"
 
 
-def test_catalog_only_native_services_do_not_become_user_apps_or_root_boot_processes() -> None:
+def test_native_service_audit_distinguishes_only_the_two_qualified_residents() -> None:
     root = Path(__file__).resolve().parents[2]
     catalog = yaml.safe_load(
         (root / "src/evidenceforge/config/activity/application_catalog.yaml").read_text()
@@ -46,11 +46,14 @@ def test_catalog_only_native_services_do_not_become_user_apps_or_root_boot_proce
     assert len(audit["applications"]) == 18
     for entry in audit["applications"]:
         app = apps[entry["id"]]
-        assert app["categories"] == ["macos_service"]
+        resident = entry["id"] in {"macos-cfprefsd", "macos-launchservicesd"}
+        assert app["categories"] == (
+            ["macos_service", "macos_resident"] if resident else ["macos_service"]
+        )
+        assert entry["behavior"] == ("preexisting_root_resident" if resident else "catalog_only")
         assert app["personas"] == []
         assert app["platforms"]["macos"]["image_path"] == entry["image_path"]
         assert app["platforms"]["macos"]["deployment"]["architectures"] == ["arm64"]
-        assert entry["behavior"] == "catalog_only"
     assert not get_apps_for_persona("default", "macos", category="macos_service")
 
 

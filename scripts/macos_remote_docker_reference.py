@@ -16,7 +16,6 @@ import json
 import os
 import platform
 import plistlib
-import pwd
 import selectors
 import subprocess
 import sys
@@ -25,6 +24,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pwd
+
+
+def _current_account() -> pwd.struct_passwd:
+    """Read the native account only when a Mac collection operation needs it."""
+    import pwd
+
+    return pwd.getpwuid(os.getuid())
 
 
 def graph_module() -> ModuleType:
@@ -143,7 +153,7 @@ def installed_images(kit: Path) -> list[dict]:
 
 def cli_arguments(work: Path) -> list[str]:
     """Select the known local Desktop socket, independently of active contexts."""
-    socket = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker/run/docker.sock"
+    socket = Path(_current_account().pw_dir) / ".docker/run/docker.sock"
     return [str(CLI), "--host", "unix://" + str(socket), "--config", str(work / "cli-config")]
 
 

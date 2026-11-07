@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 prerelease published and verified; stable target 2.2.0
+**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and release validation underway; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 
@@ -99,21 +99,27 @@ without turning `TODO.md` back into a high-conflict work journal.
   Current Mac qualification evidence and remaining assumptions are tracked in the
   [catalog worklog](docs/worklog/2026-11-07-macos-catalog-qualification.md).
 
-- [ ] **P1 — Broaden Mac background/helper populations:** Follow the bounded
-  [research sequence](docs/design/macos-workstation-feasibility/background-process-research.md):
-  resident browser/helper ownership, a small shared OS service set, one independently
-  qualified Electron-family app, then a scenario-relevant sync/updater family.
-  Distinguish catalog presence from current native qualification and preserve complete
-  process coverage. Execution and evidence belong in the
-  [follow-through worklog](docs/worklog/2026-11-06-macos-realism-follow-through.md).
+- [x] **P1 — Bounded Mac background/helper expansion:** Shared pre-window root
+  cfprefsd/launchservicesd and qualified VS Code main/helpers now use canonical
+  ownership and recovery. Browser instance ownership and process/network attribution
+  are repaired. Docker Desktop and broader helper populations remain explicitly
+  deferred; additional installations are not required for this release. See the
+  [research scope](docs/design/macos-workstation-feasibility/background-process-research.md)
+  and [follow-through worklog](docs/worklog/2026-11-06-macos-realism-follow-through.md).
 
-- [ ] **P1 — Qualify bounded native Mac filesystem telemetry:** Use the planned
-  second macOS 27.x SSH test host for controlled create, rename/replacement,
-  unlink and modified-close references. Preserve canonical process/file identity
-  across eCAR and native sources; admit only reference-supported operations and
-  target profiles. Collection setup, the finite matrix and implementation sequence
-  belong in the same follow-through worklog. Broader reads, memory mapping and
-  filesystem artifacts remain separate scope.
+- [x] **P1 — Bounded native Mac filesystem integration:** Controlled create,
+  modified-close, rename/replacement and unlink references now drive canonical
+  file/process identity and native/eCAR rendering, including positive VS Code save
+  activity and exact recovery/filter tests. Broader reads, mapping and filesystem
+  artifacts remain outside scope. See the same follow-through worklog.
+
+- [ ] **P2 — Recalibrate Mac-inclusive memory forecasts:** Compare forecasts with
+  retained measurements of Mac native/process/helper workloads, including peak live
+  process-tree RSS and checkpoint hydration. The bounded 26-hour three-host probe
+  reaches about 320 MiB, slightly above its 314 MiB upper estimate; the earlier
+  six-host MacOS-test run showed a larger miss. Improve per-family budgeting using
+  representative measured inputs; do not present forecast ranges as hard capacity
+  guarantees. See the [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
 
 - [x] **P0 — Native Mac mounted-SMB helper coverage:** Mounted-share helpers now use
   the supported native process lifecycle. The fixed Mac-inclusive assessment keeps

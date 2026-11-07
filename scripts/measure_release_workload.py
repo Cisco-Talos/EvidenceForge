@@ -101,7 +101,10 @@ def main() -> None:
                             _directory_allocated_bytes(bundle),
                         )
                         next_disk = now + report.disk_sample_seconds
-                    if suspend and not requested and (store.workspace / "controller.json").exists():
+                    if suspend and not requested and store.index_path.exists():
+                        # Immediate suspension forces an hour-one checkpoint.
+                        # Wait for the first cadence checkpoint before measuring
+                        # the retained state of this longer workload.
                         request_suspension(store)
                         requested = True
                     time.sleep(report.rss_sample_seconds)
@@ -175,8 +178,8 @@ def main() -> None:
         json.dumps(
             {
                 "formats": manifest["formats"],
-                "seed": manifest.get("seed"),
-                "target": manifest.get("target"),
+                "seed": manifest["generation_seed"],
+                "target": manifest["output_target"],
             }
         )
     )

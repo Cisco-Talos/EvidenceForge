@@ -259,7 +259,10 @@ def test_process_browser_agent_consumes_loaded_release_version(
         assert "rv:126.0" in first
 
 
-def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> None:
+@pytest.mark.parametrize("explicit_header", [False, True])
+def test_browser_process_defaults_are_stable_and_explicit_headers_survive(
+    explicit_header: bool,
+) -> None:
     """Authoritative-PID rendering projects one stable version from its browser owner."""
     generator, emitters = _generator(
         [
@@ -309,7 +312,9 @@ def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> No
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; "
                     f"rv:{version}) Gecko/20100101 Firefox/{version}"
-                ),
+                )
+                if explicit_header
+                else "",
                 status_code=200,
                 response_body_len=5000,
             ),
@@ -320,8 +325,10 @@ def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> No
         for call in emitters["zeek_http"].emit.call_args_list
         if call.args[0].protocol.http is not None
     }
-    assert len(user_agents) == 1
-    assert "Firefox/" in next(iter(user_agents))
+    assert len(user_agents) == (2 if explicit_header else 1)
+    assert all("Firefox/" in user_agent for user_agent in user_agents)
+    if explicit_header:
+        assert {agent.split("Firefox/")[1] for agent in user_agents} == {"120.0", "121.0"}
 
 
 def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
@@ -709,7 +716,7 @@ def test_build_proxy_context_preserves_known_absent_http_user_agent():
     assert proxy_context.user_agent == ""
 
 
-def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
+def test_build_proxy_context_preserves_explicit_service_user_agent():
     generator = ActivityGenerator(StateManager(), {})
     domain_controller = System(
         hostname="DC-01",
@@ -741,10 +748,7 @@ def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
             method="GET",
             host="api.westbridge-services.net",
             uri="/api/v2/checkin",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "Chrome/121.0.0.0 Safari/537.36"
-            ),
+            user_agent="Go-http-client/1.1",
             response_body_len=4096,
         ),
         explicit_mode=True,
@@ -1559,8 +1563,8 @@ class TestExplicitProxyVisibility:
         assert client_event.process is None
         assert client_event.network.initiating_pid == -1
 
-    def test_explicit_proxy_uses_process_bound_browser_agent(self) -> None:
-        """Proxy delegation cannot replace one browser process with request-local versions."""
+    def test_explicit_proxy_preserves_explicit_browser_headers(self) -> None:
+        """Proxy delegation preserves action-owned headers and their byte budgets."""
         generator, emitters = _generator([])
         user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
         workstation = generator._ip_to_system["10.0.1.10"]
@@ -1609,9 +1613,8 @@ class TestExplicitProxyVisibility:
             for call in emitters["proxy_access"].emit.call_args_list
         ]
         assert len(agents) == 2
-        assert agents[0] == agents[1]
+        assert agents == ["Firefox/119.0", "Firefox/121.0"]
         assert "Firefox/" in agents[0]
-        assert agents[0] not in {"Firefox/119.0", "Firefox/121.0"}
 
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,

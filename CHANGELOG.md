@@ -52,6 +52,8 @@ Studio acceptance remain separate release steps.
   attribution and task pacing. Route remaining Mac/baseline timing samples through
   semantic timing scopes without increasing the temporal RNG inventory budget.
   Preserve positive helper and complete SSH lifecycle assertions in extended tests.
+- Preserve nested native entitlement object/array types through wire validation and
+  make Mac reference-tool imports portable to Windows test collection.
 - Repair mixed-fleet identity and protocol consistency, passive histories, Mac
   query lifetimes, process completion and interactive-only shell history
   (`42d6440a`, `e30c1875`, `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).

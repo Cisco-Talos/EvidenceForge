@@ -13,7 +13,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import pwd
 import shlex
 import shutil
 import subprocess
@@ -25,9 +24,19 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, ValidationError
+
+if TYPE_CHECKING:
+    import pwd
+
+
+def _current_account() -> pwd.struct_passwd:
+    """Read the native account only when a Mac collection operation needs it."""
+    import pwd
+
+    return pwd.getpwuid(os.getuid())
 
 
 def _support() -> ModuleType:
@@ -1110,7 +1119,7 @@ def setup() -> Report:
     reference._command(
         ["/usr/bin/codesign", "--force", "--sign", "-", str(root / "ssh-marker")], root
     )
-    account = pwd.getpwuid(os.getuid())
+    account = _current_account()
     mode, experiment_digest = _experiment(root)
     manifest = Manifest(
         os_version=version,

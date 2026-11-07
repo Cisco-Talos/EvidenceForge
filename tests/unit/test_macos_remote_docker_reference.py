@@ -60,7 +60,7 @@ def test_container_inventory_rejects_every_nonempty_result() -> None:
 def test_cli_uses_explicit_local_socket_and_fresh_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(kit.pwd, "getpwuid", lambda _: SimpleNamespace(pw_dir="/Users/invented"))
+    monkeypatch.setattr(kit, "_current_account", lambda: SimpleNamespace(pw_dir="/Users/invented"))
     args = kit.cli_arguments(tmp_path)
     assert args[1:] == [
         "--host",
