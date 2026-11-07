@@ -9,6 +9,7 @@ from typing import get_args
 import pytest
 from scripts import macos_ssh_unified_review as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_ssh_startup_reference import _CANARY
 from tests.unit.test_macos_ssh_startup_review import _saved
 from tests.unit.test_macos_ssh_unified_reference import SECRET, _ulf, _windows
@@ -195,6 +196,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, kit.Expected]:
     return root, kit.Expected(code=code, unified_code=unified_hash)
 
 
+@requires_posix_reference
 def test_verified_review_preserves_all_files_and_rebinds_every_stored_row(tmp_path: Path) -> None:
     root, expected = _fixture(tmp_path)
     before = {
@@ -217,6 +219,7 @@ def test_verified_review_preserves_all_files_and_rebinds_every_stored_row(tmp_pa
     assert _CANARY not in result.model_dump_json() and SECRET not in result.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "damage",
     ["support", "provenance", "controls", "client", "tree", "binding", "count", "ring", "symlink"],
@@ -263,6 +266,7 @@ def test_changed_or_out_of_scope_inputs_fail_before_any_result(tmp_path: Path, d
         kit.review_existing(root, expected)
 
 
+@requires_posix_reference
 def test_preparation_does_not_open_an_existing_capture(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "reviewer")
     assert (root / "private_ssh_ulf_review.py").is_file()
@@ -274,6 +278,7 @@ def test_preparation_does_not_open_an_existing_capture(tmp_path: Path) -> None:
     assert not list(root.glob("run-*")) and not list(root.glob("*LOCK"))
 
 
+@requires_posix_reference
 def test_cli_never_exposes_validator_or_filesystem_error_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:

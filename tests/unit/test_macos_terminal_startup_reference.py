@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_terminal_startup_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
 
 _CANARY = "INVENTED_PRIVATE_TERMINAL_CANARY"
@@ -241,6 +242,7 @@ def test_version_one_fixed_report_remains_readable_without_a_step_label() -> Non
     assert restored.kit_version == 1 and restored.error == "IO" and restored.step == "INPUT"
 
 
+@requires_posix_reference
 def test_prepare_copies_only_code_and_instructions(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "prepared")
     assert {path.name for path in root.iterdir()} == {*kit.CODE, "PRIVATE-RUN.md"}
@@ -249,6 +251,7 @@ def test_prepare_copies_only_code_and_instructions(tmp_path: Path) -> None:
     assert not (root / "SETUP.json").exists()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("system_owned", [False, True])
 def test_installed_app_accepts_normal_permissions_without_weakening_private_reader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system_owned: bool
@@ -283,6 +286,7 @@ def test_installed_app_accepts_normal_permissions_without_weakening_private_read
         kit.reference._image(app)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("mode", [0o775, 0o777])
 def test_installed_app_rejects_other_writers(tmp_path: Path, mode: int) -> None:
     app = tmp_path / "invented-app"
@@ -292,6 +296,7 @@ def test_installed_app_rejects_other_writers(tmp_path: Path, mode: int) -> None:
         kit._installed_image(app)
 
 
+@requires_posix_reference
 def test_installed_app_rejects_symlinks_growth_and_oversized_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +328,7 @@ def test_installed_app_rejects_symlinks_growth_and_oversized_files(
         kit._installed_image(app)
 
 
+@requires_posix_reference
 def test_installed_app_hashing_does_not_use_the_small_private_record_limit(tmp_path: Path) -> None:
     app = tmp_path / "invented-large-app"
     with app.open("wb") as stream:
@@ -332,6 +338,7 @@ def test_installed_app_hashing_does_not_use_the_small_private_record_limit(tmp_p
     assert len(image.sha256) == 64
 
 
+@requires_posix_reference
 def test_setup_and_verification_accept_an_installed_public_app_without_running_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -371,6 +378,7 @@ def test_setup_and_verification_accept_an_installed_public_app_without_running_c
     assert (failure.value.code, failure.value.step) == ("KIT_ALREADY_USED", "SETUP_LOCK")
 
 
+@requires_posix_reference
 def test_missing_setup_rejects_capture_before_platform_commands_or_collection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -412,6 +420,7 @@ def test_fixed_diagnostics_preserve_known_error_codes_without_messages(
     assert _CANARY not in str(failure.value)
 
 
+@requires_posix_reference
 def test_collector_failure_reports_cleanup_and_writes_no_native_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -436,6 +445,7 @@ def test_collector_failure_reports_cleanup_and_writes_no_native_rows(
     assert kit.Report.model_validate_json(saved.read_bytes()) == report
 
 
+@requires_posix_reference
 def test_successful_controller_writes_only_proved_rows_after_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

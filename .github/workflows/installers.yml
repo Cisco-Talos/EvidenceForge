@@ -99,15 +99,13 @@ jobs:
           uv run --no-sync pytest --no-cov --tb=short --durations=10
           --junitxml=windows-diagnostic.xml
           tests/integration/test_macos_history.py tests/integration/test_macos_launchd_guard.py
-          tests/unit/test_browser_instances.py tests/unit/test_external_parser_docs.py
-          tests/unit/test_macos_catalog_audit.py tests/unit/test_macos_chrome_generation.py
+          tests/unit/test_external_parser_docs.py tests/unit/test_macos_catalog_audit.py
           tests/unit/test_macos_chrome_reference.py tests/unit/test_macos_chrome_review.py
-          tests/unit/test_macos_filesystem_workload.py tests/unit/test_macos_finder_generation.py
           tests/unit/test_macos_gatekeeper_reference.py tests/unit/test_macos_gui_audit_reference.py
           tests/unit/test_macos_gui_launch_reference.py tests/unit/test_macos_launch_chain_reference.py
-          tests/unit/test_macos_launch_support.py tests/unit/test_macos_launchd_activation_control.py
+          tests/unit/test_macos_launchd_activation_control.py
           tests/unit/test_macos_launchd_cleanup_state.py tests/unit/test_macos_launchd_reference.py
-          tests/unit/test_macos_launchd_review.py tests/unit/test_macos_native_system_job.py
+          tests/unit/test_macos_launchd_review.py
           tests/unit/test_macos_reference_capture.py
           tests/unit/test_macos_reference_review.py
           tests/unit/test_macos_remote_docker_reference.py tests/unit/test_macos_remote_docker_review.py

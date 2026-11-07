@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from scripts import macos_remote_docker_review as review
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_remote_process_reference import ROOT
 from tests.unit.test_macos_remote_process_review import artifact_set as code_artifact_set
 from tests.unit.test_macos_remote_process_review import records
@@ -26,6 +27,7 @@ def docker_records() -> tuple[list[dict], list[dict], list[dict]]:
     return rows, images, controls
 
 
+@requires_posix_reference
 def test_native_graph_matches_application_control_and_linux_guest_stays_separate() -> None:
     rows, images, controls = docker_records()
     result = review.relationships(rows, images, ROOT, controls)
@@ -42,6 +44,7 @@ def test_native_graph_matches_application_control_and_linux_guest_stays_separate
     assert ROOT not in json.dumps(result)
 
 
+@requires_posix_reference
 def test_wrong_launch_object_cannot_become_a_positive_control() -> None:
     rows, images, controls = docker_records()
     controls[0]["pid"] += 1
@@ -50,6 +53,7 @@ def test_wrong_launch_object_cannot_become_a_positive_control() -> None:
     assert not result["launch_control_matches"] and not result["ordinary_exit_control"]
 
 
+@requires_posix_reference
 def test_native_signalled_exit_is_preserved_as_an_observation() -> None:
     rows, images, controls = docker_records()
     rows[-1]["event"]["exit"]["stat"] = 15
@@ -68,6 +72,7 @@ def test_unknown_manifest_role_cannot_escape_as_a_private_output_label() -> None
         review.relationships(rows, images, ROOT, controls)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("corruption", ["none", "code_hash", "public_file", "capture_failure"])
 def test_private_docker_artifacts_and_capture_provenance_are_checked(
     tmp_path: Path, corruption: str

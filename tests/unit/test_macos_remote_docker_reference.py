@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from scripts import macos_remote_docker_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_remote_process_reference import ROOT, experiment
 
 
@@ -57,6 +58,7 @@ def test_container_inventory_rejects_every_nonempty_result() -> None:
         kit.inventory_empty(b"x" * 65537)
 
 
+@requires_posix_reference
 def test_cli_uses_explicit_local_socket_and_fresh_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

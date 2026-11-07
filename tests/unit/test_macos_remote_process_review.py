@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from scripts import macos_remote_process_review as review
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _record
 from tests.unit.test_macos_remote_process_reference import ROOT, experiment
 
@@ -147,6 +148,7 @@ def artifact_set(tmp_path: Path) -> Path:
     return work
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["native_hash", "permissions", "missing_source", "nonce"])
 def test_artifact_authentication_rejects_tampering_and_incomplete_provenance(
     tmp_path: Path, damage: str

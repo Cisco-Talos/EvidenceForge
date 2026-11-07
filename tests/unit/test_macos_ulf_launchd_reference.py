@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 from scripts import macos_ulf_launchd_reference as kit
 
+from tests.support.platforms import requires_posix_reference
+
 NONCE = "a" * 32
 LABEL = "org.evidenceforge.reference.launchd." + NONCE
 SECRET = "invented-private-canary-do-not-export"
@@ -40,6 +42,7 @@ def _row(message: str) -> dict:
     }
 
 
+@requires_posix_reference
 def test_preparation_copies_only_public_code_without_native_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -110,6 +113,7 @@ def test_analysis_rejects_an_unrelated_record_and_excessive_retention() -> None:
         kit.analyze([_row(LABEL)] * 257, LABEL, kit.Report())
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("unsafe", ["symlink", "permissions", "extent"])
 def test_private_input_rejects_unsafe_files(tmp_path: Path, unsafe: str) -> None:
     target = tmp_path / "data"
@@ -127,6 +131,7 @@ def test_private_input_rejects_unsafe_files(tmp_path: Path, unsafe: str) -> None
         kit._read(target)
 
 
+@requires_posix_reference
 def test_report_only_reads_saved_fixed_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -144,6 +149,7 @@ def test_report_only_reads_saved_fixed_json(
     assert json.loads(capsys.readouterr().out)["stage"] == "COMPLETE"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "label_location,guard_output,guard_returncode,expected_status",
     [

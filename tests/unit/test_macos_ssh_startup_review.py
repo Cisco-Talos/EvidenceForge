@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_ssh_startup_review as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_ssh_startup_reference import _CANARY, _chain, _manifest
 
 
@@ -72,6 +73,7 @@ def _saved(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     return root, expected
 
 
+@requires_posix_reference
 def test_offline_review_is_read_only_exports_core_aliases_and_keeps_fork_only_children(
     tmp_path: Path,
 ) -> None:
@@ -102,6 +104,7 @@ def test_offline_review_is_read_only_exports_core_aliases_and_keeps_fork_only_ch
     assert report.live_queries == "NOT_PERFORMED" and report.writes == "NONE"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "damage",
     [
@@ -176,6 +179,7 @@ def test_public_argument_candidates_export_only_fixed_layout_labels(
     assert result == expected and _CANARY not in result
 
 
+@requires_posix_reference
 def test_personal_shell_startup_descendants_are_not_in_the_core_graph() -> None:
     rows = _chain()
     noise = deepcopy(rows[-5])
@@ -191,6 +195,7 @@ def test_personal_shell_startup_descendants_are_not_in_the_core_graph() -> None:
     assert _CANARY not in report.model_dump_json()
 
 
+@requires_posix_reference
 def test_preparation_copies_code_only_and_does_not_open_existing_kits(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "review")
     assert (root / "private_ssh_review.py").is_file()

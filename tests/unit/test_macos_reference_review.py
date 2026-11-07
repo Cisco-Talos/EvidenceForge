@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from scripts import macos_reference_review as kit
 
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_reference_capture import _experiment
 
 _SECRET = "INVENTED_PRIVATE_CANARY_never_export"
@@ -323,6 +324,7 @@ def test_private_name_mode_requires_both_explicit_flags_and_never_echoes_argumen
     assert kit.ReviewReport.model_validate_json(output.out).error == "INPUT"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("surface", ["stdin", "stdout"])
 def test_private_name_view_refuses_noninteractive_or_redirected_output_before_reading(
     surface: str,
@@ -345,6 +347,7 @@ def test_private_name_view_refuses_noninteractive_or_redirected_output_before_re
     assert kit.ReviewReport.model_validate_json(output.out).error == "INPUT"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "confirmation", ["NO", "local view", " LOCAL VIEW", "LOCAL VIEW ", _SECRET]
 )
@@ -369,6 +372,7 @@ def test_private_name_view_requires_exact_explicit_confirmation_before_reading(
     assert _SECRET not in output.out
 
 
+@requires_posix_reference
 def test_explicit_private_name_view_reads_only_two_invented_files_without_values_or_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -615,6 +619,7 @@ def test_identity_shapes_are_classified_without_normalization(form: str) -> None
     assert _SECRET not in report.model_dump_json()
 
 
+@requires_posix_reference
 def test_review_reads_only_two_files_without_writes_commands_or_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -651,6 +656,7 @@ def test_review_reads_only_two_files_without_writes_commands_or_network(
     assert before == after
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     ("change", "code"),
     [
@@ -709,6 +715,7 @@ def test_private_input_guards_are_bounded_and_fixed(tmp_path: Path, change: str,
     assert raised.value.code == code
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("kind", ["symlink", "fifo", "directory"])
 def test_nonregular_or_linked_inputs_are_never_read(tmp_path: Path, kind: str) -> None:
     run = _run(tmp_path)
@@ -724,6 +731,7 @@ def test_nonregular_or_linked_inputs_are_never_read(tmp_path: Path, kind: str) -
         kit.review(run)
 
 
+@requires_posix_reference
 def test_selected_report_and_headers_must_agree(tmp_path: Path) -> None:
     rows = _rows()
     rows[0]["version"] = 10
@@ -733,6 +741,7 @@ def test_selected_report_and_headers_must_agree(tmp_path: Path) -> None:
     assert report.message_shapes == "INCONCLUSIVE"
 
 
+@requires_posix_reference
 def test_prepare_stages_only_offline_code_and_instructions(tmp_path: Path) -> None:
     target = kit.prepare(tmp_path / "fresh-review-kit")
     assert {path.name for path in target.iterdir()} == {"private_review.py", "OFFLINE-REVIEW.md"}
@@ -761,6 +770,7 @@ def test_cli_errors_never_echo_paths_or_arguments(
     assert kit.ReviewReport.model_validate_json(output.out).error == "INPUT"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("failure", ["warning", "eof", "no_tty", "git", "empty"])
 def test_human_input_stays_hidden_and_local(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -830,6 +840,7 @@ def test_unexpected_exception_hook_never_formats_exception(
     assert not output.out
 
 
+@requires_posix_reference
 def test_human_cli_reviews_only_invented_run_and_exports_no_paths_or_digests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
