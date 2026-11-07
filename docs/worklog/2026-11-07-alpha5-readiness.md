@@ -424,3 +424,33 @@ manifest and source checksums are retained at
 The forecast calibration and 7.5 MiB scratch-retirement P2 items remain explicit.
 This completes the bounded resource measurement, not general scalability or Studio
 interactive acceptance. No tag, publication or dev integration PR is authorized.
+
+
+Final repaired-source validation snapshot is
+`63df4751c2b35b946e6713b1ce212338b51631e7` on
+`codex/alpha5-final-validation-20261107`:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42412964229 .
+It includes the repaired runtime, evaluator, current fixtures, Windows POSIX-API
+mock seams and revised CI budgets. All three preview builds and every release
+CI/slow gate are requested on that exact commit. A full final local macOS routine
+pass runs separately with normal native process inspection and loopback access.
+No tag/publication/main/dev/PR change is part of this validation snapshot.
+
+
+### Root cause of routine gate timeouts
+
+The finalized Linux coverage log shows two rejection cases expanded 1 MiB/600 KiB
+string payloads into node IDs (1,048,732- and 2,457,756-character status lines). Each
+status transition stalled about 1,012 seconds; together they consumed roughly 34
+minutes. The native binding module's full 39 cases pass in 1.36 seconds locally
+with short explicit IDs. Inputs and assertions are unchanged. An AST audit found
+three more unlabeled 64 KiB argument/environment pools; all four pools now use
+semantic case names. Their full 94 cases pass. This addresses the logging root
+cause rather than relying only on increased budgets.
+
+The older Linux coverage job reached 44% with no failures before its 60-minute
+limit; it is not a coverage pass. The initial final Mac routine worker was
+interrupted deliberately before those large-ID cases and is restarted with the
+bounded names. The runtime/measurement source is unchanged from 63df4751.
+The superseded 0902 validation run was explicitly force-cancelled to release the
+reusable CI concurrency slot; cancelled results are never treated as passes.

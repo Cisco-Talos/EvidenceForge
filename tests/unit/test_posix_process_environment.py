@@ -78,6 +78,7 @@ def test_ordered_environment_preserves_unknown_empty_duplicates_and_literals(
 @pytest.mark.parametrize(
     "environment",
     [["A=1"], {"A": "1"}, (True,), ("A=bad\x00value",), ("A=1",) * 257, ("A=" + "x" * 65536,)],
+    ids=["list", "mapping", "boolean", "nul", "too-many-entries", "oversized-entry"],
 )
 def test_malformed_environment_rejects_before_allocation(environment: object) -> None:
     state = StateManager()

@@ -63,6 +63,7 @@ def test_explicit_arguments_preserve_empty_whitespace_unicode_and_literal_shell_
 @pytest.mark.parametrize(
     "arguments",
     [(), ("",), ("zero", "bad\x00value"), ["zero"], (True,), ("a",) * 257, ("a" * 65536,)],
+    ids=["empty", "empty-zero", "nul", "list", "boolean", "too-many-entries", "oversized-entry"],
 )
 def test_malformed_or_oversized_arguments_fail_before_state_allocation(arguments: object) -> None:
     state = StateManager()

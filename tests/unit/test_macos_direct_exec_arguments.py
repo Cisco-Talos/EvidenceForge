@@ -43,6 +43,18 @@ def test_direct_catalog_arguments_preserve_literal_values(
         "/usr/bin/example\0",
         "/usr/bin/example " + "x" * 65536,
     ],
+    ids=[
+        "expansion",
+        "pipeline",
+        "redirect",
+        "assignment",
+        "substitution",
+        "unclosed-quote",
+        "empty",
+        "different-image",
+        "nul",
+        "oversized",
+    ],
 )
 def test_direct_catalog_arguments_reject_shell_semantics_or_unbound_images(command: str) -> None:
     with pytest.raises(StateError):
