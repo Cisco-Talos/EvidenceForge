@@ -14,10 +14,19 @@ on:
         default: false
   workflow_dispatch:
     inputs:
+      remaining-only:
+        description: Run full Windows routine and Linux coverage checks only
+        type: boolean
+        default: false
       windows-diagnostic:
         description: Run focused Windows readiness diagnostics only
         type: boolean
         default: false
+      diagnostic-os:
+        description: Host for focused reference-kit diagnostics
+        type: choice
+        options: [windows-latest, ubuntu-latest]
+        default: windows-latest
       platform:
         description: Native installer to build for testing (never publishes)
         type: choice
@@ -37,20 +46,20 @@ permissions:
 
 jobs:
   alpha-readiness-ci:
-    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic
+    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic && !inputs.remaining-only
     uses: ./.github/workflows/ci.yml
     with:
       source-ref: ${{ github.sha }}
       release-coverage: true
 
   alpha-readiness-slow:
-    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic
+    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic && !inputs.remaining-only
     uses: ./.github/workflows/release-slow.yml
     with:
       source-ref: ${{ github.sha }}
 
   plan:
-    if: ${{ !inputs.windows-diagnostic }}
+    if: ${{ !inputs.windows-diagnostic && !inputs.remaining-only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -77,9 +86,59 @@ jobs:
               print("matrix=" + json.dumps({"include": matrix}), file=output)
           PY
 
+  remaining-tests:
+    if: github.event_name == 'workflow_dispatch' && inputs.remaining-only
+    name: Final routine and coverage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            timeout: 120
+          - os: windows-latest
+            timeout: 90
+    steps:
+      - name: Preserve repository bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-extras
+      - name: Run full Linux release coverage gate
+        if: runner.os == 'Linux'
+        run: >-
+          uv run --no-sync pytest --durations=20 --tb=short
+          --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+          --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+          --junitxml=remaining-tests.xml
+      - name: Run full Windows routine gate
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --no-sync pytest --no-cov --durations=20 --tb=short
+          --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+          --junitxml=remaining-tests.xml
+      - name: Retain final check reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: final-routine-coverage-${{ matrix.os }}
+          path: |
+            remaining-tests.xml
+            coverage.xml
+          if-no-files-found: warn
+
   windows-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.windows-diagnostic
-    runs-on: windows-latest
+    runs-on: ${{ inputs.diagnostic-os || 'windows-latest' }}
     timeout-minutes: 30
     steps:
       - name: Preserve repository bytes
@@ -97,7 +156,7 @@ jobs:
       - name: Run focused portability diagnostics
         run: >-
           uv run --no-sync pytest --no-cov --tb=short --durations=10
-          --junitxml=windows-diagnostic.xml
+          --junitxml=reference-diagnostic.xml
           tests/integration/test_macos_history.py tests/integration/test_macos_launchd_guard.py
           tests/unit/test_external_parser_docs.py tests/unit/test_macos_catalog_audit.py
           tests/unit/test_macos_chrome_reference.py tests/unit/test_macos_chrome_review.py
@@ -120,8 +179,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-readiness-diagnostic
-          path: windows-diagnostic.xml
+          name: reference-readiness-diagnostic-${{ runner.os }}
+          path: reference-diagnostic.xml
           if-no-files-found: warn
 
   build:
