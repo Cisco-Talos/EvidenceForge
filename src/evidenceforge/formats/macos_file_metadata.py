@@ -7,7 +7,10 @@ from evidenceforge.events.artifact_placement import MacosRuntimeFilePlacementObs
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
-from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
+from evidenceforge.events.macos_execution_directory import (
+    MacosExecutionDirectory,
+    validate_macos_execution_directory,
+)
 from evidenceforge.events.macos_file import (
     MacosDirectoryMetadata,
     MacosFileMetadata,
@@ -41,6 +44,14 @@ def es_directory_at_execution(process: ProcessIdentity) -> ESFile:
     validate_macos_execution_directory(
         directory, hostname=process.hostname, observed_at=process.execution_started_at
     )
+    return es_file_from_directory_observation(directory)
+
+
+def es_file_from_directory_observation(directory: MacosExecutionDirectory) -> ESFile:
+    """Render exact directory facts shared by exec and filesystem observations."""
+    if type(directory) is not MacosExecutionDirectory:
+        raise ValueError("ES directory requires its exact canonical observation")
+    directory.__post_init__()
     metadata = MacosDirectoryMetadata.model_validate_json(directory.metadata.canonical_json())
     return _es_file(directory.native_path, metadata)
 

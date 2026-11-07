@@ -284,49 +284,26 @@ class IdentityLifecyclePlanner:
 
     def _process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         host = event.src_host or event.dst_host
-        if host is None:
+        if host is None or event.process is None or event.process.pid < 0:
             return None
-        if event.process is not None and event.process.pid >= 0:
-            if (
-                event.event_type not in _PROCESS_CLOSURE_TYPES
-                and self._state_manager.get_process(host.hostname, event.process.pid) is None
-            ):
-                return None
-            process = self._state_manager.get_process_identity(host.hostname, event.process.pid)
-            if process is not None:
-                return process
-        return None
+        if event.event_type in _PROCESS_CLOSURE_TYPES:
+            return self._state_manager.get_process_identity(host.hostname, event.process.pid)
+        return self._state_manager.get_process_identity_at(
+            host.hostname, event.process.pid, event.timestamp
+        )
 
     def _network_actor_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         if event.network is None or event.src_host is None or event.network.initiating_pid < 0:
             return None
-        if (
-            self._state_manager.get_process(
-                event.src_host.hostname,
-                event.network.initiating_pid,
-            )
-            is None
-        ):
-            return None
-        return self._state_manager.get_process_identity(
-            event.src_host.hostname,
-            event.network.initiating_pid,
+        return self._state_manager.get_process_identity_at(
+            event.src_host.hostname, event.network.initiating_pid, event.timestamp
         )
 
     def _network_target_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         if event.network is None or event.dst_host is None or event.network.responding_pid < 0:
             return None
-        if (
-            self._state_manager.get_process(
-                event.dst_host.hostname,
-                event.network.responding_pid,
-            )
-            is None
-        ):
-            return None
-        return self._state_manager.get_process_identity(
-            event.dst_host.hostname,
-            event.network.responding_pid,
+        return self._state_manager.get_process_identity_at(
+            event.dst_host.hostname, event.network.responding_pid, event.timestamp
         )
 
     def _target_process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:

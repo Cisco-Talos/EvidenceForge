@@ -1568,6 +1568,7 @@ class WorldPlanner:
         effective_persona: str | None = None,
         destination_hostname: str | None = None,
         application_ids: list[str] | None = None,
+        browser_intent: bool = False,
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
@@ -1580,6 +1581,8 @@ class WorldPlanner:
             application_ids: Exact application-catalog IDs compiled from a pack
                 application binding. When supplied, these replace the legacy
                 service-to-executable inference.
+            browser_intent: Restrict inferred ownership to installed browsers for
+                a browsing action. Explicit application bindings remain authoritative.
         """
         os_cat = self.world_model.hosts[system.hostname].os_category
         persona = (user.persona or "default").lower()
@@ -1613,7 +1616,22 @@ class WorldPlanner:
                     )
                 )
             else:
+                from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+                # The compiled POSIX executable index preserves case. The legacy
+                # inverse index folds every name, losing native Mac applications
+                # such as Google Chrome while accidentally retaining zoom.us.
                 compatible_executables = get_service_to_exes().get(service, ())
+                if deployment_platform == "macos":
+                    canonical_spellings = {
+                        executable.casefold(): executable
+                        for executable, mapping in get_exe_to_service().items()
+                        if mapping["service"] == service and mapping.get("ambient", True)
+                    }
+                    compatible_executables = [
+                        canonical_spellings.get(executable.casefold(), executable)
+                        for executable in compatible_executables
+                    ]
                 requested_ids: set[str] = set()
                 for executable in sorted(
                     set(compatible_executables),
@@ -1642,6 +1660,12 @@ class WorldPlanner:
                 descriptor = deployment_registry.application_descriptor_for_assignment(assignment)
                 image = deployment_registry.application_executable_for_assignment(assignment)
                 if descriptor is None or image is None:
+                    continue
+                if (
+                    browser_intent
+                    and not explicit_applications
+                    and "browser" not in descriptor.categories
+                ):
                     continue
                 if descriptor.executable.casefold() in _SHELL_EXES:
                     continue
@@ -1879,6 +1903,12 @@ class WorldPlanner:
             for exe in compatible_exes
             if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES and ambient_network_allowed(exe)
         ]
+        if browser_intent and not application_ids:
+            from evidenceforge.generation.activity.proxy_user_agents import (
+                _browser_family_for_process,
+            )
+
+            compatible_exes = [exe for exe in compatible_exes if _browser_family_for_process(exe)]
         if not compatible_exes:
             return -1
 

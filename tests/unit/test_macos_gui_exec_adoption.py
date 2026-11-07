@@ -584,8 +584,17 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
         system=_HOST.hostname,
         parent_pid=1,
         image="/usr/bin/eslogger",
-        command_line="/usr/bin/eslogger fork exec exit",
-        arguments=("/usr/bin/eslogger", "fork", "exec", "exit"),
+        command_line="/usr/bin/eslogger fork exec exit create close rename unlink",
+        arguments=(
+            "/usr/bin/eslogger",
+            "fork",
+            "exec",
+            "exit",
+            "create",
+            "close",
+            "rename",
+            "unlink",
+        ),
         username="root",
         integrity_level="System",
         os_category="macos",
@@ -744,6 +753,10 @@ def test_gui_exec_uses_native_v11_publication_without_fabricating_a_fork(
         assert {item.event_type: item.next_sequence for item in connection.event_counters} == {
             9: 1,
             11: 0,
+            12: 0,
+            13: 0,
+            25: 0,
+            32: 0,
             15: int(completed),
         }
     finally:

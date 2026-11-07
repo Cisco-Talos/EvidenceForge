@@ -362,6 +362,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             profile,
                             window_start=self.warmup_start_time,
                             window_end=self.end_time,
+                            state=self.state_manager,
+                            complete_launches=(
+                                self.scenario.macos_process_coverage == "complete"
+                                or self.scenario.macos_process_coverage is None
+                                and any(
+                                    entry.get("format") == "macos_endpoint_security"
+                                    for entry in self.scenario.output.logs
+                                )
+                            ),
                         )
                     self._macos_execution_metadata_ready = True
                 return self._macos_execution_metadata
@@ -1143,12 +1152,29 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.dispatcher.macos_es_ingress = MacosESIngress(
                 self.output_dir / ".eforge-es-ingress"
             )
-        # All process/file producers share the existing runtime owner when the
-        # scenario explicitly needs retained launch-item definitions.
-        if self.dispatcher.local_artifact_registry is None and any(
-            spec.type == "macos_launch_item"
-            for step in self.scenario.storyline
-            for spec in step.events
+        # Provision one shared artifact owner before Activity/checkpoint setup for
+        # supported document workloads and explicit retained launch-item definitions.
+        from evidenceforge.generation.activity.macos_execution_metadata import (
+            load_macos_execution_metadata_profile,
+        )
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        filesystem_profile = load_macos_execution_metadata_profile()
+        needs_filesystem = (
+            filesystem_profile is not None
+            and filesystem_profile.filesystem_workload is not None
+            and any(
+                select_macos_es_profile(system) is not None
+                for system in self.scenario.environment.systems
+            )
+        )
+        if self.dispatcher.local_artifact_registry is None and (
+            needs_filesystem
+            or any(
+                spec.type == "macos_launch_item"
+                for step in self.scenario.storyline
+                for spec in step.events
+            )
         ):
             from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
 
@@ -1224,6 +1250,22 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.dispatcher.bind_deployment_registry(self.deployment_registry)
         self.activity_generator.macos_execution_metadata = self.macos_execution_metadata
+        if (
+            self.macos_execution_metadata is not None
+            and self.macos_execution_metadata.complete_launches
+        ):
+            from evidenceforge.generation.macos_launch_support import macos_launch_issues
+
+            launch_issues = macos_launch_issues(
+                self.scenario, self.deployment_registry, self.macos_execution_metadata.profile
+            )
+            if launch_issues:
+                issue = launch_issues[0]
+                raise StateError(
+                    f"Unsupported native Mac launch on {issue.hostname} for {issue.username}: "
+                    f"{issue.image}: {', '.join(issue.issues)}. Repair installed metadata and "
+                    "canonical launch policy before generation."
+                )
 
         # Cache org CIDR networks for external IP exclusion
         import ipaddress as _ipa_core

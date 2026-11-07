@@ -13757,6 +13757,116 @@
         "tests/unit/test_macos_policy_refusal.py",
         "tests/integration/test_macos_policy_refusal.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "effect_provenance",
+            "file",
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/actions/macos_filesystem.py",
+          "line": 130,
+          "resolved_dynamically": true,
+          "scope": "MacosFilesystemActionBundle.prepare"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "effect_provenance",
+        "file",
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "file_close",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+        "classification": "single_canonical_path",
+        "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/generation/source_timing.py",
+          "kind": "comparison",
+          "line": 4955,
+          "scope": "SourceTimingPlanner._endpoint_event_source_key"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_filesystem_action.py",
+        "tests/unit/test_macos_vscode_generation.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "effect_provenance",
+            "file",
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/actions/macos_filesystem.py",
+          "line": 130,
+          "resolved_dynamically": true,
+          "scope": "MacosFilesystemActionBundle.prepare"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "effect_provenance",
+        "file",
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "file_rename",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+        "classification": "single_canonical_path",
+        "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/generation/source_timing.py",
+          "kind": "comparison",
+          "line": 4955,
+          "scope": "SourceTimingPlanner._endpoint_event_source_key"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_filesystem_action.py",
+        "tests/unit/test_macos_vscode_generation.py"
+      ]
     }
   ],
   "formats": [

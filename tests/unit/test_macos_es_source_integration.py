@@ -57,7 +57,16 @@ def test_engine_activates_same_canonical_collector_independent_of_output(
         pid = engine._system_pids["MAC-01"]["eslogger"]
         collector = engine.state_manager.get_process_identity("MAC-01", pid)
         assert collector.image == "/usr/bin/eslogger"
-        assert collector.arguments == ("/usr/bin/eslogger", "fork", "exec", "exit")
+        assert collector.arguments == (
+            "/usr/bin/eslogger",
+            "fork",
+            "exec",
+            "exit",
+            "create",
+            "close",
+            "rename",
+            "unlink",
+        )
         assert collector.credentials.effective_uid == 0
         assert collector.parent_pid == 1
         assert collector.executable_version is not None

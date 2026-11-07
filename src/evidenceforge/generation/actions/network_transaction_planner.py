@@ -2661,7 +2661,9 @@ class NetworkTransactionPlanner:
         this decision neither creates nor releases a process reservation.
         """
         executor = self._executor
-        resolved_process = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+        resolved_process = executor.state_manager.get_process_at(
+            resolved_source_system.hostname, pid, time
+        )
         drop_explicit_pid_without_inference = False
         if resolved_process and resolved_process.start_time and time < resolved_process.start_time:
             logger.debug(
@@ -2677,7 +2679,7 @@ class NetworkTransactionPlanner:
             pid = -1
             resolved_process = None
             drop_explicit_pid_without_inference = caller_supplied_pid
-        elif executor._process_termination_recorded(
+        elif resolved_process is None and executor._process_termination_recorded(
             resolved_source_system.hostname,
             pid,
             resolved_process.start_time if resolved_process is not None else None,
@@ -5060,6 +5062,7 @@ class NetworkTransactionPlanner:
             or event.network.initiating_pid <= 0
             or request_header_finalized
             or event.http.user_agent_known_absent
+            or event.http.user_agent
         ):
             return
         from evidenceforge.generation.activity.dns_registry import get_domain_tags

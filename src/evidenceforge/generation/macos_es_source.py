@@ -290,7 +290,10 @@ def _configuration_digest(profile: MacosEndpointSecurityProfile, timebase: MachT
     return hashlib.sha256(
         json.dumps(
             {
-                "source": profile.model_dump(mode="json"),
+                "source": profile.model_dump(
+                    mode="json",
+                    exclude={"file_operations"} if profile.file_operations is None else set(),
+                ),
                 "timebase": {"numerator": timebase.numerator, "denominator": timebase.denominator},
             },
             sort_keys=True,

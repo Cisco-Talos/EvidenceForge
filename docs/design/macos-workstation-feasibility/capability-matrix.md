@@ -1,25 +1,31 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-11-03, revision 377)
+## Current generation admission (2026-11-06, revision 474)
 
-This table describes current capabilities. The dated implementation history below
-retains earlier gates as history; it must not override this summary or the current
-[delivery results](../../../scenarios/macos-workstation-acceptance/REPORT.md).
+This table describes the current source tree, not capabilities already shipped in an older
+installer. The dated history below retains earlier gates; it does not override this summary.
+The [Mac guide](../../macos.md) is the public entry point; the
+[follow-through worklog](../../worklog/2026-11-06-macos-realism-follow-through.md) records
+implementation and verification. User acceptance and broad release gates remain open.
 
 | Area | Current supported scope | Explicit limit |
 | --- | --- | --- |
-| Generation target | Explicit macOS 27 arm64 workstation | All other unqualified Mac targets reject independently of output; historical decoding is separate. |
-| Complete process starts | Independent State/native census with actionable rejection, lossless collection and output/recovery equivalence | Bounded workload acceptance; arbitrary app/launch mechanisms are not implicitly qualified. Primary 33 forks/39 execs; positive-background companion 63/78, with 39 background execs. |
-| Native startup producers | Fresh Finder reference/Chrome, Apple Terminal, iTerm2 3.7.6, SSH client/non-PTY and PTY receiver/commands, selected root/system jobs | Existing-app new windows/restoration, Dock/Spotlight attribution, additional helpers and complex shell plans retain gates. |
-| ES events | v11 fork, exec and explicit known exit; exact signing/audit/job-control/argv/environment/FD ownership | Unknown facts are not padded; generic GUI/SSH terminal results remain unknown. Native file-event generation is not enabled by historical file-event decoders. |
-| Chrome | Fresh main and renderer, generic GPU and network helper roles with independent deployments | Not every auxiliary helper, exact private-build parity, browser IPC or helper-owned network attribution. |
-| Unified Log | Workspace-method entry, bounded ASP refusal, observed SSH PAM success and source-derived plain-key success through the qualified common logger | No generic app/service ULF. Launchd's final bounded capture passed controls/cleanup with zero rows; collection has ended and the source stays gated. VERBOSE SSH session messages remain gated under ordinary daemon verbosity. |
-| Other correlated evidence | eCAR, explicit Bash/zsh interactive history and eligible existing network/server sources | No Mac SMB server, native archives/APFS image, OpenBSM or validated native SIEM mapping. |
-| Acceptance | All 22 deterministic files match through combined exact resume; native ES/ULF filtering agrees; both authoritative evaluations pass | Original full ULF scope remains incomplete due to launchd qualification. No repeated collection/panel loop or general authenticity claim. |
+| Generation target | macOS 27 arm64 workstation | Other unqualified targets reject independently of output; decoding is separate. |
+| Complete process starts | Independent canonical/native census, actionable rejection, exact recovery/filter equivalence | Every eligible modeled fork/exec, not every process a real Mac would contain. |
+| Native startup | Qualified Finder mains, Terminal/iTerm2, selected Chrome/Code helpers, SSH clients/non-PTY/PTY receivers and commands, selected root jobs | Existing-app window/restoration, Dock/Spotlight, arbitrary helper graphs and complex shell plans remain gated. |
+| ES process | v11 fork/exec/known-exit with canonical signing/audit/job-control/argv/environment/FD facts | Unknown terminal outcomes remain explicit; selected orderly results are model policy. |
+| ES filesystem | v11 empty create, modified/unmodified unmapped close, same-directory rename/replacement, pre-removal unlink | Ordinary generation is a nominal live Code document workload; generic file effects, broad reads/mappings and APFS artifacts are not converted. |
+| Chrome | Main, renderer, generic GPU/network roles; resident reuse under the exact main | No dedicated-GPU/Crashpad/general helper/IPC or blanket exact-build claim. |
+| VS Code | Selected 1.143.0 main and generic GPU/network/shared-Node roles | Renderer, extension/watcher/agent/PTY trees remain gated. |
+| Shared OS residents | Pre-window root cfprefsd and launchservicesd inventory | No invented in-window native startup/exit or ULF; other principals/services remain separately qualified. |
+| Docker | Controlled Desktop references retained | Complete backend/helper/VM graph remains deferred; CLI presence does not establish Desktop/native admission. |
+| Unified Log | Workspace entry, bounded ASP refusal, observed PAM acceptance and source-derived plain-key acceptance | No general app/service, VERBOSE SSH or launchd ULF. Final launchd capture was valid-empty under the agreed stopping rule. |
+| Other evidence | eCAR, interactive Bash/zsh, eligible network and remote-server logs, mounted SMB client effects | No Mac SMB server, OpenBSM, native archives/APFS image or validated native SIEM mapping. |
+| Verification | Installed-CLI Mac smoke, positive filesystem CLI evaluation, exact checkpoint/resume and native-filter equivalence | Earlier delivery counts belong to their dated workloads. These checks do not close user acceptance, broad release gates or general authenticity claims. |
 
-The [finite delivery plan](endpoint-delivery-acceptance.md) and
-[current worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md) distinguish
-implemented families from unqualified sources and preserve the evidence basis.
+The [finite delivery plan](endpoint-delivery-acceptance.md) preserves prior scope decisions;
+its original full ULF target remains bounded by launchd qualification. No further open-ended
+collection or repeated assessment loop is implied.
 
 ## Historical generation-admission notes (through 2026-11-01)
 

@@ -22,8 +22,9 @@ from evidenceforge.models import System
     ["curl/8.7.1", "Microsoft-CryptoAPI/10.0", "Mozilla/5.0 Chrome/121.0", "Custom spoofed agent"],
 )
 @pytest.mark.parametrize("method", ["GET", "CONNECT", "POST"])
+@pytest.mark.parametrize("finalized", [False, True])
 def test_process_attribution_preserves_bundle_finalized_wire_header(
-    user_agent: str, method: str
+    user_agent: str, method: str, finalized: bool
 ) -> None:
     executor = SimpleNamespace(browser_user_agent_for_process=Mock(return_value="Other browser"))
     planner = NetworkTransactionPlanner(executor)
@@ -37,7 +38,7 @@ def test_process_attribution_preserves_bundle_finalized_wire_header(
         event=event,
         source_system=System(hostname="client", ip="10.0.0.1", os="Windows 11", type="workstation"),
         hostname="example.test",
-        request_header_finalized=True,
+        request_header_finalized=finalized,
     )
     assert event.http is http
     executor.browser_user_agent_for_process.assert_not_called()
@@ -111,6 +112,37 @@ def test_owner_browser_header_is_selected_before_proxy_wire_budget() -> None:
     assert context.user_agent == ua
     assert context.method == "CONNECT"
     assert context.cs_bytes >= len(ua) + len("example.com:443")
+
+
+@pytest.mark.parametrize(
+    "user_agent", ["Mozilla/5.0 (Windows NT 10.0) Firefox/158.0", "curl/8.7.1", ""]
+)
+def test_explicit_request_header_survives_host_and_domain_defaults(user_agent: str) -> None:
+    from evidenceforge.generation.activity import ActivityGenerator
+    from evidenceforge.generation.state_manager import StateManager
+
+    generator = ActivityGenerator(StateManager(), {})
+    source = System(hostname="client", ip="10.0.0.1", os="macOS 27", type="workstation")
+    proxy = System(
+        hostname="proxy", ip="10.0.0.2", os="Ubuntu 24.04", type="server", roles=["forward_proxy"]
+    )
+    context = generator._build_proxy_context(
+        src_ip=source.ip,
+        dst_ip="93.184.216.34",
+        dst_port=443,
+        service="ssl",
+        duration=2,
+        orig_bytes=1000,
+        resp_bytes=5000,
+        hostname="example.com",
+        source_system=source,
+        proxy_sys=proxy,
+        explicit_mode=True,
+        http=HttpContext(
+            host="example.com", user_agent=user_agent, user_agent_known_absent=not user_agent
+        ),
+    )
+    assert context.user_agent == user_agent
 
 
 @pytest.mark.parametrize(

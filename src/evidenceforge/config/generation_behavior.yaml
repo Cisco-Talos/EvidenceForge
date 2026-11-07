@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 471
+current_revision: 483
 history_start_revision: 1
-behavior_surface_sha256: 1b7a5f585d8e50a95ca53b6b7ddf76a5794070ae7505fb9a57bfbc318b8c0af3
+behavior_surface_sha256: ad287a0fe54ecb28b351a074e283bc5f8c9ea03a71564d6b1cb70bbb591652f6
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5226,3 +5226,170 @@ changes:
   - zeek_http
   summary: Retain historical browser classification when a frozen config predates the alias catalog; current
     catalogs remain data-driven and do not change.
+- revision: 472
+  id: workstation-application-lifecycle-follow-through
+  impact: material
+  domains:
+  - process-lifecycle
+  - application
+  - network
+  - native-wire-admission
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - bash_history
+  - zsh_history
+  - proxy
+  - zeek_http
+  summary: Use canonical task pacing, profile-scoped browser ownership and application network intent;
+    admit measured v11 create/close/rename/unlink decoding while keeping native file generation disabled.
+- revision: 473
+  id: bounded-macos-filesystem-and-shared-helpers
+  impact: material
+  domains:
+  - filesystem
+  - process-lifecycle
+  - application
+  - native-wire-admission
+  formats:
+  - ecar
+  - macos_endpoint_security
+  summary: Publish explicitly owned bounded file operations through the canonical recovery journal; qualify
+    Code helper roles and seed two shared root services before collection.
+- revision: 474
+  id: integrated-macos-document-filesystem-workload
+  impact: material
+  domains:
+  - filesystem
+  - process-lifecycle
+  - configuration
+  - checkpoint-recovery
+  formats:
+  - ecar
+  - macos_endpoint_security
+  summary: Drive bounded document activity through shared directory and inode state, retained file placements
+    and the canonical native filesystem publication journal.
+- revision: 475
+  id: macos-canonical-launch-qualification
+  impact: material
+  domains:
+  - process-lifecycle
+  - application-deployment
+  - baseline-activity
+  - native-process-metadata
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - macos_unified_log
+  - zsh_history
+  summary: Qualifies reachable installed launches before allocation, adds exact bounded GUI and command
+    metadata, preserves extended entitlement values, reuses Finder per session and isolates Mac filesystem
+    sampling from other baseline choices.
+- revision: 476
+  id: homebrew-ssh-version-command-completion
+  impact: localized
+  domains:
+  - process-command-completion
+  - native-process-exit
+  formats:
+  - ecar
+  - macos_endpoint_security
+  summary: Gives the exact installed Homebrew ssh -V invocation its declared natural status-zero completion
+    without certifying other SSH commands or changing activity selection.
+- revision: 477
+  id: browser-reuse-at-requested-lifetime-time
+  impact: material
+  domains:
+  - browser-instance-lifecycle
+  - historical-process-resolution
+  - network-process-attribution
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - windows_event_security
+  - windows_event_sysmon
+  summary: Resolves browser reuse against live and bounded retained execution identities at the requested
+    event time, preventing duplicate same-profile roots during out-of-order planning without reviving
+    a closed incarnation.
+- revision: 478
+  id: network-owner-shared-browser-lifetime-reuse
+  impact: material
+  domains:
+  - browser-instance-lifecycle
+  - network-process-attribution
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - windows_event_security
+  - windows_event_sysmon
+  summary: Routes inferred browser network owners through the shared profile and event-time reuse policy,
+    preserving exact source deadlines, independent-instance intent and helper ownership instead of duplicating
+    browser roots.
+- revision: 479
+  id: network-source-process-query-at-event-time
+  impact: material
+  domains:
+  - network-process-attribution
+  - historical-process-resolution
+  formats:
+  - ecar
+  - windows_event_security
+  - windows_event_sysmon
+  summary: Adds detached event-time process views and distinguishes future-recorded termination from a
+    process already closed at the connection time.
+- revision: 480
+  id: chronological-persona-browser-ownership
+  impact: material
+  domains:
+  - baseline-activity
+  - browser-instance-lifecycle
+  - network-process-attribution
+  - historical-process-resolution
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - windows_event_security
+  - windows_event_sysmon
+  - proxy
+  - zeek_http
+  - zeek_conn
+  summary: Plans persona traffic chronologically with scoped randomness, defers flexible work to existing
+    planned browsers while preserving fixed deadlines, and resolves network actors at occurrence time.
+- revision: 481
+  id: standard-macos-catalog-launch-qualification
+  impact: material
+  domains:
+  - application-deployment
+  - process-lifecycle
+  - native-process-metadata
+  - configuration
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - zsh_history
+  summary: Adds provisional desktop and installed CLI metadata, checks query candidates before allocation,
+    honors explicit shell ownership for bundled interpreters, and applies scoped command exec environment
+    defaults.
+- revision: 482
+  id: measured-macos-cli-startup-signing
+  impact: material
+  domains:
+  - native-process-metadata
+  - process-lifecycle
+  - configuration
+  formats:
+  - ecar
+  - macos_endpoint_security
+  summary: Uses repeated unprivileged startup signing snapshots for fifteen installed CLI/runtime images,
+    preserving their actual validation categories instead of inferring runtime flags from static signatures.
+- revision: 483
+  id: scoped-mac-and-baseline-timing-ownership
+  impact: material
+  domains:
+  - baseline-timing
+  - process-lifecycle
+  - macos-filesystem
+  - macos-system-job
+  formats: []
+  summary: Samples baseline dispatch, foreground lifetimes, Mac boot/helper/session phases and filesystem
+    work through semantic timing scopes; byte-size samplers remain separately bounded non-temporal operations.

@@ -73,7 +73,13 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "string_fields": {"default_http_policy"},
     },
     "activity/proxy_user_agents.yaml": {
-        "dict_fields": {"domain_overrides", "workstation", "server", "browser_process_families"},
+        "dict_fields": {
+            "domain_overrides",
+            "workstation",
+            "server",
+            "browser_process_families",
+            "browser_profile_roots",
+        },
     },
     "activity/beacon_profiles.yaml": {
         "dict_fields": {"profiles"},

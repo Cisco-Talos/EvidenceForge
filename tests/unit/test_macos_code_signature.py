@@ -173,7 +173,7 @@ def test_boolean_entitlements_are_detached_canonical_and_checkpoint_roundtrippab
         {"a": 2**63},
         {"a": -(2**63) - 1},
         {"a": None},
-        {"a": [1]},
+        {"a": [1, True]},
         {"a": [True]},
         {"a": {"nested": 1.0}},
         {"\0": True},
@@ -565,3 +565,26 @@ def test_packaged_terminal_signer_reaches_compiled_process_binary(scenarios_dir:
     assert terminal.code_signature.team_id is None
     assert terminal.code_signature.cdhash != terminal.digests.sha1
     assert registry.resolve_binary("SSH-TEST", terminal.key.artifact_name, "linux") is None
+
+
+def test_integer_arrays_and_large_property_objects_have_a_distinct_lossless_checkpoint_tag() -> (
+    None
+):
+    from evidenceforge.events.macos_entitlements import freeze_entitlements, native_entitlements
+
+    values = {f"key-{index}": True for index in range(177)}
+    values["nested"] = {"environments": [0, 2, 7]}
+    signature = MachOCodeSignature("test.safari-shape", None, "a" * 40, freeze_entitlements(values))
+    encoded = signature.serialized_values()
+    assert encoded[3][0] == "property-object-v2"
+    restored = MachOCodeSignature.from_serialized_values(json.loads(json.dumps(encoded)))
+    assert restored == signature
+    assert native_entitlements(restored.entitlements) == values
+    release = replace(_release(_application()), code_signature=signature)
+    assert _unpack_binary_release(_pack_binary_release(release)) == release
+    with pytest.raises(ValueError, match="representation tag"):
+        MachOCodeSignature.from_serialized_values((*encoded[:3], ("property-object-v1", values)))
+    with pytest.raises(ValueError, match="0-256"):
+        freeze_entitlements({f"key-{index}": True for index in range(257)})
+    with pytest.raises(ValueError, match="exact"):
+        freeze_entitlements({"array": [1, True]})

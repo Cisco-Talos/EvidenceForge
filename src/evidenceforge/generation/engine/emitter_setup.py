@@ -1192,14 +1192,50 @@ class EmitterSetupMixin:
     ) -> _BootHostSpec:
         """Build the Mac boot forest from the effective application catalog."""
         from evidenceforge.generation.activity.application_catalog import load_catalog
+        from evidenceforge.generation.activity.timing_profiles import get_timing_window
+        from evidenceforge.generation.timing import (
+            ConstantDistribution,
+            TimingScope,
+            TriangularDistribution,
+        )
 
-        rng = random.Random(_stable_seed(f"macos_boot_sequence:{system.hostname}"))
+        window = get_timing_window(
+            "macos.boot_inventory_gap",
+            default_min_ms=50,
+            default_max_ms=1900,
+            default_position="after",
+        )
+
+        def boot_gap(alias: str) -> float:
+            distribution = (
+                ConstantDistribution(value=window.min_ms * 1000)
+                if window.min_ms == window.max_ms
+                else TriangularDistribution(
+                    minimum=window.min_ms * 1000,
+                    mode=(window.min_ms + (window.max_ms - window.min_ms) * 0.35) * 1000,
+                    maximum=window.max_ms * 1000,
+                )
+            )
+            return self.timing_runtime.sampler.sample_timedelta(
+                distribution,
+                relationship_key="macos.boot_inventory_gap",
+                scope=TimingScope(
+                    stable_id=f"{system.hostname}:{boot_time.isoformat() if boot_time else 'unknown'}",
+                    host=system.hostname,
+                    lifecycle_id=alias,
+                ),
+            ).total_seconds()
+
         deployment = getattr(self, "deployment_registry", None)
         elapsed = 0.0
         processes: list[_BootProcessSpec] = []
         for app in load_catalog()["applications"]:
-            if "macos_boot" not in app["categories"] or "macos" not in app["platforms"]:
+            if (
+                not {"macos_boot", "macos_resident"}.intersection(app["categories"])
+                or "macos" not in app["platforms"]
+            ):
                 continue
+            resident = "macos_resident" in app["categories"]
             platform = app["platforms"]["macos"]
             if len(platform["command_templates"]) != 1 or platform.get("command_parameter_pools"):
                 raise StateError("Mac boot requires one literal command template per process")
@@ -1214,7 +1250,17 @@ class EmitterSetupMixin:
             alias = app["id"].removeprefix("macos-")
             is_init = alias == "launchd"
             if not is_init:
-                elapsed += rng.uniform(0.05, 1.9)
+                elapsed += boot_gap(alias)
+            inventory_at = boot_time + timedelta(seconds=elapsed) if boot_time else None
+            collection_start = getattr(self, "warmup_start_time", None)
+            if (
+                resident
+                and isinstance(collection_start, datetime)
+                and (inventory_at is None or inventory_at >= collection_start)
+            ):
+                raise StateError(
+                    "Shared Mac resident inventory must precede collection; native startup is unqualified"
+                )
             binary = (
                 deployment.resolve_binary(
                     system.hostname, platform["image_path"], "macos", principal="root"
@@ -1259,7 +1305,7 @@ class EmitterSetupMixin:
                 )
                 if type(binary) is not BinaryReleaseIdentity or binary.mach_o_image is None:
                     raise StateError("Pre-existing root shell requires its installed native image")
-                elapsed += rng.uniform(0.05, 1.9)
+                elapsed += boot_gap("preexisting-root-shell")
                 started_at = boot_time + timedelta(seconds=elapsed) if boot_time else None
                 if started_at is None or started_at >= self.start_time:
                     raise StateError("Assumed root foothold must exist before collection starts")
@@ -1297,7 +1343,7 @@ class EmitterSetupMixin:
             )
             if type(binary) is not BinaryReleaseIdentity:
                 raise StateError("Native ES activation requires its exact deployed collector")
-            elapsed += rng.uniform(0.05, 1.9)
+            elapsed += boot_gap("eslogger")
             processes.append(
                 _BootProcessSpec(
                     alias="eslogger",

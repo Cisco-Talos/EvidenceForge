@@ -43,6 +43,34 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  baseline.user_activity_dispatch:
+    class: human_workflow
+    position: after
+    min_ms: 0
+    max_ms: 55000
+  macos.baseline.session_lead:
+    class: causal_prerequisite
+    position: before
+    min_ms: 12000
+    max_ms: 20000
+  macos.boot_inventory_gap:
+    class: causal_prerequisite
+    position: after
+    min_ms: 50
+    max_ms: 1900
+  baseline.browser_ready:
+    # Selected main-exec-to-navigation readiness, independent of collection delay.
+    class: human_workflow
+    position: after
+    min_ms: 200
+    max_ms: 4000
+  baseline.foreground_think:
+    # Selected human workflow model after the command's actual completion.
+    # Runtime is owned separately by the process bundle, never this pause.
+    class: human_workflow
+    position: after
+    min_ms: 800
+    max_ms: 18000
   posix.foreground_shell_resume:
     # Modeled foreground wait/wakeup/dispatch cost, not capture-calibrated latency.
     class: causal_prerequisite

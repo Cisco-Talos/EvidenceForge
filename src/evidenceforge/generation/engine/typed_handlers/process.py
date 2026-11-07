@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import random
+import shlex
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -405,6 +406,8 @@ def handle_process(
         if finder
         else {}
     )
+    if finder:
+        process_command_line = shlex.join(finder_arguments["arguments"])
     pid = self.activity_generator.generate_process(
         user=process_actor,
         system=system,

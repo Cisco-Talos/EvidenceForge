@@ -4957,6 +4957,8 @@ class SourceTimingPlanner:
             "file_create",
             "file_modify",
             "file_delete",
+            "file_rename",
+            "file_close",
             "registry_modify",
             "image_load",
             "process_access",

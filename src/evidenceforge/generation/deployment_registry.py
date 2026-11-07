@@ -90,6 +90,7 @@ from evidenceforge.events.content_identity import (
 )
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_file_operation import (
+    MacosFileOperationObservation,
     MacosFileRenameObservation,
     validate_macos_file_rename_records,
 )
@@ -9105,6 +9106,92 @@ class LocalArtifactVersionRegistry:
             validate_macos_file_rename_records(source, target, replacement=replacement)
         except ValueError as error:
             raise StateError(str(error)) from error
+
+    def validate_macos_file_operation(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+        observation: MacosFileOperationObservation,
+    ) -> None:
+        """Fence an explicit file occurrence against its exact placement transaction."""
+        if type(observation) is not MacosFileOperationObservation:
+            raise StateError("Mac filesystem commit requires exact canonical operation facts")
+        observation.__post_init__()
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            members = self._active_claimed_group_locked(transaction)
+            if any(member.claimed_by != get_ident() or member.committing for member in members):
+                raise StateError("Mac file operation requires its active claiming thread")
+            paths = {member.canonical_token.record.artifact.native_path for member in members}
+            owner = observation.source.artifact
+            for path in paths:
+                key = "\0".join((owner.hostname, owner.principal, "macos", path))
+                count = 0
+                for shard in self._shards:
+                    for candidate in shard.store.find_record_iter("execution_path", key):
+                        count += 1
+                        if count > 256:
+                            raise StateError("Mac file operation exceeds bounded placement history")
+                        placement = self.observe_version_placement(
+                            candidate.artifact.artifact_version_id
+                        )
+                        if (
+                            placement is None
+                            or placement.introduced_at is None
+                            or any(
+                                at is not None and at > observation.observed_at
+                                for at in (placement.introduced_at, placement.withdrawn_at)
+                            )
+                        ):
+                            raise StateError(
+                                "Mac file operations require known chronological placement history"
+                            )
+            if observation.operation == "rename":
+                rename = self._observe_macos_file_rename_locked(transaction)
+                if (
+                    rename.source != observation.source
+                    or rename.target != observation.target
+                    or rename.replacement != observation.replacement
+                    or rename.observed_at != observation.observed_at
+                ):
+                    raise StateError("Mac rename publication changed its canonical observation")
+                return
+            if len(members) != 1:
+                raise StateError("Mac file occurrence requires one exact artifact publication")
+            token = members[0].canonical_token
+            source = observation.source
+            artifact = source.artifact
+            if (
+                token.record != source
+                or token.observed_at != observation.observed_at
+                or token.withdraw_placement != (observation.operation == "unlink")
+            ):
+                raise StateError("Mac file occurrence changed its exact publication member")
+            current = self.resolve_record_for_execution_path(
+                artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+            )
+            expected = None if observation.operation == "create" else observation.previous or source
+            if current != expected:
+                raise StateError(
+                    "Mac file operation no longer names its expected current placement"
+                )
+            for other in self._prepared_reservations.values():
+                candidate = other.canonical_token.record.artifact
+                if other is not members[0] and (
+                    candidate.hostname == artifact.hostname
+                    and candidate.principal == artifact.principal
+                    and candidate.platform == artifact.platform
+                    and candidate.normalized_native_path == artifact.normalized_native_path
+                ):
+                    raise StateError("Mac file operation has a competing prepared placement")
+
+    def commit_macos_file_operation(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+        observation: MacosFileOperationObservation,
+    ) -> LocalArtifactPublicationGroupReceipt:
+        """Commit the validated file mutation under the shared registry placement fence."""
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self.validate_macos_file_operation(transaction, observation)
+            return transaction.commit_no_fail()
 
     def commit_macos_file_rename(
         self,

@@ -9,7 +9,7 @@ Contents: [sources](#select-sources-by-the-evidence-needed) ·
 [launch families](#supported-launch-families) · [SSH](#ssh-clients-receivers-and-commands) ·
 [system launch items](#explicit-system-launch-item-stages) ·
 [Unified Log and outcomes](#unified-log-families-and-policy-outcomes) ·
-[other evidence](#other-evidence-and-interpretation)
+[filesystem](#bounded-filesystem-telemetry) · [other evidence](#other-evidence-and-interpretation)
 
 The active generation target is **macOS 27, arm64, workstation**. Use existing system
 fields (`os`, optional `os_build`, `architecture`, `type`), user placement, software
@@ -25,7 +25,7 @@ processes, accounts or logs. No collector runs on that host during generation.
 
 | Source ID | Current generated evidence | Important boundary |
 | --- | --- | --- |
-| `macos_endpoint_security` | Message-v11 fork, exec and known exit records | The process-start source. Complete canonical metadata and eligible collection are required. |
+| `macos_endpoint_security` | Message-v11 fork, exec, known exit and bounded create/close/rename/unlink records | The process-start source. Complete canonical metadata and eligible collection are required. |
 | `macos_unified_log` | Loginwindow workspace-method entry, bounded ASP policy refusal, accepted SSH PAM/plain-public-key authentication | Selected message families, not a process inventory. Launching an app or service does not automatically produce ULF. |
 | `ecar` | Correlated process, credential, session, flow and file observations | Shared modeled endpoint facts; do not describe this as Apple's native ES export. |
 | `zsh_history` | Live interactive zsh command submissions | Extended incremental history, single-line ASCII, zero duration; submission does not prove command success or a child process. |
@@ -34,7 +34,8 @@ processes, accounts or logs. No collector runs on that host during generation.
 Existing network, firewall, IDS, proxy, mail and server sources describe Mac interactions
 only with the corresponding routing, deployment and sensor visibility. Windows Security/
 Sysmon and Linux syslog remain local to their actual owners. No OpenBSM, native logarchive,
-APFS image, general native filesystem-event or Mac SMB-server source is implemented.
+APFS image or Mac SMB-server source is implemented. Native file generation is limited to the
+qualified regular-file operation bundle and nominal document workload described below.
 
 Use `eforge info formats --json` to inspect the CLI actually being used. The current
 checkout exposes both native Mac format IDs above and `zsh_history`. Do not conclude
@@ -126,6 +127,17 @@ signer/entitlements. Crashpad, alerts, the dedicated GPU image, arbitrary helper
 IPC and helper-attributed connections remain outside this model. The private reference's
 installed release differed from the frozen catalog; exact build parity is not claimed.
 
+VS Code 1.143.0 has its independently qualified main plus generic GPU, network and shared
+Node helper roles. The shared Node role uses its own entrypoint and two distinct output pipes;
+do not reuse Chrome's renderer/seatbelt layout. Repeated activity reuses the exact live
+resident roles. Code renderer, extension/watcher/agent/PTY trees remain gated. Shared root
+`cfprefsd` and `launchservicesd` inventory is pre-window; it supplies no invented native
+startup/exit. Docker Desktop/backend/VM expansion remains deferred despite collected references.
+
+Ordinary browser reuse is scoped to host/user, executable and modeled/explicit user-data
+profile across supported OSes. Explicit fresh intent and distinct profiles stay distinct.
+A reused main does not acquire another startup helper tree.
+
 ## SSH clients, receivers and commands
 
 Use `ssh_session` on the receiver with the existing `source_ip` to identify a modeled
@@ -213,6 +225,29 @@ unqualified PAM/disconnect families, generic app ULF and launchd ULF remain gate
 final bounded launchd capture passed controls and cleanup but retained zero rows. The
 agreed collection sequence has ended; this is not proof of global absence and does not
 change ES coverage. No new capture or alternate diagnostic-file source is requested.
+
+## Bounded filesystem telemetry
+
+The current source profile adds native v11 create (13), close (12), rename (25) and
+unlink (32) alongside process events. The default bounded workload selects an actually live
+qualified Code main for nominal Documents activity: empty create before write, modified close,
+probabilistic same-directory atomic replacement and cleanup. The regular-file bundle also
+accepts explicit unmodified/unmapped-close facts. In-place modification preserves object/inode;
+rename preserves the source content/object while reporting the pre-existing destination when
+replacing a path. Rename/unlink use the reference-qualified pre-operation stat view.
+
+Canonical State and the shared artifact registry own volume/device/inode, content/file versions,
+current placement and changing directory stat. eCAR FILE CREATE/CLOSE/RENAME/DELETE and native
+output share these facts. The whole activity fits the live process/session; retries and exact
+resume preserve identities, counters and current placements. File rows do not change the
+process census or establish all-filesystem completeness.
+
+`macos_execution_metadata.yaml.filesystem_workload` configures eligible applications, paths,
+counts, sizes, timings, save/cleanup probabilities and nominal allocation. These values do
+not claim Code's measured save strategy or APFS allocation. No eligible live app means no
+workload. No new authored file event or automatic generic-file-effect, SMB, download or plist
+conversion is added. Broad reads, mappings, cross-volume moves and filesystem artifacts remain
+outside scope. See the repository's `docs/macos.md` and format reference for current limits.
 
 ## Other evidence and interpretation
 

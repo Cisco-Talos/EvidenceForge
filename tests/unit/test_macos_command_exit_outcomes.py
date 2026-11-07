@@ -25,7 +25,7 @@ from evidenceforge.generation.checkpoints.state_manager_head import _capture_hea
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import System, User
+from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng
 from tests.support.macos_ssh import macos_ssh_scenario
@@ -41,6 +41,16 @@ def _engine(
     chronological: bool = False,
 ) -> Iterator[tuple[GenerationEngine, System, User, ActiveSession]]:
     scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True)
+    # Exercise SSH/command lifecycles without admitting unrelated desktop apps.
+    raw = scenario.model_dump(mode="json")
+    raw["environment"]["deployment_overrides"] = [
+        {
+            "system": host.hostname,
+            "user_applications": [{"user": "test_user", "applications": ["macos-terminal", "ssh"]}],
+        }
+        for host in scenario.environment.systems
+    ]
+    scenario = Scenario.model_validate(raw)
     scenario.macos_process_coverage = "complete" if complete else "partial"
     scenario.output.logs = [{"format": "ecar"}] + (
         [{"format": "macos_endpoint_security"}] if native else []

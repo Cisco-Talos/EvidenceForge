@@ -174,6 +174,15 @@
       "classification": "single_canonical_path",
       "owner": "State POSIX membership patch, canonical occurrence helper and EventDispatcher exact projection",
       "assessment": "Internal membership changes retain exact before/after state and the actual changing actor. Dispatcher coverage requires the authenticated singleton State cohort; eCAR observation, collection omission and source recovery cannot redefine the action. Production boot/session/job composition remains unavailable."
+    },
+    {
+      "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+      "classification": "single_canonical_path",
+      "names": [
+        "file_close",
+        "file_rename"
+      ],
+      "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
     }
   ],
   "contexts": [
@@ -435,6 +444,14 @@
       "classification": "single_canonical_path",
       "owner": "OcspTransactionActionBundle",
       "assessment": "The bundle owns OCSP request/response planning and delegates transport to the network contract, but lacks an ActionAnchor and needs stronger direct contract tests."
+    },
+    {
+      "assessment": "The explicit-facts API publishes one actor activity patch, exact artifact members, effect provenance, timing and source ingress through the existing cohort journal. Automatic scenario/baseline producer integration remains open.",
+      "classification": "single_canonical_path",
+      "names": [
+        "MacosFilesystemActionBundle"
+      ],
+      "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
     }
   ],
   "formats": [

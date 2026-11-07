@@ -197,3 +197,185 @@ dictionary values with depth, node, entry and UTF-8 bounds. Prior narrower sourc
 profiles still reject nested objects. Canonical storage distinguishes empty objects
 from arrays, preserves Boolean versus integer identity at every depth, and uses a
 new explicit checkpoint tag without changing old flat encodings.
+
+## November 7 reachable-launch repair
+
+The launch-support query in `generation/macos_launch_support.py` combines exact
+compiled installation/binary identity with frozen launch and validation policy.
+Validation checks potentially selected baseline apps and installed authored targets
+before sampling; execution rechecks installed targets before process allocation.
+Selected output emitters do not determine this qualification. Explicit partial
+coverage retains the existing diagnostic path. Complete coverage never silently
+filters unsupported applications, substitutes another browser family or invents
+missing signing facts. Broader developer-tool metadata gaps now fail preflight;
+this repair does not qualify that entire catalog.
+
+Ordinary Finder activity uses its catalog-declared per-session singleton, with
+one canonical startup when first needed and reuse while that process remains live.
+This is a lazy desktop-process model, not measured login-start timing. Authored
+explicit process launches remain explicit; session closure and subsequent launches
+still use the existing lifecycle owners. Safari, Edge, Teams and Excel main launches
+use the existing bounded regular-GUI contract. No app helper graph, sandbox transition
+or app-specific Unified Log behavior is newly qualified.
+
+Bounded static inspection on the authorized second Mac (macOS 27.0.1, build 26A434,
+arm64) supplied Finder 27.0 and Safari 27.0.1 main-image signer/entitlement/slice facts.
+Executable SHA256 values are `5b2f4100170ca2ddf7fb738c2faeeeb3e56e622349328dd193965a8b4f6799b2`
+and `773bfd818b5b924d34a8749248203a6bab1c9af3b6aa8c2c93bef3ae6ce9dc79`, respectively.
+No personal logs, application data or ambient process capture was read.
+
+Public packages were downloaded into new owner-only temporary directories on that
+host, checked against Homebrew's published SHA256, and statically inspected without
+installation or executable launch. Edge's DMG was mounted read-only and detached;
+Teams/Excel PKGs were expanded without executing installer scripts. Homebrew bottles
+were extracted without pouring or running post-install actions.
+
+| Main executable | Inspected reference | Artifact SHA256 | Descriptor |
+| --- | --- | --- | --- |
+| Microsoft Edge | 157.0.4341.42 | `045d56a56c4ea29f31a60ad4afdcbd0c961b15da834c6b32b880ac11b682b516` | [Homebrew API](https://formulae.brew.sh/api/cask/microsoft-edge.json) |
+| MSTeams | 26289.204.5281.6363 | `393e25369198068c2715f3f32ad200de712a74d9184934c39ce1d5c42b39cc2c` | [Homebrew API](https://formulae.brew.sh/api/cask/microsoft-teams.json) |
+| Microsoft Excel | 16.114.4 | `ba9fbc27f3c33fcc4732bd9ce3538613fbe6c4faaf269a681e064d9d39dd257c` | [Homebrew API](https://formulae.brew.sh/api/cask/microsoft-excel.json) |
+| Homebrew ssh | 10.6p2, arm64_golden_gate | `c420fda22de5514ea105cf753099f41ff47a31fb2bb5ecd041e3debbe451373f` | [Homebrew API](https://formulae.brew.sh/api/formula/openssh.json) |
+| Homebrew nano | arm64_golden_gate bottle | `2791d87741b8f65529a08b22be01a73bbaf5a744521fa62699794c16601bd2e9` | [Homebrew API](https://formulae.brew.sh/api/formula/nano.json) |
+
+Descriptor URLs roll forward; the measured digests bind these inspections. Both
+Homebrew mains have ad-hoc signatures and verified absent entitlements. Their signing
+identifiers retain the existing release-owned UUID derivation. Apple's nano is a
+separate binary and is **not** the metadata source for `/opt/homebrew/bin/nano`.
+The catalog's pre-existing selected versions remain unchanged. As with the earlier
+GUI additions, these are explicit synthetic templates, not installed-build parity.
+Runtime flags/categories remain declared successful model outcomes, not measurements
+inferred from a static signature or a claim that native execution was collected.
+
+Safari's full dictionary has 177 top-level entries and two integer arrays. The
+version-two property-object capability retains those arrays as exact int64 values
+and raises the per-object entry bound to 256; depth, aggregate node/text and other
+bounds remain enforced. It has a new checkpoint encoding tag. Older source
+capabilities reject the extended shapes, and old signature encodings remain unchanged.
+Finder's 107-entry dictionary and nested objects are preserved separately. Unknown,
+verified absent and empty entitlements remain distinct. No dictionary is truncated.
+
+The nominal Code filesystem workload now samples from an independent stable stream
+scoped by generation seed, host and hour. It cannot consume the system-traffic stream
+and resample later application selection even when no eligible editor is active.
+
+The exact `/opt/homebrew/bin/ssh -V` completion is declared status zero through the
+existing command-completion policy. [Upstream OpenSSH's option handler](https://github.com/openssh/openssh-portable/blob/master/ssh.c)
+prints its version and exits zero for `-V`; no network session is opened by that
+option. This selector does not certify other SSH invocations or failed transports.
+
+
+## November 7 standard-persona catalog completion
+
+The user explicitly accepted provisional desktop metadata based on public research
+and existing knowledge, without installing IntelliJ IDEA, Sublime Text, Postman or
+Thunderbird. Their main images now select the existing regular-GUI owner. Bundle/
+signing vocabulary and team IDs are based on public installer configuration:
+
+| Application | Bundle/signing ID | Team ID | Public installer source |
+| --- | --- | --- | --- |
+| IntelliJ IDEA | `com.jetbrains.intellij` | `2ZEFAR8TH3` | [Installomator](https://github.com/Installomator/Installomator/blob/main/fragments/labels/jetbrainsintellijidea.sh) |
+| Sublime Text | `com.sublimetext.4` | `Z6D26JE4Y4` | [Installomator](https://github.com/Installomator/Installomator/blob/main/fragments/labels/sublimetext.sh) |
+| Postman | `com.postmanlabs.mac` | `H7H8Q7M5CK` | [Installomator](https://github.com/Installomator/Installomator/blob/main/fragments/labels/postman.sh) |
+| Thunderbird | `org.mozilla.thunderbird` | `43AQ936H96` | [Installomator](https://github.com/Installomator/Installomator/blob/main/fragments/labels/thunderbird.sh) |
+
+These four entitlement dictionaries, runtime flags and ordinary main-launch
+relationships are **selected provisional models**, not measured vendor-build facts.
+IntelliJ/Thunderbird select JIT, unsigned executable memory and library-validation
+exceptions; Postman selects the two executable-memory exceptions. Sublime selects
+an empty dictionary, which is a model choice, not verified absence. Public signing
+identities do not establish the exact entitlement sets. Their content hashes, UUIDs
+and code digests remain synthetic release identities. No new helper trees, sandbox
+transitions, app-specific ULF or full vendor-build parity are implied.
+
+The P2 whole-catalog audit in `TODO.md` requires specific installs and execution
+tests on Windows, Linux and macOS, including these provisional choices. The older
+reference-backed templates above keep their own evidence status; they are not
+relabelled as measured desktop installations by this increment.
+
+### Installed command-line and runtime references
+
+On the authorized macOS 27.0.1 arm64 reference host, Homebrew installed sevenzip,
+kubernetes-cli, make, vim, emacs, gcc, rust, dotnet, python@3.14, redis, openldap and
+powershell. Existing Git, Node and Docker Desktop's CLI were used in place. Homebrew
+auto-update/automatic cleanup were disabled; required dependencies were installed
+normally. No shell profiles, application accounts or credentials were changed,
+no containers were created, and no launchd service was enabled or started by the tests.
+
+The finite scratch experiment passes **37 controls**: 35 functional tests plus
+PowerShell's expected failure without DOTNET_ROOT and success with it. Tests cover
+7-Zip creation/integrity, an isolated Git repository, kubectl client information,
+editor batch writes, Make, C and Rust builds/execution, Node/npm, Python, pip,
+pytest in an isolated temporary virtual environment, .NET SDK/MSBuild/offline
+build, Docker CLI version, Redis/LDAP client versions and PowerShell arithmetic.
+The pytest environment is separate from the Homebrew-managed global Python site;
+the synthetic catalog still assumes the requested Python modules are available in
+its modeled deployment. That broader package/workspace state belongs to the P2 audit.
+
+Only the selected executables' static signer/entitlement/slice facts were read.
+No privileged native event capture was run. All signatures verify under strict
+checking except Python's enclosing app resource seal: ordinary strict verification
+reports `code has no resources but signature indicates they must be present`.
+A separate strict check ignoring bundle resources verifies the main executable,
+and the Python/pip/venv/pytest execution tests pass. This resource qualification is
+retained explicitly; neither the reference installation nor its signature was
+modified to make a check pass.
+
+| Executable | Inspected build / package | Executable SHA256 |
+| --- | --- | --- |
+| `7zip` | sevenzip 26.05 | `110c6bc1a5a36a0cdf91dfbf62154830e4bd1f6eba380bfc8348668236b623dd` |
+| `git` | git 2.56.0_1 | `40163333061f7223ecb604ed0f12988cfc8096d57ca8b1db006d410d4aeb700e` |
+| `docker` | Docker Desktop CLI (existing installation) | `e6bb967adc3e97c9a9027aa7a1b83691789630cb26a4bbcddd2e8353a8a89ea4` |
+| `kubectl` | kubernetes-cli 1.37.2 | `4d19946c0d0a567019bf81cd5a2820f2d8899fe7dcbcb8b4d0de4767ca50ab70` |
+| `make` | make 4.4.1 | `0672c75e5ea2153469ef2fdd14b518d4b6b4db704cc38130caa4c3267680d188` |
+| `vim` | vim 9.2.1302 | `2a2d312d233656c1d8e164d01b43f5efa36ad67c546406d1b636aa6007200cf5` |
+| `emacs` | emacs 31.1_1 | `36cd929f5f8c970efab5a7ac5e522e6d6ac6c14e51cbddebccae3fd1d6fb067a` |
+| `gcc` | gcc 16.2.0 | `e6e12f73dbc937615843ba4b4ed64955e50ef289e668896aa4f5437bc6617a80` |
+| `cargo` | rust 1.99.1 | `f6f1ae30e327d6ee1df89485871ec7a971d7c3bc34616fc8cd17ddded0489fbc` |
+| `dotnet` | dotnet 10.0.403 | `6787fad6f5c105dd96501a9bf62e0978dc35d9cb8ed318fcd39122fd8e426a86` |
+| `nodejs` | node 26.12.0 | `4d9aea129d56f18e6b3b48792aa5ba13f17dfc8c84d3a37841d14f54d59e1d1a` |
+| `python3` | python@3.14 3.14.10 | `e550ffe3966a0224068563a74dc26531c7d2ece6e522308bd9c9584c5fb75e55` |
+| `redis_cli` | redis 8.10.3 | `24f6e01653bc9d20d7fab3c30efadf485ce163304721e564abd9721cf30122e8` |
+| `ldapsearch` | openldap 2.7.2 | `335bf04741663aa91b160849651712eb7418f144b2110eaf71cd7841df323902` |
+| `powershell` | powershell 7.6.9_1 | `1e7dfb43e179cf95d5169565b1eaa66e9fe44d9183b614a818750684caf04d64` |
+
+Git/Vim/Emacs/Cargo/.NET/Node/Python/Redis/LDAP signing identifiers have a measured
+UUID component; the catalog uses its existing `{macho_uuid_hex}` substitution from
+the exact synthetic release identity. Fixed identifiers (`7zz`, `a.out`, `make`,
+`xgcc`, `apphost`) remain literal. Homebrew tools are ad-hoc signed; Docker's CLI
+retains its measured `docker` signing ID, team `9BNSXJN65R` and application-group
+entitlement. .NET's own measured entitlement dictionary is retained independently.
+
+The fifteen CLI/runtime startup flags and validation categories were then measured
+twice using unprivileged `csops` status/category queries on only the probe's own
+start-suspended children. Each child was resumed and reaped; all thirty version
+invocations exited zero, both snapshots agreed exactly, and no signing or security
+state was modified. Apple documents the read operations in
+[`codesign.h`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/codesign.h)
+and the start-suspended flag in
+[`spawn.h`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/spawn.h).
+This is startup-field evidence, not an Endpoint Security event capture or proof of
+every later runtime state.
+
+Measured flags are `0x22000201` for the ordinary ad-hoc group, `0x22020201`
+for 7-Zip/kubectl/Make/GCC, `0x22000205` for .NET and `0x22011311` for Docker.
+All categories are 10 except Docker's 6; none is a platform binary. These
+replace the initial inferred static-to-runtime policy for these fifteen images.
+The provisional desktop flags above remain explicit model choices. Selected catalog versions
+remain the pre-existing simulated releases; the reference builds above supply
+bounded templates and do not establish exact version parity. The P2 audit covers
+that remaining distinction and command/helper/completion semantics.
+
+Homebrew's `bin/pwsh` is a shell wrapper, not the native image. The catalog now
+addresses `/opt/homebrew/opt/powershell/libexec/pwsh` directly, with the required
+`DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec` default owned by canonical execution
+metadata. It preserves supplied environment values and does not fill an unknown
+environment. This normalizes the wrapper's target/default into the modeled launch;
+it does not reproduce or claim coverage of the wrapper's separate Bash exec phase.
+PowerShell's measured main identifier is `apphost`, not an assumed Microsoft
+Developer ID signature. Python uses its existing explicit shell launch rule even
+though its native interpreter path is inside `Python.app`.
+
+Preflight includes query-category candidates, so PowerShell, Redis CLI and
+ldapsearch cannot escape the same early metadata checks as ordinary apps. These
+repairs preserve complete native process coverage rather than remove candidates.

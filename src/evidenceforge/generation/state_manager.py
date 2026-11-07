@@ -76,6 +76,11 @@ from evidenceforge.events.macos_execution_directory import (
     validate_macos_execution_directory,
 )
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
+from evidenceforge.events.macos_filesystem_state import (
+    MAX_FILESYSTEM_DIRECTORIES_PER_HOST,
+    MAX_FILESYSTEM_DIRECTORY_HISTORY,
+    MacosFilesystemChange,
+)
 from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
 from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
 from evidenceforge.events.macos_spawn_io import MacosSpawnIO
@@ -2474,6 +2479,7 @@ class ActionCohortProcessActivityPatch:
     parentage_change: ProcessParentageChange | None = None
     adopting_parent: ProcessIdentity | None = None
     directory_change: MacosExecutionDirectory | None = None
+    filesystem_change: MacosFilesystemChange | None = None
     descriptor_table: MacosDescriptorTable | None = None
     native_pipe_allocation: tuple[int, int, str] | None = None
     terminal_after: MacosTerminalSession | None = None
@@ -3563,6 +3569,23 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             normalized, table=table, _native_pipe_allocation=(first_pipe_id, pipe_id, object_id)
         )
         return table
+
+    def patch_macos_filesystem(
+        self, target: ProcessIdentity, change: MacosFilesystemChange
+    ) -> None:
+        """Stage exact shared directory/allocator truth with its actor frontier."""
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(normalized) is not ProcessIdentity or self._process_activity_patches:
+            raise StateError("Filesystem mutation requires its own live-actor cohort")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=change.after.observed_at,
+            filesystem_change=change,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_filesystem_patch(patch)
+        self._process_activity_patches.append(patch)
 
     def change_macos_process_directory(
         self, target: ProcessIdentity, *, directory: MacosExecutionDirectory
@@ -4852,6 +4875,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         MacosExecScript,
         ProcessExecutableVersion,
         MacosExecutionDirectory,
+        MacosFilesystemChange,
         MacosDescriptorBinding,
         MacosDescriptorTable,
         ResponsibleProcessReference,
@@ -5198,6 +5222,13 @@ def _action_cohort_semantic_preimage(
                     patch.service_drop,
                 )
                 if patch.service_drop is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-filesystem-change-v1",
+                    patch.filesystem_change,
+                )
+                if patch.filesystem_change is not None
                 else (
                     _action_cohort_process_target_semantic(patch.target),
                     patch.activity_time,
@@ -5800,6 +5831,10 @@ class StateManager:
         self._macos_terminal_slots: dict[str, tuple[tuple[int, PosixSessionIdentity], ...]] = {}
         self._macos_terminal_ordinals: dict[str, int] = {}
         self._macos_pipe_counters: dict[str, tuple[int, int]] = {}
+        self._macos_filesystem_directories: dict[
+            tuple[str, str], tuple[MacosExecutionDirectory, ...]
+        ] = {}
+        self._macos_filesystem_inodes: dict[str, tuple[int, int]] = {}
         self._posix_job_control_reservation_counts: dict[str, int] = {}
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._pid_time_epochs: dict[str, datetime] = {}
@@ -13349,6 +13384,7 @@ class StateManager:
                             "job_control_change",
                             "parentage_change",
                             "directory_change",
+                            "filesystem_change",
                             "descriptor_table",
                             "policy_refusal",
                             "job_control_actor",
@@ -13388,6 +13424,7 @@ class StateManager:
                             patch.job_control_change,
                             patch.parentage_change,
                             patch.directory_change,
+                            patch.filesystem_change,
                             patch.descriptor_table,
                             patch.policy_refusal,
                         )
@@ -13457,9 +13494,12 @@ class StateManager:
                         pipe_counters[identity.hostname] = first, native_id
                 if patch.directory_change is not None:
                     self._validate_macos_process_directory_patch(patch)
+                if patch.filesystem_change is not None:
+                    self._validate_macos_filesystem_patch(patch)
                 if (
                     patch.job_control_change is not None
                     or patch.directory_change is not None
+                    or patch.filesystem_change is not None
                     or patch.policy_refusal is not None
                     or (
                         patch.descriptor_table is not None and type(patch.target) is ProcessIdentity
@@ -14604,6 +14644,14 @@ class StateManager:
             identity = self._action_process_identity(patch.target)
             if patch.native_pipe_allocation is not None:
                 capture_mapping(self._macos_pipe_counters, identity.hostname)
+            if patch.filesystem_change is not None:
+                change = patch.filesystem_change
+                capture_mapping(
+                    self._macos_filesystem_directories,
+                    (identity.hostname.casefold(), change.after.native_path),
+                )
+                if change.allocation is not None:
+                    capture_mapping(self._macos_filesystem_inodes, identity.hostname.casefold())
             if patch.policy_refusal is not None:
                 allocation = patch.policy_refusal
                 pid_patch = allocation.allocator
@@ -16420,6 +16468,25 @@ class StateManager:
                     self._macos_pipe_counters[process.system] = first, native_id
             if patch.directory_change is not None:
                 self._append_process_directory(process, patch.directory_change)
+            if patch.filesystem_change is not None:
+                change = patch.filesystem_change
+                key = (identity.hostname.casefold(), change.after.native_path)
+                history = self._macos_filesystem_directories.get(key)
+                if history is None:
+                    born = change.before.metadata.born
+                    seed = replace(
+                        change.before,
+                        observed_at=datetime.fromtimestamp(born.seconds, tz=UTC).replace(
+                            microsecond=born.nanoseconds // 1000
+                        ),
+                    )
+                    history = (seed,)
+                self._macos_filesystem_directories[key] = (*history, change.after)[
+                    -MAX_FILESYSTEM_DIRECTORY_HISTORY:
+                ]
+                if change.allocation is not None:
+                    first, _, last = change.allocation
+                    self._macos_filesystem_inodes[identity.hostname.casefold()] = first, last
             if patch.job_control_change is not None:
                 change = patch.job_control_change
                 self._commit_posix_membership(
@@ -18371,6 +18438,69 @@ class StateManager:
                 raise StateError("Descriptor lookup lost its exact process lifetime")
             return self._descriptor_table_from_history(process, at)
 
+    def macos_filesystem_directory(
+        self, hostname: str, path: str, at: datetime
+    ) -> MacosExecutionDirectory | None:
+        """Observe shared directory truth; retired history never falls back to old stat."""
+        with self._lock:
+            history = self._macos_filesystem_directories.get((hostname.casefold(), path))
+            if history is None:
+                return None
+            fact = next((item for item in reversed(history) if item.observed_at <= at), None)
+            if fact is None:
+                raise StateError("Mac filesystem directory history is unavailable at this time")
+            return replace(
+                fact,
+                hostname=hostname,
+                observed_at=at,
+                metadata=type(fact.metadata).model_validate_json(fact.metadata.canonical_json()),
+            )
+
+    def macos_filesystem_next_inode(self, hostname: str, first_inode: int) -> int:
+        """Plan, without consuming, the next host-owned runtime inode."""
+        if type(first_inode) is not int or not 0 < first_inode < 2**63:
+            raise StateError("Mac filesystem inode policy requires a positive bounded integer")
+        with self._lock:
+            base, previous = self._macos_filesystem_inodes.get(
+                hostname.casefold(), (first_inode, first_inode - 1)
+            )
+            if base != first_inode or previous >= 2**63 - 1:
+                raise StateError("Mac filesystem inode policy changed or is exhausted")
+            return previous + 1
+
+    def _validate_macos_filesystem_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        change = patch.filesystem_change
+        if type(patch.target) is not ProcessIdentity or type(change) is not MacosFilesystemChange:
+            raise StateError("Filesystem change requires its exact live actor and typed facts")
+        change.__post_init__()
+        actor = patch.target
+        self._validate_action_live_process_identity(actor)
+        key = (actor.hostname.casefold(), change.after.native_path)
+        if (
+            change.after.hostname != actor.hostname
+            or change.after.observed_at != patch.activity_time
+            or self._pid_os.get(actor.hostname) != "macos"
+        ):
+            raise StateError("Filesystem directory change must belong to its actor and time")
+        history = self._macos_filesystem_directories.get(key)
+        if history is not None and (
+            history[-1].observed_at >= patch.activity_time
+            or history[-1].metadata != change.before.metadata
+        ):
+            raise StateError(
+                "Filesystem directory change lost its exact chronological before state"
+            )
+        if (
+            history is None
+            and sum(host == key[0] for host, _ in self._macos_filesystem_directories)
+            >= MAX_FILESYSTEM_DIRECTORIES_PER_HOST
+        ):
+            raise StateError("Mac filesystem directory inventory exceeds its per-host bound")
+        if change.allocation is not None:
+            first, previous, _ = change.allocation
+            if self._macos_filesystem_inodes.get(key[0], (first, first - 1)) != (first, previous):
+                raise StateError("Filesystem inode allocation lost its exact prior counter")
+
     def _validate_macos_process_directory_patch(
         self, patch: ActionCohortProcessActivityPatch
     ) -> None:
@@ -19092,6 +19222,48 @@ class StateManager:
         with self._lock:
             return self._process_identity_active_at_locked(system, pid, event_time)
 
+    def get_process_at(self, system: str, pid: int, event_time: datetime) -> RunningProcess | None:
+        """Return a detached view of the exact live or retained execution at a time.
+
+        This is a read query. It neither revives a terminated process nor exposes
+        a later execution's image, credentials or executable version to a caller.
+        """
+        with self._lock:
+            identity = self._process_identity_active_at_locked(system, pid, event_time)
+            if identity is None:
+                return None
+            process = self._processes_by_object_id.get(
+                identity.object_id
+            ) or self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                return None
+            return replace(
+                process,
+                parent_pid=identity.parent_pid,
+                image=identity.image,
+                command_line=identity.command_line,
+                username=identity.principal,
+                logon_id=identity.logon_id,
+                start_time=identity.started_at,
+                execution_ordinal=identity.execution_ordinal,
+                executed_at=identity.executed_at,
+                primary_tid=identity.primary_thread.tid
+                if identity.primary_thread is not None
+                else -1,
+                credentials=identity.credentials,
+                audit_pid_version=identity.audit_pid_version,
+                arguments=identity.arguments,
+                job_control=identity.job_control,
+                environment=identity.environment,
+                parentage=identity.parentage,
+                responsibility=identity.responsibility,
+                image_security=identity.image_security,
+                execution_directory=identity.execution_directory,
+                executable_version=identity.executable_version,
+                exec_image=identity.exec_image,
+                exec_script=identity.exec_script,
+            )
+
     @staticmethod
     def process_history_retained_until(end_time: datetime) -> datetime:
         """Return the existing process-history boundary for an explicit lifecycle horizon.
@@ -19353,17 +19525,28 @@ class StateManager:
         with self._lock:
             return self._running_processes.find("username", username)
 
-    def get_processes_on_system(self, system: str) -> list[RunningProcess]:
+    def get_processes_on_system(
+        self, system: str, *, include_retained: bool = False
+    ) -> list[RunningProcess]:
         """Get all running processes on a system.
 
         Args:
             system: System hostname to search for
+            include_retained: Include bounded closed lifetimes for historical queries.
 
         Returns:
             List of running processes on the system (may be empty)
         """
         with self._lock:
-            return self._running_processes.find("system", system)
+            processes = self._running_processes.find("system", system)
+            if include_retained:
+                processes = list(processes)
+                processes.extend(
+                    process
+                    for process in self._ended_processes_by_object_id.values()
+                    if process.system == system
+                )
+            return processes
 
     def get_processes_for_session(
         self,

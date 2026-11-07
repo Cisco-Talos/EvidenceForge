@@ -249,6 +249,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "file_create",
         "file_modify",
         "file_delete",
+        "file_rename",
+        "file_close",
         "registry_modify",
         "image_load",
         "create_remote_thread",
@@ -305,6 +307,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_create": self._render_file_event,
             "file_modify": self._render_file_event,
             "file_delete": self._render_file_event,
+            "file_rename": self._render_file_event,
+            "file_close": self._render_file_event,
             "registry_modify": self._render_registry_event,
             "image_load": self._render_module_event,
             "create_remote_thread": self._render_create_remote_thread,
@@ -846,6 +850,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_create": "CREATE",
             "file_modify": "WRITE",
             "file_delete": "DELETE",
+            "file_rename": "RENAME",
+            "file_close": "CLOSE",
         }
         event_data = {
             "timestamp": self._after_process_create_timestamp(event, process_identity),
@@ -853,11 +859,13 @@ class EcarEmitter(HostMultiplexEmitter):
             "object": "FILE",
             "action": action_map.get(event.event_type, "CREATE"),
             "pid": event.file.pid if event.file else -1,
-            "principal": event.auth.username if event.auth else "",
+            "principal": event.auth.username if event.auth else (proc.username if proc else ""),
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_process_provenance(event_data, proc)
+        if event.file is not None and event.file.previous_path is not None:
+            event_data["source_file_path"] = event.file.previous_path
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)

@@ -88,6 +88,19 @@ def _finder_engine(
     gui_application: str | None = None,
 ) -> GenerationEngine:
     raw = _scenario().model_dump(mode="json", exclude_none=True)
+    # This fixture exercises one launch contract, not every installed developer tool.
+    raw["environment"]["deployment_overrides"] = [
+        {
+            "system": "MAC-01",
+            "user_applications": [
+                {
+                    "user": "alex",
+                    "applications": ["macos-reference-app"]
+                    + ([gui_application] if gui_application is not None else []),
+                }
+            ],
+        }
+    ]
     if native:
         raw["output"]["logs"].append({"format": "macos_endpoint_security"})
         raw["macos_process_coverage"] = "complete" if complete else "partial"
@@ -116,7 +129,13 @@ def _finder_engine(
                     {
                         "id": application["id"],
                         "personas": ["developer"]
-                        if application["id"] in {"macos-reference-app", gui_application}
+                        if application["id"]
+                        in {
+                            "macos-reference-app",
+                            gui_application,
+                            "macos-terminal",
+                            "macos-iterm2",
+                        }
                         else [],
                         "_replace": True,
                         **(
@@ -127,12 +146,6 @@ def _finder_engine(
                     }
                     for application in catalog["applications"]
                     if "macos" in application["platforms"]
-                    and (
-                        "code" in application["categories"]
-                        or gui_application is not None
-                        and ".app/Contents/MacOS/"
-                        in application["platforms"]["macos"]["image_path"]
-                    )
                 ],
             }
         )
@@ -186,6 +199,15 @@ def _finder_engine(
         "outlook",
         "slack",
         "onedrive",
+        "edge",
+        "teams",
+        "macos-safari",
+        "macos-finder",
+        "excel",
+        "intellij",
+        "sublimetext",
+        "postman",
+        "thunderbird",
     ],
 )
 @pytest.mark.parametrize("native", [False, True], ids=["filtered", "native"])
@@ -232,7 +254,9 @@ def test_existing_user_scenario_gui_apps_share_the_canonical_launch_owner(
 def test_unknown_app_signer_keeps_canonical_gui_chain_and_complete_coverage_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine = _finder_engine(tmp_path, monkeypatch, native=True, missing_app_signature=True)
+    engine = _finder_engine(
+        tmp_path, monkeypatch, native=True, complete=False, missing_app_signature=True
+    )
     try:
         with effective_config_scope(engine.compiled_scenario.effective_config):
             engine._initialize()
@@ -272,6 +296,7 @@ def test_unknown_app_signer_keeps_canonical_gui_chain_and_complete_coverage_fail
             ).code_signature.entitlements
             is None
         )
+        engine.scenario.macos_process_coverage = "complete"
         with pytest.raises(StateError, match="Incomplete native macOS process coverage"):
             engine._finalize_macos_process_coverage()
         host = engine.dispatcher.macos_es_ingress.coverage.hosts[0]

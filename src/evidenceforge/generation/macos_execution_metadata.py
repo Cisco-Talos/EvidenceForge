@@ -87,6 +87,8 @@ class MacosExecutionMetadataProducer:
         *,
         window_start: datetime,
         window_end: datetime,
+        state: StateManager | None = None,
+        complete_launches: bool = False,
     ) -> None:
         if (
             type(filesystem) is not MacosInstalledFilesystem
@@ -99,6 +101,8 @@ class MacosExecutionMetadataProducer:
             raise StateError(
                 "Mac execution metadata requires exact frozen owners and a finite window"
             )
+        self.complete_launches = complete_launches
+        self._state = state
         self.profile = MacosExecutionMetadataProfile.model_validate_json(profile.model_dump_json())
         hosts = frozenset(filesystem.provisioned_hosts())
         accounts = {
@@ -119,6 +123,10 @@ class MacosExecutionMetadataProducer:
             if account.account_name == "root":
                 paths.setdefault(host, {})["/"] = (account.uid, account.gid)
             owner = account.uid, account.gid
+            if profile.filesystem_workload is not None and account.uid >= 501:
+                paths.setdefault(host, {})[
+                    account.home + "/" + profile.filesystem_workload.directory_name
+                ] = owner
             if (host, account.home) in ambiguous:
                 continue
             existing = paths.setdefault(host, {}).setdefault(account.home, owner)
@@ -235,6 +243,20 @@ class MacosExecutionMetadataProducer:
                 return PosixProcessExit(exit_code=code) if code is not None else None
         return None
 
+    def command_environment(
+        self, image: str, inherited: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        """Add declared command defaults without inventing unknown or replacing supplied values."""
+        if inherited is None:
+            return None
+        for rule in self.profile.command_environments:
+            if rule.image == image:
+                supplied = {value.partition("=")[0] for value in inherited}
+                return inherited + tuple(
+                    value for value in rule.environment if value.partition("=")[0] not in supplied
+                )
+        return inherited
+
     def ordinary_close(
         self,
         process: ProcessIdentity,
@@ -294,11 +316,33 @@ class MacosExecutionMetadataProducer:
             return policy.cancelled_command
         return None
 
+    @staticmethod
+    def same_directory_object(
+        left: MacosExecutionDirectory, right: MacosExecutionDirectory
+    ) -> bool:
+        """Compare immutable directory identity separately from changing entry stat."""
+        return (
+            left.native_path == right.native_path
+            and left.hostname.casefold() == right.hostname.casefold()
+            and left.metadata.model_copy(
+                update={
+                    "modified": right.metadata.modified,
+                    "changed": right.metadata.changed,
+                    "size_bytes": right.metadata.size_bytes,
+                }
+            )
+            == right.metadata
+        )
+
     def directory(self, hostname: str, path: str, at: datetime) -> MacosExecutionDirectory:
         """Observe one provisioned directory object without inferring arbitrary paths."""
         metadata = self._directories.get((hostname.casefold(), path))
         if metadata is None or not self._known_from <= at < self._known_until:
             raise StateError("Mac working directory has no provisioned facts at this time")
+        if self._state is not None:
+            current = self._state.macos_filesystem_directory(hostname, path, at)
+            if current is not None:
+                return current
         return MacosExecutionDirectory(hostname, path, at, metadata)
 
     def gui_launch_credentials(
@@ -434,6 +478,7 @@ class MacosExecutionMetadataProducer:
             value.format(username=account.account_name, home=account.home, shell=account.shell)
             for value in values
         )
+        environment = self.command_environment(requested_path, environment)
         path = "/" if kind == "system" else account.home
         directory = self.directory(hostname, path, at)
         image = None
@@ -509,15 +554,9 @@ class MacosExecutionMetadataProducer:
             or binary.mach_o_image is None
         ):
             return None
-        for rule in self.profile.code_validation:
-            if (
-                binary.key.product_id == rule.product_id
-                and binary.key.artifact_name in rule.artifact_names
-            ):
-                return MacosImageSecurity(
-                    rule.codesigning_flags, rule.is_platform_binary, rule.validation_category
-                )
-        return None
+        from evidenceforge.generation.macos_launch_support import modeled_image_security
+
+        return modeled_image_security(self.profile, binary)
 
     def deployed_launch(
         self,
@@ -558,7 +597,7 @@ class MacosExecutionMetadataProducer:
         if current is None:
             raise StateError("Mac fork producer requires known current directory state")
         directory = self.directory(parent.hostname, current.native_path, at)
-        if directory.metadata.canonical_json() != current.metadata.canonical_json():
+        if not self.same_directory_object(directory, current):
             raise StateError("Mac fork working directory no longer matches its provisioned object")
         return builder.fork_process(
             parent, forked_at=at, execution_directory=directory, responsibility=responsibility
@@ -631,7 +670,9 @@ class MacosExecutionMetadataProducer:
                 "Finder exec requires qualified policy and explicit exec-time environment/cwd"
             )
         validate_process_arguments(arguments, command_line=shlex.join(arguments))
-        known_environment = environment if environment is not None else process.environment
+        known_environment = self.command_environment(
+            image, environment if environment is not None else process.environment
+        )
         current_directory = (
             execution_directory
             if execution_directory is not None
@@ -641,7 +682,7 @@ class MacosExecutionMetadataProducer:
         if known_environment is None or current_directory is None:
             raise StateError("Mac exec producer requires known inherited environment and directory")
         directory = self.directory(process.hostname, current_directory.native_path, at)
-        if directory.metadata.canonical_json() != current_directory.metadata.canonical_json():
+        if not self.same_directory_object(directory, current_directory):
             raise StateError("Mac exec working directory no longer matches its provisioned object")
         if (
             type(binary) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}

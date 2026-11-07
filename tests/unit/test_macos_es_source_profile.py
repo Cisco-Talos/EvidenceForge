@@ -59,12 +59,13 @@ def _setup() -> tuple:
     parent = fixture.parent.process
     start = parent.execution_started_at
     state.register_boot_time(parent.hostname, parent.started_at - timedelta(hours=1))
+    collector_arguments = load_macos_endpoint_security_profile().collector_arguments
     collector_plan = state.plan_process_materialization(
         system=parent.hostname,
         parent_pid=0,
         image="/usr/bin/eslogger",
-        command_line="/usr/bin/eslogger fork exec exit",
-        arguments=("/usr/bin/eslogger", "fork", "exec", "exit"),
+        command_line=" ".join(collector_arguments),
+        arguments=collector_arguments,
         username="root",
         integrity_level="System",
         os_category="macos",
@@ -130,7 +131,11 @@ def test_initialization_produces_exact_inventory_subscription_clock_and_profile(
     assert tuple((item.event_type, item.next_sequence) for item in connection.event_counters) == (
         (9, 0),
         (11, 0),
+        (12, 0),
+        (13, 0),
         (15, 0),
+        (25, 0),
+        (32, 0),
     )
     assert connection.source_profile.os_build == "invented-build"
     assert source.clock.hostname == system.hostname
@@ -662,6 +667,73 @@ def test_frozen_profile_and_old_inputs_do_not_read_new_ambient_policy(
     with effective_config_scope(older):
         assert load_macos_endpoint_security_profile() is None
         assert select_macos_es_profile(_system()) is None
+
+
+def test_frozen_process_only_profile_preserves_its_admission_and_configuration_hash(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    import json
+
+    from evidenceforge.generation.macos_es_source import _configuration_digest
+    from evidenceforge.generation.timing.macos import MachTimebase
+
+    effective = build_management_effective_config(tmp_path)
+    old = load_macos_endpoint_security_profile().model_dump(
+        mode="json", exclude={"file_operations"}
+    )
+    old.update(
+        profile="modeled-macos27-arm64-process-v1",
+        collector_arguments=["/usr/bin/eslogger", "fork", "exec", "exit"],
+        event_types=[9, 11, 15],
+    )
+    frozen = effective.model_copy(
+        update={
+            "packaged_defaults": effective.packaged_defaults
+            | {
+                "activity/macos_endpoint_security_profiles.yaml": {
+                    "schema_version": "2.0",
+                    "profiles": [old],
+                }
+            }
+        }
+    )
+    expected = hashlib.sha256(
+        json.dumps(
+            {"source": old, "timebase": {"numerator": 125, "denominator": 3}},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    with effective_config_scope(frozen):
+        profile = load_macos_endpoint_security_profile()
+        assert profile.file_operations is None
+        assert profile.event_types == (9, 11, 15)
+        assert profile.collector_arguments == ("/usr/bin/eslogger", "fork", "exec", "exit")
+        assert _configuration_digest(profile, MachTimebase(125, 3)) == expected
+        assert (
+            load_macos_endpoint_security_profile(
+                profile_id="modeled-macos27-arm64-process-files-v3"
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"file_operations": None},
+        {"collector_arguments": ["/usr/bin/eslogger", "fork", "exec", "exit"]},
+        {"event_types": [9, 11, 15]},
+        {"collector_arguments": ["/usr/bin/eslogger", "fork", "exec", "exit", "open"]},
+    ],
+)
+def test_native_file_admission_requires_matching_subscription_and_counter_families(
+    changes: dict,
+) -> None:
+    values = load_macos_endpoint_security_profile().model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        MacosEndpointSecurityProfile.model_validate(values | changes)
 
 
 @pytest.mark.slow

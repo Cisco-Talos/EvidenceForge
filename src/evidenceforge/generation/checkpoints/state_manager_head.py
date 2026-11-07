@@ -7,6 +7,7 @@ bounded allocator windows remain in the small live head. No arbitrary object gra
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from itertools import chain
 
@@ -21,6 +22,11 @@ from evidenceforge.events.macos_descriptors import validate_macos_descriptors
 from evidenceforge.events.macos_exec_image import validate_macos_exec_image
 from evidenceforge.events.macos_exec_script import validate_macos_exec_script
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
+from evidenceforge.events.macos_filesystem_state import (
+    MAX_FILESYSTEM_DIRECTORIES_PER_HOST,
+    MAX_FILESYSTEM_DIRECTORY_HISTORY,
+    MacosFilesystemChange,
+)
 from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt
 from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
@@ -50,7 +56,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "13"
+_SCHEMA_VERSION = "14"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -366,6 +372,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         "10",
         "11",
         "12",
+        "13",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -383,8 +390,10 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     simple = document["simple"]
     legacy = document["schema_version"] == _LEGACY_VERSION
     missing = _TERMINAL_FIELDS if document["schema_version"] in {"6", "7"} else set()
-    if document["schema_version"] != _SCHEMA_VERSION:
+    if document["schema_version"] not in {"13", _SCHEMA_VERSION}:
         missing = missing | {"_macos_process_census"}
+    if document["schema_version"] != _SCHEMA_VERSION:
+        missing = missing | {"_macos_filesystem_directories", "_macos_filesystem_inodes"}
     if legacy:
         missing = missing | _JOB_CONTROL_FIELDS
     if missing:
@@ -406,6 +415,54 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
                 f"StateManager checkpoint field {name} has an invalid type"
             )
         setattr(fresh, name, decoded)
+
+    macos_hosts = {
+        host.casefold()
+        for host, platform in fresh._pid_os.items()
+        if type(host) is str and platform == "macos"
+    }
+    directory_counts: dict[str, int] = {}
+    for key, history in fresh._macos_filesystem_directories.items():
+        if (
+            type(key) is not tuple
+            or len(key) != 2
+            or any(type(item) is not str or not item for item in key)
+            or type(history) is not tuple
+            or not 1 <= len(history) <= MAX_FILESYSTEM_DIRECTORY_HISTORY
+            or key[0] not in macos_hosts
+        ):
+            raise CheckpointCorruptionError("Mac filesystem directory history is invalid")
+        directory_counts[key[0]] = directory_counts.get(key[0], 0) + 1
+        if directory_counts[key[0]] > MAX_FILESYSTEM_DIRECTORIES_PER_HOST:
+            raise CheckpointCorruptionError("Mac filesystem directory capacity changed")
+        prior = None
+        for fact in history:
+            try:
+                validate_macos_execution_directory(
+                    fact, hostname=fact.hostname, observed_at=fact.observed_at
+                )
+                if prior is not None:
+                    MacosFilesystemChange(replace(prior, observed_at=fact.observed_at), fact)
+            except (TypeError, ValueError, AttributeError) as error:
+                raise CheckpointCorruptionError(
+                    "Mac filesystem directory fact is invalid"
+                ) from error
+            if (fact.hostname.casefold(), fact.native_path) != key or (
+                prior is not None and fact.observed_at <= prior.observed_at
+            ):
+                raise CheckpointCorruptionError("Mac filesystem directory chronology changed")
+            prior = fact
+    for host, counter in fresh._macos_filesystem_inodes.items():
+        if (
+            type(host) is not str
+            or not host
+            or host not in macos_hosts
+            or type(counter) is not tuple
+            or len(counter) != 2
+            or any(type(value) is not int for value in counter)
+            or not 0 < counter[0] <= counter[1] < 2**63
+        ):
+            raise CheckpointCorruptionError("Mac filesystem inode counter is invalid")
 
     for host, census in fresh._macos_process_census.items():
         if (
@@ -445,7 +502,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         fresh._refresh_connection_lifecycle(connection)
 
     expiring = document["expiring"]
-    if document["schema_version"] not in {"10", "11", _SCHEMA_VERSION}:
+    if document["schema_version"] not in {"10", "11", "13", _SCHEMA_VERSION}:
         if type(expiring) is not dict or set(expiring) != set(_EXPIRING_FIELDS) - {
             "_macos_policy_refusals"
         }:
@@ -618,7 +675,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         streams = session.ssh_command_streams
         if streams is not None:
             if (
-                document["schema_version"] not in {"9", "10", "11", _SCHEMA_VERSION}
+                document["schema_version"] not in {"9", "10", "11", "13", _SCHEMA_VERSION}
                 or not ssh
                 or origin is None
                 or session.effective_uid != origin.audit_uid
@@ -1015,8 +1072,8 @@ class StateManagerParticipant:
     checkpoint_owner = "state-manager"
     checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = (_LEGACY_VERSION, "7", "8")
-    checkpoint_compatible_segment_versions = (_LEGACY_VERSION, "7", "8")
+    checkpoint_compatible_head_versions = (_LEGACY_VERSION, "7", "8", "13")
+    checkpoint_compatible_segment_versions = (_LEGACY_VERSION, "7", "8", "13")
     checkpoint_state_fields = STATE_MANAGER_CHECKPOINT_FIELDS
 
     def __init__(self, manager: StateManager) -> None:
@@ -1109,7 +1166,7 @@ class StateManagerParticipant:
             if (
                 type(document) is not dict
                 or document.get("schema_version")
-                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10", "11", "12"}
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9", "10", "11", "12", "13"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

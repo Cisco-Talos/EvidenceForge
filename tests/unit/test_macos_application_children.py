@@ -189,6 +189,31 @@ def test_unavailable_helper_owner_or_deadline_does_not_allocate_processes(
     assert context.generator.state_manager.materialization_digest() == before
 
 
+def test_repeated_browser_use_keeps_resident_helpers_and_can_add_renderers(
+    tmp_path: Path, scenarios_dir: Path
+) -> None:
+    class AllHelpersRng(random.Random):
+        def randint(self, a: int, b: int) -> int:
+            return b
+
+    context = _setup(tmp_path, scenarios_dir, False)
+    state = context.generator.state_manager
+    first = context.spawn(rng=AllHelpersRng(41))
+    assert len(first) == 3
+    later = context.time + timedelta(minutes=1)
+    second = context.spawn(time=later, rng=AllHelpersRng(42))
+    assert len(second) == 1
+    added = state.get_process_identity(context.system.hostname, second[0])
+    assert "--type=renderer" in added.arguments
+    children = [
+        state.get_process_identity(context.system.hostname, pid) for pid in (*first, *second)
+    ]
+    assert sum("--type=gpu-process" in child.arguments for child in children) == 1
+    assert sum("--type=utility" in child.arguments for child in children) == 1
+    assert all(child.parent_pid == context.parent for child in children)
+    assert all(state.get_process(context.system.hostname, pid) for pid in first)
+
+
 def test_baseline_uses_compiled_helpers_without_legacy_child_catalog_lookup(
     tmp_path: Path, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -48,6 +48,7 @@ from evidenceforge.events.macos_entitlements import (
     EntitlementObject,
     FrozenEntitlements,
     canonical_entitlements,
+    extended_entitlements,
     freeze_entitlements,
     native_entitlements,
 )
@@ -320,6 +321,8 @@ class MachOCodeSignature:
         values = (self.signing_id, self.team_id, self.cdhash)
         if self.entitlements is None:
             return values
+        if type(self.entitlements) is tuple and extended_entitlements(self.entitlements):
+            return (*values, ("property-object-v2", native_entitlements(self.entitlements)))
         if type(self.entitlements) is tuple and any(
             type(value) is EntitlementObject for _, value in self.entitlements
         ):
@@ -349,9 +352,9 @@ class MachOCodeSignature:
         entries = values[3] if len(values) == 4 else None
         tag: str | None = None
         if type(entries) in {list, tuple}:
-            if len(entries) == 2 and entries[0] == "property-object-v1":
+            if len(entries) == 2 and entries[0] in {"property-object-v1", "property-object-v2"}:
                 restored = cls(values[0], values[1], values[2], freeze_entitlements(entries[1]))
-                if restored.serialized_values()[3][0] != "property-object-v1":
+                if restored.serialized_values()[3][0] != entries[0]:
                     raise ValueError("Entitlement representation tag disagrees with its values")
                 return restored
             if (

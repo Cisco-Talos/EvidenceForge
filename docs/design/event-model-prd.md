@@ -7,18 +7,24 @@ of later file edits/removal. The existing service authority binds the already
 published process/group; no rendered record triggers sibling evidence. Other
 images, domains, automatic triggers and launchd Unified Log remain unqualified.
 
-## Current generation admission (2026-10-24)
+## Current generation admission (2026-11-06)
 
-The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
-build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
-output selection. The catalog can hold multiple profiles; historical wire decoders remain
-available independently of generation admission.
+The active Mac generation target is macOS 27 arm64 workstations. Qualified v11 process
+and bounded regular-file observations publish through canonical State/action/artifact owners;
+historical decoding does not admit other targets. Supported terminal, Finder/app/helper,
+SSH and root-job producers retain their own metadata and lifecycle contracts. Selected ULF
+workspace/authentication/policy-refusal observations remain separate from ES and do not
+constitute general app/service logging.
 
-The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
-publication. Unknown metadata stays unavailable; SSH descriptor and local GUI audit-origin gaps
-still limit ordinary command exports. Explicit `process.outcome: policy_refused` now builds an internal `macos_policy_refusal` occurrence with an attempt subject and boot-owned kernel writer. The target PID has no asserted process lifetime; exact refusal cause and execution stage remain unqualified. Older v10/macOS 26 milestones
-below are historical context, not current target admission. See the
-[current profile worklog](../worklog/2026-10-24-macos27-native-process-profile.md).
+`MacosFilesystemActionBundle` owns explicit empty create, modified/unmodified close,
+same-directory rename/replacement and unlink. The ordinary Code document caller supplies
+nominal activity and mutable directory/inode state; neither rendered source triggers its
+sibling. The current [architecture](../ARCHITECTURE.md#macos-bounded-filesystem-publication)
+and [Mac guide](../macos.md) supersede earlier implementation-stage limitations below.
+
+The Phase 7 examples/tables below retain the original refactor's design context. They are
+not a complete current event/format inventory; the format/source catalog and context
+contracts remain authoritative.
 
 > **Status:** ✅ COMPLETE (Phase 7, implemented 2026-03-19)
 > **Addendum to:** `docs/PRD.md` (main EvidenceForge PRD)
@@ -734,9 +740,16 @@ The internal `macos_workspace_request` kind carries `MacosWorkspaceRequest`, sou
 
 The qualified SSH authentication source is a facet of the native receiver's existing `process_audit_bind` occurrence at successful authentication. `MacosSshAuthentication` freezes the subject SSH session, root pre-adoption writer and actual transport peer. The credential transition keeps its before/after process roles and process lifecycle, and adds the session role. Its State cohort authenticates the exact audit binding and session activity patch. ULF and eCAR use one exact publication journal, including filtering, partial sink failure and lost-return recovery. A static main-image callsite may explicitly carry the private-data flag and modeled main-image backtrace offsets; renderers do not derive frames, allocate writers or change message privacy. Both PTY modes share this producer. Password intent uses the observed keyboard-interactive/PAM payload. Plain public-key intent carries its canonical key type/SHA256 fingerprint and source-derived text through the same qualified logger, with an explicit public_source_same_logger semantic basis. This is not an additional local public-key observation. Missing/unsupported keys produce no fabricated native row. Ordinary daemon verbosity is retained; verbose session messages, other unqualified SSH messages and launchd ULF remain gated.
 
-The experimental `macos_endpoint_security` source renders only complete authenticated Mac
-`process_fork` transitions through the exact canonical cohort journal. Canonical boot activation
-owns the modeled privileged collector; the dispatcher registry owns its finite profile/counters.
-No new authored event, generic process-create conversion, native exec/exit admission or host
-collector invocation is introduced. Missing required metadata remains an explicit admission error
-when native output is selected.
+The experimental `macos_endpoint_security` source renders complete authenticated Mac
+process and bounded regular-file observations through the exact canonical cohort journal.
+Canonical boot activation owns the modeled collector, not a real host command. Qualified
+fork/exec/known-exit and file-operation producers supply their own complete facts; missing
+required metadata remains an explicit admission error. Source-local/global counters are
+allocated during chronological final delivery, independently of process planning order.
+
+Internal file kinds `file_create`, `file_close`, `file_rename` and `file_delete` carry
+`FileContext.macos_operation` with explicit immutable source/target/content/stat facts.
+`MacosFilesystemChange` binds mutable directory and inode changes to that same transaction.
+The nominal Code document workload uses these kinds; they add no authored event type or
+automatic native conversion of other file producers. Source renderers allocate no identities,
+file metadata or sibling occurrences.

@@ -77,6 +77,22 @@ export function ScorecardPanel({ jobId, api, compact = false }: { jobId: string;
     <div className="scorecard-detail-heading">{!compact && <div><span className="eyebrow">SAVED EVALUATION</span><h3>{report.scenario_name}</h3><small>Evaluated {new Date(report.evaluated_at).toLocaleString()} · {report.total_records.toLocaleString()} records</small></div>}<div className="scorecard-detail-total"><strong>{score(report.overall_score)}</strong><span className={verdictClass}>{verdict}</span></div></div>
     <p className={`scorecard-verdict ${verdictClass}`}>{report.acceptance_passed === false ? `${failed.length || "One or more"} required check${failed.length === 1 ? "" : "s"} failed. The overall score does not override required checks.` : report.acceptance_passed === true ? "All applicable required checks passed." : "There is not enough evaluated evidence to determine acceptance."}</p>
     {compact && <small className="muted">{report.total_records.toLocaleString()} records</small>}
+    {(report.macos_hosts || []).length > 0 && <details className="scorecard-macos-coverage">
+      <summary>macOS process coverage<ChevronDown size={14} /></summary>
+      <p className="muted small">Counts reconcile modeled processes with native Endpoint Security. Unknown exit outcomes do not imply success.</p>
+      {report.macos_hosts?.map((host) => <div key={`${host.hostname}:${host.source_profile}`}>
+        <strong>{host.hostname}</strong><small className="muted"> · {host.policy === "complete" ? "Complete coverage requested" : "Partial collection"}</small>
+        {host.census ? <>
+          <p><span className={host.census.complete ? "score-pass" : "score-fail"}>{host.census.complete ? "Process starts complete" : "Process starts incomplete"}</span> · <span className={host.census.exit_complete == null ? "score-indeterminate" : host.census.exit_complete ? "score-pass" : "score-fail"}>{host.census.exit_complete == null ? "Exit completeness unmeasured" : host.census.exit_complete ? "Exits complete" : "Exits incomplete"}</span></p>
+          <dl>
+            <div><dt>Forks published / expected</dt><dd>{host.census.published_forks} / {host.census.expected_forks}</dd></div>
+            <div><dt>Execs published / expected</dt><dd>{host.census.published_execs} / {host.census.expected_execs}</dd></div>
+            <div><dt>Exits published / known results</dt><dd>{host.census.published_exits ?? "Unmeasured"} / {host.census.known_exits ?? "Unmeasured"}</dd></div>
+            <div><dt>Unknown exit outcomes</dt><dd>{host.census.observed_exits == null || host.census.known_exits == null ? "Unmeasured" : host.census.observed_exits - host.census.known_exits}</dd></div>
+          </dl>
+        </> : <p className="muted small">Process census unavailable in this saved report.</p>}
+      </div>)}
+    </details>}
     <div className="scorecard-pillars">{report.pillars.map((pillar, index) => <details className="scorecard-pillar" key={`${jobId}-${pillar.name}-${index}`}>
       <summary className="scorecard-pillar-heading"><strong>{pillar.name}</strong><ScoreResult sub={pillarResult(pillar)} /><ChevronDown className="pillar-chevron" size={14} /></summary>
       {pillar.sub_scores.length ? <ul>{pillar.sub_scores.map((sub, subIndex) => <li key={`${sub.name}-${subIndex}`}><span>{sub.name}{sub.skipped ? " · Skipped" : ""}</span><ScoreResult sub={sub} />{sub.details && <small>{sub.details}</small>}</li>)}</ul> : <p className="muted small">No subscores recorded.</p>}

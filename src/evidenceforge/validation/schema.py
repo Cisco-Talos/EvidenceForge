@@ -1664,6 +1664,32 @@ class ScenarioValidator:
             compilation = compile_scenario_source_deployment(self.scenario)
             start, end = resolve_time_window(self.scenario.time_window)
             validate_complete_collection(self.scenario, compilation.deployment, formats, start, end)
+            from evidenceforge.generation.activity.macos_execution_metadata import (
+                load_macos_execution_metadata_profile,
+            )
+            from evidenceforge.generation.deployment_compiler import (
+                compile_native_deployment_registry,
+            )
+            from evidenceforge.generation.macos_launch_support import macos_launch_issues
+            from evidenceforge.generation.world_model import WorldModel
+
+            profile = load_macos_execution_metadata_profile()
+            if profile is not None:
+                registry = compile_native_deployment_registry(
+                    self.scenario, WorldModel(self.scenario, "validation.invalid")
+                )
+                for issue in macos_launch_issues(self.scenario, registry, profile):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path="macos_process_coverage",
+                            message=(
+                                f"Unsupported native Mac launch on {issue.hostname} for "
+                                f"{issue.username}: {issue.image}: {', '.join(issue.issues)}"
+                            ),
+                            suggestion="Repair the installed executable metadata and canonical launch policy.",
+                        )
+                    )
         except (StateError, SourceDeploymentCompilationError, ValueError) as error:
             self.issues.append(
                 ValidationIssue(

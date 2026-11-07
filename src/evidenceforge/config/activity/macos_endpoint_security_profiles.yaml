@@ -3,18 +3,16 @@
 schema_version: "2.0"
 profiles:
   - schema_version: "1.0"
-    profile: modeled-macos27-arm64-process-v1
+    profile: modeled-macos27-arm64-process-files-v3
     os_major: 27
     architecture: arm64
-    collector_arguments: [/usr/bin/eslogger, fork, exec, exit]
+    collector_arguments: [/usr/bin/eslogger, fork, exec, exit, create, close, rename, unlink]
     message_version: 11
-    event_types: [9, 11, 15]
+    event_types: [9, 11, 12, 13, 15, 25, 32]
     action_type: 1
     result_type: 0
     auth_result: 0
     clock_profile: macos27-workspace-entry-v1
-    # Reviewed non-PTY SSH client confirms exact integer values in v11 objects.
-    # Application keys/templates and descriptor inventories remain separate gates.
-    exec_entitlements: absent_or_bounded_property_object
-    # Reviewed v7 boot-parent export; launchd's own assigned ASID is distinct.
+    exec_entitlements: absent_or_bounded_property_object_v2
     boot_parent_token: default_unattributed_kernel
+    file_operations: bounded_regular_files_v1

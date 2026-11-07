@@ -28,6 +28,7 @@ class MacosSpawnIO:
         "ssh_shell",
         "ssh_pty_shell",
         "browser_sandbox",
+        "utility_pipes",
     ]
     first_pipe_id: int | None = None
     descriptor_fd: int | None = None
@@ -46,9 +47,16 @@ class MacosSpawnIO:
             "ssh_shell",
             "ssh_pty_shell",
             "browser_sandbox",
+            "utility_pipes",
         }:
             raise ValueError("Mac spawn I/O requires a supported explicit file-action layout")
-        if self.kind in {"login_pipes", "server_channels", "ssh_auth", "browser_sandbox"}:
+        if self.kind in {
+            "login_pipes",
+            "server_channels",
+            "ssh_auth",
+            "browser_sandbox",
+            "utility_pipes",
+        }:
             if type(self.first_pipe_id) is not int or not 0 < self.first_pipe_id < 2**63:
                 raise ValueError("Mac spawn pipes require their host-local native ID policy")
         elif self.first_pipe_id is not None:

@@ -1438,3 +1438,9 @@ html[data-platform="linux"] select optgroup { color: var(--text); background-col
 .send-mode-menu [role="menuitem"] { padding: 8px; cursor: pointer; outline: none; }
 .send-mode-menu [data-highlighted] { background: #213a60; border-radius: 4px; }
 .send-mode-menu [data-disabled] { opacity: .45; cursor: default; }
+
+.scorecard-macos-coverage { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.scorecard-macos-coverage summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+.scorecard-macos-coverage dl { margin: 8px 0 16px; }
+.scorecard-macos-coverage dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 4px 0; }
+.scorecard-macos-coverage dd { margin: 0; font-variant-numeric: tabular-nums; }

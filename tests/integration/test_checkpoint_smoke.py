@@ -634,15 +634,15 @@ def test_short_generation_checkpoint_suspension_and_resume(
         receiver = [
             row for name, rows in native_by_source.items() if "/SSH-TEST." in name for row in rows
         ]
-        assert len(receiver) == 6 and all(row["event_type"] == 11 for row in receiver)
+        from tests.support.macos_ssh import assert_native_ssh_receiver_lifecycle
+
+        assert_native_ssh_receiver_lifecycle(receiver, closed=True, sessions=2)
         for rows in native_by_source.values():
             for row in rows:
                 decode_endpoint_security_record(json.dumps(row))
                 assert row["version"] == 11 and row["event_type"] in {9, 11, 15}
             global_sequences = [row["global_seq_num"] for row in rows]
             assert global_sequences == sorted(set(global_sequences))
-        sequences = [row["seq_num"] for row in receiver]
-        assert sequences == list(range(sequences[0], sequences[0] + 6))
     if denied_launch or failed_exec:
         assert b"invented-blocked-helper" not in b"".join(
             content for name, content in resumed_files.items() if name.startswith("data/")

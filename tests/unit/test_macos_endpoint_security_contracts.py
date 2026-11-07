@@ -130,6 +130,10 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
             "destination": {"existing_file": _file("/tmp/example")},
             "acl": None,
         }
+    elif family == "close":
+        event = {"target": _file("/tmp/example"), "modified": True, "was_mapped_writable": False}
+    elif family == "unlink":
+        event = {"target": _file("/tmp/example"), "parent_dir": _file("/tmp")}
     else:
         event = {
             "source": _file("/tmp/old"),
@@ -139,7 +143,15 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
     return {
         "schema_version": 1,
         "version": version,
-        "event_type": {"exec": 9, "fork": 11, "create": 13, "exit": 15, "rename": 25}[family],
+        "event_type": {
+            "exec": 9,
+            "fork": 11,
+            "close": 12,
+            "create": 13,
+            "exit": 15,
+            "rename": 25,
+            "unlink": 32,
+        }[family],
         "action_type": 1,
         "action": {"result": {"result_type": 0, "result": {"auth": 0}}},
         "time": _TIME,
@@ -165,6 +177,10 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
         (11, "fork"),
         (11, "exec"),
         (11, "exit"),
+        (11, "create"),
+        (11, "close"),
+        (11, "rename"),
+        (11, "unlink"),
     ],
 )
 def test_versioned_native_record_roundtrips_without_new_fields(version: int, family: str) -> None:
@@ -211,6 +227,65 @@ def test_rename_variants_preserve_directory_name_instead_of_fabricating_existing
         decode_endpoint_security_record(json.dumps(fields))
     fields["event"]["rename"]["destination"] = {"existing_file": _file("/tmp/replaced")}
     assert json.loads(decode_endpoint_security_record(json.dumps(fields)).to_ndjson()) == fields
+
+
+@pytest.mark.parametrize("version", [6, 9, 10])
+@pytest.mark.parametrize("family", ["close", "unlink"])
+def test_new_filesystem_shapes_do_not_promote_unreviewed_versions(
+    version: int, family: str
+) -> None:
+    with pytest.raises(ValidationError, match="Unsupported"):
+        decode_endpoint_security_record(json.dumps(_record(version, family)))
+
+
+@pytest.mark.parametrize("field", ["modified", "was_mapped_writable"])
+@pytest.mark.parametrize("value", [0, 1, "true", None])
+def test_close_flags_require_source_booleans(field: str, value: object) -> None:
+    fields = _record(11, "close")
+    fields["event"]["close"][field] = value
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(fields))
+
+
+def test_read_only_close_remains_a_close_observation() -> None:
+    fields = _record(11, "close")
+    fields["event"]["close"]["modified"] = False
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert record.event.close.modified is False
+    assert record.event.close.was_mapped_writable is False
+    assert set(json.loads(record.to_ndjson())["event"]) == {"close"}
+
+
+def test_current_file_snapshots_preserve_empty_create_and_old_replacement_identity() -> None:
+    fields = _record(11, "create")
+    fields["event"]["create"]["destination"]["existing_file"]["stat"]["st_size"] = 0
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert record.event.create.destination.existing_file.stat.st_size == 0
+    fields = _record(11, "rename")
+    fields["event"]["rename"]["destination_type"] = 0
+    replaced = _file("/tmp/replaced")
+    replaced["stat"]["st_ino"] = 9002
+    fields["event"]["rename"]["destination"] = {"existing_file": replaced}
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert record.event.rename.source.stat.st_ino == 9001
+    assert record.event.rename.destination.existing_file.stat.st_ino == 9002
+    fields = _record(11, "unlink")
+    assert (
+        decode_endpoint_security_record(json.dumps(fields)).event.unlink.target.stat.st_nlink == 1
+    )
+    del fields["event"]["unlink"]["parent_dir"]
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(fields))
+
+
+def test_current_create_does_not_admit_an_unobserved_pending_destination_variant() -> None:
+    fields = _record(11, "create")
+    fields["event"]["create"]["destination_type"] = 1
+    fields["event"]["create"]["destination"] = {
+        "new_path": {"dir": _file("/tmp"), "filename": "pending", "mode": 0o600}
+    }
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(fields))
 
 
 @pytest.mark.parametrize(

@@ -129,7 +129,7 @@ class MacosSystemJobStartup(MacosFinderStartup):
             f"XPC_SERVICE_NAME={definition.label}",
         )
         self._fork_directory = metadata.directory(parent.hostname, "/", times[0])
-        if self._fork_directory.metadata != current.metadata:
+        if not metadata.same_directory_object(self._fork_directory, current):
             raise StateError("Native system-job fork changed its boot directory object")
         self._launcher_directory = metadata.directory(parent.hostname, "/", times[1])
         self._app_directory = metadata.directory(parent.hostname, "/", times[3])

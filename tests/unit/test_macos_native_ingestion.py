@@ -108,6 +108,21 @@ def test_malformed_native_records_are_counted_as_failures(
     assert schema.score == 0 and schema.sample_findings
 
 
+@pytest.mark.parametrize("family", ["create", "close", "rename", "unlink"])
+def test_v11_file_ingestion_preserves_operation_truth_and_does_not_invent_process_births(
+    tmp_path: Path, family: str
+) -> None:
+    source = "macos_endpoint_security"
+    fields = _record(11, family)
+    records = list(get_parser(source).parse_file(_write(tmp_path, source, [fields])))
+    assert len(records) == 1
+    assert records[0].fields == fields and not records[0].parse_errors
+    assert records[0].representation == "macos_endpoint_security_v11"
+    schema, constraints = ParseabilityScorer()._score_both({source: records})
+    assert schema.score == constraints.score == 100
+    assert set(records[0].fields["event"]) == {family}
+
+
 @pytest.mark.parametrize("trailing", [_log_record(), {"count": 0, "finished": 1}])
 def test_records_after_export_completion_are_not_silently_accepted(
     tmp_path: Path, trailing: dict[str, object]

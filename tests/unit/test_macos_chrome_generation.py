@@ -194,6 +194,7 @@ def test_unsupported_browser_child_is_rejected_before_allocating_a_lifetime(
         engine._close_emitters()
 
 
+@pytest.mark.parametrize("family", ["chrome", "vscode"])
 @pytest.mark.parametrize("committed", [False, True], ids=["before-commit", "lost-return"])
 @pytest.mark.parametrize("phase", [0, 1], ids=["fork", "exec"])
 def test_browser_helper_retry_keeps_one_fork_exec_and_pipe_allocation(
@@ -201,8 +202,17 @@ def test_browser_helper_retry_keeps_one_fork_exec_and_pipe_allocation(
     monkeypatch: pytest.MonkeyPatch,
     committed: bool,
     phase: int,
+    family: str,
 ) -> None:
-    engine = _finder_engine(tmp_path, monkeypatch, native=True)
+    from tests.unit.test_macos_vscode_generation import HELPER as CODE_HELPER
+    from tests.unit.test_macos_vscode_generation import MAIN as CODE_MAIN
+
+    main_image = MAIN if family == "chrome" else CODE_MAIN
+    helper_image = GENERIC if family == "chrome" else CODE_HELPER
+    pipe_count = 1 if family == "chrome" else 2
+    engine = _finder_engine(
+        tmp_path, monkeypatch, native=True, gui_application=None if family == "chrome" else "vscode"
+    )
     try:
         with effective_config_scope(engine.compiled_scenario.effective_config):
             engine._initialize()
@@ -217,20 +227,24 @@ def test_browser_helper_retry_keeps_one_fork_exec_and_pipe_allocation(
             system,
             at,
             logon,
-            MAIN,
-            shlex.join((MAIN,)),
-            arguments=(MAIN,),
+            main_image,
+            shlex.join((main_image,)),
+            arguments=(main_image,),
             parent_pid=1,
             require_exact_parent=True,
             macos_launch_kind="finder",
         )
-        args = (GENERIC, "--type=gpu-process")
+        args = (
+            (helper_image, "--type=gpu-process")
+            if family == "chrome"
+            else (helper_image, "--type=utility", "--utility-sub-type=node.mojom.NodeService")
+        )
         request = ProcessExecutionRequest(
             user,
             system,
             at + timedelta(seconds=1),
             logon,
-            GENERIC,
+            helper_image,
             shlex.join(args),
             arguments=args,
             parent_pid=main,
@@ -269,13 +283,13 @@ def test_browser_helper_retry_keeps_one_fork_exec_and_pipe_allocation(
         assert after.execs.count == before.execs.count + 1
         assert engine.state_manager._macos_pipe_counters[system.hostname] == (
             first,
-            before_pipe[1] + 1,
+            before_pipe[1] + pipe_count,
         )
         process = engine.state_manager.get_process_identity(system.hostname, pid)
         table = engine.state_manager.process_descriptors_at(
             process, event_time=process.execution_started_at
         )
-        assert len([binding for binding in table.bindings if binding.kind == "pipe"]) == 1
+        assert len([binding for binding in table.bindings if binding.kind == "pipe"]) == pipe_count
         engine.dispatcher.assert_exact_projection_recoveries_drained()
         engine._finalize_macos_process_coverage()
         assert engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.complete

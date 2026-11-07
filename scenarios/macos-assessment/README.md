@@ -1,4 +1,8 @@
-# macOS mixed-fleet assessment benchmark
+# Historical macOS 26 assessment archive
+
+This is retained development/assessment evidence, not a current user example.
+Its macOS 26 target is no longer admitted for generation. For current examples
+and supported sources, use [Simulating macOS workstations](../../docs/macos.md).
 
 This scenario-local software-company benchmark exercises two macOS 26 arm64
 workstations, a Windows workstation and an Ubuntu SSH/Samba server. It is synthetic
@@ -7,7 +11,9 @@ authored input; no personal inventories or host logs were used.
 `revisions/01-supported/` preserves the complete CLI-created Schema 3 draft layout,
 including its UUID and `draft.json`, as a tracked benchmark snapshot. The original
 managed draft remains under `.eforge/artifacts/drafts/scenario/macos-assessment/`.
-Use the tracked `source/scenario.yaml` as the assessment input. Do not edit this
+The tracked input is `revisions/01-supported/source/scenario.yaml`; revision 2 uses
+`revisions/02-native/source/scenario.yaml`. There is no top-level `source/scenario.yaml`.
+Do not edit this
 revision after the first successful baseline; create a separately identified revision for additional
 native sources or materially different coverage. This is not a published scenario.
 

@@ -9,6 +9,21 @@ Automated release and packaged-installer checks remain required. See the
 [release worklog](worklog/2026-10-12-release-2.2.0a2.md).
 See [Studio installation](studio.md#macos-installation).
 
+## Source capabilities and release scope
+
+Installer host support is separate from simulated OS/log-source support. The current
+source tree adds experimental macOS 27 arm64 workstation process/helper and bounded
+filesystem evidence; older published installers do not gain those capabilities merely
+because the product version has not yet been bumped. Release notes must state the
+snapshot's admitted source profile and limits. Use the [platform/log matrix](../README.md#supported-log-formats)
+and [Mac guide](macos.md) when preparing those notes.
+
+The Mac documentation pass does not close user acceptance or authorize integration,
+a version bump, tagging or publication. Before the next release, retain the outstanding
+representative Mac/Studio acceptance and final-snapshot release checks. Launchd ULF,
+Docker Desktop's complete helper graph, broader native filesystem behavior and external
+Mac SIEM normalization remain explicit limits, rather than implied release capabilities.
+
 ## Prepare the source
 
 Choose the next stable version using the SemVer rules in `AGENTS.md`. For previews, append a
@@ -52,6 +67,7 @@ latest. Do not manually push a stable tag to initiate this path.
    recovery, all four slow shards without coverage, and Python checkpoint portability.
 3. Native macOS Apple Silicon and Ubuntu 24.04 ARM64/x86_64 builds with locked Python/npm/Cargo
    dependencies, isolated packaged CLI/resource and checkpoint-enabled generation verification,
+   a positive Mac-native CLI generation/evaluation smoke (ES/ULF/history and process census),
    bundled GStreamer appsink/scanner checks for AppImages, DMG integrity and all checksums.
 4. Downloading this run's installer artifacts, staging a draft release, uploading missing assets,
    downloading and verifying them against the build, then publishing.

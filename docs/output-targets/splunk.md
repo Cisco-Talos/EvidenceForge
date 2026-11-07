@@ -49,6 +49,11 @@ required by the current CIM checks.
 | Zeek connection and HTTP logs | TA for Zeek | <https://splunkbase.splunk.com/app/5466> |
 | Web and proxy access logs | Splunk Add-on for Apache Web Server | <https://splunkbase.splunk.com/app/3186> |
 
+Mac ES/ULF NDJSON and zsh-history files keep their source representation, but
+are outside this backend's current parser discovery/validation. A passing mixed-fleet
+harness result does not include those sources or establish native Mac normalization.
+See the [source and parser boundaries](README.md#native-mac-output-and-parser-coverage).
+
 ## Generate And Validate
 
 Base ingest validation:

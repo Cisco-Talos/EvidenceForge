@@ -120,6 +120,7 @@ from evidenceforge.generation.activity.process_access_patterns import (
     pick_granted_access,
 )
 from evidenceforge.generation.activity.process_helpers import _posix_foreground_lifetime
+from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -155,6 +156,7 @@ from evidenceforge.generation.world_model import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.timing import hawkes_timestamps
@@ -1999,6 +2001,21 @@ def _is_kerberos_member_server(system: Any) -> bool:
         str(value).lower().replace("_", "-") for value in (getattr(system, "roles", None) or [])
     }
     return bool((services | roles) & _KERBEROS_MEMBER_SERVICE_MARKERS)
+
+
+@dataclass(frozen=True, slots=True)
+class _PersonaConnectionIntent:
+    """One bounded hourly persona request, planned before network publication."""
+
+    time: datetime
+    seed: int
+    session: ActiveSession
+    user: User | None
+    connection: dict[str, Any]
+    destination_ip: str
+    hostname: str | None
+    session_deadline: datetime
+    server_admin: bool
 
 
 class BaselineMixin:
@@ -8631,8 +8648,15 @@ class BaselineMixin:
         if terminal_pass:
             assert current_hour is not None
             terminal_activity_plans = []
-            for activity_type in activities:
-                jitter = timedelta(seconds=rng.uniform(0, 55))
+            for activity_index, activity_type in enumerate(activities):
+                jitter = self.activity_generator._sample_profile_activity_gap(
+                    "baseline.user_activity_dispatch",
+                    stable_id=f"{system.hostname}:{user.username}:{event_time.isoformat()}",
+                    host=system.hostname,
+                    source="baseline",
+                    lifecycle_id=activity_type,
+                    ordinal=activity_index,
+                )
                 planned_time = event_time + jitter
                 close_bound = self._baseline_user_activity_close_bound_seconds(
                     activity_type=activity_type,
@@ -8705,7 +8729,14 @@ class BaselineMixin:
             jitter = (
                 terminal_activity_plans[activity_index][1]
                 if terminal_activity_plans is not None
-                else timedelta(seconds=rng.uniform(0, 55))
+                else self.activity_generator._sample_profile_activity_gap(
+                    "baseline.user_activity_dispatch",
+                    stable_id=f"{system.hostname}:{user.username}:{event_time.isoformat()}",
+                    host=system.hostname,
+                    source="baseline",
+                    lifecycle_id=activity_type,
+                    ordinal=activity_index,
+                )
             )
             t = event_time + jitter
             active_session = next(
@@ -9924,6 +9955,25 @@ class BaselineMixin:
         sys_pids: dict[str, int],
     ) -> None:
         """Emit ordinary endpoint FILE telemetry from running baseline processes."""
+        provider = self.activity_generator.macos_execution_metadata
+        if (
+            os_cat == "macos"
+            and provider is not None
+            and provider.profile.filesystem_workload is not None
+        ):
+            from evidenceforge.generation.macos_filesystem_workload import (
+                emit_macos_document_workload,
+            )
+
+            # File activity owns its draw stream even when no eligible editor is live.
+            # Sampling it must not resample later network/application ownership.
+            file_rng = random.Random(
+                _stable_seed(
+                    f"macos-document-workload:{system.hostname}:{current_hour.isoformat()}"
+                )
+            )
+            emit_macos_document_workload(self, system, current_hour, file_rng)
+            return
         from evidenceforge.config.schemas import MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR
         from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import (
@@ -10057,6 +10107,50 @@ class BaselineMixin:
                     file=FileContext(path=file_path, action=file_action, pid=process.pid),
                 )
             )
+
+    def _baseline_browser_ready_time(
+        self,
+        *,
+        system: System,
+        user: User,
+        session: ActiveSession,
+        pid: int,
+        candidate_time: datetime,
+        current_hour: datetime,
+        planned_logoffs: dict[tuple[str, str], float] | None,
+    ) -> datetime | None:
+        """Schedule flexible browsing after its already planned canonical main exec."""
+        identity = self.state_manager.get_process_identity_at(system.hostname, pid, candidate_time)
+        if identity is not None:
+            return candidate_time
+        identity = self.state_manager.get_process_identity(system.hostname, pid)
+        if identity is None or identity.principal != user.username:
+            return None
+        ready = identity.execution_started_at
+        if ready <= candidate_time:
+            return None
+        gap = self.activity_generator._process_activity_timing().sample_profile_gap(
+            "baseline.browser_ready",
+            stable_id=f"browser-ready:{identity.object_id}:{candidate_time.isoformat()}",
+            host=system.hostname,
+            source="baseline",
+            lifecycle_id=session.logon_id,
+        )
+        at = ready + gap
+        at = self._pace_interactive_startup_activity(
+            session=session,
+            system=system,
+            user=user,
+            candidate_time=at,
+            activity_key=f"browser-ready:{identity.object_id}",
+            current_hour=current_hour,
+            planned_logoffs=planned_logoffs,
+        )
+        if at is None or not self._baseline_pass_admits(current_hour, start=at):
+            return None
+        if not _session_active_at(session, at, current_hour, planned_logoffs):
+            return None
+        return at
 
     def _generate_profile_traffic(
         self,
@@ -10544,6 +10638,8 @@ class BaselineMixin:
         # Only real interactive user sessions get persona traffic — skip
         # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
         host_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+        scheduled_persona: list[_PersonaConnectionIntent] = []
+        scheduled_pack: list[tuple[User, list[dict[str, Any]], tuple[int, int], bool]] = []
         for session in host_sessions:
             persona = None
             user_obj = None
@@ -10649,143 +10745,210 @@ class BaselineMixin:
                     continue
                 offset = max(session_start_sec, raw_offset)
                 ts = current_hour + timedelta(seconds=offset)
-                svc = conn.get("service", "")
-                is_server_source = self._is_server_admin_persona_source(system)
-                conn_proto = conn.get("proto", "tcp")
-                conn_port = conn["port"]
-                is_browser_connection = svc in ("ssl", "http") and hostname and not is_server_source
-                maximum_duration, browser_request_close_headroom = (
-                    self._baseline_persona_connection_close_bounds_seconds(
-                        current_hour,
-                        start=ts,
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        proto=conn_proto,
-                        dst_port=conn_port,
-                        service=svc,
-                        is_browser_connection=bool(is_browser_connection),
-                    )
+                seed = _stable_seed(
+                    f"persona-traffic:{system.hostname}:{session.logon_id}:{ts.isoformat()}:{len(scheduled_persona)}"
                 )
-                if not self._baseline_pass_admits(
-                    current_hour,
-                    start=ts,
-                    end=ts + timedelta(seconds=maximum_duration),
-                ):
-                    continue
-                if not _session_active_at(session, ts, current_hour, planned_logoffs):
-                    continue
-                paced_ts = self._pace_interactive_startup_activity(
-                    session=session,
-                    system=system,
-                    user=user_obj,
-                    candidate_time=ts,
-                    activity_key=f"profile:{conn.get('service', '')}:{hostname or conn['role']}",
-                    current_hour=current_hour,
-                    planned_logoffs=planned_logoffs,
-                )
-                if paced_ts is None:
-                    continue
-                ts = paced_ts
-                maximum_duration, browser_request_close_headroom = (
-                    self._baseline_persona_connection_close_bounds_seconds(
-                        current_hour,
-                        start=ts,
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        proto=conn_proto,
-                        dst_port=conn_port,
-                        service=svc,
-                        is_browser_connection=bool(is_browser_connection),
-                    )
-                )
-                if not self._baseline_pass_admits(
-                    current_hour,
-                    start=ts,
-                    end=ts + timedelta(seconds=maximum_duration),
-                ):
-                    continue
-                if not _session_active_at(session, ts, current_hour, planned_logoffs):
-                    continue
-                if not self._package_maintenance_connection_allowed(system, hostname, ts):
-                    continue
-
-                persona_pid = -1
-                # Thread effective persona so _server_admin sessions don't
-                # get browser/SaaS processes attributed on servers.
-                eff_persona = "_server_admin" if use_server_admin_persona else None
-                if user_obj and conn.get("service"):
-                    persona_pid = self.world_planner.ensure_connection_process(
+                scheduled_persona.append(
+                    _PersonaConnectionIntent(
+                        time=ts,
+                        seed=seed,
+                        session=session,
                         user=user_obj,
-                        system=system,
-                        session=session,
-                        time=ts,
-                        service=conn["service"],
-                        rng=rng,
-                        effective_persona=eff_persona,
-                        destination_hostname=hostname,
-                    )
-
-                self.state_manager.set_current_time(ts)
-
-                # For HTTP/HTTPS: generate browsing session with subresources,
-                # referrer chains, and cross-domain CDN fan-out.
-                if svc == "smb" and any(
-                    share.system.casefold()
-                    == str(
-                        getattr(self.activity_generator._ip_to_system.get(dst_ip), "hostname", "")
-                    ).casefold()
-                    for share in self.activity_generator._storage_world.shares
-                ):
-                    continue
-                if svc in ("ssl", "http") and hostname and not is_server_source:
-                    self._emit_browsing_session(
-                        system=system,
-                        user_obj=user_obj,
-                        session=session,
+                        connection=dict(conn),
+                        destination_ip=dst_ip,
                         hostname=hostname,
-                        dst_ip=dst_ip,
-                        conn=conn,
-                        base_ts=ts,
-                        persona_pid=persona_pid,
-                        os_cat=os_cat,
-                        rng=rng,
-                        latest_request_time=(
-                            min(
-                                session_deadline,
-                                pass_end - timedelta(seconds=browser_request_close_headroom),
-                            )
-                            if self._baseline_pass_is_terminal(current_hour)
-                            else session_deadline
-                        ),
+                        session_deadline=session_deadline,
+                        server_admin=use_server_admin_persona,
                     )
-                else:
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        time=ts,
-                        dst_port=conn["port"],
-                        proto=conn.get("proto", "tcp"),
-                        service=conn.get("service"),
-                        duration=rng.uniform(0.1, 10.0),
-                        orig_bytes=rng.randint(200, 8000),
-                        resp_bytes=rng.randint(500, 80000),
-                        emit_dns=conn.get("emit_dns", False),
-                        source_system=system,
-                        hostname=hostname,
-                        pid=persona_pid,
-                    )
+                )
 
             if pack_persona_groups and user_obj is not None:
-                self._generate_pack_persona_traffic(
+                scheduled_pack.append(
+                    (user_obj, pack_persona_groups, (_pc_lo, _pc_hi), use_server_admin_persona)
+                )
+
+        # Global order within this host/hour prevents a later sampled request from
+        # committing a browser root before another session's earlier request.
+        for intent in sorted(scheduled_persona, key=lambda item: (item.time, item.seed)):
+            ts = intent.time
+            rng = random.Random(intent.seed)
+            session = intent.session
+            user_obj = intent.user
+            conn = intent.connection
+            dst_ip = intent.destination_ip
+            hostname = intent.hostname
+            session_deadline = intent.session_deadline
+            use_server_admin_persona = intent.server_admin
+            svc = conn.get("service", "")
+            is_server_source = self._is_server_admin_persona_source(system)
+            conn_proto = conn.get("proto", "tcp")
+            conn_port = conn["port"]
+            is_browser_connection = svc in ("ssl", "http") and hostname and not is_server_source
+            maximum_duration, browser_request_close_headroom = (
+                self._baseline_persona_connection_close_bounds_seconds(
+                    current_hour,
+                    start=ts,
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto=conn_proto,
+                    dst_port=conn_port,
+                    service=svc,
+                    is_browser_connection=bool(is_browser_connection),
+                )
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=ts,
+                end=ts + timedelta(seconds=maximum_duration),
+            ):
+                continue
+            if not _session_active_at(session, ts, current_hour, planned_logoffs):
+                continue
+            paced_ts = self._pace_interactive_startup_activity(
+                session=session,
+                system=system,
+                user=user_obj,
+                candidate_time=ts,
+                activity_key=f"profile:{conn.get('service', '')}:{hostname or conn['role']}",
+                current_hour=current_hour,
+                planned_logoffs=planned_logoffs,
+            )
+            if paced_ts is None:
+                continue
+            ts = paced_ts
+            maximum_duration, browser_request_close_headroom = (
+                self._baseline_persona_connection_close_bounds_seconds(
+                    current_hour,
+                    start=ts,
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto=conn_proto,
+                    dst_port=conn_port,
+                    service=svc,
+                    is_browser_connection=bool(is_browser_connection),
+                )
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=ts,
+                end=ts + timedelta(seconds=maximum_duration),
+            ):
+                continue
+            if not _session_active_at(session, ts, current_hour, planned_logoffs):
+                continue
+            if not self._package_maintenance_connection_allowed(system, hostname, ts):
+                continue
+
+            persona_pid = -1
+            # Thread effective persona so _server_admin sessions don't
+            # get browser/SaaS processes attributed on servers.
+            eff_persona = "_server_admin" if use_server_admin_persona else None
+            if user_obj and conn.get("service"):
+                persona_pid = self.world_planner.ensure_connection_process(
+                    user=user_obj,
+                    system=system,
+                    session=session,
+                    time=ts,
+                    service=conn["service"],
+                    rng=rng,
+                    effective_persona=eff_persona,
+                    destination_hostname=hostname,
+                    browser_intent=bool(
+                        is_browser_connection and is_browser_like_proxy_domain(hostname)
+                    ),
+                )
+
+            if is_browser_connection and persona_pid > 0 and user_obj is not None:
+                ready_ts = self._baseline_browser_ready_time(
+                    system=system,
+                    user=user_obj,
+                    session=session,
+                    pid=persona_pid,
+                    candidate_time=ts,
                     current_hour=current_hour,
+                    planned_logoffs=planned_logoffs,
+                )
+                if ready_ts is None:
+                    continue
+                ts = ready_ts
+                maximum_duration, browser_request_close_headroom = (
+                    self._baseline_persona_connection_close_bounds_seconds(
+                        current_hour,
+                        start=ts,
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        proto=conn_proto,
+                        dst_port=conn_port,
+                        service=svc,
+                        is_browser_connection=True,
+                    )
+                )
+                if not self._baseline_pass_admits(
+                    current_hour, start=ts, end=ts + timedelta(seconds=maximum_duration)
+                ):
+                    continue
+
+            self.state_manager.set_current_time(ts)
+
+            # For HTTP/HTTPS: generate browsing session with subresources,
+            # referrer chains, and cross-domain CDN fan-out.
+            if svc == "smb" and any(
+                share.system.casefold()
+                == str(
+                    getattr(self.activity_generator._ip_to_system.get(dst_ip), "hostname", "")
+                ).casefold()
+                for share in self.activity_generator._storage_world.shares
+            ):
+                continue
+            if svc in ("ssl", "http") and hostname and not is_server_source:
+                self._emit_browsing_session(
                     system=system,
                     user_obj=user_obj,
-                    groups=pack_persona_groups,
+                    session=session,
+                    hostname=hostname,
+                    dst_ip=dst_ip,
+                    conn=conn,
+                    base_ts=ts,
+                    persona_pid=persona_pid,
                     os_cat=os_cat,
-                    count_range=(_pc_lo, _pc_hi),
-                    planned_logoffs=planned_logoffs,
-                    use_server_admin_persona=use_server_admin_persona,
+                    rng=rng,
+                    latest_request_time=(
+                        min(
+                            session_deadline,
+                            pass_end - timedelta(seconds=browser_request_close_headroom),
+                        )
+                        if self._baseline_pass_is_terminal(current_hour)
+                        else session_deadline
+                    ),
                 )
+            else:
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=conn["port"],
+                    proto=conn.get("proto", "tcp"),
+                    service=conn.get("service"),
+                    duration=rng.uniform(0.1, 10.0),
+                    orig_bytes=rng.randint(200, 8000),
+                    resp_bytes=rng.randint(500, 80000),
+                    emit_dns=conn.get("emit_dns", False),
+                    source_system=system,
+                    hostname=hostname,
+                    pid=persona_pid,
+                )
+
+        for user_obj, groups, count_range, use_server_admin_persona in scheduled_pack:
+            self._generate_pack_persona_traffic(
+                current_hour=current_hour,
+                system=system,
+                user_obj=user_obj,
+                groups=groups,
+                os_cat=os_cat,
+                count_range=count_range,
+                planned_logoffs=planned_logoffs,
+                use_server_admin_persona=use_server_admin_persona,
+            )
 
     def _claim_hourly_pack_traffic_groups(
         self,
