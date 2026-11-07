@@ -612,3 +612,12 @@ Studio bytes are unchanged from e663 and the measured revision 488; retain its
 successful native/installer/slow evidence rather than repeat unrelated checks
 for POSIX test declarations. Official publication still runs the complete release
 workflow on the eventual authorized release commit. The user Studio hold remains.
+
+Final Linux reference diagnostic passes 1,605 tests with one skip (e1e4716b,
+run 42421148958). It retains all native POSIX privacy, compiler, cleanup and
+ownership checks; reports are under `linux-reference-e1e4/`. A direct catalog-read
+audit also gives the extended Finder CLI fixture an explicit UTF-8 read. Its
+test data/assertions are unchanged. Full lint/formatting (1,510 files), version
+sync, behavior declaration and the measured runtime/config hashes remain current.
+The last requested rerun comprises full Windows routine tests and the full Linux
+release coverage selection, with strict 70% coverage and a 120-minute Linux budget.
