@@ -60,6 +60,7 @@ class _RecoveryDispatcher:
         on_drain: Callable[[], None] | None = None,
     ) -> None:
         self._calls = calls
+        self.macos_es_ingress = None
         self._drain_failures = drain_failures
         self._on_drain = on_drain
 

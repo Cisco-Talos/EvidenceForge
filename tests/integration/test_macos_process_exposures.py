@@ -4,6 +4,7 @@
 """Mac process exposures remain visible without inventing Linux tool installations."""
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -74,16 +75,27 @@ def test_mac_process_exposures_correlate_with_existing_canonical_lifecycle(tmp_p
             row
             for row in rows
             if row["object"] == "PROCESS"
-            and row["action"] == "CREATE"
-            and value in row["properties"]["command_line"]
+            and (
+                row["action"] == "CREATE"
+                or (row["action"] == "MODIFY" and row["properties"].get("operation") == "exec")
+            )
+            and value in row["properties"].get("command_line", "")
         ]
         assert len(creates) == 1
         create = creates[0]
         assert create["principal"] == "alex"
         assert create["properties"]["image_path"] == "/usr/bin/env"
-        assert create["properties"]["parent_image_path"].startswith("/")
+        birth = next(
+            row
+            for row in rows
+            if row["objectID"] == create["objectID"] and row["action"] == "CREATE"
+        )
+        assert birth["properties"]["parent_image_path"] == "/bin/zsh"
+        arguments = shlex.split(create["properties"]["command_line"])
+        assert len(arguments) == 2 and "=" in arguments[1]
         assert create["ppid"] != 4
-        assert create["properties"]["session_id"]
+        assert create["properties"]["logon_id"]
+        assert "session_id" not in create["properties"]
         assert any(
             row["object"] == "PROCESS"
             and row["action"] == "TERMINATE"

@@ -2514,13 +2514,7 @@ class _PreparedSshCloseContinuation:
             and getattr(self.ecar_owner, "supports_exact_projection_publication", None) is True
         )
         no_ecar_owner_is_exact = bool(
-            type(emitters) is dict
-            and "ecar" not in emitters
-            and self.ecar_owner is None
-            and (
-                type(self.plan.auth_state) is _SshMacAuthState
-                or self._all_projection_times_are_warmup_suppressed()
-            )
+            type(emitters) is dict and "ecar" not in emitters and self.ecar_owner is None
         )
         zeek_owner_is_exact = bool(
             type(emitters) is dict
@@ -2539,30 +2533,6 @@ class _PreparedSshCloseContinuation:
         ):
             raise StateError("Exact SSH close requires its original eCAR/Zeek projection owners")
         self.require_application_owner_shape()
-
-    def _all_projection_times_are_warmup_suppressed(self) -> bool:
-        """Prove every open and terminal occurrence precedes the output gate."""
-
-        output_start = getattr(self.dispatcher_owner, "output_start_time", None)
-        if type(output_start) is not datetime:
-            return False
-        plan = self.plan
-        projection_times = (
-            plan.open_time,
-            plan.session_started_at,
-            plan.receiver_started_at,
-            plan.auth_state.receiver.connection_time,
-            plan.auth_state.receiver.authenticated_at,
-            plan.auth_state.receiver.session_open_time,
-            plan.auth_state.receiver.ready_at,
-            plan.close_time,
-            plan.receiver_terminate_time,
-            plan.session_close_time,
-            *((plan.logind_remove_time,) if plan.logind_remove_time is not None else ()),
-            *((plan.source_terminate_time,) if plan.source_terminate_time is not None else ()),
-        )
-        gate = ensure_utc(output_start)
-        return all(ensure_utc(timestamp) < gate for timestamp in projection_times)
 
     def require_projection_owner(self, executor: SshSessionExecutor) -> None:
         """Identity-bind every close retry to its original runtime and dispatcher."""
@@ -3646,67 +3616,10 @@ class SshSessionActionBundle:
             return False
         if type(dict.get(emitters, "ecar")) is EcarEmitter:
             return True
-        return "ecar" not in emitters and (
-            _get_os_category(self.request.target_system.os) == "macos"
-            or self._no_ecar_cohort_is_provably_warmup()
-        )
-
-    def _no_ecar_cohort_is_provably_warmup(self) -> bool:
-        """Conservatively admit an exact no-eCAR cohort only when wholly suppressed."""
-
-        dispatcher = getattr(self.executor, "dispatcher", None)
-        output_start = getattr(dispatcher, "output_start_time", None)
-        if type(output_start) is not datetime:
-            return False
-        request = self.request
-        duration = 0.0
-        if request.bundle_owns_close:
-            duration = (
-                request.duration
-                if request.duration is not None
-                else self._preview_deferred_transport_duration()
-            )
-            if request.min_duration is not None:
-                duration = max(duration, request.min_duration)
-            duration = max(1.0, duration)
-        if request.session_end_plan is not None:
-            planned_duration = (
-                ensure_utc(request.session_end_plan.canonical_end) - ensure_utc(request.time)
-            ).total_seconds()
-            if planned_duration <= 0:
-                return False
-            duration = max(duration, planned_duration)
-        if not math.isfinite(duration):
-            return False
-        try:
-            required_headroom = ssh_action_deadline_transport_headroom_seconds(
-                min_duration_seconds=duration,
-                auth_method=request.auth_method,
-                public_key_type=request.public_key_type,
-                route_class="private" if self._source_system() is not None else "public",
-                **self._action_deadline_runtime_options(ensure_utc(output_start)),
-            )
-        except (StateError, TypeError, ValueError):
-            return False
-        return ensure_utc(request.time) + timedelta(seconds=required_headroom) < ensure_utc(
-            output_start
-        )
-
-    def _preview_deferred_transport_duration(self) -> float:
-        """Preview the exact upcoming random duration without advancing its owner RNG."""
-
-        request = self.request
-        preview_rng = random.Random(0)
-        preview_rng.setstate(_get_rng().getstate())
-        self.executor.preview_ssh_source_port(
-            request.source_ip,
-            request.target_system.ip,
-            request.source_port,
-            preview_rng,
-            self._source_os(),
-            request.time,
-        )
-        return preview_rng.uniform(30.0, 3600.0)
+        # An absent renderer is an exact empty projection cohort. Canonical SSH
+        # ownership must stay the same across source filtering; a present renderer
+        # still requires the concrete built-in owner checked above.
+        return "ecar" not in emitters
 
     def _source_os(self) -> str:
         """Return the source OS category used for source-port reservation."""

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 486
+current_revision: 487
 history_start_revision: 1
-behavior_surface_sha256: 73ae7aa778d77a7e8d1400428e7727a506c5e03f8df3bef893183cfa2d7efbbe
+behavior_surface_sha256: e2dcdc1e242e8f03610d5d9129f4d2ca481a57e7a6c887302312583c8a7bbed8
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5419,3 +5419,18 @@ changes:
   formats: []
   summary: Resolves SSH/network source ownership at occurrence time. Applies transport activity and holds
     only to the same live lifetime, preserving retained evidence and excluding later PID reuse.
+- revision: 487
+  id: ssh-source-independent-exact-ownership
+  impact: localized
+  domains:
+  - ssh-session-lifecycle
+  - source-filtering
+  - macos-terminal-readiness
+  - macos-process-exposure-lifecycle
+  formats:
+  - ecar
+  - syslog
+  - zeek
+  - macos_endpoint_security
+  summary: Keeps SSH construction independent of eCAR, declines unavailable existing Mac terminal shells,
+    and gives assignment-only env exposure carriers bounded modeled lifetimes.

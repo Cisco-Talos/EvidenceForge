@@ -54,6 +54,29 @@ def test_snare_variant_preserves_canonical_fields(tmp_path: Path, case: dict) ->
     assert scores[0].unavailable_check_count == 0
 
 
+@pytest.mark.parametrize("day", [1, 7, 9, 10, 29])
+@pytest.mark.parametrize("source", ["windows_event_security", "windows_event_sysmon"])
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_snare_header_day_padding_preserves_exact_timestamp_comparison(
+    tmp_path: Path, day: int, source: str, conflicting: bool
+) -> None:
+    case = next(case for case in CASES if case["format"] == source)
+    fields = dict(case["fields"])
+    fields["TimeCreated"] = f"2024-02-{day:02d}T12:00:00Z"
+    if "UtcTime" in fields:
+        fields["UtcTime"] = f"2024-02-{day:02d} 12:00:00.000"
+    raw = render_case(case | {"fields": fields})
+    if conflicting:
+        raw = raw.replace("12:00:00", "12:00:01", 1)
+    path = tmp_path / f"{source}_snare.log"
+    path.write_text(raw + "\n")
+    (record,) = get_parser(source).parse_file(path)
+    assert ("Conflicting Snare timestamps" in record.parse_errors) == conflicting
+    if not conflicting:
+        assert not record.parse_errors
+        assert record.timestamp.day == day and record.timestamp.year == 2024
+
+
 def test_projection_inventory_is_exhaustive() -> None:
     assert len(load_snare_projections().events) == len(CASES) == 43
 

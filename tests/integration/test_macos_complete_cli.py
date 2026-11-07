@@ -35,8 +35,8 @@ def test_default_native_completeness_rejects_unresolved_starts_or_removed_source
                 {
                     "type": "process",
                     "launch_method": "finder",
-                    "process_name": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                    "command_line": "'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'",
+                    "process_name": "/Applications/Unqualified Example.app/Contents/MacOS/Unqualified Example",
+                    "command_line": "'/Applications/Unqualified Example.app/Contents/MacOS/Unqualified Example'",
                     "supplementary": "none",
                 }
             ],
@@ -66,6 +66,6 @@ def test_default_native_completeness_rejects_unresolved_starts_or_removed_source
     assert (
         "native macos_endpoint_security output is not selected" in text
         if filter_native
-        else "Finder startup requires an explicit app bundle-identifier policy" in text
+        else "Finder startup requires qualified installed-app policy and empty effects" in text
     ), text
     assert not (output / "GROUND_TRUTH.json").exists()

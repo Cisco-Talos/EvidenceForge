@@ -563,6 +563,7 @@ def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationE
 
     engine = GenerationEngine.__new__(GenerationEngine)
     engine.activity_generator = harness.generator
+    engine.state_manager = harness.state
     engine.dispatcher = harness.dispatcher
     engine.emitters = {}
     engine.end_time = _END
@@ -4251,6 +4252,7 @@ def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
     sink = _OrderedSourceSink(calls, owner)
     engine = GenerationEngine.__new__(GenerationEngine)
     engine.activity_generator = owner
+    engine.state_manager = StateManager()
     engine.dispatcher = dispatcher
     engine.emitters = {"ordered": sink}
     engine.end_time = _END

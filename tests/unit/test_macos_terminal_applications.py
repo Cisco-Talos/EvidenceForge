@@ -99,6 +99,19 @@ def test_assigned_terminal_owns_commands_and_preserves_complete_coverage_boundar
         catalog = application_descriptor(terminal_id)
         assert terminal.image == catalog["platforms"]["macos"]["image_path"]
         assert shell.image == "/bin/zsh" and login.image == "/usr/bin/login"
+        digest = state.materialization_digest()
+        assert (
+            generator.ensure_macos_session_shell(user, system, logon, at + timedelta(seconds=5))
+            is None
+        )
+        assert state.materialization_digest() == digest
+        assert (
+            generator.ensure_macos_session_shell(
+                user, system, logon, shell.execution_started_at + timedelta(microseconds=1)
+            )
+            is None
+        )
+        assert state.materialization_digest() == digest
         if terminal_id == "macos-iterm2":
             server = state.get_process_identity(system.hostname, login.parent_pid)
             assert server.image.endswith("/iTermServer-3.7.6")

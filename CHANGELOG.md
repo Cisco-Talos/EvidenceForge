@@ -54,7 +54,12 @@ Studio acceptance remain separate release steps.
   Preserve positive helper and complete SSH lifecycle assertions in extended tests.
 - Preserve nested native entitlement object/array types through wire validation,
   separate historical network/SSH attribution from live process updates, and make
-  Mac reference-tool imports portable to Windows test collection.
+  Mac reference-tool imports portable to Windows test collection. Keep SSH lifecycle
+  construction independent of eCAR selection and decline backdated use of a session
+  shell whose terminal startup is already reserved for a later occurrence. Use
+  assignment-only Mac env exposure carriers with bounded modeled lifetimes and
+  stable canonical argv/wire quoting. Compare Snare timestamps as calendar values,
+  accepting valid day padding and payload-owned leap years while rejecting conflicts.
 - Repair mixed-fleet identity and protocol consistency, passive histories, Mac
   query lifetimes, process completion and interactive-only shell history
   (`42d6440a`, `e30c1875`, `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).

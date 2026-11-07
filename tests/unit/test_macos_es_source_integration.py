@@ -464,4 +464,21 @@ def test_cli_selects_native_source_and_records_manifest_without_inventing_forks(
     assert result.exit_code == 0, result.output
     manifest = json.loads((destination / "GENERATION_MANIFEST.json").read_text())
     assert manifest["formats"] == ["macos_endpoint_security"]
-    assert not list(destination.rglob("macos_endpoint_security.ndjson"))
+    records = [
+        json.loads(line)
+        for path in destination.rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    truth = json.loads((destination / "GROUND_TRUTH.json").read_text())
+    census = truth["macos_native_coverage"]["hosts"][0]["process_census"]
+    assert census["complete"] and census["aggregate_births"] == 0
+    assert (
+        census["expected_forks"]
+        == census["published_forks"]
+        == sum(row["event_type"] == 11 for row in records)
+    )
+    assert (
+        census["expected_execs"]
+        == census["published_execs"]
+        == sum(row["event_type"] == 9 for row in records)
+    )

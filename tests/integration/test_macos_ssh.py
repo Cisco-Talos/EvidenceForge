@@ -69,7 +69,8 @@ def test_mac_ssh_client_process_history_transport_and_close(
         row
         for row in clients
         if row["object"] == "PROCESS"
-        and row["action"] == "CREATE"
+        and row["action"] == "MODIFY"
+        and row["properties"].get("operation") == "exec"
         and row["properties"]["image_path"] == "/usr/bin/ssh"
     ]
     history = "".join(path.read_text() for path in tmp_path.rglob("*.zsh_history"))

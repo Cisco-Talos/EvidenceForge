@@ -291,3 +291,136 @@ retirement item, distinct from the existing broader spool-relocation backlog. No
 recovery source or external file is deleted to hide the observation; scoped scratch
 and reports remain available on the reference Mac. The corrected supervisor's
 `final_owned_temporary_allocated_bytes` makes that residual visible.
+
+
+## Extended-suite reconciliation after revision 486
+
+Validation snapshot `0902bf949c20d0eea75d9e40936e18ad40b18d47` on
+`codex/alpha5-final-validation-20261107` runs at
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42409371753 .
+Its product runtime source is byte-identical to b1c153c6; the changed recovery
+companion and corrected owned-temp measurement supervisor are included. Neither
+run is a full passing gate yet. b1c153c6 passed all three native Studio gates,
+state recovery, Python portability, lint, Windows durability and preview installer
+verification, while three completed slow shards exposed additional failures.
+The remaining routine/coverage/fourth-shard results are still pending.
+
+Revision 487 addresses two genuine root causes found by those slow gates:
+
+- A Linux SSH call with no eCAR sink switched from exact to compatibility lifecycle
+  construction once it might cross collection. That changed shared RNG consumption
+  during warm-up and later Mac native timestamps. Missing eCAR is now an exact
+  empty projection cohort; present sinks still require concrete immutable owners.
+  Removed the obsolete warm-up-only admission/preview path. The original native
+  full/filtered failing case passes and all 162 deferred SSH checks pass.
+- Earlier background work can be visited after a later authored terminal launch
+  has reserved the session's initial shell. The old readiness path attempted a
+  second fresh app and failed. It now declines the unavailable future shell
+  without modifying State or creating a window. Both terminal variants have
+  positive same-owner reuse plus backdated no-mutation controls; all 15 terminal
+  tests and the original Mac SSH exact suspend/resume regression pass.
+
+Other repairs retain current source contracts: Mac 27 fixtures, one run seed for
+native boot/activity, public chronological native delivery, fork CREATE joined to
+exec MODIFY, absent Windows session IDs on Mac, exact dispatcher/state doubles,
+new timing helper call sites, SMB2/3 share_type/path instead of SMB1-only service,
+and withheld hashes when capture has missing file bytes. Native completeness
+negative control now uses an actually unqualified invented app rather than the
+now-qualified Chrome main. Generic SSH transport no longer asserts invalid-user
+password authentication. Exact-close rejection tests distinguish permitted ordinary
+preterminal rows from forbidden exact terminal admission. Independent counts,
+identity/parent/lifetime, no-side-effect and exact recovery/filter assertions remain.
+Additional Windows-only UID mock seams use raising=False for absent POSIX APIs.
+
+Local test execution that overlapped source formatting produced manifest-digest
+refusals; those are instrumentation timing failures and are rerun on the frozen
+revision-487 digest, not counted as passes or independent product regressions.
+19 mixed-platform receiver tests pass; 102 source-native/network checks passed
+with the remaining ULF test rerun required after that formatting boundary.
+Final owned-temp revision-486 reports/provenance are retained locally in
+`/private/tmp/eforge-alpha5-readiness/resource-owned-temp-evidence.tar.gz`.
+Repeat the same fixed resource workload on final runtime source before reporting
+final metrics. No new workload, capture or application installation is authorized
+or needed for this repeat.
+
+
+### Completed slow diagnostics and final owner repairs
+
+All four b1c153c6 slow shards finished: respectively 33/18/16/17 failures, with
+537/505/498/574 passes (84 failed, 2,114 passed and five skips overall). These are
+full defect-finding results, not a passing gate. Reconciled the remaining original
+failures through focused runs: 19 receiver cases pass with native boot/activity
+under the same seed and the public chronological-delivery mode; 102 of 103 source-
+native/network cases passed before a formatting-boundary manifest refusal; the
+ULF case subsequently passed on frozen source. A later 80-case slow reconciliation
+had 76 pass and exposed four remaining fixtures/owners described below.
+
+The terminal readiness fix now declines any unavailable existing initial shell,
+including a source-visible readiness floor later than the backdated request. It
+never treats an unavailable initial shell as permission to launch another window.
+The persistence resume regression passes; both terminal variants retain positive
+reuse and backdated birth/execution/source-readiness no-mutation controls.
+
+A real process-exposure defect left later Mac exposures unrealized: the old env
+carriers invoked an unmodeled second program and had no admitted finite lifetime,
+so the initial carrier occupied its foreground shell indefinitely. Shared cached
+spawn-rule data now supplies assignment-only env invocations and nominal bounded
+lifetimes. Secret and adversarial renderers share that pool and preserve the exact
+encoded wire substring through canonical argv quoting, including spaces and
+apostrophes. No extra child/exec or known terminal result is invented. All five
+exposures and their individual process terminations now appear; the corrected
+integration gate passes. All 293 secret/payload/terminal/platform unit checks pass,
+including positive literal argv/wire preservation and a negative extra-program
+lifetime control.
+
+Other final fixtures keep strong positive controls: the helper checkpoint fixture
+explicitly owns a browser and renderer through a paired ten-hour logout instead
+of depending on incidental high-baseline selection. Its positive retained-helper,
+exact resume and final close checks pass. The natural-descendant closure case uses
+an explicitly bounded id query rather than assuming an invented helper is short;
+all three starts and matching terminations remain required. A root id query proves
+its pre-existing elevated /bin/sh parent, no root USER_SESSION and finite closure;
+that gate passes. Denied/failed exec census asserts zero aggregate starts and
+exactly one canonical fork/exec, with native completeness correctly absent because
+that fixture selects no native source.
+
+The SOF-ELK iteration gate found a real parser defect: RFC3164's unpadded day was
+compared textually with Snare's padded day. Native payload year now owns the
+calendar comparison, including February 29 when the fallback year is non-leap;
+contradictory seconds still fail. All 177 Snare tests pass, including security and
+Sysmon padding/conflict/leap-year cases. A fresh 141,847-record SOF-ELK bundle that
+previously rejected all 31,004 Windows rows now passes evaluation, with both
+Parseability measures at 100. No generated bundle was edited to obtain that pass.
+The test now prints the failed parseability diagnostic if the strict check fails.
+
+Windows job 128509132898 exhausted its 45-minute limit (confirmed by GitHub check
+annotation); cancellation is not a pass and no usable completed log was retained.
+The expanded routine budgets are 90 minutes for Windows and release Linux coverage,
+and 45 minutes for ordinary Linux; strict tests and 70% coverage stay unchanged.
+Routine commands now retain the twenty slowest durations. The existing Linux
+coverage job remains pending; final repaired-source CI must still complete.
+Full Ruff, formatting (1,509 files), version sync, behavior declaration, eleven
+temporal migration/guard tests and config validation (101 files, zero findings)
+pass. Final behavior revision 487 digest is
+`e2dcdc1e242e8f03610d5d9129f4d2ca481a57e7a6c887302312583c8a7bbed8`.
+
+### Final fixed-workload resource measurement
+
+All 767 runtime/config files on the reference host match the final local inventory
+`engine-v487-files.json`. The same workload SHA, host, seed, sources, 26-hour window,
+one-hour warm-up, cadence and owned-temp supervisor are retained. Final measurement
+`measurement-v487/` passes stopped checkpoint verification and exact resume:
+
+- generation/resume 68.111 seconds; stopped verification 6.205 seconds;
+- peak process-tree RSS 333,660,160 bytes (318.2 MiB);
+- sampled total working disk 75,227,136 bytes (71.7 MiB);
+- hour-seven checkpoint workspace 24,446,830 logical / 26,279,936 allocated bytes;
+- final output 16,963,178 logical bytes; retained owned temporary scratch 7,835,648 bytes.
+
+All eighteen generated data-file hashes equal the preceding owned-temp run.
+The metadata/config size changed with declared behavior. Final reports, generation
+manifest and source checksums are retained at
+`/private/tmp/eforge-alpha5-readiness/resource-v487-evidence.tar.gz`.
+The forecast calibration and 7.5 MiB scratch-retirement P2 items remain explicit.
+This completes the bounded resource measurement, not general scalability or Studio
+interactive acceptance. No tag, publication or dev integration PR is authorized.

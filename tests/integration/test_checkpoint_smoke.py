@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -377,6 +378,62 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "user_applications": [{"user": "alex", "applications": ["chrome", "macos-zsh"]}],
             }
         ]
+        from evidenceforge.generation.activity.application_catalog import application_descriptor
+
+        chrome = application_descriptor("chrome")["platforms"]["macos"]
+        child_command = chrome["children"][0]
+        scenario_data.setdefault("storyline", []).extend(
+            [
+                {
+                    "id": "helper-owner-login",
+                    "time": "+48m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Own the retained browser helper fixture",
+                    "events": [{"type": "logon", "logon_type": 2}],
+                },
+                {
+                    "id": "retained-browser",
+                    "time": "+49m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Start or reuse the exact browser owner",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": chrome["image_path"],
+                            "command_line": shlex.join((chrome["image_path"],)),
+                            "process_ref": "retained-browser",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+                {
+                    "id": "retained-helper",
+                    "time": "+50m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Keep a positive helper across recovery",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": shlex.split(child_command)[0],
+                            "command_line": child_command,
+                            "parent_ref": "retained-browser",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+                {
+                    "id": "helper-owner-close",
+                    "time": "+10h",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Close the retained browser session",
+                    "events": [{"type": "logoff"}],
+                },
+            ]
+        )
     if start is not None:
         scenario_data["time_window"]["start"] = start
         scenario_data["storyline"] = [

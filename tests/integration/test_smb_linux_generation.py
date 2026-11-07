@@ -742,7 +742,8 @@ def test_external_client_to_samba_keeps_network_locality_and_server_only_endpoin
     ecar = _json_records(linux_matrix_output, "ecar.json")
 
     assert connection["local_orig"] is False
-    assert file_record["local_orig"] is False
+    # files.log locality names the sender: this read is sent by local Samba.
+    assert file_record["local_orig"] is True
     assert file_record["is_orig"] is False
     assert not any(
         record.get("hostname") in {"198.51.100.42", "external-client.example.test"}

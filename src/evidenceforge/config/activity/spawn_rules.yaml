@@ -459,6 +459,17 @@ linux:
 # Native macOS ancestry. These are eligible relationships, not a claim that
 # every application or helper starts in every session.
 macos:
+  # Assignment-only env prints the environment and starts no second executable.
+  # These are modeled carrier lifetimes, not measured command/result references.
+  env:
+    command_templates:
+      - /usr/bin/env API_TOKEN={value}
+      - /usr/bin/env SECRET={value}
+      - /usr/bin/env LOG_FIELD={value}
+      - /usr/bin/env USER_INPUT={value}
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.05, maximum: 2.5, sigma: 0.85}
+    children: []
   # Explicit no-op command; nominal synthetic timing, not a host benchmark.
   "true":
     command_templates: [/usr/bin/true]

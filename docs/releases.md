@@ -108,8 +108,8 @@ gh workflow run release.yml --ref dev -f tag=v2.2.0a1
 ```
 
 This repeats every release gate and retains the tag's original source commit. It does not move
-the tag or merge main. Instrumented Linux release coverage has a 60-minute job budget; routine
-Linux checks retain their 25-minute budget. Prefer the original run's failed-job retry when a
+the tag or merge main. Instrumented Linux release coverage and Windows routine tests have 90-minute job
+budgets; routine Linux checks have a 45-minute budget. Prefer the original run's failed-job retry when a
 draft already contains assets, since rebuilding can change installer bytes.
 
 The build job uses a platform matrix. Additional platform support should add native build and

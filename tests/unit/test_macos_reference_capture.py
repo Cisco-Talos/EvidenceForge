@@ -392,7 +392,9 @@ def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
 
     tmp_path.chmod(0o700)
     monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
-    monkeypatch.setattr(kit.os, "geteuid", (lambda: uid) if family == "Darwin" else forbidden)
+    monkeypatch.setattr(
+        kit.os, "geteuid", (lambda: uid) if family == "Darwin" else forbidden, raising=False
+    )
     monkeypatch.setattr(kit.platform, "system", lambda: family)
     monkeypatch.setattr(kit.platform, "machine", lambda: architecture)
     monkeypatch.setattr(kit, "_quiet_command", lambda _args, _cwd: version.encode())
@@ -428,7 +430,7 @@ def test_successful_preflight_never_builds_collects_or_writes_data(
 
     tmp_path.chmod(0o700)
     monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
-    monkeypatch.setattr(kit.os, "geteuid", lambda: 123)
+    monkeypatch.setattr(kit.os, "geteuid", lambda: 123, raising=False)
     monkeypatch.setattr(kit.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(kit.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(kit, "_quiet_command", fake_version)

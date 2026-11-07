@@ -122,7 +122,7 @@ def test_mac_mail_submission_owns_native_endpoint_process_and_avoids_linux_cache
     scenario = _email_scenario()
     scenario.time_window.start = datetime(2026, 10, 15, 14, tzinfo=UTC)
     for system in scenario.environment.systems[:2]:
-        system.os = "macOS 26"
+        system.os = "macOS 27"
         system.architecture = "arm64"
     scenario.output = OutputSpec(
         logs=[{"format": "zeek"}, {"format": "ecar"}], destination="./data"

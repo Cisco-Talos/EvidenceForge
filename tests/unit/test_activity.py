@@ -3686,15 +3686,15 @@ class TestActivityGenerator:
             445,
             3306,
         }
-        assert {
-            request.get("service") for request in service_requests if request.get("service")
-        } >= {
-            "ssh",
-            "http",
-            "ssl",
-            "smb",
-            "mysql",
-        }
+        # Failed scan attempts do not establish an application service. Every
+        # identified response must still agree with its probed destination port.
+        services_by_port = {22: "ssh", 80: "http", 443: "ssl", 445: "smb", 3306: "mysql"}
+        assert any(request.get("service") for request in service_requests)
+        assert all(
+            request["service"] == services_by_port[request["dst_port"]]
+            for request in service_requests
+            if request.get("service")
+        )
         assert all(
             request["suppress_application_side_effects"] is True for request in probe_requests
         )

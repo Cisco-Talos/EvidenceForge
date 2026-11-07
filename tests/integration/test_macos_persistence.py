@@ -95,8 +95,11 @@ def test_authored_job_descendants_close_consistently_across_filtering(
     if natural_exit:
         for step in data["storyline"]:
             for event in step["events"]:
-                if event.get("parent_ref"):
-                    event["command_line"] = event["command_line"].replace(" --keep-alive", "")
+                if event.get("process_ref") == "helper-2":
+                    # A known finite command supplies a positive natural completion;
+                    # unknown invented executables retain their operation owner.
+                    event["process_name"] = "/usr/bin/id"
+                    event["command_line"] = "/usr/bin/id"
     source = tmp_path / "scenario.yaml"
     source.write_text(yaml.safe_dump(data, sort_keys=False))
     outputs: list[Path] = []
@@ -143,7 +146,7 @@ def test_authored_job_descendants_close_consistently_across_filtering(
         in {
             "/usr/local/libexec/invented-worker",
             "/usr/local/libexec/invented-helper-1",
-            "/usr/local/libexec/invented-helper-2",
+            "/usr/bin/id" if natural_exit else "/usr/local/libexec/invented-helper-2",
         }
     ]
     starts = [row for row in family if row["action"] == "CREATE"]

@@ -65,6 +65,8 @@ def _mock_activity_generator_factory(mock_instance: Mock):
     """Bind mocked generation to the bundle-owned session postcondition."""
 
     mock_instance.timing_runtime = None
+    mock_instance.generate_process.return_value = 4321
+    mock_instance._sample_profile_activity_gap.return_value = timedelta(0)
 
     def factory(**kwargs):
         state_manager = kwargs["state_manager"]

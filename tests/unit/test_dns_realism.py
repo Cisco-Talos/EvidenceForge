@@ -1512,9 +1512,15 @@ class TestWeirdProtocolConstraint:
 
         state_manager.set_current_time(timestamp)
         monkeypatch.setattr(generator_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
-        monkeypatch.setattr(network_planner_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
+        original_distribution = network_planner_module.connection_state_distribution
+        monkeypatch.setattr(
+            network_planner_module,
+            "connection_state_distribution",
+            lambda protocol: (
+                (("S0", 1, "DD"),) if protocol == "udp" else original_distribution(protocol)
+            ),
+        )
         monkeypatch.setattr(generator_module, "_UDP_CONN_WEIGHTS", [1])
-        monkeypatch.setattr(network_planner_module, "_UDP_CONN_WEIGHTS", [1])
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",

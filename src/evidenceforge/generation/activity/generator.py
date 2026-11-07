@@ -25708,6 +25708,9 @@ class ActivityGenerator:
             if shell_ready_or_deferred(shell):
                 assert shell is not None
                 return shell.pid
+            # A reserved initial shell can be unavailable at an earlier canonical
+            # or source-visible instant. It does not authorize a second window.
+            return None
         registry = self.dispatcher.deployment_registry
         if terminal_application_id is None and session.process_tree_root is None:
             # Eligibility is frozen with the deployment, like other baseline apps.
@@ -25768,6 +25771,7 @@ class ActivityGenerator:
                     or (root is not None and root.image == terminal_image)
                     else None
                 )
+            return None
 
         provider = self.macos_execution_metadata
         policy = (

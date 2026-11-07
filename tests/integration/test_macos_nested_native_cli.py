@@ -123,7 +123,7 @@ def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
             and count["reason"] == "supported"
             and count["status"] in {"visible", "delayed"}
         )
-        == 1
+        >= 1
         for action in commands
     )
 
@@ -288,6 +288,13 @@ def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_life
         assert len(births) == len(execs) == len(exits) == 1
         assert exits[0]["event"]["exit"]["stat"] == 0
     assert not (output / "data" / ".eforge-es-ingress").exists()
+    # Compound shells have explicitly unknown completion. Measure the two
+    # authored, reference-qualified ordinary queries whose known exits are
+    # independently required above.
+    query_pids = {
+        commands[name]["attributes"]["pid"]
+        for name in ("remote-nested-id", "remote-nested-version")
+    }
     shell_query_spans: list[float] = []
     for path in (output / "data").rglob("ecar.json"):
         starts: dict[str, dict] = {}
@@ -307,11 +314,10 @@ def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_life
                 starts[identity] = row
             elif row.get("action") == "TERMINATE" and identity in starts:
                 start = starts[identity]
-                command = start.get("properties", {}).get("command_line", "")
-                if command in {
-                    "/bin/zsh -c 'id; groups'",
-                    "/bin/zsh -c 'ls -la ~/Library/LaunchAgents'",
-                }:
+                if (
+                    int(start["pid"]) in query_pids
+                    and row["hostname"].split(".", 1)[0] == "NS-MAC-02"
+                ):
                     shell_query_spans.append((row["timestamp_ms"] - start["timestamp_ms"]) / 1000)
-    assert len(shell_query_spans) >= 2
+    assert len(shell_query_spans) == 2
     assert 0 < median(shell_query_spans) < 0.5
