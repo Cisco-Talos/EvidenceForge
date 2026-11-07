@@ -514,3 +514,42 @@ that the collector can run on Windows. All existing assertions remain intact and
 these operational cases remain required on Linux/macOS. A scoped Path.stat mock
 also prevents a failed native-image query from corrupting pytest's own reporting.
 The final local focused SSH/reference/history/docs group passes all 563 cases.
+
+### Final revision-488 resource evidence
+
+The final runtime's 767 files match inventory `engine-v488-files.json`; behavior
+digest is `01b26ecea23f6edd0d1b9016f62a07e756c0eca918fc4caf88cbbe4c686a89f0`.
+The same reference host/input/seed/cadence/owned-temp supervisor completes under
+`measurement-v488/`, with exact stopped checkpoint verification and resume:
+
+- generation/resume 68.150 seconds; checkpoint verification 5.884 seconds;
+- peak process-tree RSS 336,822,272 bytes (321.2 MiB);
+- sampled peak working disk 76,034,048 bytes (72.5 MiB);
+- hour-seven checkpoint 24,446,830 logical / 26,279,936 allocated bytes;
+- final output 16,963,178 logical bytes; retained temporary scratch 7,835,648 bytes.
+
+All eighteen generated data hashes match revision 487. The final evidence archive
+is `/private/tmp/eforge-alpha5-readiness/resource-v488-evidence.tar.gz`.
+The same forecast-calibration and scratch-retirement P2 limits apply. No further
+measurement is needed for test/documentation-only changes.
+
+On 49444, slow shards one, three and four pass 571/514/590 tests respectively,
+with four skips in those shards. Shard two and Linux coverage remain pending.
+The corrected full Mac routine worker is running from the frozen revision-488
+source at `/private/tmp/eforge-alpha5-readiness/routine-macos-r488.txt`.
+Windows diagnostic two is run 42416861509 on test-only snapshot ac570be2.
+
+The second Windows diagnostic passes: 914 passed, 279 explicit platform skips,
+zero failures/errors in 519.1 seconds. JUnit is retained under
+`/private/tmp/eforge-alpha5-readiness/windows-diagnostic-ac570/`.
+The final slow shard on 49444 finishes with 522 passed, one skipped and one
+filtered-SSH failure; all four shards total 2,197 passed, five skipped, one failed.
+That last sudo/SSH lifecycle case passes on revision 488 in 1.87 seconds, including
+TTY owner/route retirement and canonical session closure. No further source fix
+was needed. Coverage on 49444 remains active and must finish undisturbed.
+
+Request the complete final matrix from a separate isolated validation branch to
+preserve that earlier coverage result. The runtime remains the measured revision
+488; only test portability and worklog updates follow b30333b2. The original
+Mac implementation branch/worktree remains uncommitted and preserved; no dev/main
+movement, release tag, publication or integration PR is authorized.
