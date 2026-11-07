@@ -4839,9 +4839,10 @@ class SshSessionActionBundle:
         source_system = self._source_system()
         if source_system is None or source_pid <= 0:
             return
-        source_process = self.executor.state_manager.get_process(
+        source_process = self.executor.state_manager.get_process_at(
             source_system.hostname,
             source_pid,
+            state.open_time or self.request.time,
         )
         source_session_end: datetime | None = None
         if source_process is not None and source_process.logon_id:
@@ -5656,7 +5657,7 @@ class SshSessionActionBundle:
         manager = self.executor.state_manager
         if not manager.is_process_active_at(system.hostname, source_pid, self.request.time):
             return None
-        return manager.get_process_identity(system.hostname, source_pid)
+        return manager.get_process_identity_at(system.hostname, source_pid, self.request.time)
 
     @staticmethod
     def _source_process_context(identity: ProcessIdentity | None) -> ProcessContext | None:

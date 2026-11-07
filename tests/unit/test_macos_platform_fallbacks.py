@@ -145,6 +145,7 @@ def test_system_file_churn_uses_platform_appropriate_fallback_owner(
         _machine_ids={"CLIENT": "a" * 32},
         _scaled_randint=lambda *_: 1,
         activity_generator=SimpleNamespace(
+            macos_execution_metadata=None,
             _build_host_context=lambda _: None,
             _foreground_process_expired_for_attribution=lambda *_: False,
             _process_termination_recorded=lambda *_: False,

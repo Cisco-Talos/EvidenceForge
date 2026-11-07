@@ -83,10 +83,26 @@ def test_v11_preserves_empty_and_scalar_string_objects_distinct_from_null(values
         assert type(dict(record.event.exec.entitlements)["invented.identity"]) is str
 
 
+def test_v11_preserves_exact_integer_arrays_distinct_from_boolean_arrays() -> None:
+    from evidenceforge.events.macos_entitlements import IntegerEntitlementArray
+
+    fields = _record(11, "exec")
+    values = [0, 2, -(2**63), 2**63 - 1]
+    fields["event"]["exec"]["entitlements"] = {"invented.array": values}
+    record = decode_endpoint_security_record(json.dumps(fields))
+    assert json.loads(record.to_ndjson()) == fields
+    frozen = dict(record.event.exec.entitlements)["invented.array"]
+    assert type(frozen) is IntegerEntitlementArray
+    values.append(999)
+    assert frozen.values == (0, 2, -(2**63), 2**63 - 1)
+
+
 @pytest.mark.parametrize(
     "values",
     [
-        {"invented.array": [1]},
+        {"invented.array": [1, True]},
+        {"invented.array": [2**63]},
+        {"invented.array": [-(2**63) - 1]},
         {"invented.array": [True]},
         {"invented.array": [None]},
         {"invented.array": [["nested"]]},
@@ -136,10 +152,10 @@ def test_historical_exec_does_not_silently_accept_v11_entitlements(version: int)
         decode_endpoint_security_record(json.dumps(fields))
 
 
-@pytest.mark.parametrize("family", ["create", "rename"])
-def test_v11_does_not_promote_historical_file_event_families(family: str) -> None:
-    with pytest.raises(ValidationError):
-        decode_endpoint_security_record(json.dumps(_record(11, family)))
+@pytest.mark.parametrize("family", ["create", "close", "rename", "unlink"])
+def test_v11_file_codec_roundtrips_current_qualified_shapes(family: str) -> None:
+    fields = _record(11, family)
+    assert json.loads(decode_endpoint_security_record(json.dumps(fields)).to_ndjson()) == fields
 
 
 @pytest.mark.parametrize("family", ["fork", "exec", "exit"])

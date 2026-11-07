@@ -40,12 +40,12 @@ from evidenceforge.generation.deployment_registry import (
 )
 from evidenceforge.generation.emitters.base import ExactPublicationBatch
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import EventContractError, StateError
 from tests.unit.test_macos_exec_script import _script
 from tests.unit.test_macos_installed_provisioning import _scenario
 from tests.unit.test_macos_runtime_es_preparation import _publish
-from tests.unit.test_macos_runtime_file_metadata import _manager
 
 
 @pytest.mark.parametrize(
@@ -90,9 +90,9 @@ def test_retained_file_effect_has_one_native_exec_and_exact_file_checkpoint(
         logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
         shell = generator.ensure_macos_session_shell(user, system, logon, at + timedelta(minutes=1))
         assert shell is not None
-        content = _manager()
-        generator._runtime_content_manager = content
-        engine.dispatcher.bind_local_artifact_registry(content.registry)
+        content = generator._runtime_content_manager
+        assert content is not None
+        assert engine.dispatcher.local_artifact_registry is content.registry
         descriptor, _ = _script(content, system.hostname)
         descriptor = replace(
             descriptor,
@@ -273,7 +273,7 @@ def test_retained_file_effect_has_one_native_exec_and_exact_file_checkpoint(
         restored_state = StateManager()
         _restore_head(restored_state, _capture_head(engine.state_manager))
         assert restored_state.get_process_identity(system.hostname, pid) == identity
-        restored_content = _manager()
+        restored_content = RuntimeContentIdentityManager(LocalArtifactVersionRegistry())
         checkpoint = LocalArtifactVersionRegistryParticipant(content.registry).prepare_checkpoint(1)
         LocalArtifactVersionRegistryParticipant(restored_content.registry).restore_checkpoint(
             checkpoint.head.payload, ()

@@ -19353,19 +19353,15 @@ class StateManager:
     def is_process_active_at(self, system: str, pid: int, time: datetime) -> bool:
         """Return whether a live or retained process identity spans ``time``."""
         with self._lock:
-            process = self.state.running_processes.get((system, pid))
-            if process is None:
-                process = self._ended_processes_by_key.get((system, pid))
+            effective_time = ensure_utc(time)
+            process = self._process_identity_active_at_locked(system, pid, effective_time)
             if process is None:
                 return False
-            effective_time = ensure_utc(time)
             if process.logon_id:
                 session = self.state.active_sessions.get(self._resolve_logon_id(process.logon_id))
                 if session is not None and not _session_valid_at(session, effective_time):
                     return False
-            return process.start_time <= effective_time and (
-                process.end_time is None or effective_time < process.end_time
-            )
+            return True
 
     def get_session_object_id(self, logon_id: str) -> str:
         """Get the eCAR objectID for a session."""

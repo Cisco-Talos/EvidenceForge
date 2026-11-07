@@ -269,6 +269,8 @@ def test_legacy_head_and_records_keep_unknown_membership() -> None:
     document["expiring"].pop("_macos_policy_refusals")
     # The independent process census arrived after this legacy head as well.
     document["simple"].pop("_macos_process_census")
+    document["simple"].pop("_macos_filesystem_directories")
+    document["simple"].pop("_macos_filesystem_inodes")
     for name in ("_posix_job_control_reservations", "_posix_job_control_reservation_counts"):
         del document["simple"][name]
     for name in (

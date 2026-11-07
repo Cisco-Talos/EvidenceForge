@@ -108,6 +108,8 @@ def test_legacy_checkpoint_cannot_invent_a_complete_census_history() -> None:
     head = loads(_capture_head(state))
     head["schema_version"] = "10"
     head["simple"].pop("_macos_process_census")
+    head["simple"].pop("_macos_filesystem_directories")
+    head["simple"].pop("_macos_filesystem_inodes")
     fresh = StateManager()
     _restore_head(fresh, dumps(head))
     assert fresh.macos_process_census_snapshot() == ()

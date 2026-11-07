@@ -151,3 +151,80 @@ bundles and the stopped checkpoint backup remain in the reference task directory
   through a plain validator. All 64 native codec contract tests pass. Behavior
   revision 484 declares this localized source serialization change. Repeat the short
   resource probe on this final engine before final reporting.
+
+### Corrected snapshot and subsequent fixture reconciliation
+
+Corrected validation snapshot `7aa8cc19` (parent `c74b454c`) is running at
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42406220372 .
+The next dispatch superseded the original reusable CI/slow groups through their
+existing same-branch concurrency policy; original cancelled jobs are not passes.
+Original x86_64 Linux preview installer verification passed. The original Linux
+Studio Python gate found a single stale application-editor schema fixture
+(539 passed, 1 skipped); the fixture now includes the live Mac argv/signing fields.
+The complete local frontend suite passes 348 tests, and its production build passes.
+
+An additional 154 process/file/recovery tests pass after retaining the engine's
+single already-bound runtime artifact registry (including a matching fresh registry
+for hydration), and constructing genuine historical StateManager schemas without
+later filesystem directory/inode fields. Native v11 tests now distinguish admitted
+integer entitlement arrays from mixed/bool arrays and round-trip all four newly
+qualified file operation families. The previous blanket rejection predated the
+agreed filesystem integration. Bounds, unknown-field checks and profile admission
+remain separately enforced.
+
+The full routine suite also found the filesystem retry dictionary absent from the
+mutable retention policy inventory. Revision 485 adds its explicit bounded host/hour
+batch owner: configured task counts bound it; successful drain removes it; failed
+work blocks hour completion/checkpointing. This is an inventory declaration with
+no evidence behavior change, not an exception to the inventory guard.
+
+The final revision-484 resource rerun measured 67.721 seconds generation/resume,
+6.071 seconds checkpoint verification, 336,101,376 bytes peak RSS (320.5 MiB),
+57,278,464 bytes sampled allocated working disk (54.6 MiB), the same 24,446,444-byte
+logical / 26,279,936-byte allocated hour-seven checkpoint workspace, and the same
+16,962,792-byte final output. Host is Apple M1 Max, ten physical cores, 32 GiB RAM,
+macOS 27.0.1, Python 3.12.15. All 767 engine files matched the local checksum
+inventory, and all measured data-file hashes matched the prior revision-483 run.
+Final reports and engine-file hashes are retained in
+`/private/tmp/eforge-alpha5-readiness/resource-final-evidence.tar.gz`.
+Revision 485 only adds inventory metadata; final source/run evidence will be
+reconciled after the complete suite finishes.
+
+A read-only triage of GitHub's default-branch dependency warning found the reported
+filelock/virtualenv paths originate only in the optional dev extra through
+pre-commit. `uv tree --frozen --invert --package filelock --package virtualenv`
+confirms that scope; these are not Studio production requirements. No runtime
+vulnerability or dependency remediation is claimed from that metadata check.
+
+## Final local reconciliation before the last CI dispatch
+
+The first full default macOS pass completed in 1976.10 seconds with 19,804 passed,
+50 skipped, 62 failed and one setup error (2,435 slow/soak cases deselected).
+This was a defect-finding pass while repairs were underway, not a passing final gate.
+Every affected non-native module was rerun on reconciled source: 660 passed,
+3 deselected in 77.54 seconds. Native helper/instance-lock/process-census checks
+require normal macOS process inspection and loopback sockets; outside the session
+sandbox all 35 tests passed in 18.55 seconds. No test was skipped or weakened to
+work around these host permissions. Logs and the exact failure/module inventory
+are retained under `/private/tmp/eforge-alpha5-readiness/`.
+
+The extended run also exposed retained SSH/network attribution attempting a live
+activity patch after State had already ended its source. Revision 486 separates
+historical attribution from mutable live holds/frontiers, resolves SSH source and
+session-fence facts at occurrence time, and uses the same event-time query for
+State's active predicate. A PID-only request after alias retirement omits ambiguous
+source attribution instead of adopting a later PID owner; already-bound durable
+SSH continuations retain their original identity. The new positive/negative reuse
+control and 717 activity/State/network/SSH checks pass (164 extended cases excluded).
+Windows browser tests retain positive same-family reuse while proving Chrome and
+Firefox own distinct mains and children, matching the repaired instance policy.
+
+Other final fixture repairs adopt the shared engine registry for retained scripts,
+keep infrastructure-auth tests about unspecified domain-selected headers, and keep
+v11 integer arrays explicitly bounded at int64 limits. An overlong new behavior
+summary was caught by the CLI manifest validator and shortened; the declared
+revision/digest and version checks now pass. Studio input/codec tests pass 63/63,
+retained-script/UA tests pass 37/37, runtime retention tests pass 12/12, and
+v11/editor fixture tests pass 88/88. Full frontend tests pass 348/348 and the
+production build passes. The initial suite's failures are all accounted for;
+complete final Linux/Windows/slow/native/installer gates remain required below.

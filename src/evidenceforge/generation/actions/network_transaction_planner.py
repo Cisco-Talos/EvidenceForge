@@ -6307,10 +6307,32 @@ class NetworkTransactionPlanner:
                 SessionActivityPatch,
             )
 
-            process_identity = executor.state_manager.get_process_identity(
-                endpoints.resolved_source_system.hostname,
+            source_host = endpoints.resolved_source_system.hostname
+            occurrence_owner = executor.state_manager.get_process_identity_at(
+                source_host,
                 publication_inputs.pid,
+                publication_inputs.event.network.started_at,
             )
+            live = executor.state_manager.get_process(source_host, publication_inputs.pid)
+            latest_identity = (
+                executor.state_manager.get_process_identity(source_host, publication_inputs.pid)
+                if live is not None
+                else None
+            )
+            process_identity = (
+                latest_identity
+                if latest_identity is not None
+                and occurrence_owner is not None
+                and latest_identity.object_id == occurrence_owner.object_id
+                and (
+                    publication_inputs.process_ctx is None
+                    or publication_inputs.process_ctx.start_time is None
+                    or publication_inputs.process_ctx.start_time == occurrence_owner.started_at
+                )
+                else None
+            )
+            # Retained historical attribution describes past evidence. It cannot
+            # mutate an ended owner or a later lifetime that reused the PID.
             activity_time = (
                 publication_inputs.event.network.closed_at
                 or publication_inputs.event.network.started_at

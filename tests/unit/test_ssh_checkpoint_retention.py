@@ -108,10 +108,15 @@ def test_ssh_checkpoint_keeps_original_process_after_pid_reuse(
         fixture.close_and_read()
 
 
-def test_ssh_binds_retained_process_that_spans_transport_open(tmp_path: Path) -> None:
+@pytest.mark.parametrize("reuse_pid", [False, True])
+def test_ssh_binds_retained_process_that_spans_transport_open(
+    tmp_path: Path, reuse_pid: bool
+) -> None:
     reset_thread_rng(42)
     fixture = _fixture(tmp_path)
     fixture.generator.dispatcher.emitters.pop("ecar")
+    fixture.state._initialize_pid_allocator(fixture.source.hostname, "windows")
+    fixture.state._pid_counters[fixture.source.hostname] = 5000
     request, pid = _modeled_scp_owned_close(fixture)
     try:
         identity = fixture.state.get_process_identity(fixture.source.hostname, pid)
@@ -119,9 +124,33 @@ def test_ssh_binds_retained_process_that_spans_transport_open(tmp_path: Path) ->
         fixture.state.end_process(
             fixture.source.hostname, pid, end_time=request.time + timedelta(minutes=3)
         )
+        replacement = None
+        if reuse_pid:
+            later = request.time + timedelta(minutes=4)
+            fixture.state.set_current_time(later)
+            fixture.state._pid_counters[fixture.source.hostname] = pid + 61536
+            replacement_pid = fixture.state.create_process(
+                fixture.source.hostname,
+                0,
+                identity.image,
+                "later unrelated process",
+                fixture.user.username,
+                "Medium",
+                identity.logon_id,
+            )
+            assert replacement_pid == pid
+            replacement = fixture.state.get_process_identity(fixture.source.hostname, pid)
+            assert replacement.object_id != identity.object_id
         SshSessionActionBundle(request, fixture.generator).execute()
         captured = decode_state_value(_capture_ssh_lifecycles(fixture.generator)[0][3][11])
-        assert captured == identity
+        if replacement is not None:
+            # PID reuse retires the old numeric alias. This request has no durable
+            # object reference, so omit ambiguous attribution instead of binding
+            # the later process. Already-bound SSH continuations are tested above.
+            assert captured is None
+            assert fixture.state.get_process_identity(fixture.source.hostname, pid) == replacement
+        else:
+            assert captured == identity
     finally:
         fixture.close_and_read()
 

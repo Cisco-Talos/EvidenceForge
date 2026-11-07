@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 484
+current_revision: 486
 history_start_revision: 1
-behavior_surface_sha256: 4ad229a04f89d8796f2f85423def50afc5f9a124040c02d1bac3741d1816495a
+behavior_surface_sha256: 73ae7aa778d77a7e8d1400428e7727a506c5e03f8df3bef893183cfa2d7efbbe
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5391,8 +5391,8 @@ changes:
   - macos-filesystem
   - macos-system-job
   formats: []
-  summary: Samples baseline dispatch, foreground lifetimes, Mac boot/helper/session phases and filesystem
-    work through semantic timing scopes; byte-size samplers remain separately bounded non-temporal operations.
+  summary: Moves baseline dispatch, foreground lifetime and Mac boot/helper/session/filesystem timing
+    into semantic scopes. Byte-size samplers keep separate non-temporal caps.
 - revision: 484
   id: preserve-empty-native-entitlement-object-tags
   impact: localized
@@ -5400,5 +5400,22 @@ changes:
   - macos-native-source-serialization
   formats:
   - macos_endpoint_security
-  summary: Retains shared freezer-validated immutable object/array tags without a second Pydantic union
-    coercion, preserving empty nested entitlement objects on the native wire.
+  summary: Preserves validated nested entitlement object/array tags through native serialization, including
+    empty dictionaries, without a second union coercion.
+- revision: 485
+  id: classify-bounded-mac-filesystem-retry-retention
+  impact: none
+  domains:
+  - generation-retention-inventory
+  formats: []
+  summary: 'Classifies bounded host/hour filesystem retry batches: drain removes them and pending work
+    blocks checkpoint capture. No generated evidence changes.'
+- revision: 486
+  id: separate-historical-network-attribution-from-live-activity-patches
+  impact: localized
+  domains:
+  - network-process-ownership
+  - process-lifecycle
+  formats: []
+  summary: Resolves SSH/network source ownership at occurrence time. Applies transport activity and holds
+    only to the same live lifetime, preserving retained evidence and excluding later PID reuse.
