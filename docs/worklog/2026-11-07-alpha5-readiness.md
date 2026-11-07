@@ -228,3 +228,66 @@ retained-script/UA tests pass 37/37, runtime retention tests pass 12/12, and
 v11/editor fixture tests pass 88/88. Full frontend tests pass 348/348 and the
 production build passes. The initial suite's failures are all accounted for;
 complete final Linux/Windows/slow/native/installer gates remain required below.
+
+### Combined recovery positive controls
+
+The original combined source's valid same-seed run became quiet under corrected
+singleton reuse: all authored starts/roles and exact recovery/filtering passed,
+but no new incidental background exec or compound command appeared. The test
+had depended on incidental baseline selection for both positive/negative controls.
+The managed recovery companion now admits already-qualified VS Code in the
+Mac-Apple baseline profile and explicitly authors `compound-unknown` at +20m.
+Seed 373, medium intensity, collection and original thirty-minute acceptance
+source are unchanged. The compound oracle joins its authored PID/host, so extra
+legitimate baseline compounds cannot falsely fail an exact-one assertion.
+Code itself is now a required native image; the positive background assertion is
+retained. Validation has the same four intentional warnings and no errors.
+The strengthened full suspend/verify/exact-resume/native-filter test passes in
+46.32 seconds: six background native execs, one Code exec, five ULF rows, complete
+start census, 44 native known exits and three explicitly unknown outcomes.
+Current results are retained at
+`/private/tmp/eforge-alpha5-readiness/recovery-final-result.json`; historical
+revision-374 `scenarios/macos-workstation-recovery/RESULTS.json` is preserved and
+clearly labeled in its README. The reference toolkit's two remaining mocked
+`os.getuid` seams now also work where that POSIX API is absent; 149 tests pass.
+
+### Fully reconciled engine CI snapshot
+
+Snapshot `b1c153c6702836b5ec68c0cb4bf9a585c95050d7` is running at
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42407787085 .
+Engine revision is 486, digest
+`73ae7aa778d77a7e8d1400428e7727a506c5e03f8df3bef893183cfa2d7efbbe`.
+This run predates the explicit recovery fixture correction; retain it to discover
+all remaining full-tier failures before the final fixture-only snapshot. All three
+preview installers passed on prior snapshot 7aa8cc19; b1c153c6's Mac installer,
+portability, lint, Windows durability and native state-recovery gates have passed.
+A cancelled earlier gate is never counted as a pass. Other results remain pending.
+
+### Working-disk measurement correction
+
+Source inspection found Mac audit ledgers and Windows spools can use system temp,
+outside the bundle. Prior reported disk peaks are therefore bundle-only lower
+bounds. The supervisor now gives every child CLI phase a private TMPDIR/TMP/TEMP
+under `working/temporary`, counts that and `working/bundle` together with inode
+deduplication, and supervises checkpoint verification as well as generation/resume.
+Backups, reports, dependencies and the supervisor remain outside the measured tree.
+It additionally reports retained scratch after success. This changes measurement
+instrumentation only; the engine and fixed workload remain unchanged.
+
+The corrected owned-temp measurement completes in 67.937 seconds generation/resume
+plus 6.103 seconds stopped verification, with 334,790,656 bytes peak process-tree RSS
+(319.3 MiB) and **75,796,480 bytes (72.3 MiB) sampled total working disk**. The
+hour-seven retained checkpoint remains 24,446,444 logical / 26,279,936 allocated
+bytes; final output remains 16,962,792 bytes. The temp-isolated run's data hashes
+match the prior revision-486 run exactly, and bundle verification passes. The memory
+upper estimate remains slightly low; the P2 calibration item remains explicit.
+
+The measurement additionally exposes 7,835,648 allocated bytes (7.5 MiB) of retained
+Windows/Sysmon SQLite scratch after success: two initial suspension and two
+verification spools outside the bundle. Normal final rendering removes its own
+spools. The existing discard-only verification contract closes connections and
+descriptors but does not delete these outside-root journals. Added a P2 owned-scratch
+retirement item, distinct from the existing broader spool-relocation backlog. No
+recovery source or external file is deleted to hide the observation; scoped scratch
+and reports remain available on the reference Mac. The corrected supervisor's
+`final_owned_temporary_allocated_bytes` makes that residual visible.

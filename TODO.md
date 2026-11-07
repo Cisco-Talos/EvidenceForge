@@ -121,6 +121,14 @@ without turning `TODO.md` back into a high-conflict work journal.
   representative measured inputs; do not present forecast ranges as hard capacity
   guarantees. See the [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
 
+- [ ] **P2 — Retire owned Windows/Sysmon scratch after checkpoint operations:**
+  A verified 26-hour mixed-fleet suspend/verify/resume run leaves four owned SQLite
+  spool directories (about 7.5 MiB allocated) after successful completion. Preserve
+  immutable recovery and source-finalization safety while releasing obsolete runtime
+  scratch from suspension and verification; add exact owned-path/identity cleanup
+  checks. Keep this distinct from broader spool relocation. Evidence is in the
+  [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
+
 - [x] **P0 — Native Mac mounted-SMB helper coverage:** Mounted-share helpers now use
   the supported native process lifecycle. The fixed Mac-inclusive assessment keeps
   complete fork/exec/exit coverage and matches all eleven mounted-helper exits in

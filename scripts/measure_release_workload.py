@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -39,6 +41,9 @@ class Measurement(BaseModel):
     retained_checkpoint_allocated_bytes: int = 0
     checkpoint_completed_simulated_hours: int = 0
     final_logical_bytes: int = 0
+    final_owned_temporary_allocated_bytes: int = 0
+    bundle_relative_path: str = "working/bundle"
+    disk_scope: str = "bundle plus owned worker temporary files; excludes backup and reports"
     rss_sample_seconds: float = 0.05
     disk_sample_seconds: float = 0.2
     bundle_verified: bool = False
@@ -56,8 +61,16 @@ def main() -> None:
         parser.error("checkpoint cadence and timeout must be positive")
     scenario = args.scenario.resolve(strict=True)
     destination = args.destination.resolve()
-    destination.mkdir(parents=True, exist_ok=False)
-    bundle = destination / "bundle"
+    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    working = destination / "working"
+    temporary = working / "temporary"
+    temporary.mkdir(mode=0o700, parents=True)
+    bundle = working / "bundle"
+    environment = os.environ | {
+        "TMPDIR": str(temporary),
+        "TMP": str(temporary),
+        "TEMP": str(temporary),
+    }
     report = Measurement(scenario_sha256=hashlib.sha256(scenario.read_bytes()).hexdigest())
     prefix = [sys.executable, "-m", "evidenceforge"]
     with (destination / "validation.json").open("w") as output:
@@ -71,22 +84,29 @@ def main() -> None:
                 str(args.checkpoint_hours),
             ],
             stdout=output,
+            env=environment,
             check=True,
             timeout=120,
         )
     store = IncrementalCheckpointStore(bundle)
     deadline = time.monotonic() + args.timeout_seconds
 
-    def run(arguments: list[str], label: str, *, suspend: bool = False) -> None:
+    def run(
+        arguments: list[str], label: str, *, suspend: bool = False, verification: bool = False
+    ) -> None:
         started = time.monotonic()
+        phase_deadline = min(deadline, started + 300) if verification else deadline
         requested = False
         next_disk = 0.0
-        with (destination / f"{label}.log").open("w") as log:
-            child = subprocess.Popen([*prefix, *arguments], stdout=log, stderr=subprocess.STDOUT)
+        suffix = "json" if verification else "log"
+        with (destination / f"{label}.{suffix}").open("w") as log:
+            child = subprocess.Popen(
+                [*prefix, *arguments], stdout=log, stderr=subprocess.STDOUT, env=environment
+            )
             process = psutil.Process(child.pid)
             try:
                 while child.poll() is None:
-                    if time.monotonic() > deadline:
+                    if time.monotonic() > phase_deadline:
                         raise TimeoutError("workload exceeded its fixed wall-time budget")
                     try:
                         report.peak_process_tree_rss_bytes = max(
@@ -98,7 +118,7 @@ def main() -> None:
                     if now >= next_disk:
                         report.sampled_peak_working_disk_bytes = max(
                             report.sampled_peak_working_disk_bytes,
-                            _directory_allocated_bytes(bundle),
+                            _directory_allocated_bytes(working),
                         )
                         next_disk = now + report.disk_sample_seconds
                     if suspend and not requested and store.index_path.exists():
@@ -122,7 +142,10 @@ def main() -> None:
                     except subprocess.TimeoutExpired:
                         child.kill()
                         child.wait(timeout=10)
-                report.generation_seconds += time.monotonic() - started
+                if verification:
+                    report.verification_seconds += time.monotonic() - started
+                else:
+                    report.generation_seconds += time.monotonic() - started
                 (destination / "measurement.json").write_text(
                     report.model_dump_json(indent=2) + "\n"
                 )
@@ -152,24 +175,19 @@ def main() -> None:
     )
     # Preserve the stopped valid recovery before hydration/resume. Reflinks/hardlinks
     # are deliberately avoided so this copy cannot mutate the original checkpoint.
-    import shutil
-
     shutil.copytree(store.workspace, destination / "checkpoint-backup")
-    started = time.monotonic()
-    with (destination / "checkpoint-verification.json").open("w") as output:
-        subprocess.run(
-            [*prefix, "checkpoint", "verify", str(bundle), "--json"],
-            stdout=output,
-            check=True,
-            timeout=300,
-        )
-    report.verification_seconds = time.monotonic() - started
+    run(
+        ["checkpoint", "verify", str(bundle), "--json"],
+        "checkpoint-verification",
+        verification=True,
+    )
     run(["generate", "--output", str(bundle), "--resume", "--resume-policy", "exact"], "resume")
     verify_generation_bundle(bundle)
     report.bundle_verified = True
     report.final_logical_bytes = _directory_bytes(bundle)
+    report.final_owned_temporary_allocated_bytes = _directory_allocated_bytes(temporary)
     report.sampled_peak_working_disk_bytes = max(
-        report.sampled_peak_working_disk_bytes, _directory_allocated_bytes(bundle)
+        report.sampled_peak_working_disk_bytes, _directory_allocated_bytes(working)
     )
     (destination / "measurement.json").write_text(report.model_dump_json(indent=2) + "\n")
     manifest = json.loads((bundle / "GENERATION_MANIFEST.json").read_text())

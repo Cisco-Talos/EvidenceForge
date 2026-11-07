@@ -258,7 +258,7 @@ def test_native_operations_reject_other_targets(
             system=lambda: "Darwin", machine=lambda: architecture, mac_ver=lambda: (major, (), "")
         ),
     )
-    monkeypatch.setattr(kit.os, "getuid", lambda: uid)
+    monkeypatch.setattr(kit.os, "getuid", lambda: uid, raising=False)
     with pytest.raises(kit.PrivateError, match="PLATFORM"):
         kit._platform()
 

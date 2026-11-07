@@ -914,7 +914,7 @@ def test_static_diagnostic_issues_only_seven_fixed_queries_and_writes_nothing(
 
     expected = _manifest().images[0]
     monkeypatch.setattr(kit, "_root", lambda: tmp_path)
-    monkeypatch.setattr(kit.os, "getuid", lambda: 501)
+    monkeypatch.setattr(kit.os, "getuid", lambda: 501, raising=False)
     monkeypatch.setattr(kit.os, "geteuid", lambda: 501)
     monkeypatch.setattr(kit.sys, "platform", "darwin")
     monkeypatch.setattr(kit.support, "_installed_image", lambda _path: expected.image)
