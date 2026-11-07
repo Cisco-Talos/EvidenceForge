@@ -67,7 +67,7 @@ jobs:
             timeout_minutes: 45
           - os: windows-latest
             timeout_minutes: 90
-    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 90 || matrix.timeout_minutes }}
+    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 120 || matrix.timeout_minutes }}
 
     steps:
       - name: Preserve repository bytes on Windows

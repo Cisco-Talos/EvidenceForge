@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,17 @@ COMPLETE = DIRECTORY + (
     b"LEASE_PRESENT\nLEASE_OWNER_MATCH\nLEASE_MODE_MATCH\nLEASE_KIND_MATCH\n"
     b"LEASE_LINKS_MATCH\nLEASE_SIZE_MATCH\nLEASE_CONTENT_MATCH\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def owned_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect mocked compiler scratch to owned test storage on every POSIX host."""
+
+    def scratch(*, prefix: str, dir: str) -> TemporaryDirectory:
+        assert dir == "/private/tmp"
+        return TemporaryDirectory(prefix=prefix, dir=tmp_path)
+
+    monkeypatch.setattr(kit, "tempfile", SimpleNamespace(TemporaryDirectory=scratch))
 
 
 def _missing(nonce: str = NONCE) -> bytes:

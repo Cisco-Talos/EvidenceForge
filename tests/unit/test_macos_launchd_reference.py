@@ -298,12 +298,16 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     root = kit.prepare(tmp_path / "fresh")
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
-    monkeypatch.setattr(kit.os, "getuid", lambda: 501, raising=False)
-    monkeypatch.setattr(kit.os, "getgid", lambda: 20, raising=False)
+    owner = root.stat()
     monkeypatch.setattr(
         kit,
         "_current_account",
-        lambda: SimpleNamespace(pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20),
+        lambda: SimpleNamespace(
+            pw_name=_CANARY,
+            pw_dir=f"/Users/{_CANARY}",
+            pw_uid=owner.st_uid,
+            pw_gid=owner.st_gid,
+        ),
     )
     manifest = _manifest()
     monkeypatch.setattr(
@@ -318,15 +322,6 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
         ),
     )
     monkeypatch.setattr(kit.support, "_image", lambda _path: manifest.ready_marker)
-    # The private reader still checks real test-file ownership, independently of mocked uid.
-    real_read = kit.reference._read
-    monkeypatch.setattr(
-        kit.reference,
-        "_read",
-        lambda path, limit=kit.reference.MAX_LINE: (
-            path.read_bytes() if path.is_relative_to(root) else real_read(path, limit)
-        ),
-    )
     commands = []
 
     def command(args: list[str], _root: Path) -> None:
@@ -339,6 +334,7 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     assert report.stage == "SETUP_READY"
     assert commands == ["/usr/bin/clang"] * 3 + ["/usr/bin/codesign"]
     assert kit._manifest(root).username == _CANARY
+    assert kit._manifest(root).uid == owner.st_uid
     for name in ("job-guard", "collector-guard", "job_guard.c", "ssh_analysis_support.py"):
         path = root / name
         original = path.read_bytes()

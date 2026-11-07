@@ -72,6 +72,11 @@ latest. Do not manually push a stable tag to initiate this path.
 4. Downloading this run's installer artifacts, staging a draft release, uploading missing assets,
    downloading and verifying them against the build, then publishing.
 
+Mac reference-collector operation tests require POSIX paths, ownership, no-follow I/O
+or Unix syscalls and run in macOS/Linux CI. Portable Mac simulation and record-codec
+tests remain included in Windows routine checks. Specific reference-operation tests
+declare their POSIX requirement; Windows does not provide a native Mac collector gate.
+
 The publisher requires all six assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
 `EvidenceForge-Studio-VERSION-aarch64.AppImage`, `EvidenceForge-Studio-VERSION-x86_64.AppImage`,
 and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix.
@@ -108,8 +113,9 @@ gh workflow run release.yml --ref dev -f tag=v2.2.0a1
 ```
 
 This repeats every release gate and retains the tag's original source commit. It does not move
-the tag or merge main. Instrumented Linux release coverage and Windows routine tests have 90-minute job
-budgets; routine Linux checks have a 45-minute budget. Prefer the original run's failed-job retry when a
+the tag or merge main. Instrumented Linux release coverage has a 120-minute job budget;
+Windows routine tests have a 90-minute budget and routine Linux checks have 45 minutes.
+Prefer the original run's failed-job retry when a
 draft already contains assets, since rebuilding can change installer bytes.
 
 The build job uses a platform matrix. Additional platform support should add native build and

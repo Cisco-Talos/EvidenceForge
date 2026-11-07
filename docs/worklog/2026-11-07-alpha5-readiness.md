@@ -553,3 +553,62 @@ preserve that earlier coverage result. The runtime remains the measured revision
 488; only test portability and worklog updates follow b30333b2. The original
 Mac implementation branch/worktree remains uncommitted and preserved; no dev/main
 movement, release tag, publication or integration PR is authorized.
+
+Final full matrix: `e663a30f` on `codex/alpha5-release-gates-20261107`, run
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42417719269 .
+It retains the measured revision-488 runtime, all corrected tests and original
+strict gates. Lint, portability, Windows durability and all three native state
+gates pass; the final Mac DMG, x86_64 AppImage and Linux ARM64 Studio gate pass.
+Downloaded final-runtime DMG/checksum (local checksum verified):
+`/private/tmp/eforge-alpha5-readiness/installers-e663/macos/`.
+The matching x86_64 AppImage/checksum is under `installers-e663/linux-x86_64/`.
+The full local Mac routine log is beyond 90% with no failures at this checkpoint.
+
+An additional diagnostic-only branch `codex/alpha5-windows-complete-20261107`,
+commit `798d0669`, expands the Windows diagnostic to the remaining reference-kit
+modules beyond the old abort point. It changes only the diagnostic test list:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42418430886 .
+The active isolated worktree is on this diagnostic branch. No final full run was
+cancelled to start it. Status files: `ci-release-gates-status.json` for e663,
+`ci-bounded-status.json` for the earlier 49444 coverage run, and
+`windows-diagnostic3-status.json` for the expanded diagnostic, all beneath
+`/private/tmp/eforge-alpha5-readiness/`. Read-only watchers retain state transitions;
+the final full Mac routine log remains `routine-macos-r488.txt` there.
+
+The full corrected macOS routine suite passes 19,904 tests with 50 skips in
+1,947.02 seconds. Native reference-operation requirements do not skip any of
+these POSIX cases on Mac. The expanded Windows diagnostic first exposed 174
+additional POSIX reference-kit failures/errors. Specific operation tests now have
+the same explicit platform requirement; portable codec/model assertions remain.
+The complete focused retry passes 1,149 tests with 457 platform skips, zero
+failures/errors in 23.8 seconds (2b5e8076, run 42419591594). Its JUnit is retained
+under `windows-diagnostic-2b5e/`. The 121 expensive simulation tests excluded from
+this *diagnostic-only retry* previously passed in the 914-case Windows diagnostic
+and remain selected in every full routine/release gate.
+
+The release-only Linux coverage job has exceeded 75 minutes despite bounded node
+IDs. Give final instrumented coverage a 120-minute job budget for measured runtime
+headroom; normal Linux remains 45 minutes and Windows 90 minutes. The 70% coverage
+threshold, selected tests and source/native gates are unchanged. The earlier
+coverage run remains active to collect its actual result before another final
+complete snapshot is requested. No runtime bytes changed after the measured
+revision 488.
+
+The earlier Linux coverage job reaches 58% before its 90-minute cancellation.
+There is no long test stall: the largest observed status interval is 72.5 seconds,
+and maximum status-line length is 5,163 characters. It records the corrected
+worklog notice and nine Linux-only reference-fixture failures. A focused Linux
+diagnostic confirms exactly those nine failures (1,596 passed, one skipped):
+eight mocked cleanup cases assume `/private/tmp`, and one setup fixture changes
+the global account UID to 501 while its real private files belong to the Linux
+runner UID. The cleanup fixture now redirects only mocked compiler scratch to
+owned test storage while asserting the original requested native directory. The
+account fixture uses the actual private-file owner and restores the real strict
+reader instead of bypassing ownership. All 93 affected cases pass on Mac.
+
+Full remaining checks will use the exact normal Windows routine and Linux 70%
+coverage commands, with JUnit/coverage reports retained. Product runtime and
+Studio bytes are unchanged from e663 and the measured revision 488; retain its
+successful native/installer/slow evidence rather than repeat unrelated checks
+for POSIX test declarations. Official publication still runs the complete release
+workflow on the eventual authorized release commit. The user Studio hold remains.
