@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 487
+current_revision: 488
 history_start_revision: 1
-behavior_surface_sha256: e2dcdc1e242e8f03610d5d9129f4d2ca481a57e7a6c887302312583c8a7bbed8
+behavior_surface_sha256: 01b26ecea23f6edd0d1b9016f62a07e756c0eca918fc4caf88cbbe4c686a89f0
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5434,3 +5434,16 @@ changes:
   - macos_endpoint_security
   summary: Keeps SSH construction independent of eCAR, declines unavailable existing Mac terminal shells,
     and gives assignment-only env exposure carriers bounded modeled lifetimes.
+- revision: 488
+  id: filtered-linux-ssh-exact-publication-and-checkpoint-authority
+  impact: localized
+  domains:
+  - ssh-session-lifecycle
+  - source-filtering
+  - checkpoint-identity-authority
+  formats:
+  - ecar
+  - syslog
+  - zeek
+  summary: Allows authenticated Linux SSH cohorts to omit unselected source targets while requiring
+    positive rows from every selected target, and validates retained exact source identity during checkpoint capture.

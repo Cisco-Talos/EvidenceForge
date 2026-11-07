@@ -384,7 +384,7 @@ that gate passes. Denied/failed exec census asserts zero aggregate starts and
 exactly one canonical fork/exec, with native completeness correctly absent because
 that fixture selects no native source.
 
-The SOF-ELK iteration gate found a real parser defect: RFC3164's unpadded day was
+The SOF-ELK® iteration gate found a real parser defect: RFC3164's unpadded day was
 compared textually with Snare's padded day. Native payload year now owns the
 calendar comparison, including February 29 when the fallback year is non-leap;
 contradictory seconds still fail. All 177 Snare tests pass, including security and
@@ -454,3 +454,50 @@ interrupted deliberately before those large-ID cases and is restarted with the
 bounded names. The runtime/measurement source is unchanged from 63df4751.
 The superseded 0902 validation run was explicitly force-cancelled to release the
 reusable CI concurrency slot; cancelled results are never treated as passes.
+
+
+The current validation snapshot is
+`49444e10e5f937f7a9e4f2137cd1866d9f348dc2`:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42413530433 .
+Only the four bounded test-name pools and worklog differ from 63df4751; the entire
+product runtime, Studio and reference-measured engine are byte-identical. The
+63df4751 run was deliberately superseded to remove the logging stall. The current
+full Mac routine log is
+`/private/tmp/eforge-alpha5-readiness/routine-macos-bounded-ids.txt`.
+The three native state-recovery gates, lint, Python portability and Windows
+durability pass. The Apple Silicon preview also passes isolated packaged runtime,
+resources, checkpoint generation, native Mac generation/evaluation and DMG
+integrity verification. Its downloaded checksum passes locally. Retained preview:
+`/private/tmp/eforge-alpha5-readiness/installers/macos/preview-installer-macos-aarch64/`.
+
+The local routine run found one documentation-policy failure: this worklog's
+first external-parser product reference lacked its registered-trademark symbol.
+That notice is corrected; both documentation checks pass. Snapshot 49444 still
+contains the original notice, so its corresponding routine failure must not be
+reported as a pass. Collect the rest of the full run before creating a corrected
+snapshot. No product-runtime or measured-workload bytes changed for this repair.
+
+### Remaining routine-gate findings
+
+The complete Mac routine run on revision 487 finishes with 19,889 passed,
+50 skipped and eight failed in 1,982.85 seconds. Besides the documentation notice,
+five SSH retention cases expose missing collection-omission support in exact Linux
+SSH publication; two compatibility timing cases expose exact admission of a
+non-concrete dispatcher. Revision 488 admits only the concrete dispatcher and
+permits authenticated in-window Linux SSH members to omit endpoint targets only
+when eCAR is unselected. Present targets still require positive exact rows, and
+the existing mixed warm-up rejection is preserved. Exact checkpoint capture now
+authenticates the retained source identity against StateManager. Legacy and exact
+retention/PID-reuse/lost-authority tests, network-only and no-source positive
+closure, and the existing publication/rollback/loopback matrix pass (429 checks);
+the timing/retention pair passes 29 checks after the dispatcher admission repair.
+
+All three native Studio and state-recovery jobs and all three preview installers
+pass on 49444. Slow shard three passes 514 cases. Other slow shards and coverage
+are still running. The Windows routine job reaches 50% and then aborts inside
+pytest reporting because a Path.stat test double leaks beyond its intended call.
+Scope that double to the owned-image query. The retained log lists earlier
+Windows portability failures but has no final tracebacks due to that abort.
+A read-only Windows-only diagnostic dispatch on the isolated validation branch
+will collect those failures before another complete gate run. It retains JUnit
+results and changes no production release workflow or publication permissions.

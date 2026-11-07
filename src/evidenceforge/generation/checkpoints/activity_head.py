@@ -942,6 +942,14 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
         except StateError as error:
             raise CheckpointError("SSH checkpoint lost completed receiver startup") from error
         plan = continuation.plan
+        if (
+            plan.source_identity is not None
+            and generator.state_manager.get_process_identity_by_object_id(
+                plan.source_identity.object_id
+            )
+            != plan.source_identity
+        ):
+            raise CheckpointError("SSH checkpoint source process lost State authority")
         rows.append(
             [
                 plan.continuation_id,

@@ -69,7 +69,7 @@ def test_zsh_parser_reports_unsupported_or_invalid_native_records(
 ) -> None:
     history = tmp_path / "MAC-TEST/zsh_history/alex.zsh_history"
     history.parent.mkdir(parents=True)
-    history.write_text(record + "\n")
+    history.write_text(record + "\n", encoding="utf-8")
     parsed = list(ZshHistoryParser().parse_file(history))
     assert len(parsed) == 1 and parsed[0].parse_errors
 

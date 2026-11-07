@@ -847,8 +847,9 @@ def test_owned_image_alias_uses_exact_file_objects_without_resolving_native_path
         assert path in {_PROBE, Path("/usr/bin/true")}
         return SimpleNamespace(st_dev=123, st_ino=9002 if path.name == "true" else 9001)
 
-    monkeypatch.setattr(Path, "stat", stat)
-    images = kit._owned_images(_PROBE)
+    with monkeypatch.context() as image_stat:
+        image_stat.setattr(Path, "stat", stat)
+        images = kit._owned_images(_PROBE)
     assert sampled == [_PROBE, Path("/usr/bin/true")]
     rows, controls = _experiment()
 

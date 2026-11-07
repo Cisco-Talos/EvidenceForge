@@ -60,6 +60,8 @@ Studio acceptance remain separate release steps.
   assignment-only Mac env exposure carriers with bounded modeled lifetimes and
   stable canonical argv/wire quoting. Compare Snare timestamps as calendar values,
   accepting valid day padding and payload-owned leap years while rejecting conflicts.
+  Preserve exact Linux SSH publication with endpoint collection omitted, and reject
+  checkpoint capture when the retained source process has lost canonical authority.
 - Repair mixed-fleet identity and protocol consistency, passive histories, Mac
   query lifetimes, process completion and interactive-only shell history
   (`42d6440a`, `e30c1875`, `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).

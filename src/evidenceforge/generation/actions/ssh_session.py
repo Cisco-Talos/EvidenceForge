@@ -3607,7 +3607,7 @@ class SshSessionActionBundle:
             return False
         dispatcher = getattr(self.executor, "dispatcher", None)
         emitters = getattr(dispatcher, "emitters", None)
-        if type(emitters) is not dict:
+        if type(dispatcher) is not EventDispatcher or type(emitters) is not dict:
             return False
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter

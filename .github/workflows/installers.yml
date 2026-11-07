@@ -14,6 +14,10 @@ on:
         default: false
   workflow_dispatch:
     inputs:
+      windows-diagnostic:
+        description: Run focused Windows readiness diagnostics only
+        type: boolean
+        default: false
       platform:
         description: Native installer to build for testing (never publishes)
         type: choice
@@ -33,19 +37,20 @@ permissions:
 
 jobs:
   alpha-readiness-ci:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic
     uses: ./.github/workflows/ci.yml
     with:
       source-ref: ${{ github.sha }}
       release-coverage: true
 
   alpha-readiness-slow:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.windows-diagnostic
     uses: ./.github/workflows/release-slow.yml
     with:
       source-ref: ${{ github.sha }}
 
   plan:
+    if: ${{ !inputs.windows-diagnostic }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -71,6 +76,46 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("matrix=" + json.dumps({"include": matrix}), file=output)
           PY
+
+  windows-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.windows-diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Preserve repository bytes
+        run: git config --global core.autocrlf false
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-extras
+      - name: Run focused portability diagnostics
+        run: >-
+          uv run --no-sync pytest --no-cov --tb=short --durations=10
+          --junitxml=windows-diagnostic.xml
+          tests/integration/test_macos_history.py tests/integration/test_macos_launchd_guard.py
+          tests/unit/test_browser_instances.py tests/unit/test_external_parser_docs.py
+          tests/unit/test_macos_catalog_audit.py tests/unit/test_macos_chrome_generation.py
+          tests/unit/test_macos_chrome_reference.py tests/unit/test_macos_chrome_review.py
+          tests/unit/test_macos_filesystem_workload.py tests/unit/test_macos_finder_generation.py
+          tests/unit/test_macos_gatekeeper_reference.py tests/unit/test_macos_gui_audit_reference.py
+          tests/unit/test_macos_gui_launch_reference.py tests/unit/test_macos_launch_chain_reference.py
+          tests/unit/test_macos_launch_support.py tests/unit/test_macos_launchd_activation_control.py
+          tests/unit/test_macos_launchd_cleanup_state.py tests/unit/test_macos_launchd_reference.py
+          tests/unit/test_macos_launchd_review.py tests/unit/test_macos_native_system_job.py
+          tests/unit/test_macos_reference_capture.py
+      - name: Retain diagnostic results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-readiness-diagnostic
+          path: windows-diagnostic.xml
+          if-no-files-found: warn
 
   build:
     name: Installer (${{ matrix.platform }})

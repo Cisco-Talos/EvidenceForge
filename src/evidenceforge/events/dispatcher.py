@@ -13294,7 +13294,7 @@ class EventDispatcher:
                     for prepared in owner.dispatches
                 )
             )
-            uncollected_mac_terminal = bool(
+            uncollected_ssh_terminal = bool(
                 type(owner) is _PreparedDeferredSessionPublicationRecord
                 and owner.exact_recovery is record
                 and not owner.all_suppressed
@@ -13303,7 +13303,7 @@ class EventDispatcher:
                 and record.target_proofs == ()
                 and record.batch.commit_cursor == 0
                 and all(member == () for member in record.member_identifiers)
-                and self._is_macos_ssh_receiver_projection_cohort(owner.dispatches)
+                and self._is_ssh_receiver_projection_cohort(owner.dispatches)
                 and all(
                     not self._deferred_session_exact_target_slices(prepared._projection)
                     for prepared in owner.dispatches
@@ -13327,7 +13327,7 @@ class EventDispatcher:
                 and receipt.occurrence_ids == record.occurrence_ids
                 and receipt.target_proof_digest == self._prepared_dispatch_owner_token
                 and (
-                    positive_target_terminal or all_suppressed_terminal or uncollected_mac_terminal
+                    positive_target_terminal or all_suppressed_terminal or uncollected_ssh_terminal
                 )
                 and receipt.member_integrity_digest == record.member_integrity_digest
                 and len(outcomes) == len(record.occurrence_ids)
@@ -14413,8 +14413,8 @@ class EventDispatcher:
             raise EventContractError("Deferred native ingress changed its exact staged rows")
         return facts[:-count]
 
-    @staticmethod
-    def _is_macos_ssh_receiver_projection_cohort(
+    def _is_ssh_receiver_projection_cohort(
+        self,
         dispatches: tuple[PreparedDispatch, ...],
     ) -> bool:
         """Recognize the already-authenticated transport/receiver/session cohort.
@@ -14432,9 +14432,20 @@ class EventDispatcher:
             and process.event_type in {EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
             and session.event_type is EventKind.SSH_SESSION
             and host is not None
-            and host.os_category == "macos"
+            and host.os_category in {"linux", "macos"}
+            and (
+                host.os_category == "macos"
+                or (
+                    process.event_type is EventKind.SYSTEM_PROCESS_CREATE
+                    and "ecar" not in self.emitters
+                    and not any(
+                        self._projection_is_exact_warmup_suppressed(member._projection)
+                        for member in dispatches
+                    )
+                )
+            )
             and process.src_host is not None
-            and process.src_host.os_category == "macos"
+            and process.src_host.os_category == host.os_category
             and process.src_host.hostname == host.hostname
             and transport.dst_host is not None
             and transport.dst_host.hostname == host.hostname
@@ -14492,9 +14503,9 @@ class EventDispatcher:
                 "Deferred-session exact projection target proof cardinality changed"
             )
         proven_members = {proof.member_ordinal for proof in proofs}
-        macos_receiver = self._is_macos_ssh_receiver_projection_cohort(dispatches)
+        ssh_receiver = self._is_ssh_receiver_projection_cohort(dispatches)
         required_members = (
-            {target[0] for target in expected} if macos_receiver else set(range(len(dispatches)))
+            {target[0] for target in expected} if ssh_receiver else set(range(len(dispatches)))
         )
         if proven_members != required_members:
             raise EventContractError(
@@ -14642,7 +14653,7 @@ class EventDispatcher:
             if member_ordinal == 0
         )
         if (
-            not macos_receiver
+            not ssh_receiver
             and any(member_ordinal > 0 for member_ordinal, *_rest in expected)
             and not (transport_targets)
         ):
@@ -14677,7 +14688,7 @@ class EventDispatcher:
         for proof in proofs:
             if proof.member_ordinal == 0 or proof.format_name != "ecar":
                 continue
-            if not transport_ecar_keys and macos_receiver:
+            if not transport_ecar_keys and ssh_receiver:
                 continue
             if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
                 raise EventContractError(
