@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_gui_launch_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
 
 _CANARY = "INVENTED_PRIVATE_CANARY_DO_NOT_EXPORT"
@@ -255,6 +256,7 @@ def test_profile_never_inferred_from_platform_or_boolean(version: object) -> Non
     assert kit._wire_profile(_raws(rows)) != "V11"
 
 
+@requires_posix_reference
 def test_prepare_only_copies_reviewable_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -294,6 +296,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("target", ["Probe", "guard", "plist", "source", "codec"])
 def test_setup_manifest_binds_code_binary_and_codec(
     prepared: Path, target: str, monkeypatch: pytest.MonkeyPatch
@@ -313,6 +316,7 @@ def test_setup_manifest_binds_code_binary_and_codec(
         kit._manifest(prepared)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "permissions", "fifo", "size"])
 def test_private_file_reader_does_not_follow_or_open_unbounded_sources(
     tmp_path: Path, kind: str
@@ -345,6 +349,7 @@ def test_human_commands_require_flags_and_never_echo_inputs(
     assert json.loads(result.out)["error"] == "INPUT"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("failure", [None, "interrupt", "cleanup", "finder-timeout"])
 def test_mock_collection_cleans_up_and_persists_only_owned_rows(
     prepared: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
@@ -423,6 +428,7 @@ def test_mock_collection_cleans_up_and_persists_only_owned_rows(
         assert kit.offline_report().stage == "OFFLINE_REPORT"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("launch_chain", [False, True])
 def test_existing_session_lock_returns_specific_error_without_reading_or_collecting(
     prepared: Path,
@@ -457,6 +463,7 @@ def test_existing_session_lock_returns_specific_error_without_reading_or_collect
     assert _CANARY not in output.out + output.err
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "status,expected", [(-9, "PROBE_KILLED"), (2, "PROBE_FAILED"), (None, "PROBE_TIMEOUT")]
 )
@@ -483,6 +490,7 @@ def test_probe_preflight_failure_reaps_without_starting_collection_or_creating_r
     assert _CANARY not in report.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("reply", [b"FINDER\n", b"LAUNCHD\n", _CANARY.encode(), b"1234\n"])
 def test_role_lookup_uses_exact_private_token_pipe_and_fixed_output(
     prepared: Path, monkeypatch: pytest.MonkeyPatch, reply: bytes
@@ -506,6 +514,7 @@ def test_role_lookup_uses_exact_private_token_pipe_and_fixed_output(
     assert _CANARY not in kit.CaseReport(responsible_image_role=role).model_dump_json()
 
 
+@requires_posix_reference
 def test_pump_writes_no_ambient_rows_and_backfills_only_proven_fork() -> None:
     read_fd, write_fd = os.pipe()
     stream = os.fdopen(read_fd, "rb")
@@ -685,6 +694,7 @@ def existing_capture(prepared: Path) -> tuple[Path, Path]:
     return prepared, run
 
 
+@requires_posix_reference
 def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
     existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -716,6 +726,7 @@ def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
     assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == files
 
 
+@requires_posix_reference
 def test_version_six_reviews_retained_launcher_without_native_execution_or_writes(
     existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -767,6 +778,7 @@ def test_version_six_reviews_retained_launcher_without_native_execution_or_write
     assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == files
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "birth,label",
     [
@@ -831,6 +843,7 @@ def test_chain_reviewer_uses_retained_app_lifetime_and_preserves_its_unknown_pre
     assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == files
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["helper", "provenance", "own", "wire", "duplicate_exec"])
 def test_existing_reviewer_rejects_invalid_provenance_and_observations(
     existing_capture: tuple[Path, Path], damage: str
@@ -857,6 +870,7 @@ def test_existing_reviewer_rejects_invalid_provenance_and_observations(
         kit.review_existing(root)
 
 
+@requires_posix_reference
 def test_failed_original_collection_controls_leave_supplemental_checks_inconclusive(
     existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -871,6 +885,7 @@ def test_failed_original_collection_controls_leave_supplemental_checks_inconclus
     assert report.control_environment.comparison == report.finder_fork == "INCONCLUSIVE"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("known", [False, True])
 def test_only_offline_review_accepts_the_exact_prior_codec_lineage(
     existing_capture: tuple[Path, Path], known: bool
@@ -911,6 +926,7 @@ def test_hidden_original_location_never_allows_echo_fallback(
         kit._hidden_existing_root()
 
 
+@requires_posix_reference
 def test_human_existing_review_cli_returns_only_fixed_diagnostics(
     existing_capture: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,

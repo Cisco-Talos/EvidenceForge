@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.platforms import requires_posix_reference
 
+
+@requires_posix_reference
 def test_launchd_guard_cancellation_deadlines_recovery_and_fixed_root_scope(tmp_path: Path) -> None:
     compiler = shutil.which("clang")
     if compiler is None:

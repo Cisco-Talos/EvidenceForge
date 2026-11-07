@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_launchd_review as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_launchd_reference import _CANARY, _chain, _manifest
 
 
@@ -91,6 +92,7 @@ def _saved(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     return root, expected
 
 
+@requires_posix_reference
 def test_offline_review_is_read_only_and_exports_only_fixed_public_key_classes(
     tmp_path: Path,
 ) -> None:
@@ -124,6 +126,7 @@ def test_offline_review_is_read_only_and_exports_only_fixed_public_key_classes(
     assert kit.Report.model_validate_json(text) == report
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "damage",
     [
@@ -223,6 +226,7 @@ def test_closed_report_rejects_native_text(field: str) -> None:
         kit.Report.model_validate({field: _CANARY})
 
 
+@requires_posix_reference
 def test_prepare_does_not_open_existing_private_kit_and_binds_source_digests(
     tmp_path: Path,
 ) -> None:

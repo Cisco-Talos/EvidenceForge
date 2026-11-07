@@ -501,3 +501,16 @@ Windows portability failures but has no final tracebacks due to that abort.
 A read-only Windows-only diagnostic dispatch on the isolated validation branch
 will collect those failures before another complete gate run. It retains JUnit
 results and changes no production release workflow or publication permissions.
+
+The Windows-only diagnostic on b30333b2 (run 42416440454) completes in 66.7 seconds
+and retains JUnit output. It identifies 109 UTF-8 fixture-read failures, principally
+the shared Finder/catalog fixture, plus POSIX collector-operation tests (permissions,
+UID ownership, no-follow opens, FIFO/select, native paths and poll.h C harnesses).
+The catalog/Finder reads and non-ASCII history input now declare UTF-8 explicitly.
+Only the specific native reference-operation test functions receive an explicit
+POSIX requirement; portable simulation, model and codec tests remain eligible on
+Windows. These are private Mac collector operating-system contracts, not a claim
+that the collector can run on Windows. All existing assertions remain intact and
+these operational cases remain required on Linux/macOS. A scoped Path.stat mock
+also prevents a failed native-image query from corrupting pytest's own reporting.
+The final local focused SSH/reference/history/docs group passes all 563 cases.

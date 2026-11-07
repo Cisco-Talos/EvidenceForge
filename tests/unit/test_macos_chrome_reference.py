@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_chrome_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _file, _process, _record
 
 CANARY = "INVENTED_PRIVATE_CHROME_CANARY"
@@ -454,6 +455,7 @@ def test_short_console_output_and_closed_report_schema(capsys: pytest.CaptureFix
         kit.Descriptor(slot=CANARY, kind="VNODE", pipe="NOT_PIPE")
 
 
+@requires_posix_reference
 def test_launch_command_selects_one_new_profile_without_debugging_or_sandbox_bypass() -> None:
     command = kit._launch_command(Path(PROFILE), URL)
     assert command[:5] == ["/usr/bin/open", "-n", "-a", str(kit.APP), "--args"]
@@ -462,6 +464,7 @@ def test_launch_command_selects_one_new_profile_without_debugging_or_sandbox_byp
     assert not any("debugging" in argument or argument == "--no-sandbox" for argument in command)
 
 
+@requires_posix_reference
 def test_code_only_prepare_is_fresh_and_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -637,6 +640,7 @@ def _fake_capture(
     return kit.capture(), events
 
 
+@requires_posix_reference
 def test_controller_cleanup_precedes_code_verification_and_shareable_file_is_outer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -658,6 +662,7 @@ def test_controller_cleanup_precedes_code_verification_and_shareable_file_is_out
     assert events[-1] == "verify_offline"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure,expected",
     [
@@ -734,6 +739,7 @@ def test_native_phase_and_lifetime_counts_do_not_conflate_two_execs_with_two_bir
     assert report.started_lifetimes_without_exit == 0
 
 
+@requires_posix_reference
 def test_vendor_metadata_query_verifies_code_without_opening_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1012,6 +1018,7 @@ def test_static_diagnostic_requires_explicit_run_flag_and_prints_only_fixed_sche
         kit.CodeCommandResult(outcome="FAIL", failure=CANARY)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("kind", ["MAIN", "RENDERER", "GPU", "HELPER", "CRASHPAD", "XPCPROXY"])
 def test_process_reference_uses_standard_app_validation_and_keeps_vendor_requirements(
     monkeypatch: pytest.MonkeyPatch,
@@ -1102,6 +1109,7 @@ def test_entitlement_decoder_rejects_non_objects_and_does_not_scan_for_xml() -> 
     assert kit.decode_entitlement_output(b" \n\t") == {}
 
 
+@requires_posix_reference
 def test_setup_metadata_decoder_accepts_xpcproxy_blob_without_changing_entitlements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1146,6 +1154,7 @@ def test_entitlement_framing_failure_reaches_fixed_setup_error_labels(
     assert report["installed_code_output_form"] == "OTHER_TEXT"
 
 
+@requires_posix_reference
 def test_full_setup_invented_inventory_handles_all_six_code_images_and_xpcproxy_container(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

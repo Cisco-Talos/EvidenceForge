@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_launchd_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
 
 _CANARY = "INVENTED_PRIVATE_LAUNCHD_CANARY"
@@ -270,6 +271,7 @@ def test_report_rejects_untrusted_text(field: str) -> None:
         kit.Report.model_validate({field: _CANARY})
 
 
+@requires_posix_reference
 def test_prepare_is_code_only_exclusive_and_loads_all_shared_comparisons(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "fresh")
     assert set(path.name for path in root.iterdir()) == set(kit.CODE) | {"PRIVATE-RUN.md"}
@@ -289,6 +291,7 @@ def test_prepare_is_code_only_exclusive_and_loads_all_shared_comparisons(tmp_pat
         kit.prepare(root)
 
 
+@requires_posix_reference
 def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -418,6 +421,7 @@ def test_guard_timeout_does_not_claim_cleanup_and_closes_cancellation_pipe() -> 
     assert job.stdin.closed
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure",
     [
@@ -540,6 +544,7 @@ def test_capture_is_automatic_single_use_and_cleans_before_native_disk(
         kit.capture()
 
 
+@requires_posix_reference
 def test_report_only_reads_fixed_saved_json_and_never_native_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

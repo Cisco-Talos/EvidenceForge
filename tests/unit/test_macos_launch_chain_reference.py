@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from scripts import macos_gui_launch_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_gui_launch_reference import _CANARY, _IMAGE, _raws, _rows
 
 
@@ -370,6 +371,7 @@ def test_launcher_buffer_is_bounded_and_disabled_for_original_mode() -> None:
     assert not original.launchers and not any(tracker.records.values())
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("synthetic_entitlement", [False, True])
 def test_launcher_setup_separates_the_marker_experiment_and_binds_its_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synthetic_entitlement: bool

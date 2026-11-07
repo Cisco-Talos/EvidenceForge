@@ -13,6 +13,8 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_gui_audit_reference as kit
 
+from tests.support.platforms import requires_posix_reference
+
 _CANARY = "INVENTED_PRIVATE_CANARY_never_export"
 
 
@@ -203,6 +205,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return kit.prepare(tmp_path / "invented-kit")
 
 
+@requires_posix_reference
 def test_preparation_is_code_only_and_refuses_overwrite(prepared: Path) -> None:
     assert {path.name for path in prepared.iterdir()} == {
         "private_gui_audit.py",
@@ -235,6 +238,7 @@ def test_repo_source_cannot_record_or_review() -> None:
         kit.report()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["symlink", "hardlink", "permissions", "size", "fifo"])
 def test_private_file_boundary(tmp_path: Path, damage: str) -> None:
     path = tmp_path / "invented.json"
@@ -255,6 +259,7 @@ def test_private_file_boundary(tmp_path: Path, damage: str) -> None:
         kit._read(path)
 
 
+@requires_posix_reference
 def test_mock_record_and_report_use_only_invented_data(
     prepared: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

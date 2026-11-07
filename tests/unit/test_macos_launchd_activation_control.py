@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 from scripts import macos_ulf_launchd_reference as kit
 
+from tests.support.platforms import requires_posix_reference
+
 NONCE = "a" * 32
 SECRET = "invented-private-activation-canary"
 SUCCESS = (
@@ -18,6 +20,7 @@ SUCCESS = (
 )
 
 
+@requires_posix_reference
 def test_fresh_setup_hashes_the_detailed_guard_protocol_without_executing_controls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -240,6 +243,7 @@ def synthetic_guard(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "fault,stage,reason",
     [
@@ -280,6 +284,7 @@ def test_c_guard_reports_the_original_failure_stage_without_running_native_comma
     assert b"NATIVE_COMMAND_ATTEMPTED" not in result.stderr
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("mode", ["run", "run-diagnostic"])
 def test_c_guard_success_keeps_legacy_wire_output_and_removes_only_synthetic_controls(
     tmp_path: Path, synthetic_guard: Path, mode: str

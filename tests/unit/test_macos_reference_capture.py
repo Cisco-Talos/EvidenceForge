@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from scripts import macos_reference_capture as kit
 
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _file, _process
 
 _PROBE = Path("/private/tmp/invented-kit/private-run-example/process-probe")
@@ -323,6 +324,7 @@ def test_input_and_retention_limits_fail_closed(monkeypatch: pytest.MonkeyPatch)
     assert tracker.records == []
 
 
+@requires_posix_reference
 def test_prepare_copies_only_code_and_does_not_call_native_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -366,6 +368,7 @@ def test_capture_from_checkout_is_rejected_before_host_checks(
         kit.capture()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("command", ["preflight", "capture"])
 @pytest.mark.parametrize(
     ("uid", "family", "architecture", "version", "code"),
@@ -413,6 +416,7 @@ def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
     assert report.gate_status == "NOT_EVALUATED"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("version", ["26.0", "27.0.1", "15.7", "28.987654321"])
 def test_successful_preflight_never_builds_collects_or_writes_data(
     tmp_path: Path,
@@ -522,6 +526,7 @@ def test_legacy_fixed_report_remains_readable() -> None:
     assert report.message_shapes == "INCONCLUSIVE"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure",
     [
@@ -837,6 +842,7 @@ def test_identity_never_falls_back_to_partial_tokens_or_pid_only(mutation: str) 
         kit._identity(process)
 
 
+@requires_posix_reference
 def test_owned_image_alias_uses_exact_file_objects_without_resolving_native_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -119,7 +119,9 @@ def _finder_engine(
         ]
     overlay = tmp_path / ".eforge/config/activity/application_catalog.yaml"
     overlay.parent.mkdir(parents=True)
-    catalog = yaml.safe_load((get_activity_directory() / "application_catalog.yaml").read_text())
+    catalog = yaml.safe_load(
+        (get_activity_directory() / "application_catalog.yaml").read_text(encoding="utf-8")
+    )
     overlay.write_text(
         yaml.safe_dump(
             {
@@ -388,7 +390,7 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
     records = [
         record
         for path in tmp_path.rglob("macos_endpoint_security.ndjson")
-        for line in path.read_text().splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if (record := decode_endpoint_security_record(line)).process.audit_token.pid == pid
         or record.event_type == 11
         and record.event.fork.child.audit_token.pid == pid

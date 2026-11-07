@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_gatekeeper_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _record
 from tests.unit.test_macos_native_contracts import _log_record, _persona_metadata
 
@@ -122,6 +123,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return kit.prepare(tmp_path / "invented-kit")
 
 
+@requires_posix_reference
 def test_prepare_copies_only_code_and_instructions(prepared: Path) -> None:
     assert {path.name for path in prepared.iterdir()} == set(kit.CODE_FILES)
     assert prepared.stat().st_mode & 0o077 == 0
@@ -195,6 +197,7 @@ def _delivery(root: Path, monkeypatch: pytest.MonkeyPatch) -> kit.Config:
     return config
 
 
+@requires_posix_reference
 def test_setup_has_one_fresh_identity_and_no_launch_or_listener(synthetic: Path) -> None:
     config = kit._config(synthetic)
     assert len(config.token) == 32 and config.cdhash == _HASH
@@ -204,6 +207,7 @@ def test_setup_has_one_fresh_identity_and_no_launch_or_listener(synthetic: Path)
         kit.setup()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "name",
     [
@@ -222,6 +226,7 @@ def test_changed_code_or_binaries_fail_provenance(synthetic: Path, name: str) ->
         kit._config(synthetic)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "public", "oversize", "fifo"])
 def test_private_reader_rejects_unsafe_files(tmp_path: Path, kind: str) -> None:
     source, path = tmp_path / "source", tmp_path / "input"
@@ -277,6 +282,7 @@ def test_server_policy_serves_exact_bytes_without_cache_or_external_content(meth
     assert "Access-Control-Allow-Origin" not in headers
 
 
+@requires_posix_reference
 def test_server_binds_only_loopback_and_suppresses_handler_diagnostics(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -304,6 +310,7 @@ def test_server_binds_only_loopback_and_suppresses_handler_diagnostics(
     assert "PRIVATE_SERVER_STOPPED" in output and _CANARY not in output
 
 
+@requires_posix_reference
 def test_download_requires_delivery_exact_content_signature_and_quarantine(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -317,6 +324,7 @@ def test_download_requires_delivery_exact_content_signature_and_quarantine(
         kit._download(synthetic, config)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("item", ["probe.zip", "app_binary", "app_symlink"])
 def test_changed_or_relocated_download_is_never_launched(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch, item: str
@@ -363,6 +371,7 @@ def _es(config: kit.Config, *, family: str = "exec", helper: bool = False) -> di
     return row
 
 
+@requires_posix_reference
 def test_readiness_requires_both_own_ul_message_and_own_exec_exit_identity() -> None:
     config = _config()
     tracker = kit.Tracker(config, Path("/private/tmp/invented/metadata-probe"))
@@ -466,6 +475,7 @@ def _capture_result() -> kit.Report:
     )
 
 
+@requires_posix_reference
 def test_capture_control_report_flow_opens_no_records_in_report(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -504,6 +514,7 @@ def test_capture_control_report_flow_opens_no_records_in_report(
     assert kit.report("CONSENT_PROMPT").denial_conclusion == "NOT_ESTABLISHED"
 
 
+@requires_posix_reference
 def test_incomplete_control_is_reportable_but_not_qualified(synthetic: Path) -> None:
     kit._write(synthetic / "private/capture.json", _capture_result().model_dump_json().encode())
     result = kit.report("BLOCK_ALERT")
@@ -590,6 +601,7 @@ def test_pump_retains_exact_bytes_only_after_item_filter(
     assert output.getvalue() == relevant + b"\n"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("mode", ["complete", "es_unready", "ul_unready", "interrupted"])
 def test_mocked_collection_requires_readiness_and_always_stops_both_sources(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch, mode: str
@@ -694,6 +706,7 @@ def test_download_page_has_only_static_local_link() -> None:
     assert headers["Content-Security-Policy"].startswith("default-src 'none'")
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("change", ["late_marker", "bad_cleanup", "timeout"])
 def test_control_refuses_ambiguous_or_unfinished_capture(synthetic: Path, change: str) -> None:
     result = _capture_result()
@@ -710,6 +723,7 @@ def test_control_refuses_ambiguous_or_unfinished_capture(synthetic: Path, change
         kit.control()
 
 
+@requires_posix_reference
 def test_provenance_refuses_original_parent_symlinks(synthetic: Path) -> None:
     original = synthetic / "private/original"
     held = synthetic / "private/held-original"
@@ -719,6 +733,7 @@ def test_provenance_refuses_original_parent_symlinks(synthetic: Path) -> None:
         kit._config(synthetic)
 
 
+@requires_posix_reference
 def test_exact_platform_provenance_stays_private_and_build_drift_stops_collection(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -747,6 +762,7 @@ def test_verification_report_cannot_expose_native_values(field: str) -> None:
         kit.VerificationReport.model_validate({field: _CANARY})
 
 
+@requires_posix_reference
 def test_read_only_diagnosis_accepts_existing_kit_without_reading_records_or_writing(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -781,6 +797,7 @@ def test_read_only_diagnosis_accepts_existing_kit_without_reading_records_or_wri
     }
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "missing,step",
     [
@@ -810,6 +827,7 @@ def test_missing_download_inputs_report_exact_step_without_leaking_names(
     assert not (synthetic / "private/capture-started").exists()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "fault,step,code",
     [
@@ -876,6 +894,7 @@ def test_source_copy_cannot_diagnose_a_private_kit() -> None:
     assert result.step == "INPUT" and result.error == "LOCATION"
 
 
+@requires_posix_reference
 def test_offline_shape_review_is_bounded_read_only_and_accepts_v1(
     shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -908,6 +927,7 @@ def test_shape_diagnostic_field_names_match_the_closed_native_schema() -> None:
     }
 
 
+@requires_posix_reference
 def test_fixed_shape_review_accepts_human_approved_persona_fields_without_values(
     shape_capture: Path,
 ) -> None:
@@ -1003,6 +1023,7 @@ def test_shape_diagnostic_distinguishes_missing_mixed_and_additional_fields() ->
     assert _CANARY not in result.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "fault",
     [
@@ -1081,6 +1102,7 @@ def test_offline_review_refuses_unsafe_or_unqualified_inputs(
     assert not result.fields and _CANARY not in result.model_dump_json()
 
 
+@requires_posix_reference
 def test_offline_review_never_leaks_native_exception_text(
     shape_capture: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1116,6 +1138,7 @@ def test_private_name_inspection_refuses_agent_or_redirected_output_before_readi
         kit.inspect_field_names(Path("/invented-never-opened"))
 
 
+@requires_posix_reference
 def test_private_terminal_inspection_shows_names_only_from_verified_rows(
     shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -1132,6 +1155,7 @@ def test_private_terminal_inspection_shows_names_only_from_verified_rows(
     assert _CANARY not in output.out and not output.err
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("fault", ["control", "escape", "long", "count", "uncorrelated"])
 def test_private_name_inspection_refuses_unbounded_or_uncorrelated_names_before_printing(
     shape_capture: Path,
@@ -1170,6 +1194,7 @@ def test_private_policy_layouts_refuse_non_tty_before_any_read(
         kit.inspect_policy_layouts(Path("/invented-never-opened"))
 
 
+@requires_posix_reference
 def test_private_policy_layouts_deduplicate_templates_and_omit_messages_paths_and_identities(
     shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -1193,6 +1218,7 @@ def test_private_policy_layouts_deduplicate_templates_and_omit_messages_paths_an
     assert _CANARY not in output.out and str(shape_capture) not in output.out and not output.err
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("fault", ["overlong", "invalid", "many", "uncorrelated"])
 def test_private_policy_layouts_validate_all_inputs_before_any_output(
     shape_capture: Path,
@@ -1230,6 +1256,7 @@ def test_denial_review_report_has_only_fixed_leaves(field: str) -> None:
         kit.DenialReviewReport.model_validate({field: _CANARY})
 
 
+@requires_posix_reference
 def test_fixed_denial_review_preserves_evidence_and_does_not_infer_cause_or_exec_stage(
     denial_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -1271,6 +1298,7 @@ def test_fixed_denial_review_preserves_evidence_and_does_not_infer_cause_or_exec
     }
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "fault",
     [
@@ -1342,6 +1370,7 @@ def test_denial_review_never_accepts_incomplete_or_mismatched_refusal_evidence(
     assert _CANARY not in result.model_dump_json()
 
 
+@requires_posix_reference
 def test_denial_review_retains_multiple_target_pids_as_unqualified_lifecycle_extent(
     denial_capture: Path,
 ) -> None:
@@ -1360,6 +1389,7 @@ def test_repo_copy_cannot_review_native_denial() -> None:
     assert result.error == "LOCATION"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("known", [False, True])
 def test_denial_path_checks_only_compare_fixed_public_candidates(
     denial_capture: Path, known: bool
@@ -1382,6 +1412,7 @@ def test_denial_path_checks_only_compare_fixed_public_candidates(
     assert _CANARY not in result.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "style,label",
     [
@@ -1410,6 +1441,7 @@ def test_denial_metadata_classifies_public_tracepoint_styles_without_ids(
     assert str(row["traceID"]) not in result.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "field,value,check",
     [
