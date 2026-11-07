@@ -109,6 +109,15 @@ jobs:
           tests/unit/test_macos_launchd_cleanup_state.py tests/unit/test_macos_launchd_reference.py
           tests/unit/test_macos_launchd_review.py tests/unit/test_macos_native_system_job.py
           tests/unit/test_macos_reference_capture.py
+          tests/unit/test_macos_reference_review.py
+          tests/unit/test_macos_remote_docker_reference.py tests/unit/test_macos_remote_docker_review.py
+          tests/unit/test_macos_remote_filesystem_reference.py tests/unit/test_macos_remote_filesystem_review.py
+          tests/unit/test_macos_remote_process_reference.py tests/unit/test_macos_remote_process_review.py
+          tests/unit/test_macos_ssh_descriptor_reference.py tests/unit/test_macos_ssh_pty_reference.py
+          tests/unit/test_macos_ssh_startup_reference.py tests/unit/test_macos_ssh_startup_review.py
+          tests/unit/test_macos_ssh_unified_reference.py tests/unit/test_macos_ssh_unified_review.py
+          tests/unit/test_macos_terminal_startup_reference.py tests/unit/test_macos_terminal_startup_review.py
+          tests/unit/test_macos_ulf_launchd_reference.py
       - name: Retain diagnostic results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
