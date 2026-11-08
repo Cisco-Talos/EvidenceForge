@@ -4,6 +4,76 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v2.2.0a5 (2026-11-07)
+
+Fifth alpha of the planned 2.2.0 release. Adds bounded macOS 27 arm64 workstation
+simulation and native endpoint evidence alongside the existing Windows, Linux and
+network sources. This entry describes prepared source; publication and interactive
+Studio acceptance remain separate release steps.
+
+**Mac workstation and canonical process ownership**
+
+- Add explicit Mac platform capabilities, catalog/defaults, SSH receivers and
+  mixed-fleet routing. Keep unsupported Mac targets and source combinations out of
+  generation; the active native target is macOS 27 arm64 (`d76c7e77`, `43d52356`,
+  `af6a355d`, `e07bbe4a`).
+- Model POSIX arguments, environments, credentials, groups, sessions, terminal
+  ownership and exit results through canonical state and transactional action
+  bundles. Preserve parent lifetimes, executable versions, loaded content and
+  event-time observations through fork, exec, close and recovery (`5f2d4c16`,
+  `01800dd8`, `120a0231`, `913c1932`, `a3f5781f`, `9f8c619c`).
+- Add qualified Finder, Terminal/iTerm2, Chrome helper, SSH client/receiver and
+  selected launchd process chains. Model returning exec failures, policy refusals,
+  persistence writes/removal and ordinary process closure with explicit limits
+  (`f529e12a`, `bf03e53e`, `b32fb552`, `bec1e3c9`, `28e66791`, `84c9864a`,
+  `dda966ac`, `e928bf5d`, `23705907`, `56452271`).
+
+**Native Mac evidence and qualification**
+
+- Publish bounded Endpoint Security v11 fork/exec/known-exit observations from
+  retained canonical facts, with collector epochs, ordered counters, independent
+  process census and exact native filtering/recovery. Retain script/interpreter,
+  descriptor, file-placement and signing facts without recreating them in emitters
+  (`33372a78`, `239b0041`, `74e87fdb`, `4586fcb2`, `74907aa9`, `09acf964`,
+  `1d4a0351`, `4cf5ac22`).
+- Add reference-qualified ordinary-verbosity SSH authentication and bounded app
+  policy-refusal Unified Log messages. Keep unqualified launchd Unified Log
+  messages gated; native references do not imply universal source fidelity
+  (`a592c0cf`, `d28f1f8c`, `87f677aa`, `352bc159`).
+- Integrate reference-supported create, modified-close, rename/replacement and
+  unlink telemetry through canonical process/file identity, including a bounded
+  VS Code document workload, shared stat/inode ownership and fault-safe recovery.
+  Expand measured OS/app helpers and qualify installed CLI/runtime launch metadata;
+  provisional desktop metadata and the cross-platform catalog audit remain explicit
+  (`acbaf51f`).
+
+**Realism, Studio and validation**
+
+- Repair canonical browser instance ownership, historical process/network
+  attribution and task pacing. Route remaining Mac/baseline timing samples through
+  semantic timing scopes without increasing the temporal RNG inventory budget.
+  Preserve positive helper and complete SSH lifecycle assertions in extended tests.
+- Preserve nested native entitlement object/array types through wire validation,
+  separate historical network/SSH attribution from live process updates, and make
+  Mac reference-tool imports portable to Windows test collection. Keep SSH lifecycle
+  construction independent of eCAR selection and decline backdated use of a session
+  shell whose terminal startup is already reserved for a later occurrence. Use
+  assignment-only Mac env exposure carriers with bounded modeled lifetimes and
+  stable canonical argv/wire quoting. Compare Snare timestamps as calendar values,
+  accepting valid day padding and payload-owned leap years while rejecting conflicts.
+  Preserve exact Linux SSH publication with endpoint collection omitted, and reject
+  checkpoint capture when the retained source process has lost canonical authority.
+- Repair mixed-fleet identity and protocol consistency, passive histories, Mac
+  query lifetimes, process completion and interactive-only shell history
+  (`42d6440a`, `e30c1875`, `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).
+- Expose Mac assets, native previews and coverage in Studio; fix platform-specific
+  application editing and scorecard presentation. Add packaged native Mac generation
+  and evaluation smoke coverage (`6b543989` and subsequent source changes).
+- Revise platform/log-format mappings, Mac capability/limitations documentation,
+  configuration references, parser quickstarts and release guidance. Preserve
+  bounded acceptance evidence and private-reference collection/review workflows
+  (`d0e97a8a`, `1bf7be99` and subsequent documentation changes).
+
 ## v2.2.0a4 (2026-10-14)
 
 Fourth alpha of the planned 2.2.0 release. Includes the Studio chat, file-summary and published
