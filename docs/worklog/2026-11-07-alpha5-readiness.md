@@ -621,3 +621,92 @@ test data/assertions are unchanged. Full lint/formatting (1,510 files), version
 sync, behavior declaration and the measured runtime/config hashes remain current.
 The last requested rerun comprises full Windows routine tests and the full Linux
 release coverage selection, with strict 70% coverage and a 120-minute Linux budget.
+
+Final remaining-gates snapshot is `927e9c89` on
+`codex/alpha5-final-checks-20261107`:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/42421300183 .
+Jobs 128550092781 (Linux coverage, 120 minutes) and 128550093083 (Windows routine,
+90 minutes) run the complete corresponding CI selections, excluding only the same
+separately gated Studio/desktop files as normal CI. Reports are retained as
+`final-routine-coverage-ubuntu-latest` and `final-routine-coverage-windows-latest`.
+They use `--junitxml=remaining-tests.xml`; Linux retains the strict 70% coverage
+threshold. The isolated Installer Builds workflow's `remaining-only` dispatch
+repeats just these unresolved checks; normal release/CI entry points retain every
+required gate. This helper workflow remains absent from the original workspace.
+Status is retained at `ci-final-remaining-status.json` under the local evidence
+directory. The e663 full-run watcher remains active for its final slow-shard and
+older routine results. All three full Studio and native-state gates and all three
+installers passed there; no runtime or Studio bytes differ in the final retry.
+
+All four slow shards on e663 now pass: 571/523/514/590 passed, with 3/1/0/1
+skips respectively (2,198 passed, five skipped overall). Retained complete logs
+are `slow1-e663.log` through `slow4-e663.log`. The Required Release CI aggregation
+for those slow/portability jobs succeeds. The full Windows and Linux coverage
+retry on 927e9c89 remains active; neither pending check is claimed as a pass.
+
+Interpret old routine results carefully: e663's Windows job predates the second
+POSIX reference-operation declarations, and its Linux coverage predates the two
+portable fixture repairs. Expected historical failures there are not new defects
+in 927e9c89. The authoritative remaining routine/coverage results are run
+42421300183. The e663 native, installer, portability and all four slow successes
+remain applicable to the byte-identical product runtime and Studio.
+
+The older e663 Windows routine completes in 3,751.23 seconds: 18,768 passed,
+318 skipped, 167 failed and nine setup errors. Its 174 expected reference-operation
+failures/errors match the already-repaired expanded diagnostic. Two later cases
+only collect unraisable warnings from test streams left open by those interrupted
+unsupported operations; they are not independent product regressions. The complete
+reference diagnostic passes without those operations on Windows. Final 927e9c89
+full Windows verification remains authoritative and pending.
+
+The later e663 Linux coverage run reaches 80% before its 90-minute timeout,
+again with only the same nine reference-fixture failures. Its full retained log
+is `coverage-e663.log`. This confirms continuing test progress and substantial
+runner/runtime variance (49444 reached 58% at the same cap), reinforcing the
+120-minute final budget. A timeout is never counted as a coverage pass.
+
+Final full Windows routine on 927e9c89 passes: 18,766 passed, 496 explicit
+platform/optional skips, zero failures/errors in 3,834.61 seconds. The two earlier
+unraisable-warning cascades are absent. The complete JUnit report is retained at
+`final-windows-927e/remaining-tests.xml`; full log is `windows-927e-final.log`.
+Only job 128550092781 (Linux full coverage) remains unresolved in run 42421300183.
+
+## Final outcome
+
+The user-requested alpha-5 preparation and readiness items 1–2 are complete.
+Version metadata is 2.2.0a5 / 2.2.0-alpha.5. The final remaining-gates run
+42421300183 succeeds on 927e9c89:
+
+| Check | Result |
+| --- | --- |
+| Full local macOS routine | 19,904 passed, 50 skipped; 1,947.02 seconds |
+| Full Windows routine | 18,766 passed, 496 explicit platform/optional skips; 3,834.61 seconds |
+| Full Linux release coverage | 19,191 passed, 71 skipped; 5,450.67 seconds |
+| Enforced combined statement/branch coverage | 76.06%, above the unchanged 70% gate |
+| Four slow shards, without coverage | 2,198 passed, five skipped |
+| Native Studio and state recovery | macOS, Linux ARM64 and Linux x86_64 pass |
+| Additional gates | Lint, version/behavior sync, Python 3.12→3.13 portability, Windows durability pass |
+| Preview installers | Apple Silicon DMG and both Linux AppImages verified; all downloaded SHA256 checks pass |
+
+Linux line coverage is 80.20% and branch coverage 65.20%; the enforced combined
+coverage is 76.06%. Final Linux JUnit/coverage XML is retained under
+`/private/tmp/eforge-alpha5-readiness/final-linux-927e/`, with the complete log at
+`coverage-927e-final.log`. The matching Windows report/log and four slow logs are
+listed above. Native/installer evidence is from the byte-identical product/Studio
+snapshot e663; subsequent changes are test platform/fixture fixes, CI budgets
+and documentation. The final runtime remains revision 488 and matches all 767
+reference-measured runtime/config hashes.
+
+The final fixed 26-hour three-host workload completes generation/resume in
+68.150 seconds plus 5.884 seconds of stopped checkpoint verification. Sampled
+peak process-tree RSS is 321.2 MiB, working disk 72.5 MiB, and hour-seven checkpoint
+workspace 23.3 MiB logical / 25.1 MiB allocated. Exact resume, final bundle
+verification and all eighteen data-file hashes pass. Forecast calibration and
+7.5 MiB retained owned scratch remain documented P2 follow-ups, alongside the
+already accepted whole-catalog installation audit.
+
+User Studio evaluation remains pending. Preparing/versioning/testing does not
+authorize publication: no release tag, publication, main/dev movement or integration
+PR was performed. The original implementation worktree and blind-review artifacts
+remain preserved. The eventual authorized release workflow still checks every gate
+on its exact release commit.
