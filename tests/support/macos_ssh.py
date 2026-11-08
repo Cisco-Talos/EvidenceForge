@@ -98,3 +98,92 @@ def macos_ssh_scenario(
             }
         )
     return Scenario.model_validate(data)
+
+
+def assert_native_ssh_receiver_lifecycle(
+    rows: list[dict], *, closed: bool, sessions: int = 1
+) -> None:
+    """Require each qualified six-process receiver graph and its exact close set."""
+    executions = [row for row in rows if row["event_type"] == 9]
+    wrappers = [
+        row
+        for row in executions
+        if row["event"]["exec"]["target"]["executable"]["path"]
+        == "/usr/libexec/sshd-keygen-wrapper"
+    ]
+    assert len(wrappers) == sessions
+    forks = [row for row in rows if row["event_type"] == 11]
+    checked: set[int] = set()
+    for wrapper in wrappers:
+        main = wrapper["event"]["exec"]["target"]["audit_token"]["pid"]
+        family = {main}
+        for _ in range(len(forks)):
+            family.update(
+                row["event"]["fork"]["child"]["audit_token"]["pid"]
+                for row in forks
+                if row["process"]["audit_token"]["pid"] in family
+            )
+        assert not checked.intersection(family)
+        checked.update(family)
+        births = [
+            row for row in forks if row["event"]["fork"]["child"]["audit_token"]["pid"] in family
+        ]
+        assert len(family) == len(births) == 6
+        assert len({row["event"]["fork"]["child"]["audit_token"]["pid"] for row in births}) == 6
+        by_image = {
+            image: [
+                row
+                for row in executions
+                if row["event"]["exec"]["target"]["executable"]["path"] == image
+                and row["event"]["exec"]["target"]["audit_token"]["pid"] in family
+            ]
+            for image in (
+                "/usr/libexec/sshd-keygen-wrapper",
+                "/usr/sbin/sshd",
+                "/usr/libexec/sshd-session",
+                "/usr/libexec/sshd-auth",
+                "/bin/zsh",
+            )
+        }
+        assert all(len(matches) == 1 for matches in by_image.values())
+        assert all(
+            by_image[image][0]["event"]["exec"]["target"]["audit_token"]["pid"] == main
+            for image in (
+                "/usr/libexec/sshd-keygen-wrapper",
+                "/usr/sbin/sshd",
+                "/usr/libexec/sshd-session",
+            )
+        )
+        for image in ("/usr/libexec/sshd-auth", "/bin/zsh"):
+            execution = by_image[image][0]
+            pid = execution["event"]["exec"]["target"]["audit_token"]["pid"]
+            birth = next(
+                row for row in births if row["event"]["fork"]["child"]["audit_token"]["pid"] == pid
+            )
+            assert birth["global_seq_num"] < execution["global_seq_num"]
+        exits = [
+            row
+            for row in rows
+            if row["event_type"] == 15 and row["process"]["audit_token"]["pid"] in family
+        ]
+        assert len(exits) == (6 if closed else 3)
+        assert len({row["process"]["audit_token"]["pid"] for row in exits}) == len(exits)
+        for end in exits:
+            pid = end["process"]["audit_token"]["pid"]
+            previous = [
+                row
+                for row in executions
+                if row["event"]["exec"]["target"]["audit_token"]["pid"] == pid
+            ]
+            assert all(row["global_seq_num"] < end["global_seq_num"] for row in previous)
+            if previous:
+                # Credential transitions may follow exec without replacing its image.
+                target = previous[-1]["event"]["exec"]["target"]
+                assert (
+                    target["audit_token"]["pidversion"]
+                    == end["process"]["audit_token"]["pidversion"]
+                )
+                assert target["executable"] == end["process"]["executable"]
+    for event_type in {row["event_type"] for row in rows}:
+        sequences = [row["seq_num"] for row in rows if row["event_type"] == event_type]
+        assert sequences == list(range(sequences[0], sequences[0] + len(sequences)))

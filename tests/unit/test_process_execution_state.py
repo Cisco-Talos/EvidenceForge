@@ -467,3 +467,30 @@ def test_exec_history_does_not_cross_reused_pid_lifetimes(monkeypatch: pytest.Mo
         == executed
     )
     assert manager.get_process_identity(original.hostname, original.pid) == replacement.identity
+
+
+def test_event_time_process_views_are_detached_and_survive_retained_restore() -> None:
+    manager, before = _process()
+    after = _execute(manager, before)
+    early = _START + timedelta(milliseconds=500)
+    later = _START + timedelta(seconds=2)
+    view = manager.get_process_at(before.hostname, before.pid, early)
+    assert view.image == before.image and view.execution_ordinal == before.execution_ordinal
+    assert manager.get_process(before.hostname, before.pid).image == after.image
+    view.image = "/invented/detached-copy"
+    assert manager.get_process_at(before.hostname, before.pid, early).image == before.image
+    manager.end_process(before.hostname, before.pid, end_time=_START + timedelta(seconds=3))
+    assert manager.get_process(before.hostname, before.pid) is None
+    assert manager.get_process_at(before.hostname, before.pid, later).image == after.image
+    assert (
+        manager.get_process_at(before.hostname, before.pid, _START + timedelta(seconds=3)) is None
+    )
+    restored = StateManager()
+    restore_complete_state(restored, capture_complete_state(manager))
+    digest = restored.materialization_digest()
+    assert restored.get_process_at(before.hostname, before.pid, early).image == before.image
+    assert (
+        restored.get_process_at(before.hostname, before.pid, later).execution_ordinal
+        == after.execution_ordinal
+    )
+    assert restored.materialization_digest() == digest

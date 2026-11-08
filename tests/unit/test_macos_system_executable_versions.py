@@ -14,6 +14,7 @@ from evidenceforge.generation.deployment_compiler import compile_native_deployme
 from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.engine.emitter_setup import BootFleetSpec, EmitterSetupMixin
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.world_model import WorldModel
 from evidenceforge.models.scenario import Scenario, System
 from tests.support.macos_ssh import macos_ssh_scenario
@@ -36,6 +37,7 @@ def test_boot_plan_binds_compiled_images_in_request_state_and_recovery(
     state = StateManager()
     state.set_current_time(_START)
     engine = Mock(spec=EmitterSetupMixin)
+    engine.timing_runtime = TimingRuntime(reference_time=_START)
     engine.state_manager = state
     engine.deployment_registry = _compiled(scenarios_dir, "MAC-BOOT")
     system = System(hostname="MAC-BOOT", ip="192.0.2.44", os="macOS 26", type="workstation")

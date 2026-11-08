@@ -19,7 +19,7 @@ from evidenceforge.events.es_collector import (
     ESDeliveryRequest,
 )
 from evidenceforge.events.identity import ProcessIdentity
-from evidenceforge.events.macos_entitlements import EntitlementObject
+from evidenceforge.events.macos_entitlements import EntitlementObject, extended_entitlements
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
 from evidenceforge.events.macos_process_observation import (
     MacosGUIExecResponsibilityObservation,
@@ -116,7 +116,9 @@ def _decision(dispatcher: EventDispatcher, event: CanonicalOccurrence) -> Observ
             target_id=f"macos_endpoint_security:host:{ordinal}",
             source_ordinal=ordinal,
             canonical_time=event.timestamp,
-            requested_capabilities=CollectionCapability.PROCESS,
+            requested_capabilities=CollectionCapability.FILE
+            if event.file is not None and event.file.macos_operation is not None
+            else CollectionCapability.PROCESS,
         )
         if not envelope.admitted:
             return ObservationDecision(
@@ -177,6 +179,17 @@ def prepared_macos_es_process_publication(
         MacosEndpointSecurityEmitter,
     )
     from evidenceforge.generation.state_manager import MaterializationBatchPlan
+
+    if events and all(
+        event.file is not None and event.file.macos_operation is not None for event in events
+    ):
+        from evidenceforge.generation.macos_es_file_publication import (
+            prepared_macos_es_file_publication,
+        )
+
+        with prepared_macos_es_file_publication(dispatcher, cohort, events) as native:
+            yield native
+        return
 
     if type(cohort) is MaterializationBatchPlan:
         dispatcher.state_manager.validate_macos_process_observation_plan(cohort)
@@ -375,8 +388,12 @@ def prepared_macos_es_process_publication(
                 if type(entitlements) is tuple
                 else False
             )
+            if type(entitlements) is tuple and extended_entitlements(entitlements):
+                if policy != "absent_or_bounded_property_object_v2":
+                    return "entitlements_present"
             if entitlements != "absent" and not (
-                policy == "absent_or_bounded_property_object"
+                policy
+                in {"absent_or_bounded_property_object", "absent_or_bounded_property_object_v2"}
                 or policy == "absent_or_bounded_integer_object"
                 and not nested
                 or (

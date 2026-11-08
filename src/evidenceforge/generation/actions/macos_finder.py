@@ -149,7 +149,7 @@ class MacosFinderStartup:
         if current is None:
             raise StateError("Finder startup requires its boot parent's modeled working directory")
         self._fork_directory = metadata.directory(host.hostname, current.native_path, times[0])
-        if self._fork_directory.metadata != current.metadata:
+        if not metadata.same_directory_object(self._fork_directory, current):
             raise StateError("Finder startup changed the boot parent's directory object")
         self._phase = 0
         self._pending: PendingMacosStartupPhase | None = None

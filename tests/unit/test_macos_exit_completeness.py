@@ -31,7 +31,13 @@ from tests.unit.test_process_execution_state import _START, _process
 
 @pytest.mark.parametrize(
     "command",
-    ["/bin/pwd", "/bin/df -h", "/bin/ls -la {home}/Documents", "/usr/bin/du -sh {home}/Documents"],
+    [
+        "/bin/pwd",
+        "/bin/df -h",
+        "/bin/ls -la {home}/Documents",
+        "/usr/bin/du -sh {home}/Documents",
+        "/opt/homebrew/bin/ssh -V",
+    ],
 )
 def test_declared_query_completion_has_known_exit_and_independent_count(
     tmp_path: Path, scenarios_dir: Path, command: str

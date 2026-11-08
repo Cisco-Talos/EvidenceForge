@@ -12,23 +12,32 @@ The current implementation supports two developer-facing parser backends:
 
 ## Quickstart
 
-Generate the dataset with the SOF-ELK output target, then run the full
-developer-facing pipeline against the generated `data/` directory:
+Run from the repository root using the committed branch-office example. It selects
+Windows, Zeek, eCAR, Linux syslog, Bash history, IDS, firewall, web and proxy output,
+with the required server roles and sensors. Generate a SOF-ELK dataset, then run
+the developer-facing pipeline against its `data/` directory:
 
 ```bash
-uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target sof-elk
-uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data
+uv run eforge generate scenarios/branch-office-example/scenario.yaml \
+  --target sof-elk --output ./output/parser-sof-elk
+uv run python scripts/external_parser.py ./output/parser-sof-elk/data
 ```
 
-For Splunk validation, generate with the Splunk output target and explicitly
-accept Splunk's license and General Terms for the ephemeral container run:
+For Splunk validation, use a separate output directory and explicitly accept
+Splunk's license and General Terms for the ephemeral container run:
 
 ```bash
-uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target splunk
-uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data \
+uv run eforge generate scenarios/branch-office-example/scenario.yaml \
+  --target splunk --output ./output/parser-splunk
+uv run python scripts/external_parser.py ./output/parser-splunk/data \
   --backend splunk \
   --accept-splunk-license
 ```
+
+The branch-office workload is a practical quickstart, not exhaustive coverage of
+every event ID or Zeek protocol. Parser discovery checks the files actually
+generated. Use the purpose-built multi-family smoke tests below for parser-family
+coverage; the broader local healthcare scenario is not required.
 
 The script requires `OUTPUT_TARGET.txt` to exist beside the scenario artifacts
 or inside `data/`, and the marker must contain `sof-elk` or `splunk`. Missing,
@@ -41,8 +50,8 @@ For a durable report location, pass a work directory:
 
 ```bash
 uv run python scripts/external_parser.py \
-  scenarios/apt-healthcare-breach/data \
-  --work-dir /private/tmp/eforge-parser-validation \
+  ./output/parser-sof-elk/data \
+  --work-dir /private/tmp/eforge-parser-sof-elk \
   --timeout 180
 ```
 

@@ -18,7 +18,7 @@ from evidenceforge.formats.macos_endpoint_security import decode_endpoint_securi
 from tests.integration.test_checkpoint_smoke import (
     test_short_generation_checkpoint_suspension_and_resume as _checkpoint_gate,
 )
-from tests.support.macos_ssh import macos_ssh_scenario
+from tests.support.macos_ssh import assert_native_ssh_receiver_lifecycle, macos_ssh_scenario
 
 
 @pytest.mark.slow
@@ -76,7 +76,9 @@ def test_nonempty_native_cli_is_deterministic_filter_independent_and_ingestible(
             for path in paths
         }
         receiver = records_by_host["SSH-TEST"]
-        assert len(receiver) == 3 and all(record.fields["event_type"] == 11 for record in receiver)
+        assert_native_ssh_receiver_lifecycle(
+            [json.loads(record.raw) for record in receiver], closed=False
+        )
         assert records_by_host["TEST-01"]
         records = [record for source in records_by_host.values() for record in source]
         assert all(not record.parse_errors for record in records)

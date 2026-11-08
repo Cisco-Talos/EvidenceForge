@@ -35,6 +35,8 @@ class EventKind(StrEnum):
     FILE_DELETE = "file_delete"
     FILE_MODIFY = "file_modify"
     FILE_READ = "file_read"
+    FILE_RENAME = "file_rename"
+    FILE_CLOSE = "file_close"
     GROUP_MEMBER_ADDED_GLOBAL = "group_member_added_global"
     GROUP_MEMBER_ADDED_LOCAL = "group_member_added_local"
     GROUP_MEMBER_ADDED_UNIVERSAL = "group_member_added_universal"
@@ -256,6 +258,7 @@ class EffectOccurrenceOwner(StrEnum):
     EMAIL_ATTACHMENT_FILE_ROOT = "email_attachment_file_root"
     HTTP_MULTIPART_LOCAL_READ = "http_multipart_local_read"
     MACOS_LAUNCH_ITEM_FILE = "macos_launch_item_file"
+    MACOS_FILESYSTEM = "macos_filesystem"
 
 
 @dataclass(frozen=True, slots=True)
@@ -786,6 +789,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
             EventKind.FILE_DELETE,
             EventKind.FILE_MODIFY,
             EventKind.FILE_READ,
+            EventKind.FILE_RENAME,
+            EventKind.FILE_CLOSE,
         )
     },
     **{

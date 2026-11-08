@@ -416,7 +416,14 @@
           },
           {
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
             },
             "type": "array"
           },

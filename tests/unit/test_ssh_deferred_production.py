@@ -2702,18 +2702,18 @@ def test_exact_ssh_open_preserves_unresolved_source_process_compatibility(tmp_pa
     fixture.zeek.close()
 
 
-def test_no_ecar_uses_exact_bridge_only_for_wholly_suppressed_warmup(
+def test_no_ecar_retains_exact_ownership_across_collection_boundaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing eCAR sink preserves exact warm-up ownership but not visible cohorts."""
+    """An absent sink keeps exact ownership for warm-up, visible and crossing cohorts."""
 
     reset_thread_rng(42)
     output_start = _START + timedelta(hours=2)
     fixture = _fixture(tmp_path, output_start_time=output_start)
     assert fixture.generator.dispatcher.emitters.pop("ecar") is fixture.ecar
     visible = replace(fixture.request(), time=output_start)
-    assert not SshSessionActionBundle(
+    assert SshSessionActionBundle(
         visible,
         fixture.generator,
     )._uses_exact_deferred_publication()
@@ -2725,7 +2725,7 @@ def test_no_ecar_uses_exact_bridge_only_for_wholly_suppressed_warmup(
             "ssh-warmup-crossing-close",
         ),
     )
-    assert not SshSessionActionBundle(
+    assert SshSessionActionBundle(
         crossing_authoritative_close,
         fixture.generator,
     )._uses_exact_deferred_publication()
@@ -4344,6 +4344,7 @@ def test_exact_close_syslog_admission_rejects_nonconcrete_targets_before_state(
         _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
         session_before = fixture.state.get_session_identity(logon_id)
         assert session_before is not None
+        ordinary_emit_calls = _DuckExactSyslog.emit_calls
 
         with pytest.raises(EventContractError, match="syslog.*unsupported before State"):
             fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
@@ -4352,7 +4353,7 @@ def test_exact_close_syslog_admission_rejects_nonconcrete_targets_before_state(
         assert len(fixture.generator._pending_ssh_session_closures) == 1
         _assert_no_dispatcher_residue(fixture.generator.dispatcher)
         assert _DuckExactSyslog.marker_reads == 0
-        assert _DuckExactSyslog.emit_calls == 0
+        assert _DuckExactSyslog.emit_calls == ordinary_emit_calls
         assert alias_marker_reads == 0
         if isinstance(target, SyslogEmitter):
             exact = target.exact_candidate_census()

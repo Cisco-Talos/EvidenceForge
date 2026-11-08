@@ -36,6 +36,8 @@ class _LegacyStateParticipant(StateManagerParticipant):
             "_macos_terminal_slots",
             "_macos_terminal_ordinals",
             "_macos_pipe_counters",
+            "_macos_filesystem_directories",
+            "_macos_filesystem_inodes",
         ):
             del head["simple"][name]
         segments = []
@@ -80,10 +82,25 @@ def test_controller_restores_only_explicitly_compatible_segments(
         phase="collection", completed_simulated_hours=12, next_hour="2026-10-16T00:00:00+00:00"
     )
     manifest = controller.commit(cursor=next_cursor, participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "13"
+    assert manifest.participant_heads[0].schema_version == "14"
     again = StateManager()
     controller.restore_participants(
         recovery=store.recover(), participants=(StateManagerParticipant(again),)
     )
     assert again.get_process_identity(identity.hostname, identity.pid) == identity
     assert again.next_semantic_peer_ordinal("process", "invented-peer") == 2
+
+
+def test_state_v13_restores_without_new_filesystem_maps_and_keeps_process_census() -> None:
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+
+    state, identity = _root()
+    head = loads(_capture_head(state))
+    head["schema_version"] = "13"
+    head["simple"].pop("_macos_filesystem_directories")
+    head["simple"].pop("_macos_filesystem_inodes")
+    restored = StateManager()
+    _restore_head(restored, dumps(head))
+    assert restored.get_process_identity(identity.hostname, identity.pid) == identity
+    assert restored._macos_process_census == state._macos_process_census
+    assert restored._macos_filesystem_directories == restored._macos_filesystem_inodes == {}

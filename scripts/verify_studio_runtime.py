@@ -330,6 +330,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
             properties["validated_with"]["evidenceforge_version"]
             == manifest["evidenceforge_version"]
         )
+        verify_macos_native(cli, workspace, environment)
     return {
         "architecture": architecture,
         "version": manifest["evidenceforge_version"],
@@ -343,4 +344,48 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
         "bundle_data_properties": "passed",
         "validation": "passed",
         "checkpoint_enabled_generation": "passed",
+        "macos_native_generation_and_evaluation": "passed",
     }
+
+
+def verify_macos_native(cli: Path, workspace: Path, environment: dict[str, str]) -> None:
+    """Exercise native Mac sources through the selected installed CLI and resources."""
+    fixture = (
+        Path(__file__).resolve().parents[1] / "tests/fixtures/scenarios/macos-native-smoke.yaml"
+    )
+    source = workspace / "macos-native-smoke.yaml"
+    shutil.copyfile(fixture, source)
+    output = workspace / "macos-native-output"
+    run_cli(cli, ["validate", str(source), "--json"], workspace, environment, timeout=60)
+    run_cli(
+        cli,
+        ["generate", str(source), "--output", str(output), "--checkpoint-hours", "1"],
+        workspace,
+        environment,
+        timeout=180,
+    )
+    report = json.loads(
+        run_cli(cli, ["eval", str(output), "--format", "json"], workspace, environment, timeout=120)
+    )
+    assert report["acceptance_passed"] is True, "Mac smoke failed authoritative evaluation"
+    for source_id in ("macos_endpoint_security", "macos_unified_log", "zsh_history"):
+        assert report["source_counts"].get(source_id, 0) > 0, (
+            f"Mac smoke has no {source_id} evidence"
+        )
+    truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+    hosts = truth["macos_native_coverage"]["hosts"]
+    assert len(hosts) == 1
+    census = hosts[0]["process_census"]
+    assert census["complete"] and census["exit_complete"]
+    assert census["expected_forks"] == census["published_forks"] > 0
+    assert census["expected_execs"] == census["published_execs"] > 0
+    assert census["expected_exits"] == census["published_exits"] > 0
+    executions: set[str] = set()
+    for path in (output / "data").rglob("macos_endpoint_security.ndjson"):
+        with path.open() as stream:
+            for line in stream:
+                row = json.loads(line)
+                assert row["version"] == 11
+                if row["event_type"] == 9:
+                    executions.add(row["event"]["exec"]["target"]["executable"]["path"])
+    assert {"/usr/bin/id", "/usr/bin/sw_vers"} <= executions

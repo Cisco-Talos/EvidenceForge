@@ -74,7 +74,7 @@ class MacosBrowserHelperStartup(MacosFinderStartup):
             or app.mach_o_image is None
             or app.mach_o_image.architecture != "arm64"
             or metadata.image_security(app) is None
-            or spawn_io.kind != "browser_sandbox"
+            or spawn_io.kind not in {"browser_sandbox", "utility_pipes"}
             or not parent.execution_started_at < times[0] < times[1]
         ):
             raise StateError(

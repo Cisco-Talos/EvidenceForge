@@ -3482,6 +3482,30 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     special_privileges: WindowsSpecialPrivilegesConfig
 
 
+class BrowserProfileRoots(BaseModel, extra="forbid", frozen=True):
+    """Modeled default browser data directories, independent of the generating host."""
+
+    windows: str | None = Field(default=None, min_length=1)
+    linux: str | None = Field(default=None, min_length=1)
+    macos: str | None = Field(default=None, min_length=1)
+
+    @field_validator("windows", "linux", "macos")
+    @classmethod
+    def absolute_modeled_path(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        absolute = (
+            bool(re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", value))
+            if info.field_name == "windows"
+            else value.startswith("/")
+        )
+        if not absolute or set(re.findall(r"\{([^}]+)\}", value)) - {"username"}:
+            raise ValueError(
+                "Browser profile root must be absolute and may substitute only {username}"
+            )
+        return value
+
+
 class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
     """A domain-specific proxy User-Agent profile."""
 
@@ -4432,8 +4456,10 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
         "absent_or_bounded_object",
         "absent_or_bounded_integer_object",
         "absent_or_bounded_property_object",
+        "absent_or_bounded_property_object_v2",
     ]
     boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
+    file_operations: Literal["bounded_regular_files_v1"] | None = None
 
     @field_validator(
         "os_major",
@@ -4454,8 +4480,11 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
     @classmethod
     def process_subscription(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         """Require the subscription actually covered by the bounded experiment."""
-        if values != ("/usr/bin/eslogger", "fork", "exec", "exit"):
-            raise ValueError("The bounded ES profile requires /usr/bin/eslogger fork exec exit")
+        if values not in {
+            ("/usr/bin/eslogger", "fork", "exec", "exit"),
+            ("/usr/bin/eslogger", "fork", "exec", "exit", "create", "close", "rename", "unlink"),
+        }:
+            raise ValueError("ES profile requires a qualified process or process/file subscription")
         return values
 
     @field_validator("event_types", mode="before")
@@ -4465,10 +4494,22 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
         if (
             type(values) not in {tuple, list}
             or any(type(value) is not int for value in values)
-            or tuple(values) != (9, 11, 15)
+            or tuple(values) not in {(9, 11, 15), (9, 11, 12, 13, 15, 25, 32)}
         ):
-            raise ValueError("The bounded ES profile requires event types [9, 11, 15]")
+            raise ValueError(
+                "ES event types must match the qualified process or process/file families"
+            )
         return values
+
+    @model_validator(mode="after")
+    def coherent_file_subscription(self) -> Self:
+        """Keep historical process profiles frozen and file admission explicit."""
+        enabled = self.file_operations is not None
+        if enabled != (len(self.collector_arguments) == 8) or enabled != (
+            len(self.event_types) == 7
+        ):
+            raise ValueError("File admission, subscription and counter families must agree")
+        return self
 
 
 class MacosEndpointSecurityProfilesConfig(BaseModel, extra="forbid", frozen=True):
@@ -4529,6 +4570,32 @@ class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosCommandEnvironmentPolicy(BaseModel, extra="forbid", frozen=True):
+    """Installed command defaults applied to its canonical exec environment."""
+
+    image: str = Field(min_length=1, max_length=4096)
+    environment: tuple[str, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def literal_defaults(self) -> Self:
+        """Require literal image paths and unique bounded environment assignments."""
+        if (
+            not self.image.startswith("/")
+            or "\0" in self.image
+            or ".." in PurePosixPath(self.image).parts
+            or any(
+                len(value.encode("utf-8")) > 4096
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^\x00]*", value) is None
+                for value in self.environment
+            )
+            or len({value.partition("=")[0] for value in self.environment}) != len(self.environment)
+        ):
+            raise ValueError(
+                "Mac command environment requires a literal path and unique assignments"
+            )
+        return self
+
+
 class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
     """A literal nested shell invocation admitted as a modeled command parent."""
 
@@ -4558,12 +4625,15 @@ class MacosBrowserHelperPolicy(BaseModel, extra="forbid", frozen=True):
     parent_image: str = Field(min_length=1, max_length=4096)
     image: str = Field(min_length=1, max_length=4096)
     arguments: tuple[str, ...] = Field(min_length=1, max_length=16)
-    seatbelt_fd: int = Field(strict=True, ge=3, lt=2**15)
+    io_layout: Literal["browser_sandbox", "utility_pipes"] = "browser_sandbox"
+    seatbelt_fd: int | None = Field(default=None, strict=True, ge=3, lt=2**15)
     environment: tuple[str, ...] = Field(default=(), max_length=16)
 
     @model_validator(mode="after")
     def literal_scope(self) -> Self:
         """Keep helper admission exact; runtime arguments cannot override file actions."""
+        if (self.io_layout == "browser_sandbox") != (self.seatbelt_fd is not None):
+            raise ValueError("Helper descriptor layout and sandbox pipe slot must agree")
         if any(
             not path.startswith("/") or "\0" in path or ".." in PurePosixPath(path).parts
             for path in (self.parent_image, self.image)
@@ -4671,6 +4741,44 @@ class MacosOrdinaryClosePolicy(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosFilesystemWorkloadProfile(BaseModel, extra="forbid", frozen=True):
+    """Nominal bounded application document activity, independent of native rendering."""
+
+    applications: tuple[str, ...] = Field(min_length=1, max_length=16)
+    directory_name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+    filenames: tuple[str, ...] = Field(min_length=1, max_length=16)
+    first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    count_min: int = Field(strict=True, ge=0, le=4)
+    count_max: int = Field(strict=True, ge=0, le=4)
+    size_min: int = Field(strict=True, ge=1, le=4096)
+    size_max: int = Field(strict=True, ge=1, le=4096)
+    file_permissions: int = Field(strict=True, ge=0, le=0o777)
+    allocated_blocks: int = Field(strict=True, ge=0, le=128)
+    close_delay_min: float = Field(gt=0, le=10)
+    close_delay_max: float = Field(gt=0, le=10)
+    idle_probability: float = Field(ge=0, le=1)
+    atomic_replace_probability: float = Field(ge=0, le=1)
+    cleanup_probability: float = Field(ge=0, le=1)
+    parent_stat_phase: Literal["before"]
+    directory_entry_bytes: int = Field(strict=True, ge=0, le=4096)
+
+    @model_validator(mode="after")
+    def bounded_workload(self) -> Self:
+        if (
+            self.count_min > self.count_max
+            or self.size_min > self.size_max
+            or self.close_delay_min > self.close_delay_max
+            or any(
+                not name or name in {".", ".."} or "/" in name or "\\" in name or "\0" in name
+                for name in self.filenames
+            )
+            or len(set(self.applications)) != len(self.applications)
+            or len(set(self.filenames)) != len(self.filenames)
+        ):
+            raise ValueError("Mac filesystem workload requires bounded distinct names and ranges")
+        return self
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4718,11 +4826,15 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     system_job_environment: tuple[str, ...] = ()
     system_job_phase_timing: ShortCommandTiming | None = None
     nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
+    command_environments: tuple[MacosCommandEnvironmentPolicy, ...] = Field(
+        default=(), max_length=64
+    )
     preexisting_root_shell: MacosCommandShellPolicy | None = None
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )
     ordinary_close: MacosOrdinaryClosePolicy | None = None
+    filesystem_workload: MacosFilesystemWorkloadProfile | None = None
 
     @field_validator("finder_launch_images")
     @classmethod
@@ -4745,6 +4857,13 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:
         """Preserve unknown policy in older inputs and reject overlapping rules."""
+        if (
+            self.filesystem_workload is not None
+            and self.filesystem_workload.first_inode <= self.directory_inode_range.max
+        ):
+            raise ValueError(
+                "Runtime file inodes must be disjoint from provisioned directory inodes"
+            )
         if self.directory_age_range.max >= 2**31:
             raise ValueError("Mac directory age range must fit bounded timedelta seconds")
         selectors = [
@@ -4765,6 +4884,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         if self.ssh_pty_execution is not None and self.ssh_receiver_startup is None:
             raise ValueError("SSH PTY execution requires the qualified native receiver startup")
         terminals = [entry.application_id for entry in self.terminal_startups]
+        command_images = [entry.image for entry in self.command_environments]
+        if len(command_images) != len(set(command_images)):
+            raise ValueError("Mac command environments require distinct image selectors")
         if len(terminals) != len(set(terminals)):
             raise ValueError("Terminal startup policies must have distinct application IDs")
         if len(selectors) != len(set(selectors)):

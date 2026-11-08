@@ -317,7 +317,9 @@ class ProcessExecutionService:
     ) -> ProcessReuseCandidate | None:
         """Select in the existing precedence order, keeping preflight allocation-free."""
         system = request.system
-        if request.new_posix_session or request.arguments is not None:
+        if request.new_posix_session or (
+            request.arguments is not None and request.macos_launch_kind != "finder"
+        ):
             return None
         if (
             not preflight
@@ -378,7 +380,6 @@ class ProcessExecutionService:
             and not prepared_requires_new_root
             and not request.from_storyline
             and request.allow_existing_browser_reuse
-            and request.source_visible_by is None
         ):
             candidate_pid = self.reuse._existing_user_browser_pid(
                 system=system,
@@ -388,6 +389,9 @@ class ProcessExecutionService:
                 command_line=command_line,
                 time=time,
                 source_visible_by=request.source_visible_by,
+                allow_deferred_start=(
+                    request.source_visible_by is None and not request.preserve_requested_time
+                ),
             )
             if candidate_pid is not None:
                 return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.BROWSER)
@@ -712,6 +716,35 @@ class ProcessExecutionService:
 
     def _prepare_execution(self, request: ProcessExecutionRequest) -> ProcessExecutionAdmission:
         """Validate prepared effects and actor identity before launch decisions."""
+        provider = self.identity.macos_execution_metadata
+        registry = self.dispatcher.deployment_registry
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and provider is not None
+            and provider.complete_launches
+            and registry is not None
+            and registry.resolve_binary(
+                request.system.hostname,
+                request.process_name,
+                "macos",
+                principal=request.user.username,
+            )
+            is not None
+        ):
+            from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
+
+            support = resolve_macos_launch_support(
+                registry,
+                provider.profile,
+                request.system.hostname,
+                request.user.username,
+                request.process_name,
+            )
+            if support.issues:
+                raise StateError(
+                    f"Unsupported native Mac launch {request.process_name}: "
+                    f"{', '.join(support.issues)}. No process was admitted."
+                )
         prepared_endpoint = (
             request.prepared_effects.endpoint if request.prepared_effects is not None else None
         )
@@ -1524,7 +1557,8 @@ class ProcessExecutionService:
         directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
         if directory is None:
             raise StateError("Mac browser helper requires its parent's current working directory")
-        arguments = (*arguments, f"--seatbelt-client={rule.seatbelt_fd}")
+        if rule.io_layout == "browser_sandbox":
+            arguments = (*arguments, f"--seatbelt-client={rule.seatbelt_fd}")
         overrides = {entry.split("=", 1)[0] for entry in rule.environment}
         environment = (
             tuple(entry for entry in parent.environment if entry.split("=", 1)[0] not in overrides)
@@ -1547,9 +1581,7 @@ class ProcessExecutionService:
             app=binary,
             arguments=arguments,
             environment=environment,
-            spawn_io=MacosSpawnIO(
-                "browser_sandbox", provider.profile.first_pipe_id, rule.seatbelt_fd
-            ),
+            spawn_io=MacosSpawnIO(rule.io_layout, provider.profile.first_pipe_id, rule.seatbelt_fd),
             times=(forked_at, executed_at),
             lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
             concurrency_group_id=request.concurrency_group_id,
@@ -1742,7 +1774,7 @@ class ProcessExecutionService:
             command_line=shlex.join(arguments),
             executed_at=executed_at,
             arguments=arguments,
-            environment=parent.environment,
+            environment=provider.command_environment(launch.actor.image, parent.environment),
             execution_directory=provider.directory(
                 parent.hostname, directory.native_path, executed_at
             ),

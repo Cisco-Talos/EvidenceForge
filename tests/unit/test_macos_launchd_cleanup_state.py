@@ -4,10 +4,13 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
 from scripts import macos_ulf_launchd_reference as kit
+
+from tests.support.platforms import requires_posix_reference
 
 NONCE = "a" * 32
 SECRET = "invented-private-canary-do-not-export"
@@ -19,6 +22,17 @@ COMPLETE = DIRECTORY + (
     b"LEASE_PRESENT\nLEASE_OWNER_MATCH\nLEASE_MODE_MATCH\nLEASE_KIND_MATCH\n"
     b"LEASE_LINKS_MATCH\nLEASE_SIZE_MATCH\nLEASE_CONTENT_MATCH\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def owned_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect mocked compiler scratch to owned test storage on every POSIX host."""
+
+    def scratch(*, prefix: str, dir: str) -> TemporaryDirectory:
+        assert dir == "/private/tmp"
+        return TemporaryDirectory(prefix=prefix, dir=tmp_path)
+
+    monkeypatch.setattr(kit, "tempfile", SimpleNamespace(TemporaryDirectory=scratch))
 
 
 def _missing(nonce: str = NONCE) -> bytes:
@@ -70,6 +84,7 @@ def test_partial_unknown_or_contradictory_inspection_cannot_prove_cleanup(output
     assert SECRET not in report.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "output,service_code,service_error,expected,error",
     [
@@ -135,6 +150,7 @@ def test_grouped_checker_never_collects_reads_records_or_changes_original_kit(
     assert all(call[1]["timeout"] <= 30 for call in calls)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("failed_step,code", [(0, "CONTROL"), (1, "BUILD")])
 def test_preflight_failure_prevents_privileged_inspection_and_service_query(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_step: int, code: str
@@ -186,6 +202,7 @@ def synthetic_inspector(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "case,expected,content_checked",
     [

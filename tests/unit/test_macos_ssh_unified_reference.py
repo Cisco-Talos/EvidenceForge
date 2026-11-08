@@ -10,6 +10,7 @@ import pytest
 from scripts import macos_ssh_startup_reference as startup
 from scripts import macos_ssh_unified_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_ssh_startup_reference import (
     test_mocked_capture_cleans_up_and_only_persists_proved_rows_after_success as _capture_test,
 )
@@ -30,6 +31,7 @@ def no_native_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(startup.os, "execve", forbidden)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("failure", ["ulf_stream", "ulf_cleanup", "ulf_binding"])
 def test_unified_capture_failure_never_writes_native_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -249,6 +251,7 @@ def test_ambient_ring_is_memory_only_bounded_and_marker_checks_image(
     assert kit.select_rows([row for _size, row in collector.rows], _windows()) == []
 
 
+@requires_posix_reference
 def test_unified_prepare_only_copies_code_and_frozen_opt_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -271,6 +274,7 @@ def test_unified_prepare_only_copies_code_and_frozen_opt_in(
     assert "SHAREABLE-SSH-ULF-REPORT.json" in (root / "PRIVATE-RUN.md").read_text()
 
 
+@requires_posix_reference
 def test_saved_ulf_report_starts_no_command_and_opens_no_native_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:

@@ -40,6 +40,7 @@ from evidenceforge.events.content_identity import (
 )
 from evidenceforge.events.http_semantics import http_wire_referrer, http_wire_target
 from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_file_operation import MacosFileOperationObservation
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -426,6 +427,8 @@ class FileContext:
     artifact_identity: LocalArtifactIdentity | None = None
     content_identity: FileContentIdentity | None = None
     macos_metadata: MacosFileMetadata | None = None
+    macos_operation: MacosFileOperationObservation | None = None
+    previous_path: str | None = None
 
 
 @dataclass(slots=True)

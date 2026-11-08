@@ -256,6 +256,15 @@ _MIGRATED_LEGACY_CALLS = Counter(
 
 _DIRECT_CONTINUOUS_METHODS = _RAW_TEMPORAL_METHODS - {"randint", "randrange"}
 
+# Exact, independently bounded file-size operations added after the timing census.
+# They return byte counts, never timestamps/durations; do not exempt whole modules.
+_NON_TEMPORAL_SIZE_CALLS = Counter(
+    {
+        ("activity/process_output_profiles.py", "process_output_size_bytes", "uniform"): 1,
+        ("activity/runtime_executable_profiles.py", "runtime_executable_size_bytes", "uniform"): 1,
+    }
+)
+
 
 def _enclosing_function(
     node: ast.AST,
@@ -320,6 +329,9 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
+    sizes = Counter({selector: observed[selector] for selector in _NON_TEMPORAL_SIZE_CALLS})
+    assert not sizes - _NON_TEMPORAL_SIZE_CALLS
+    observed -= sizes
 
     assert len(caps) == 195
     assert sum(caps.values()) == 358

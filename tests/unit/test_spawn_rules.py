@@ -664,10 +664,10 @@ class TestWindowsProcessTreeRealism:
             assert state_manager.get_process(win_system.hostname, child_proc.parent_pid) is not None
             stale_parent = child_pid
 
-    def test_top_level_browser_reuses_existing_session_browser(
+    def test_top_level_browser_reuses_only_its_own_browser_profile(
         self, state_manager, mock_emitters, win_system, user
     ):
-        """Repeated navigations in one session should reuse the open browser process."""
+        """Repeated navigation reuses one browser while different families remain distinct."""
         ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
         logon_id = ag.generate_logon(
             user,
@@ -693,7 +693,16 @@ class TestWindowsProcessTreeRealism:
             r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
         )
 
-        assert second_pid == first_pid
+        assert second_pid != first_pid
+        again = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" https://example.net/',
+        )
+        assert again == first_pid
         browser_processes = [
             proc
             for proc in state_manager.get_processes_on_system(win_system.hostname)
@@ -701,7 +710,7 @@ class TestWindowsProcessTreeRealism:
             and proc.image.rsplit("\\", 1)[-1].lower()
             in {"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"}
         ]
-        assert len(browser_processes) == 1
+        assert len(browser_processes) == 2
 
     def test_browser_launch_spacing_avoids_same_second_duplicates(
         self, state_manager, mock_emitters, win_system, user
@@ -861,6 +870,10 @@ class TestWindowsProcessTreeRealism:
                     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                     r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
                 ),
+                (
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.net/',
+                ),
             ]
         )
         monkeypatch.setattr(
@@ -910,6 +923,9 @@ class TestWindowsProcessTreeRealism:
             "process_user_apps",
         )
 
+        ag.execute_baseline_activity(
+            user, win_system, datetime(2024, 3, 18, 12, 0, 6, tzinfo=UTC), "process_user_apps"
+        )
         user_processes = [
             proc
             for proc in state_manager.get_processes_on_system(win_system.hostname)
@@ -927,13 +943,20 @@ class TestWindowsProcessTreeRealism:
             if proc.image.lower().endswith(r"\firefox.exe") and "-contentproc" in proc.command_line
         ]
 
-        assert not chrome_children
+        assert len(chrome_children) == 1
         assert len(firefox_children) == 2
         parent_pids = {proc.parent_pid for proc in firefox_children}
         assert len(parent_pids) == 1
         parent_proc = state_manager.get_process(win_system.hostname, next(iter(parent_pids)))
         assert parent_proc is not None
         assert parent_proc.image.lower().endswith(r"\firefox.exe")
+
+        chrome_parent = state_manager.get_process(
+            win_system.hostname, chrome_children[0].parent_pid
+        )
+        assert chrome_parent is not None
+        assert chrome_parent.pid != parent_proc.pid
+        assert chrome_parent.image.lower().endswith(r"\chrome.exe")
 
     def test_explorer_process_cannot_parent_from_browser_renderer(
         self, state_manager, mock_emitters, win_system, user

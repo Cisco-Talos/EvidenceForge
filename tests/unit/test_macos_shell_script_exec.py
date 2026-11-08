@@ -14,7 +14,6 @@ from evidenceforge.generation.engine import GenerationEngine
 from tests.unit.test_macos_exec_script import _script
 from tests.unit.test_macos_installed_provisioning import _scenario
 from tests.unit.test_macos_runtime_es_preparation import _publish
-from tests.unit.test_macos_runtime_file_metadata import _manager
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -36,9 +35,9 @@ def test_explicit_retained_script_uses_shared_fork_exec_and_completeness(
         logon = generator.generate_logon(user, system, at, allow_local_session_reuse=False)
         shell = generator.ensure_macos_session_shell(user, system, logon, at + timedelta(minutes=1))
         assert shell is not None
-        content = _manager()
-        generator._runtime_content_manager = content
-        engine.dispatcher.bind_local_artifact_registry(content.registry)
+        content = generator._runtime_content_manager
+        assert content is not None
+        assert engine.dispatcher.local_artifact_registry is content.registry
         descriptor, record = _script(content, system.hostname)
         _publish(content, descriptor, engine.start_time - timedelta(seconds=1))
         reference = MacosExecScript.from_runtime_record(record)

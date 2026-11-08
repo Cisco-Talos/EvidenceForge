@@ -79,11 +79,19 @@ def plan_spawn_descriptors(
         )
     is_server = intent.kind == "server_channels"
     is_browser = intent.kind == "browser_sandbox"
+    is_utility = intent.kind == "utility_pipes"
     is_ssh = intent.kind in {"ssh_inetd", "ssh_session", "ssh_auth"}
-    if is_server or is_ssh or is_browser:
+    if is_server or is_ssh or is_browser or is_utility:
         if terminal != "absent":
             raise StateError("Mac server channels require explicitly absent controlling terminal")
-        if is_browser:
+        if is_utility:
+            standards = [binding for binding in inherited.bindings if binding.fd <= 2]
+            if tuple(binding.fd for binding in standards) != (0, 1, 2) or any(
+                binding.kind != "file" or binding.close_on_exec for binding in standards
+            ):
+                raise StateError("Mac utility pipes require qualified inherited vnode standards")
+            bindings = standards[:1]
+        elif is_browser:
             bindings = [binding for binding in inherited.bindings if binding.fd <= 2]
             if (
                 tuple(binding.fd for binding in bindings) != (0, 1, 2)
@@ -138,7 +146,7 @@ def plan_spawn_descriptors(
     allocation = None
     count = (
         2
-        if is_server
+        if is_server or is_utility
         else 1
         if intent.kind in {"login_pipes", "ssh_auth", "browser_sandbox"}
         else 0
@@ -161,6 +169,8 @@ def plan_spawn_descriptors(
             fds = (
                 (intent.descriptor_fd,)
                 if is_browser
+                else (1 + offset,)
+                if is_utility
                 else (2 + offset,)
                 if is_server
                 else (4,)

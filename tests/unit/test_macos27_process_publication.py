@@ -29,7 +29,18 @@ from tests.unit.test_macos_native_sink_publication import _prepare
 
 @pytest.mark.parametrize(
     "known_entitlements",
-    [False, True, "boolean", "string_array", "string", "empty", "integer", "nested"],
+    [
+        False,
+        True,
+        "boolean",
+        "string_array",
+        "string",
+        "empty",
+        "integer",
+        "nested",
+        "integer_array",
+        "large",
+    ],
 )
 @pytest.mark.parametrize(
     "entitlement_policy",
@@ -40,6 +51,7 @@ from tests.unit.test_macos_native_sink_publication import _prepare
         "absent_or_bounded_object",
         "absent_or_bounded_integer_object",
         "absent_or_bounded_property_object",
+        "absent_or_bounded_property_object_v2",
     ],
 )
 @pytest.mark.parametrize("exit_code", [None, 7])
@@ -87,6 +99,8 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
             "empty": (),
             "integer": (("invented.version", 1),),
             "nested": freeze_entitlements({"invented.object": {"flag": True}}),
+            "integer_array": freeze_entitlements({"invented.environments": [0, 2, 7]}),
+            "large": freeze_entitlements({f"key-{index}": True for index in range(177)}),
         }
 
         def executable() -> RuntimeArtifactDescriptor:
@@ -179,7 +193,7 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     assert source.connection().next_delivery == 3
     assert [
         (item.event_type, item.next_sequence) for item in source.connection().event_counters
-    ] == [(9, 1), (11, 1), (15, 1)]
+    ] == [(kind, int(kind in {9, 11, 15})) for kind in source.profile.event_types]
     assert state.get_process(after.hostname, after.pid) is None
     dispatcher.assert_exact_projection_recoveries_drained()
     output.close()
@@ -187,6 +201,8 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
     records = [decode_endpoint_security_record(line) for line in paths[0].read_text().splitlines()]
     has_exec = (
         known_entitlements is True
+        or bool(known_entitlements)
+        and entitlement_policy == "absent_or_bounded_property_object_v2"
         or (known_entitlements == "boolean" and entitlement_policy != "absent_only")
         or (
             known_entitlements == "string_array"
@@ -225,21 +241,10 @@ def test_active_profile_exports_only_known_phases_with_all_counter_claims(
         execution = next(record for record in records if record.event_type == 9)
         import json
 
-        expected_entitlements = (
-            {"invented.enabled": True}
-            if known_entitlements == "boolean"
-            else {"invented.enabled": True, "invented.items": ["example.one", "example.two"]}
-            if known_entitlements == "string_array"
-            else {"invented.identity": "example.vendor"}
-            if known_entitlements == "string"
-            else {}
-            if known_entitlements == "empty"
-            else {"invented.version": 1}
-            if known_entitlements == "integer"
-            else {"invented.object": {"flag": True}}
-            if known_entitlements == "nested"
-            else None
-        )
+        from evidenceforge.events.macos_entitlements import native_entitlements
+
+        entries = explicit.get(known_entitlements)
+        expected_entitlements = native_entitlements(entries) if entries is not None else None
         assert (
             json.loads(execution.to_ndjson())["event"]["exec"]["entitlements"]
             == expected_entitlements

@@ -19,6 +19,7 @@ from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAutho
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 from tests.unit.test_macos_ssh_process_graph import _bootstrap
@@ -31,6 +32,7 @@ def test_boot_profiles_materialize_distinct_sessions_and_restore(direct: bool) -
     state = StateManager()
     state.set_current_time(_START)
     engine = Mock(spec=EmitterSetupMixin)
+    engine.timing_runtime = TimingRuntime(reference_time=_START)
     engine.state_manager = state
     system = System(hostname="MAC-BOOT", ip="192.0.2.44", os="macOS 26", type="workstation")
     spec = EmitterSetupMixin._build_macos_boot_host_spec(engine, system, _START)
@@ -52,7 +54,9 @@ def test_boot_profiles_materialize_distinct_sessions_and_restore(direct: bool) -
     assert pids["launchd"] == 1 and len(pids) > 3
     for pid in pids.values():
         process = state.get_process_identity(system.hostname, pid)
-        assert process.arguments == (process.image,)
+        assert process.arguments == (
+            (process.image, "daemon") if process.image == "/usr/sbin/cfprefsd" else (process.image,)
+        )
         assert process.command_line == shlex.join(process.arguments)
         assert process.environment is None
         group = process.job_control
@@ -245,6 +249,7 @@ def test_invalid_boot_argv_is_rejected_before_state_changes(
     state = StateManager()
     state.set_current_time(_START)
     engine = Mock(spec=EmitterSetupMixin)
+    engine.timing_runtime = TimingRuntime(reference_time=_START)
     engine.state_manager = state
     system = System(hostname="MAC-BOOT", ip="192.0.2.44", os="macOS 26", type="workstation")
     before = state.materialization_digest()

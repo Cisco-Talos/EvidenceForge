@@ -5427,6 +5427,13 @@ class EventDispatcher:
             if event.process is not None and event.process.username
             else (event.auth.username if event.auth is not None else "")
         )
+        operation = event.file.macos_operation if event.file is not None else None
+        rename_removals = (
+            (operation.source,)
+            + ((operation.replacement,) if operation.replacement is not None else ())
+            if operation is not None and operation.operation == "rename"
+            else ()
+        )
         file_records = []
         binary_records = []
         for token in publications:
@@ -5462,7 +5469,12 @@ class EventDispatcher:
                 and canonical_native_path(event.file.path, platform)
                 == canonical_native_path(artifact.native_path, platform)
             )
-            if token.withdraw_placement and (not file_match or event.event_type != "file_delete"):
+            rename_removal = token.withdraw_placement and record in rename_removals
+            if (
+                token.withdraw_placement
+                and not rename_removal
+                and (not file_match or event.event_type != "file_delete")
+            ):
                 raise EventContractError(
                     "Prepared removal requires its exact file-delete occurrence"
                 )
@@ -5480,11 +5492,16 @@ class EventDispatcher:
                     record.binary is not None
                     and self._process_owns_runtime_exec_content(subject, record)
                 )
-            if not file_match and not binary_match and not retained_exec_content:
+            if (
+                not file_match
+                and not binary_match
+                and not retained_exec_content
+                and not rename_removal
+            ):
                 raise EventContractError(
                     "Prepared artifact publication path is unrelated to its canonical occurrence"
                 )
-            if file_match:
+            if file_match and not rename_removal:
                 file_records.append(record)
             if binary_match:
                 binary_records.append(record)
@@ -5504,6 +5521,32 @@ class EventDispatcher:
                 platform,
             )
         if event.file is not None and file_record is not None:
+            if operation is not None:
+                operation.__post_init__()
+                expected_record = (
+                    operation.target if operation.operation == "rename" else operation.source
+                )
+                expected_kind, expected_action = {
+                    "create": ("file_create", "create"),
+                    "close": ("file_close", "close"),
+                    "rename": ("file_rename", "rename"),
+                    "unlink": ("file_delete", "delete"),
+                }[operation.operation]
+                if (
+                    file_record != expected_record
+                    or operation.observed_at != event.timestamp
+                    or event.event_type != expected_kind
+                    or event.file.action != expected_action
+                    or event.file.previous_path
+                    != (
+                        operation.source.artifact.native_path
+                        if operation.operation == "rename"
+                        else None
+                    )
+                ):
+                    raise EventContractError(
+                        "Native file operation changed its canonical file binding"
+                    )
             if event.file.artifact_identity not in (None, file_record.artifact):
                 raise EventContractError(
                     "File artifact identity conflicts with its exact retained publication"
@@ -8428,6 +8471,11 @@ class EventDispatcher:
         if len(record.trusted_projections) > 1:
             return self._require_multi_process_projection(record)
         projection = record.trusted_projections[0]
+        if (
+            projection.occurrence.file is not None
+            and projection.occurrence.file.macos_operation is not None
+        ):
+            return self._require_macos_file_projection(record)
         if record.root_action_id.startswith("process-exit:"):
             return self._require_posix_exit_projection(record)
         if projection.occurrence.event_type is EventKind.PROCESS_JOB_CONTROL:
@@ -8453,6 +8501,87 @@ class EventDispatcher:
                 except EventContractError:
                     return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_macos_file_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Admit one explicit filesystem operation and its sole live process frontier."""
+        from evidenceforge.events.contracts import EffectOccurrenceKind, EffectOccurrenceOwner
+
+        event = record.trusted_projections[0].occurrence
+        plan = record.state_plan
+        actor = event.identity_plan.actor if event.identity_plan is not None else None
+        operation = event.file.macos_operation if event.file is not None else None
+        if (
+            len(record.dispatches) != 1
+            or operation is None
+            or type(actor) is not ProcessIdentity
+            or event.src_host is None
+            or event.src_host.os_category != "macos"
+            or event.src_host.hostname != actor.hostname
+            or event.dst_host is not None
+            or event.process is None
+            or event.process.pid != actor.pid
+            or event.process.image != actor.image
+            or event.process.username != actor.principal
+            or event.file.pid != actor.pid
+            or event.timestamp < actor.execution_started_at
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != actor
+            or plan.process_activity_patches[0].activity_time != event.timestamp
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+            or record.effect_member_bindings
+            or record.external_effect_links
+            or len(record.owned_effect_plans) != 1
+            or record.artifact_registry is None
+            or not record.artifact_publications
+        ):
+            raise EventContractError(
+                "Exact Mac file operation changed its singleton canonical owner"
+            )
+        effect = record.owned_effect_plans[0]
+        if (
+            effect.owner is not EffectOccurrenceOwner.MACOS_FILESYSTEM
+            or effect.kind is not EffectOccurrenceKind.FILE
+            or effect.root_action_id != record.root_action_id
+            or effect.occurrence_count != 1
+            or event.effect_provenance != effect.provenance(0)
+        ):
+            raise EventContractError("Exact Mac file operation lost its bounded effect provenance")
+        operation.__post_init__()
+        change = plan.process_activity_patches[0].filesystem_change
+        if change is not None:
+            import posixpath
+
+            change.__post_init__()
+            if (
+                change.after.native_path != posixpath.dirname(operation.source.artifact.native_path)
+                or change.after.metadata.volume_id != operation.source.macos_file.volume_id
+                or change.after.metadata.device != operation.source.macos_file.device
+                or change.allocation is not None
+                and (
+                    operation.operation != "create"
+                    or change.allocation[2] != operation.source.macos_file.inode
+                )
+                or operation.parent is not None
+                and operation.parent not in (change.before, change.after)
+            ):
+                raise EventContractError(
+                    "Filesystem state patch drifted from its exact file operation"
+                )
+        return "macos_filesystem"
 
     @staticmethod
     def _require_process_job_control_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -9468,6 +9597,12 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         record.exact_projection_kind = exact_kind
+        if exact_kind == "macos_filesystem":
+            self._single_ecar_exact_projection_participants(projection)
+            record.exact_all_suppressed = self._ecar_projection_is_exact_omission(projection)
+            cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
+            record.exact_publication_batch = cleanup_record.exact_publication_batch
+            return
         terminal_kind = exact_kind in {
             "posix_exec",
             "posix_fork",
@@ -9639,6 +9774,7 @@ class EventDispatcher:
             "posix_exit",
             "process_credentials",
             "process_job_control",
+            "macos_filesystem",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
@@ -9651,6 +9787,7 @@ class EventDispatcher:
                     "posix_exit",
                     "process_credentials",
                     "process_job_control",
+                    "macos_filesystem",
                 }
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
@@ -9676,6 +9813,7 @@ class EventDispatcher:
                 "posix_exit",
                 "process_credentials",
                 "process_job_control",
+                "macos_filesystem",
             }
             or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
@@ -10625,8 +10763,14 @@ class EventDispatcher:
             expected = {
                 self._es_process_occurrence(item._occurrence)[0]: item._occurrence
                 for item in dispatches
-                if item._occurrence.event_type
-                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                if (
+                    item._occurrence.event_type
+                    in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                    or (
+                        item._occurrence.file is not None
+                        and item._occurrence.file.macos_operation is not None
+                    )
+                )
             }
             for row in es_ingress.rows:
                 occurrence = expected.get(row.occurrence_id)
@@ -10672,8 +10816,14 @@ class EventDispatcher:
                 )
                 for row in (es_ingress.rows if es_ingress is not None else ())
                 if prepared._occurrence.storyline_cluster_id
-                and prepared._occurrence.event_type
-                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                and (
+                    prepared._occurrence.event_type
+                    in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                    or (
+                        prepared._occurrence.file is not None
+                        and prepared._occurrence.file.macos_operation is not None
+                    )
+                )
                 and row.occurrence_id == self._es_process_occurrence(prepared._occurrence)[0]
             )
             for prepared in dispatches
@@ -11914,6 +12064,10 @@ class EventDispatcher:
             process_fork_identities,
         )
 
+        if event.file is not None and event.file.macos_operation is not None:
+            from evidenceforge.generation.macos_es_file_publication import file_occurrence
+
+            return file_occurrence(event)
         if event.event_type is EventKind.PROCESS_FORK:
             _, identity = process_fork_identities(event)
             return f"process-fork:{identity.object_id}", 11
@@ -12302,6 +12456,10 @@ class EventDispatcher:
                     )
                     artifact_claimed = artifact_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], artifact_context))
+                    if record.exact_projection_kind == "macos_filesystem":
+                        record.artifact_registry.validate_macos_file_operation(
+                            artifact_claimed, record.member_occurrences[0].file.macos_operation
+                        )
 
                 if record.es_delivery is not None:
                     from evidenceforge.generation.actions.es_collection import (
@@ -12720,7 +12878,14 @@ class EventDispatcher:
                             artifact_registry = record.artifact_registry
                             assert artifact_receipt is not None and artifact_registry is not None
                             self._commit_exact_expected_owner(
-                                artifact_claimed.commit_no_fail,
+                                (
+                                    lambda: artifact_registry.commit_macos_file_operation(
+                                        artifact_claimed,
+                                        record.member_occurrences[0].file.macos_operation,
+                                    )
+                                )
+                                if record.exact_projection_kind == "macos_filesystem"
+                                else artifact_claimed.commit_no_fail,
                                 expected=artifact_receipt,
                                 terminal_authenticates=lambda: bool(
                                     artifact_claimed.committed
@@ -13129,7 +13294,7 @@ class EventDispatcher:
                     for prepared in owner.dispatches
                 )
             )
-            uncollected_mac_terminal = bool(
+            uncollected_ssh_terminal = bool(
                 type(owner) is _PreparedDeferredSessionPublicationRecord
                 and owner.exact_recovery is record
                 and not owner.all_suppressed
@@ -13138,7 +13303,7 @@ class EventDispatcher:
                 and record.target_proofs == ()
                 and record.batch.commit_cursor == 0
                 and all(member == () for member in record.member_identifiers)
-                and self._is_macos_ssh_receiver_projection_cohort(owner.dispatches)
+                and self._is_ssh_receiver_projection_cohort(owner.dispatches)
                 and all(
                     not self._deferred_session_exact_target_slices(prepared._projection)
                     for prepared in owner.dispatches
@@ -13162,7 +13327,7 @@ class EventDispatcher:
                 and receipt.occurrence_ids == record.occurrence_ids
                 and receipt.target_proof_digest == self._prepared_dispatch_owner_token
                 and (
-                    positive_target_terminal or all_suppressed_terminal or uncollected_mac_terminal
+                    positive_target_terminal or all_suppressed_terminal or uncollected_ssh_terminal
                 )
                 and receipt.member_integrity_digest == record.member_integrity_digest
                 and len(outcomes) == len(record.occurrence_ids)
@@ -14248,8 +14413,8 @@ class EventDispatcher:
             raise EventContractError("Deferred native ingress changed its exact staged rows")
         return facts[:-count]
 
-    @staticmethod
-    def _is_macos_ssh_receiver_projection_cohort(
+    def _is_ssh_receiver_projection_cohort(
+        self,
         dispatches: tuple[PreparedDispatch, ...],
     ) -> bool:
         """Recognize the already-authenticated transport/receiver/session cohort.
@@ -14267,9 +14432,20 @@ class EventDispatcher:
             and process.event_type in {EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
             and session.event_type is EventKind.SSH_SESSION
             and host is not None
-            and host.os_category == "macos"
+            and host.os_category in {"linux", "macos"}
+            and (
+                host.os_category == "macos"
+                or (
+                    process.event_type is EventKind.SYSTEM_PROCESS_CREATE
+                    and "ecar" not in self.emitters
+                    and not any(
+                        self._projection_is_exact_warmup_suppressed(member._projection)
+                        for member in dispatches
+                    )
+                )
+            )
             and process.src_host is not None
-            and process.src_host.os_category == "macos"
+            and process.src_host.os_category == host.os_category
             and process.src_host.hostname == host.hostname
             and transport.dst_host is not None
             and transport.dst_host.hostname == host.hostname
@@ -14327,9 +14503,9 @@ class EventDispatcher:
                 "Deferred-session exact projection target proof cardinality changed"
             )
         proven_members = {proof.member_ordinal for proof in proofs}
-        macos_receiver = self._is_macos_ssh_receiver_projection_cohort(dispatches)
+        ssh_receiver = self._is_ssh_receiver_projection_cohort(dispatches)
         required_members = (
-            {target[0] for target in expected} if macos_receiver else set(range(len(dispatches)))
+            {target[0] for target in expected} if ssh_receiver else set(range(len(dispatches)))
         )
         if proven_members != required_members:
             raise EventContractError(
@@ -14477,7 +14653,7 @@ class EventDispatcher:
             if member_ordinal == 0
         )
         if (
-            not macos_receiver
+            not ssh_receiver
             and any(member_ordinal > 0 for member_ordinal, *_rest in expected)
             and not (transport_targets)
         ):
@@ -14512,7 +14688,7 @@ class EventDispatcher:
         for proof in proofs:
             if proof.member_ordinal == 0 or proof.format_name != "ecar":
                 continue
-            if not transport_ecar_keys and macos_receiver:
+            if not transport_ecar_keys and ssh_receiver:
                 continue
             if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
                 raise EventContractError(

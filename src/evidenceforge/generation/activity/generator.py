@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_support.scheduling import ProcessLaunchScheduler
     from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
     from evidenceforge.generation.actions.process_support.system import SystemProcessService
+    from evidenceforge.generation.macos_filesystem_workload import MacosFilesystemBatch
 
 import evidenceforge.events.dispatcher as dispatcher_types
 from evidenceforge.config.schemas import MacosTerminalStartupPolicy
@@ -3729,6 +3730,7 @@ class ActivityGenerator:
         self.dispatcher = dispatcher
         self._runtime_content_manager = runtime_content_manager
         self._macos_finder_startups: dict[str, RetainedFinderLaunch] = {}
+        self._macos_filesystem_workflows: dict[str, MacosFilesystemBatch] = {}
         self._macos_terminal_startups: dict[str, _RetainedMacosTerminalStartup] = {}
         if dispatcher is not None:
             bind_execution_effect_audit = getattr(
@@ -5731,7 +5733,16 @@ class ActivityGenerator:
                 sample_key="terminal_command_close",
             )
         else:
-            duration = timedelta(seconds=rng.uniform(*lifetime))
+            duration = self._sample_activity_gap(
+                relationship_key="activity.process.foreground_lifetime",
+                stable_id=f"foreground:{system.hostname}:{pid}:{start_time.isoformat()}",
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=f"{system.hostname}:{pid}:{start_time.isoformat()}",
+                minimum_ms=lifetime[0] * 1000,
+                maximum_ms=lifetime[1] * 1000,
+                timing_runtime=self._activity_timing_runtime(None),
+            )
         return duration
 
     def _generate_bounded_foreground_process_termination(
@@ -5748,14 +5759,16 @@ class ActivityGenerator:
         completion_outcome: PosixProcessExit | None = None,
     ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
-        termination_time = start_time + self._bounded_process_duration(
-            system=system,
-            start_time=start_time,
-            pid=pid,
-            process_name=process_name,
-            lifetime=lifetime,
-            rng=rng,
-        )
+        termination_time = self.foreground_process_termination_time(system.hostname, pid)
+        if termination_time is None:
+            termination_time = start_time + self._bounded_process_duration(
+                system=system,
+                start_time=start_time,
+                pid=pid,
+                process_name=process_name,
+                lifetime=lifetime,
+                rng=rng,
+            )
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
         session = self.state_manager.get_session(logon_id)
         lifecycle_deadlines = [
@@ -8759,6 +8772,22 @@ class ActivityGenerator:
             return -1, None
         image, command_line = spec
 
+        from evidenceforge.generation.activity.browser_instances import browser_main_intent
+
+        browser_owner = browser_main_intent(image, command_line)
+        if browser_owner:
+            browser_pid = self._existing_user_browser_pid(
+                system=source_system,
+                username=user.username,
+                logon_id=session.logon_id,
+                process_name=image,
+                command_line=command_line,
+                time=time,
+                source_visible_by=source_visible_by,
+            )
+            if browser_pid is not None:
+                return (browser_pid, image) if browser_pid > 0 else (-1, None)
+
         image_lower = image.lower()
         image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
         resident_resource_owner = image_exe == "gvfsd-smb-browse"
@@ -8769,7 +8798,8 @@ class ActivityGenerator:
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
-            if proc.username == user.username
+            if not browser_owner
+            and proc.username == user.username
             and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and (not require_exact_command or proc.command_line == command_line)
@@ -9595,7 +9625,7 @@ class ActivityGenerator:
         http: Optional["HttpContext"] = None,
         explicit_mode: bool = False,
         time: datetime | None = None,
-        client_user_agent: str = "",
+        client_user_agent: str | None = None,
     ) -> ProxyContext:
         """Build a proxy access context from the logical origin request."""
         rng = _get_rng()
@@ -9679,12 +9709,12 @@ class ActivityGenerator:
             and not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        if client_user_agent:
+        if client_user_agent is not None:
             # Canonical browser ownership is resolved before header byte budgets
             # and channel affinity. Domain defaults cannot change that identity.
             user_agent = client_user_agent
-        elif http is not None and getattr(http, "user_agent_known_absent", False):
-            user_agent = ""
+        elif http is not None and (http.user_agent or http.user_agent_known_absent):
+            user_agent = http.user_agent
         else:
             user_agent = self._proxy_user_agent_for_context(
                 rng,
@@ -17299,17 +17329,25 @@ class ActivityGenerator:
                 parent_pid = shell_pid
                 if ensure_utc(time) <= shell.execution_started_at:
                     time = shell.execution_started_at + timedelta(milliseconds=50)
+        launch_support = None
+        if provider is not None and ".app/Contents/MacOS/" in process_name:
+            from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
+
+            registry = self.dispatcher.deployment_registry if self.dispatcher is not None else None
+            if registry is not None:
+                launch_support = resolve_macos_launch_support(
+                    registry, provider.profile, system.hostname, user.username, process_name
+                )
         finder_session = (
             self.state_manager.get_session_at(logon_id, time)
-            if provider is not None and process_name in provider.profile.finder_launch_images
+            if launch_support is not None and launch_support.mechanism == "finder"
             else None
         )
         if (
-            _get_os_category(system.os) == "macos"
-            and macos_launch_kind is None
+            macos_launch_kind is None
             and not require_exact_parent
-            and provider is not None
-            and process_name in provider.profile.finder_launch_images
+            and launch_support is not None
+            and launch_support.mechanism == "finder"
             and finder_session is not None
             and finder_session.session_kind == "interactive"
             and finder_session.logon_type == 2
@@ -17319,7 +17357,6 @@ class ActivityGenerator:
             arguments = catalog_direct_exec_arguments(process_name, command_line)
             command_line = shlex.join(arguments)
             macos_launch_kind = "finder"
-            allow_existing_browser_reuse = False
             allow_browser_launch_spacing = False
         if _get_os_category(system.os) in {
             "linux",
@@ -25671,6 +25708,9 @@ class ActivityGenerator:
             if shell_ready_or_deferred(shell):
                 assert shell is not None
                 return shell.pid
+            # A reserved initial shell can be unavailable at an earlier canonical
+            # or source-visible instant. It does not authorize a second window.
+            return None
         registry = self.dispatcher.deployment_registry
         if terminal_application_id is None and session.process_tree_root is None:
             # Eligibility is frozen with the deployment, like other baseline apps.
@@ -25731,6 +25771,7 @@ class ActivityGenerator:
                     or (root is not None and root.image == terminal_image)
                     else None
                 )
+            return None
 
         provider = self.macos_execution_metadata
         policy = (
@@ -26957,6 +26998,8 @@ class ActivityGenerator:
         system: System,
         requested_time: datetime,
         command: str,
+        *,
+        reserve_command_dwell: bool = True,
     ) -> datetime | None:
         """Preserve foreground command dwell time for one user's shell history."""
         requested_time = self._align_linux_bash_after_session_ready(
@@ -27013,6 +27056,16 @@ class ActivityGenerator:
         if scheduled_time is None:
             return None
         self._commit_bash_history_second_no_fail(second_reservation)
+        if not reserve_command_dwell:
+            # The caller's process bundle owns completion and subsequent think
+            # time. History submission must not independently reserve its runtime.
+            owner = self._active_user_linux_process_session(user, system, scheduled_time)
+            key = (system.hostname, user.username, owner.logon_id if owner is not None else "")
+            self._bash_history_command_counts[key] = (
+                self._bash_history_command_counts.get(key, 0) + 1
+            )
+            self._remember_linux_bash_session_activity(user, system, scheduled_time, scheduled_time)
+            return scheduled_time
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -28871,6 +28924,38 @@ class ActivityGenerator:
         ]
         if not eligible:
             return ()
+        # Reopening an existing browser may request another renderer, but its
+        # resident GPU/network roles still belong to that same exact parent.
+        # Consult canonical children rather than inventing a new startup tree.
+        resident_children = [
+            self.state_manager.get_process_identity_at(system.hostname, child.pid, time)
+            for child in self.state_manager.get_processes_for_session(logon_id, system.hostname)
+            if child.parent_pid == parent_pid and child.start_time <= ensure_utc(time)
+        ]
+
+        def missing_resident_role(index: int) -> bool:
+            image, command = descriptor.child_commands[index]
+            roles = tuple(
+                token
+                for token in shlex.split(command)
+                if token.startswith(("--type=", "--utility-sub-type="))
+            )
+            if not roles or "--type=renderer" in roles:
+                return True
+            return not any(
+                child is not None
+                and child.image == image
+                and child.parentage is not None
+                and child.parentage.original is not None
+                and child.parentage.original.object_id == parent.ecar_object_id
+                and child.arguments is not None
+                and all(role in child.arguments for role in roles)
+                for child in resident_children
+            )
+
+        eligible = [index for index in eligible if missing_resident_role(index)]
+        if not eligible:
+            return ()
         maximum = profile.get("max_children", len(eligible))
         maximum = len(eligible) if maximum is None else maximum
         delay = profile.get("spawn_delay") or [0.5, 3.0]
@@ -28888,9 +28973,24 @@ class ActivityGenerator:
             self.process_source_create_bound(system, parent_pid) or ensure_utc(time),
         )
         selected = rng.sample(eligible, rng.randint(1, min(maximum, len(eligible))))
-        starts = sorted(floor + timedelta(seconds=rng.uniform(*delay)) for _ in selected)
+        starts = sorted(
+            (
+                floor
+                + self._sample_activity_gap(
+                    relationship_key="macos.application.helper_start",
+                    stable_id=f"{parent.ecar_object_id}:{time.isoformat()}",
+                    host=system.hostname,
+                    lifecycle_id=parent.ecar_object_id,
+                    ordinal=index,
+                    minimum_ms=delay[0] * 1000,
+                    maximum_ms=delay[1] * 1000,
+                ),
+                index,
+            )
+            for index in selected
+        )
         launches: list[tuple[datetime, str, str, tuple[str, ...]]] = []
-        for index, child_time in zip(selected, starts, strict=True):
+        for child_time, index in starts:
             visible_bound = (
                 child_time
                 + self._source_timing_planner.process_create_positive_headroom(child_time, "macos")
@@ -29199,7 +29299,12 @@ class ActivityGenerator:
                     if os_category == "linux":
                         logon_time = time - timedelta(seconds=_get_rng().uniform(7.0, 15.0))
                     elif os_category == "macos":
-                        logon_time = time - timedelta(seconds=_get_rng().uniform(12.0, 20.0))
+                        logon_time = time - self._sample_profile_activity_gap(
+                            "macos.baseline.session_lead",
+                            stable_id=f"{system.hostname}:{user.username}:{time.isoformat()}",
+                            host=system.hostname,
+                            source="baseline",
+                        )
                     else:
                         logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
                     logon_id = self.generate_logon(user, system, logon_time)
@@ -29376,7 +29481,7 @@ class ActivityGenerator:
                     if os_category == "linux":
                         shell_command_line = _background_linux_shell_command_if_needed(command_line)
                         process_time = self._schedule_bash_history_time(
-                            user, system, time, shell_command_line
+                            user, system, time, shell_command_line, reserve_command_dwell=False
                         )
                         if process_time is None or not self._is_within_scenario_window(
                             process_time
@@ -29477,7 +29582,23 @@ class ActivityGenerator:
                                 )
                                 if running is None:
                                     continue
-                                source_process_time = running.start_time
+                                identity = self.state_manager.get_process_identity_at(
+                                    system.hostname, source_pid, source_process_time
+                                ) or self.state_manager.get_process_identity(
+                                    system.hostname, source_pid
+                                )
+                                if identity is None:
+                                    continue
+                                source_process_time = max(
+                                    source_process_time, identity.execution_started_at
+                                )
+                                session = self.state_manager.get_session_at(
+                                    logon_id, source_process_time
+                                )
+                                if not _session_active_for_activity(
+                                    session, source_process_time
+                                ) or not self._is_within_scenario_window(source_process_time):
+                                    continue
                             if pid < 0:
                                 pid = source_pid
                                 process_name = source_process_name
@@ -29494,21 +29615,9 @@ class ActivityGenerator:
                             self._process_parents()._record_user_process(
                                 system, user, source_pid, source_process_name
                             )
-                            if os_category == "linux":
-                                lifetime = _linux_foreground_lifetime(
-                                    source_process_name, source_command_line
-                                )
-                                if lifetime is not None:
-                                    self._remember_foreground_shell_available(
-                                        system=system,
-                                        username=user.username,
-                                        logon_id=logon_id,
-                                        parent_pid=parent_pid,
-                                        termination_time=source_process_time
-                                        + timedelta(seconds=lifetime[1]),
-                                        seed_text=source_command_line,
-                                        concurrency_group_id=concurrency_group_id,
-                                    )
+                            # The process bundle already reserves its sampled canonical
+                            # completion. A second reservation at the lifetime upper bound
+                            # would serialize every editor on the same maximum-length slot.
                         requested_group_time = group_process_time
                     if not created_processes:
                         return
@@ -29675,7 +29784,14 @@ class ActivityGenerator:
                                 username=user.username,
                                 logon_id=logon_id,
                                 parent_pid=parent_pid,
-                                termination_time=termination_time,
+                                termination_time=termination_time
+                                + self._process_activity_timing().sample_profile_gap(
+                                    "baseline.foreground_think",
+                                    stable_id=f"baseline-task:{system.hostname}:{logon_id}:{source_process_time.isoformat()}:{source_command_line}",
+                                    host=system.hostname,
+                                    source="baseline",
+                                    lifecycle_id=logon_id,
+                                ),
                                 seed_text=source_command_line,
                                 concurrency_group_id=process_group_id,
                             )

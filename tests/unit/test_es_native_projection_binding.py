@@ -125,6 +125,16 @@ def test_in_scope_observation_tampering_cannot_reseal_replacement_counter_facts(
         "x" * (1024 * 1024) + "\n",
         "é" * (600 * 1024) + "\n",
     ],
+    ids=[
+        "empty",
+        "lf-only",
+        "unterminated",
+        "multiple-rows",
+        "crlf",
+        "surrogate",
+        "over-character-limit",
+        "over-utf8-byte-limit",
+    ],
 )
 def test_invalid_or_oversized_native_rows_do_not_bind_or_advance(payload: str) -> None:
     _, process, owner, profile = _setup()

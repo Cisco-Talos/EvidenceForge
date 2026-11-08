@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from scripts import macos_reference_capture as kit
 
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _file, _process
 
 _PROBE = Path("/private/tmp/invented-kit/private-run-example/process-probe")
@@ -323,6 +324,7 @@ def test_input_and_retention_limits_fail_closed(monkeypatch: pytest.MonkeyPatch)
     assert tracker.records == []
 
 
+@requires_posix_reference
 def test_prepare_copies_only_code_and_does_not_call_native_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -366,6 +368,7 @@ def test_capture_from_checkout_is_rejected_before_host_checks(
         kit.capture()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("command", ["preflight", "capture"])
 @pytest.mark.parametrize(
     ("uid", "family", "architecture", "version", "code"),
@@ -392,7 +395,9 @@ def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
 
     tmp_path.chmod(0o700)
     monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
-    monkeypatch.setattr(kit.os, "geteuid", (lambda: uid) if family == "Darwin" else forbidden)
+    monkeypatch.setattr(
+        kit.os, "geteuid", (lambda: uid) if family == "Darwin" else forbidden, raising=False
+    )
     monkeypatch.setattr(kit.platform, "system", lambda: family)
     monkeypatch.setattr(kit.platform, "machine", lambda: architecture)
     monkeypatch.setattr(kit, "_quiet_command", lambda _args, _cwd: version.encode())
@@ -411,6 +416,7 @@ def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
     assert report.gate_status == "NOT_EVALUATED"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("version", ["26.0", "27.0.1", "15.7", "28.987654321"])
 def test_successful_preflight_never_builds_collects_or_writes_data(
     tmp_path: Path,
@@ -428,7 +434,7 @@ def test_successful_preflight_never_builds_collects_or_writes_data(
 
     tmp_path.chmod(0o700)
     monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
-    monkeypatch.setattr(kit.os, "geteuid", lambda: 123)
+    monkeypatch.setattr(kit.os, "geteuid", lambda: 123, raising=False)
     monkeypatch.setattr(kit.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(kit.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(kit, "_quiet_command", fake_version)
@@ -520,6 +526,7 @@ def test_legacy_fixed_report_remains_readable() -> None:
     assert report.message_shapes == "INCONCLUSIVE"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure",
     [
@@ -835,6 +842,7 @@ def test_identity_never_falls_back_to_partial_tokens_or_pid_only(mutation: str) 
         kit._identity(process)
 
 
+@requires_posix_reference
 def test_owned_image_alias_uses_exact_file_objects_without_resolving_native_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -845,8 +853,9 @@ def test_owned_image_alias_uses_exact_file_objects_without_resolving_native_path
         assert path in {_PROBE, Path("/usr/bin/true")}
         return SimpleNamespace(st_dev=123, st_ino=9002 if path.name == "true" else 9001)
 
-    monkeypatch.setattr(Path, "stat", stat)
-    images = kit._owned_images(_PROBE)
+    with monkeypatch.context() as image_stat:
+        image_stat.setattr(Path, "stat", stat)
+        images = kit._owned_images(_PROBE)
     assert sampled == [_PROBE, Path("/usr/bin/true")]
     rows, controls = _experiment()
 

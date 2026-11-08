@@ -33,8 +33,8 @@ baseline-only scenarios explicitly state that no malicious events were generated
 
 - **Guided scenario authoring** — Agent skills turn exercise ideas into validated scenario
   definitions, environment briefings, reusable packs, and configuration changes.
-- **Multi-source evidence generation** — Produce Windows, Linux, EDR, network, IDS, firewall, web,
-  proxy, and email evidence from one scenario.
+- **Multi-source evidence generation** — Produce Windows, Linux, experimental macOS workstation,
+  EDR, network, IDS, firewall, web, proxy, and email evidence from one scenario.
 - **Baseline and storyline modeling** — Combine ordinary user and system activity, benign red
   herrings, and typed attack events in the same dataset.
 - **Repeatable generation at scale** — Deterministic seeds, resource forecasts, progress reporting,
@@ -151,18 +151,44 @@ See the [Studio guide](docs/studio.md) for installation, workflows, and backup/r
 
 ## Supported Log Formats
 
-| Format | Description |
-|--------|-------------|
-| Windows Security Events | 30 event IDs covering authentication, process activity, Kerberos, persistence, account and group management, permitted connections, and log clearing |
-| Windows Sysmon | Events 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22 for process, network, module, injection, file, registry, and DNS activity |
-| Zeek (16 log types) | conn, dhcp, dns, files, http, ntp, ocsp, packet_filter, pe, reporter, smb_files, smb_mapping, smtp, ssl, weird, and x509 |
-| eCAR | Simulated EDR/XDR telemetry for processes, files, flows, registry, modules, threads, user sessions, and services |
-| Linux syslog | Authentication, session, service, package, scheduler, maintenance, firewall, Samba, and other role-aware system activity |
-| Bash history | Per-user timestamped command history |
-| Snort/Suricata alerts | Fast-format IDS alerts with sensor-aware filtering and correlation to network evidence |
-| Cisco ASA | Connection, teardown, deny, NAT, and threat-detection syslog from modeled firewall control points |
-| Web access | Apache/Nginx combined text or Splunk-compatible JSON, depending on the output target |
-| HTTP proxy | Extended Apache/Nginx combined text, SOF-ELK®-compatible combined text, or Splunk-compatible JSON, depending on the output target |
+These tables describe the **current source checkout**. Published installers contain the
+capabilities of their release; consult its release notes and `eforge info formats --json`.
+The OS being simulated is independent of the computer running EvidenceForge or Studio.
+
+### Host logs by simulated operating system
+
+| Simulated OS | Available host formats | Scope |
+| --- | --- | --- |
+| Windows workstations and servers | Windows Security (`windows_event_security`), Sysmon (`windows_event_sysmon`), eCAR (`ecar`) | Authentication, process and endpoint activity; Windows-specific registry, module and service evidence where modeled. |
+| Linux workstations and servers | Linux syslog (`syslog`), Bash history (`bash_history`), eCAR (`ecar`) | Role-aware authentication, sessions, services, package/scheduler/maintenance activity, interactive Bash and endpoint evidence. |
+| macOS 27 arm64 workstations **(experimental)** | Endpoint Security (`macos_endpoint_security`), Unified Log (`macos_unified_log`), zsh history (`zsh_history`), explicit interactive Bash history (`bash_history`), eCAR (`ecar`) | Qualified v11 process and bounded file operations; selected workspace, policy-refusal and SSH authentication messages. See [Mac scope and limits](docs/macos.md). |
+
+Host formats stay on their owning platform: a Mac client contacting a Windows server can leave
+Windows evidence **on the server**, alongside its own Mac and network evidence. eCAR families vary
+by platform; selecting eCAR on Linux or macOS does not create Windows registry/module telemetry.
+History requires a modeled interactive shell. macOS 26 and other unqualified Mac targets are not
+currently admitted for generation.
+
+### Network sensors and control points
+
+These observe eligible traffic from any simulated OS; they are not additional endpoint OSes.
+
+| Source | Available formats | Deployment requirement |
+| --- | --- | --- |
+| Zeek | 16 JSON log types: conn, dhcp, dns, files, http, ntp, ocsp, packet_filter, pe, reporter, smb_files, smb_mapping, smtp, ssl, weird and x509 | A configured network sensor with appropriate visibility. Each protocol needs matching modeled activity. |
+| Snort/Suricata IDS | Fast-format correlated alerts (`snort_alert`) | A configured IDS sensor and eligible signatures/network evidence. |
+| Cisco ASA firewall | Connection, teardown, deny, NAT and threat-detection syslog (`cisco_asa`) | A configured firewall control point; traffic visibility and policy determine its evidence. |
+
+### Application/server logs and artifacts
+
+| Source | Available output | Where it is produced |
+| --- | --- | --- |
+| Web server | Apache/Nginx combined text or target-specific JSON (`web_access`) | A Windows/Linux host with the `web_server` role. Clients may use any supported OS. |
+| Forward proxy | Extended combined text, SOF-ELK® combined text or Splunk-compatible JSON (`proxy_access`) | A Windows/Linux host with the `forward_proxy` role and configured proxy routing. |
+| Email | Optional RFC 5322 `.eml` artifacts and manifest, correlated SMTP/network evidence | Configured email routes and authored/background messages; artifacts are separate from log-format selection. |
+
+Selecting a format does not create every source or guarantee a file. Deployment, roles,
+activity, collection windows and sensor placement determine what is actually emitted.
 
 The default target uses SIEM-neutral output. `--target sof-elk` produces layouts and source-native
 variants suitable for SOF-ELK, including Snare Windows events and year-partitioned RFC3164
@@ -173,6 +199,14 @@ across targets.
 See the [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for field-level details and
 the [Output Target Ingest Guides](docs/output-targets/README.md) for target-specific ingestion and
 parser support.
+
+### Modeled macOS workstations (experimental branch work)
+
+The current checkout's experimental macOS 27 arm64 model includes qualified process startup,
+selected helper families, bounded native filesystem telemetry, interactive history and selected
+Unified Log messages. See [Simulating macOS workstations](docs/macos.md) for available sources,
+examples, coverage interpretation and explicit limits. This source-tree work does not describe
+capabilities already shipped in an older installer.
 
 ## Quick Start
 
@@ -272,9 +306,9 @@ Useful `generate` flags include `--verbose` / `--debug`, `--formats` / `-F`,
 default checkpoint cadence is 24 simulated hours; `0` disables new checkpoints. `validate` accepts
 the same checkpoint-cadence option so its resource forecast reflects the intended run.
 
-`resources predict` uses the same calibrated forecast as validation and generation. Supply
-`--project-root` for a workspace's packs and overlays, and `--destination` to check the filesystem
-where output will be saved. Its JSON report includes estimate ranges, resource pressure, and a
+`resources predict` uses the same calibrated forecast as validation and generation. Run from
+the project root to use its packs and overlays; `--project-root` explicitly overrides that
+working-directory context. Use `--destination` to check the filesystem where output will be saved. Its JSON report includes estimate ranges, resource pressure, and a
 machine snapshot. Prediction availability does not certify scenario validity; validate separately.
 
 Resume defaults to `--resume-policy compatible`. It attempts environment drift such as Python,
@@ -300,7 +334,7 @@ The recommended approach is the agent skill (`/eforge config` in Claude Code or 
 ChatGPT/Codex):
 
 ```text
-/eforge config add a nurse persona for a healthcare scenario
+/eforge config inspect my project overlay and explain which defaults it changes
 ```
 
 For the overlay workflow, manual editing, and cross-file dependencies, see
@@ -371,6 +405,7 @@ source launches, installer builds, test tiers, coding conventions and external-p
   immutable local releases, linked upgrades, and portable scenario/pack archives
 - [Scenario Reference](docs/reference/scenario-reference.md) — Scenario fields, includes, typed
   events, and validation rules
+- [Simulating macOS workstations](docs/macos.md) — Sources, examples, file telemetry and scope
 - [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — Output layout, log types,
   field details, and known limitations
 - [Reusable Scenario Packs](docs/reference/SCENARIO_PACKS.md) — Industry and organization pack
@@ -412,52 +447,3 @@ SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used wi
 ## License
 
 [MIT License](LICENSE) - Copyright (c) 2026 Cisco Systems, Inc.
-
-### Modeled macOS workstations (experimental branch work)
-
-The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
-build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
-output selection. The catalog can hold multiple profiles; historical wire decoders remain
-available independently of generation admission.
-
-The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
-and Unified Log workspace-method entry, bounded app-policy refusal and SSH PAM/plain-public-key authentication. Native Endpoint Security uses the qualified v11 process
-profile. Exec needs explicit null or bounded Boolean/integer/string/string-array entitlements and complete descriptors; exit needs an explicit
-completed result. Qualified literal local-terminal and non-PTY SSH commands share canonical
-fork/exec production, including the exec of a shell receiving a quoted command argument.
-Fresh Apple Terminal and iTerm2 3.7.6 startup now share a native phase owner, including their
-different helper chains, login credentials, TTYs and descriptor layouts. Bounded command
-workloads pass complete fork/exec reconciliation through the public CLI. Non-PTY SSH receivers
-also have a qualified launchd/xpcproxy/helper/shell chain: six real forks, six execs and three
-known short-helper exits. Complete Mac-to-Mac SSH workloads pass through both terminals,
-including output filtering and checkpoint recovery. Generic session teardown retains unknown
-exit results. Explicit SSH `pty: true` now qualifies initial zsh startup and literal installed
-foreground commands, with one terminal and distinct command process groups. Existing shells
-reuse their identities. Inner commands are not automatically expanded. Other GUI apps,
-restored jobs/new windows in an existing app, complex command
-plans and unknown binary metadata still limit broader complete process coverage.
-Explicit system jobs can select write-stage `launch_profile: root_xpcproxy_v11` for the
-reviewed root launch mechanism, with `/usr/bin/true` or the existing modeled `/usr/bin/sw_vers` image. Each activation adds one launchd fork and two execs
-(xpcproxy, then target), with a separate POSIX session and frozen loaded environment.
-See the [native system-job example](scenarios/macos-persistence-example/README.md).
-Other images, triggers and user LaunchAgents retain their gates.
-Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
-and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).
-
-The [macOS 26 assessment benchmark](scenarios/macos-assessment/README.md) is preserved as historical
-assessment evidence. Its old target is no longer a currently valid generation scenario. Native
-reference records remain private and are never repository fixtures.
-
-The internal Finder relationship and authenticated xpcproxy-to-app exec contracts now preserve
-GUI audit adoption and process-group changes through canonical state and native publication.
-The qualified fresh Finder, terminal and Chrome producers own their complete startup phases;
-other app shapes, Dock/Spotlight attribution and existing-app new windows remain gated.
-See the [bounded Finder reference and remaining scope](docs/design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).
-
-ES is the process-start source; ULF contains selected message families and is not a
-process inventory. Complete ES coverage requires every eligible in-window canonical fork/exec
-to reconcile or generation fails. The [current delivery results](scenarios/macos-workstation-acceptance/REPORT.md)
-record 33 forks/39 execs in the quiet primary and 63/78 in the positive-background recovery
-companion, with all 22 deterministic files equal through exact resume. Unknown exit results
-remain explicit. Launchd ULF stays gated after a controlled valid-empty reference; its process
-evidence remains in ES, and native collection has stopped under the agreed finite plan.

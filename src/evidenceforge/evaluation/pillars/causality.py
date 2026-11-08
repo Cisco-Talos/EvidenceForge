@@ -1205,7 +1205,9 @@ class CausalityScorer(DimensionScorer):
             if format_name == "cisco_asa":
                 msg_id = f.get("msg_id")
                 if msg_id == 733100:
-                    return True
+                    # Generic appliance scan alarms do not identify every nearby
+                    # authored scanner. Only an attributable source can prove this scan.
+                    return f.get("src_ip") == scan_src
                 return (
                     msg_id in (302013, 302014, 106023)
                     and f.get("src_ip") == scan_src

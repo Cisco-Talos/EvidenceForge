@@ -96,23 +96,46 @@ def test_mac_mixed_fleet_isolation_fresh_process_determinism_and_filtering(
         children = [
             row
             for row in processes
-            if row["action"] == "CREATE" and "/Helpers/" in row["properties"]["image_path"]
+            if row["action"] == "MODIFY"
+            and row["properties"].get("operation") == "exec"
+            and "/Helpers/" in row["properties"]["image_path"]
         ]
         assert children
         creates = {row["objectID"]: row for row in processes if row["action"] == "CREATE"}
         ends = {row["objectID"]: row for row in processes if row["action"] == "TERMINATE"}
         for child in children:
-            parent = creates[child["actorID"]]
-            assert parent["properties"]["image_path"].endswith("/MacOS/Google Chrome")
-            assert parent["pid"] == child["ppid"]
-            assert parent["timestamp_ms"] < child["timestamp_ms"]
-            if parent["objectID"] in ends:
+            birth = creates[child["objectID"]]
+            # Fork CREATE retains its parent's image; helper exec is a later MODIFY.
+            assert birth["properties"]["image_path"].endswith("/MacOS/Google Chrome")
+            assert birth["timestamp_ms"] < child["timestamp_ms"]
+            parent_id = birth["actorID"]
+            assert birth["properties"]["source_process_uuid"] == parent_id
+            assert int(birth["properties"]["source_pid"]) == birth["ppid"] == child["ppid"]
+            assert birth["properties"]["logon_id"] == child["properties"]["logon_id"]
+            parent = creates.get(parent_id)
+            if parent is not None:
+                parent_execs = [
+                    row
+                    for row in processes
+                    if row["objectID"] == parent_id
+                    and row["action"] == "MODIFY"
+                    and row["properties"].get("operation") == "exec"
+                    and row["properties"]["image_path"].endswith("/MacOS/Google Chrome")
+                ]
+                assert len(parent_execs) == 1
+                assert (
+                    parent["timestamp_ms"] < parent_execs[0]["timestamp_ms"] < birth["timestamp_ms"]
+                )
+                assert parent["pid"] == child["ppid"]
+                assert parent_execs[0]["properties"]["logon_id"] == child["properties"]["logon_id"]
+            # Parents born during warm-up have no in-window CREATE; their exact
+            # fork source identity above and any visible end still constrain children.
+            if parent_id in ends:
                 assert (
                     child["timestamp_ms"]
                     < ends[child["objectID"]]["timestamp_ms"]
-                    <= ends[parent["objectID"]]["timestamp_ms"]
+                    <= ends[parent_id]["timestamp_ms"]
                 )
             else:
                 # An active session beyond collection need not have a visible close.
                 assert child["objectID"] not in ends
-            assert parent["properties"]["logon_id"] == child["properties"]["logon_id"]

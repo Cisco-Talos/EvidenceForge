@@ -24,7 +24,9 @@ def test_finder_cli_has_one_authored_exec_and_filter_independent_native_bytes(
     tmp_path: Path,
 ) -> None:
     # Explicit test-only opt-in; other machine binaries stay deployed for their owners.
-    catalog = yaml.safe_load((get_activity_directory() / "application_catalog.yaml").read_text())
+    catalog = yaml.safe_load(
+        (get_activity_directory() / "application_catalog.yaml").read_text(encoding="utf-8")
+    )
     selected = {
         "schema_version": 2,
         "default_deployment": catalog["default_deployment"],

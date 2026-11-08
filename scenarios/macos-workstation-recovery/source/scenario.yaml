@@ -68,6 +68,7 @@ environment:
       applications:
       - macos-terminal
       - chrome
+      - vscode
   - system: MAC-ITERM
     user_applications:
     - user: alex
@@ -204,6 +205,16 @@ storyline:
   - type: process
     process_name: /usr/bin/uname
     command_line: /usr/bin/uname -a
+    supplementary: none
+- id: compound-unknown
+  time: +20m
+  actor: alex
+  system: MAC-APPLE
+  activity: Explicit unknown-result shell control; its inner commands are not modeled
+  events:
+  - type: process
+    process_name: /bin/zsh
+    command_line: /bin/zsh -c 'id; groups'
     supplementary: none
 - id: ssh-nonpty-open
   time: +50m

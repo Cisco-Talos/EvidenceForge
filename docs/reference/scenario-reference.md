@@ -4,7 +4,8 @@ description: "Scenario Schema Reference"
 
 # Scenario Schema Reference
 
-This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
+This document describes the authored EvidenceForge Scenario 1.0, 2.0 and 3.0 schemas and their
+current semantics. Older phase labels identify when individual fields were introduced.
 
 This is the consolidated human manual. Installed authoring skills use smaller topic references
 under `commands/eforge/references/` so they can load the complete schema and semantics relevant to
@@ -30,10 +31,26 @@ complete launcher/session coverage. Existing processes gain no retrospective exe
 an in-window exec in an existing process still counts.
 
 The supported target remains macOS 27 arm64. Ordinary literal local/non-PTY commands have a
-qualified fork/exec path. Fresh Apple Terminal/iTerm2, bounded SSH and the explicit root
-system-job preset also have qualified producers. Other app/helper activations and unsupported
-job definitions retain gates; complete requests containing unresolved starts reject. See the
+qualified fork/exec path. Fresh Apple Terminal/iTerm2, qualified Finder app mains, selected Chrome/Code helpers, bounded
+non-PTY/PTY SSH and the explicit root system-job preset also have qualified producers.
+Other app/helper activations and unsupported job definitions retain gates; complete requests containing unresolved starts reject. See the
 [producer inventory and acceptance matrix](../design/macos-workstation-feasibility/process-producer-inventory.md).
+
+## Simulated platforms and source selection
+
+A simulated system's OS determines its eligible host logs; it is independent of the OS running
+EvidenceForge. See the [platform/source matrix](EVIDENCE_FORMATS.md#platform-and-source-matrix)
+for Windows, Linux, experimental macOS 27 arm64, network and application/server sources.
+Selecting a format does not deploy the source or guarantee a record; roles, activity, collection
+and sensor visibility still apply.
+
+The native Mac ES profile also supports bounded create/close/rename/unlink observations.
+Its ordinary Code-owned document workload uses existing deployment and baseline activity,
+with nominal policy in `macos_execution_metadata.yaml.filesystem_workload`. It adds no authored
+filesystem event type and does not automatically project all file, SMB, download or launch-item
+operations into ES. The process-start completeness policy remains a process census, separate
+from file-event coverage. See [Simulating macOS workstations](../macos.md) for the current
+source-tree capability boundaries and examples.
 
 ## Naming metadata
 

@@ -396,7 +396,9 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         _host(
             "macos_endpoint_security",
             "macos_endpoint_security",
-            CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
+            CollectionCapability.PROCESS
+            | CollectionCapability.FILE
+            | CollectionCapability.COHERENT_ACTOR,
             frozenset({"macos"}),
         ),
         _host(

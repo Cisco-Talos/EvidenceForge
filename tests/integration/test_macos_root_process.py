@@ -20,8 +20,8 @@ def test_authored_root_process_has_native_parent_without_service_login(tmp_path:
             time="+1m",
             actor="root",
             system="MAC-01",
-            activity="Invented privileged provisioning process",
-            events=[dict(type="process", process_name="/usr/local/libexec/invented-provisioner")],
+            activity="Inspect the pre-existing privileged root context",
+            events=[dict(type="process", process_name="/usr/bin/id")],
         )
     ]
     scenario = tmp_path / "root.yaml"
@@ -60,14 +60,18 @@ def test_authored_root_process_has_native_parent_without_service_login(tmp_path:
         row
         for row in rows
         if row["object"] == "PROCESS"
-        and row["action"] == "CREATE"
-        and row.get("properties", {}).get("image_path") == "/usr/local/libexec/invented-provisioner"
+        and row["action"] == "MODIFY"
+        and row.get("properties", {}).get("operation") == "exec"
+        and row.get("properties", {}).get("image_path") == "/usr/bin/id"
     ]
     assert len(processes) == 1
     created = processes[0]
     assert created["principal"] == "root"
-    assert created["ppid"] == 1
-    assert created["properties"]["parent_image_path"] == "/sbin/launchd"
+    assert created["ppid"] > 1
+    birth = next(
+        row for row in rows if row["objectID"] == created["objectID"] and row["action"] == "CREATE"
+    )
+    assert birth["properties"]["parent_image_path"] == "/bin/sh"
     assert not created["properties"].get("logon_id")
     assert any(
         row["objectID"] == created["objectID"] and row["action"] == "TERMINATE" for row in rows

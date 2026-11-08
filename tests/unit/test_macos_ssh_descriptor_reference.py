@@ -12,6 +12,8 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_ssh_descriptor_reference as kit
 
+from tests.support.platforms import requires_posix_reference
+
 _CANARY = "INVENTED_PRIVATE_CANARY_never_export"
 
 
@@ -58,6 +60,7 @@ def prepared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return kit.prepare(tmp_path / "invented-kit")
 
 
+@requires_posix_reference
 def test_prepare_copies_only_reviewed_code_and_instructions(prepared: Path) -> None:
     assert {path.name for path in prepared.iterdir()} == {
         "private_ssh_descriptors.py",
@@ -114,6 +117,7 @@ def synthetic(prepared: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return prepared
 
 
+@requires_posix_reference
 def test_exec_preserves_standard_streams_and_adds_only_private_report_instrumentation(
     synthetic: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -138,6 +142,7 @@ def test_exec_preserves_standard_streams_and_adds_only_private_report_instrument
         kit.record("local")
 
 
+@requires_posix_reference
 def test_report_keeps_distinct_observations_and_ignores_unrelated_files(synthetic: Path) -> None:
     assert kit.report().contexts == "INCOMPLETE"
     for slot in kit.SLOTS:
@@ -153,6 +158,7 @@ def test_report_keeps_distinct_observations_and_ignores_unrelated_files(syntheti
     assert _CANARY not in result.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "value", [b"{}", b'{"private":"INVENTED_PRIVATE_CANARY_never_export"}', b"not-json"]
 )
@@ -162,6 +168,7 @@ def test_partial_or_unknown_probe_data_cannot_pass(synthetic: Path, value: bytes
         kit.report()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("slot", ["no_pty", "pty"])
 def test_remote_context_requires_explicit_attestation(synthetic: Path, slot: kit.Slot) -> None:
     with pytest.raises(kit.PrivateError, match="INPUT"):
@@ -171,6 +178,7 @@ def test_remote_context_requires_explicit_attestation(synthetic: Path, slot: kit
         kit.record("local", ssh_context=True)
 
 
+@requires_posix_reference
 def test_changed_code_blocks_collection_and_reporting(synthetic: Path) -> None:
     (synthetic / "ssh_descriptor_probe.c").write_text(_CANARY)
     for operation in (kit.report, lambda: kit.record("local")):
@@ -178,6 +186,7 @@ def test_changed_code_blocks_collection_and_reporting(synthetic: Path) -> None:
             operation()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["symlink", "hardlink", "permissions", "size", "fifo"])
 def test_owner_only_regular_bounded_file_boundary(tmp_path: Path, damage: str) -> None:
     path = tmp_path / "input"

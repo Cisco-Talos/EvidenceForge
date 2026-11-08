@@ -1842,6 +1842,25 @@ def _validate_dns_and_ids(
                         )
                     )
     browser_families = proxy_ua_data.get("browser_process_families", {})
+    from evidenceforge.config.schemas import BrowserProfileRoots
+
+    browser_roots = proxy_ua_data.get("browser_profile_roots", {})
+    if not isinstance(browser_roots, dict):
+        result.issues.append(
+            Issue("ERROR", "proxy_user_agents.yaml", "Browser profile roots must be a mapping")
+        )
+    else:
+        for family, roots in browser_roots.items():
+            try:
+                BrowserProfileRoots.model_validate(roots)
+            except ValidationError:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_user_agents.yaml",
+                        f"Invalid browser profile roots for {family}",
+                    )
+                )
     if not isinstance(browser_families, dict):
         result.issues.append(
             Issue("ERROR", "proxy_user_agents.yaml", "Browser process families must be a mapping")

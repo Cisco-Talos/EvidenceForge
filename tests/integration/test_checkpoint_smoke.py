@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -377,6 +378,62 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "user_applications": [{"user": "alex", "applications": ["chrome", "macos-zsh"]}],
             }
         ]
+        from evidenceforge.generation.activity.application_catalog import application_descriptor
+
+        chrome = application_descriptor("chrome")["platforms"]["macos"]
+        child_command = chrome["children"][0]
+        scenario_data.setdefault("storyline", []).extend(
+            [
+                {
+                    "id": "helper-owner-login",
+                    "time": "+48m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Own the retained browser helper fixture",
+                    "events": [{"type": "logon", "logon_type": 2}],
+                },
+                {
+                    "id": "retained-browser",
+                    "time": "+49m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Start or reuse the exact browser owner",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": chrome["image_path"],
+                            "command_line": shlex.join((chrome["image_path"],)),
+                            "process_ref": "retained-browser",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+                {
+                    "id": "retained-helper",
+                    "time": "+50m",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Keep a positive helper across recovery",
+                    "events": [
+                        {
+                            "type": "process",
+                            "process_name": shlex.split(child_command)[0],
+                            "command_line": child_command,
+                            "parent_ref": "retained-browser",
+                            "supplementary": "none",
+                        }
+                    ],
+                },
+                {
+                    "id": "helper-owner-close",
+                    "time": "+10h",
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Close the retained browser session",
+                    "events": [{"type": "logoff"}],
+                },
+            ]
+        )
     if start is not None:
         scenario_data["time_window"]["start"] = start
         scenario_data["storyline"] = [
@@ -634,15 +691,15 @@ def test_short_generation_checkpoint_suspension_and_resume(
         receiver = [
             row for name, rows in native_by_source.items() if "/SSH-TEST." in name for row in rows
         ]
-        assert len(receiver) == 6 and all(row["event_type"] == 11 for row in receiver)
+        from tests.support.macos_ssh import assert_native_ssh_receiver_lifecycle
+
+        assert_native_ssh_receiver_lifecycle(receiver, closed=True, sessions=2)
         for rows in native_by_source.values():
             for row in rows:
                 decode_endpoint_security_record(json.dumps(row))
                 assert row["version"] == 11 and row["event_type"] in {9, 11, 15}
             global_sequences = [row["global_seq_num"] for row in rows]
             assert global_sequences == sorted(set(global_sequences))
-        sequences = [row["seq_num"] for row in receiver]
-        assert sequences == list(range(sequences[0], sequences[0] + 6))
     if denied_launch or failed_exec:
         assert b"invented-blocked-helper" not in b"".join(
             content for name, content in resumed_files.items() if name.startswith("data/")

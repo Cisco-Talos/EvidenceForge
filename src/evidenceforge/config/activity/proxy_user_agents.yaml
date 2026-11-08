@@ -7,6 +7,29 @@
 # generic agents, server roles, package-manager destinations, or OS families
 # without copying this whole file.
 
+# Browser instance ownership is separate from header identity. These are modeled
+# default user-data roots; explicit directories override them. Profiles within a
+# Chromium user-data root share its browser process.
+browser_profile_roots:
+  chrome:
+    macos: /Users/{username}/Library/Application Support/Google/Chrome
+    windows: 'C:\Users\{username}\AppData\Local\Google\Chrome\User Data'
+    linux: /home/{username}/.config/google-chrome
+  edge:
+    macos: /Users/{username}/Library/Application Support/Microsoft Edge
+    windows: 'C:\Users\{username}\AppData\Local\Microsoft\Edge\User Data'
+    linux: /home/{username}/.config/microsoft-edge
+  firefox:
+    macos: /Users/{username}/Library/Application Support/Firefox/Profiles
+    windows: 'C:\Users\{username}\AppData\Roaming\Mozilla\Firefox\Profiles'
+    linux: /home/{username}/.mozilla/firefox
+  safari:
+    macos: /Users/{username}/Library/Safari
+  opera:
+    macos: /Users/{username}/Library/Application Support/com.operasoftware.Opera
+    windows: 'C:\Users\{username}\AppData\Roaming\Opera Software\Opera Stable'
+    linux: /home/{username}/.config/opera
+
 browser_process_families:
   chrome:
     - chrome.exe

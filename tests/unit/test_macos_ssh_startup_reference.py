@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from scripts import macos_ssh_startup_reference as kit
 from scripts import macos_ssh_unified_reference as unified
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
 from tests.unit.test_macos_ulf_launchd_reference import _row
 
@@ -137,6 +138,7 @@ def _track(rows: list[dict]) -> kit.Tracker:
     return tracker
 
 
+@requires_posix_reference
 def test_exact_connection_tree_includes_auth_sibling_and_excludes_other_connections() -> None:
     rows = _chain()
     noise = deepcopy(rows[1])
@@ -222,6 +224,7 @@ def test_integer_entitlement_template_cannot_match_a_boolean() -> None:
     assert phases[0].entitlement_types == ("ARRAY", "BOOLEAN")
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "status,expected",
     [
@@ -297,6 +300,7 @@ def test_report_rejects_arbitrary_native_text(field: str) -> None:
         kit.Report.model_validate({field: [_CANARY] if field == "fork_roles" else _CANARY})
 
 
+@requires_posix_reference
 def test_prepare_copies_code_only_and_extends_the_reviewed_hard_stop(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "fresh")
     assert {path.name for path in root.iterdir()} == set(kit.CODE) | {"PRIVATE-RUN.md"}
@@ -306,6 +310,7 @@ def test_prepare_copies_code_only_and_extends_the_reviewed_hard_stop(tmp_path: P
     assert not (root / "SETUP.json").exists()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("pty", [False, True])
 @pytest.mark.parametrize("unified_log", [False, True])
 def test_setup_and_provenance_use_mocked_native_commands_only(
@@ -315,11 +320,9 @@ def test_setup_and_provenance_use_mocked_native_commands_only(
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
     monkeypatch.setattr(
-        kit.pwd,
-        "getpwuid",
-        lambda _uid: SimpleNamespace(
-            pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20
-        ),
+        kit,
+        "_current_account",
+        lambda: SimpleNamespace(pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20),
     )
     manifest = _manifest()
     monkeypatch.setattr(
@@ -375,6 +378,7 @@ def test_client_is_loopback_only_config_free_password_only_and_preserves_stdio()
     assert "ps " not in source and "log stream" not in source
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
 )

@@ -14,10 +14,14 @@ from evidenceforge.validation.configuration import ValidationResult, _validate_p
 def test_mac_catalog_audit_covers_original_entries_and_admitted_variants() -> None:
     root = Path(__file__).resolve().parents[2]
     catalog = yaml.safe_load(
-        (root / "src/evidenceforge/config/activity/application_catalog.yaml").read_text()
+        (root / "src/evidenceforge/config/activity/application_catalog.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     audit = yaml.safe_load(
-        (root / "docs/design/macos-workstation-feasibility/catalog-audit.yaml").read_text()
+        (root / "docs/design/macos-workstation-feasibility/catalog-audit.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     original = {
         app["id"]: app for app in catalog["applications"] if not app["id"].startswith("macos-")
@@ -34,23 +38,30 @@ def test_mac_catalog_audit_covers_original_entries_and_admitted_variants() -> No
             assert decision["availability"] == "supported"
 
 
-def test_catalog_only_native_services_do_not_become_user_apps_or_root_boot_processes() -> None:
+def test_native_service_audit_distinguishes_only_the_two_qualified_residents() -> None:
     root = Path(__file__).resolve().parents[2]
     catalog = yaml.safe_load(
-        (root / "src/evidenceforge/config/activity/application_catalog.yaml").read_text()
+        (root / "src/evidenceforge/config/activity/application_catalog.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     audit = yaml.safe_load(
-        (root / "docs/design/macos-workstation-feasibility/native-catalog-audit.yaml").read_text()
+        (root / "docs/design/macos-workstation-feasibility/native-catalog-audit.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     apps = {entry["id"]: entry for entry in catalog["applications"]}
     assert len(audit["applications"]) == 18
     for entry in audit["applications"]:
         app = apps[entry["id"]]
-        assert app["categories"] == ["macos_service"]
+        resident = entry["id"] in {"macos-cfprefsd", "macos-launchservicesd"}
+        assert app["categories"] == (
+            ["macos_service", "macos_resident"] if resident else ["macos_service"]
+        )
+        assert entry["behavior"] == ("preexisting_root_resident" if resident else "catalog_only")
         assert app["personas"] == []
         assert app["platforms"]["macos"]["image_path"] == entry["image_path"]
         assert app["platforms"]["macos"]["deployment"]["architectures"] == ["arm64"]
-        assert entry["behavior"] == "catalog_only"
     assert not get_apps_for_persona("default", "macos", category="macos_service")
 
 
@@ -210,7 +221,9 @@ def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation(
 
     root = Path(__file__).resolve().parents[2]
     audit = yaml.safe_load(
-        (root / "docs/design/macos-workstation-feasibility/native-catalog-audit.yaml").read_text()
+        (root / "docs/design/macos-workstation-feasibility/native-catalog-audit.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     entries = [row for row in audit["action_applications"] if row["id"] != "macos-ssh"]
     assert {entry["id"] for entry in entries} == {
@@ -256,8 +269,8 @@ def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation(
 
 def test_readable_mac_audit_matches_every_machine_readable_decision() -> None:
     root = Path(__file__).resolve().parents[2] / "docs/design/macos-workstation-feasibility"
-    readable = (root / "catalog-audit.md").read_text()
-    audit = yaml.safe_load((root / "catalog-audit.yaml").read_text())
+    readable = (root / "catalog-audit.md").read_text(encoding="utf-8")
+    audit = yaml.safe_load((root / "catalog-audit.yaml").read_text(encoding="utf-8"))
     for entry in audit["applications"]:
         rows = [line for line in readable.splitlines() if line.startswith(f"| `{entry['id']}` |")]
         assert len(rows) == 1, entry["id"]

@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_chrome_review as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_chrome_reference import CANARY, HOME, PROFILE, URL, _chain, _manifest
 
 
@@ -254,6 +255,7 @@ def _saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, dict[
     return root, expected
 
 
+@requires_posix_reference
 def test_verified_review_reads_only_declared_files_and_changes_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -290,6 +292,7 @@ def test_verified_review_reads_only_declared_files_and_changes_nothing(
     assert CANARY not in report.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "damage",
     ["code", "control", "report", "provenance", "foreign_row", "sequence", "traversal", "symlink"],
@@ -388,6 +391,7 @@ def test_process_type_is_an_allowlisted_comparison(values: list[str], label: str
     assert kit._process_type(payload) == label
 
 
+@requires_posix_reference
 def test_prepare_pins_only_trusted_code_and_does_not_execute_or_open_a_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

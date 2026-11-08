@@ -377,7 +377,7 @@ class ProxyTransactionExecutor(Protocol):
         http: HttpContext | None,
         explicit_mode: bool = False,
         time: datetime | None = None,
-        client_user_agent: str = "",
+        client_user_agent: str | None = None,
     ) -> ProxyContext:
         """Build proxy context for a logical origin request."""
         ...
@@ -563,21 +563,22 @@ class ProxyTransactionActionBundle:
                 generator_utils._http_flow_payload_bytes(request_local_http)
             )
 
-        client_user_agent = ""
+        client_user_agent: str | None = None
         if request.proxy is None and request.source_system is not None and request.pid > 0:
             supplied_http = request.http
             if supplied_http is None or (
-                not supplied_http.user_agent_known_absent
-                and (
-                    not supplied_http.user_agent
-                    or generator_utils._is_browser_family_http_user_agent(supplied_http.user_agent)
-                )
+                not supplied_http.user_agent_known_absent and not supplied_http.user_agent
             ):
                 client_user_agent = executor.browser_user_agent_for_process(
                     request.source_system,
                     request.pid,
                     hostname=request.hostname or "",
                 )
+                if supplied_http is not None and not client_user_agent:
+                    # An explicit HTTP request keeps its supplied header/default.
+                    # A bare CONNECT from an owned non-browser has no asserted
+                    # User-Agent; do not manufacture a desktop browser identity.
+                    client_user_agent = None
         proxy_context = request.proxy or executor._build_proxy_context(
             src_ip=request.src_ip,
             dst_ip=dst_ip,

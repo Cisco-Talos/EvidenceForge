@@ -111,6 +111,7 @@ _TRANSIENT_EMPTY_FIELDS = (
     "_linux_sudo_tty_capacity_claims",
     "_pending_linux_sudo_logoffs",
     "_macos_finder_startups",
+    "_macos_filesystem_workflows",
     "_macos_terminal_startups",
     "_pending_ssh_manager_closures",
     "_postfix_queue_states",
@@ -941,6 +942,14 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
         except StateError as error:
             raise CheckpointError("SSH checkpoint lost completed receiver startup") from error
         plan = continuation.plan
+        if (
+            plan.source_identity is not None
+            and generator.state_manager.get_process_identity_by_object_id(
+                plan.source_identity.object_id
+            )
+            != plan.source_identity
+        ):
+            raise CheckpointError("SSH checkpoint source process lost State authority")
         rows.append(
             [
                 plan.continuation_id,

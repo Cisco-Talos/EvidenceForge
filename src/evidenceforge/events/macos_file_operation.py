@@ -6,8 +6,114 @@
 import posixpath
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Literal
 
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
+from evidenceforge.events.macos_execution_directory import (
+    MacosExecutionDirectory,
+    validate_macos_execution_directory,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MacosFileOperationObservation:
+    """One canonical filesystem occurrence with explicit source-native stat phase.
+
+    Create is the empty file before writing; close observes the current file;
+    rename and unlink observe their pre-operation source. Replacement preserves
+    the old destination object. This value grants no registry or source authority.
+    """
+
+    operation: Literal["create", "close", "rename", "unlink"]
+    source: LocalArtifactVersionRecord
+    observed_at: datetime
+    parent: MacosExecutionDirectory | None = None
+    target: LocalArtifactVersionRecord | None = None
+    replacement: LocalArtifactVersionRecord | None = None
+    previous: LocalArtifactVersionRecord | None = None
+    modified: bool | None = None
+    was_mapped_writable: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.operation not in {"create", "close", "rename", "unlink"} or (
+            type(self.observed_at) is not datetime or self.observed_at.utcoffset() is None
+        ):
+            raise ValueError("Mac file operation requires its bounded kind and an aware time")
+        if type(self.source) is not LocalArtifactVersionRecord:
+            raise ValueError("Mac file operation requires its exact canonical file version")
+        self.source.__post_init__()
+        record = self.source
+        metadata = record.macos_file
+        if (
+            record.artifact.platform != "macos"
+            or metadata is None
+            or metadata.link_count != 1
+            or record.artifact.native_path != record.artifact.normalized_native_path
+        ):
+            raise ValueError("Mac file operation requires a known single-link regular file")
+        if self.operation == "close":
+            if type(self.modified) is not bool or self.was_mapped_writable is not False:
+                raise ValueError("Bounded Mac close requires explicit modified and unmapped facts")
+            if self.previous is not None:
+                old = self.previous
+                if type(old) is not LocalArtifactVersionRecord:
+                    raise ValueError(
+                        "Modified close requires its exact prior canonical file version"
+                    )
+                old.__post_init__()
+                if (
+                    self.modified is not True
+                    or old.artifact.object_key != record.artifact.object_key
+                    or old.artifact.native_path != record.artifact.native_path
+                    or old.artifact.version >= record.artifact.version
+                    or old.macos_file is None
+                    or old.macos_file.file_object_id != metadata.file_object_id
+                    or old.macos_file.inode != metadata.inode
+                    or old.macos_file.device != metadata.device
+                    or old.macos_file.volume_id != metadata.volume_id
+                    or metadata.model_copy(
+                        update={
+                            "accessed": old.macos_file.accessed,
+                            "modified": old.macos_file.modified,
+                            "changed": old.macos_file.changed,
+                            "size_bytes": old.macos_file.size_bytes,
+                            "allocated_blocks": old.macos_file.allocated_blocks,
+                        }
+                    )
+                    != old.macos_file
+                ):
+                    raise ValueError("Modified close must preserve the exact prior file object")
+        elif self.modified is not None or self.was_mapped_writable is not None:
+            raise ValueError("Only close carries modification/mapping observations")
+        if self.operation != "close" and self.previous is not None:
+            raise ValueError("Only modified close carries its prior content version")
+        if self.operation == "create" and (
+            record.content.size_bytes != 0 or metadata.size_bytes != 0
+        ):
+            raise ValueError("Bounded Mac create describes the empty pre-write file")
+        if self.operation == "rename":
+            if self.target is None:
+                raise ValueError("Mac rename requires its exact resulting placement")
+            validate_macos_file_rename_records(record, self.target, replacement=self.replacement)
+        elif self.target is not None or self.replacement is not None:
+            raise ValueError("Only rename carries a target or replaced destination")
+        if self.operation in {"rename", "unlink"}:
+            if self.parent is None:
+                raise ValueError("Mac rename/unlink requires explicit parent-directory facts")
+            validate_macos_execution_directory(
+                self.parent, hostname=self.parent.hostname, observed_at=self.observed_at
+            )
+            if (
+                self.parent.hostname.casefold() != record.artifact.hostname.casefold()
+                or self.parent.native_path != posixpath.dirname(record.artifact.native_path)
+                or self.parent.metadata.volume_id != metadata.volume_id
+                or self.parent.metadata.device != metadata.device
+            ):
+                raise ValueError(
+                    "Mac file parent must be the exact same-volume containing directory"
+                )
+        elif self.parent is not None:
+            raise ValueError("This bounded create/close observation does not include a directory")
 
 
 @dataclass(frozen=True, slots=True)

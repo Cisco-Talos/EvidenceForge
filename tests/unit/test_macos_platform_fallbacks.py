@@ -145,6 +145,7 @@ def test_system_file_churn_uses_platform_appropriate_fallback_owner(
         _machine_ids={"CLIENT": "a" * 32},
         _scaled_randint=lambda *_: 1,
         activity_generator=SimpleNamespace(
+            macos_execution_metadata=None,
             _build_host_context=lambda _: None,
             _foreground_process_expired_for_attribution=lambda *_: False,
             _process_termination_recorded=lambda *_: False,
@@ -164,7 +165,8 @@ def test_mac_smtp_submission_is_correlated_with_the_shared_tls_transport(tmp_pat
     from tests.unit.test_email_evidence import _email_scenario, _read_ndjson
 
     scenario = _email_scenario()
-    scenario.environment.systems[0].os = "macOS 26"
+    scenario.environment.systems[0].os = "macOS 27"
+    scenario.environment.systems[0].architecture = "arm64"
     engine = GenerationEngine(
         scenario,
         output_dir=tmp_path / "data",
@@ -221,3 +223,27 @@ def test_mac_custom_process_rejects_foreign_platform_facts(invalid: str) -> None
     custom["platforms"] = {"macos": platform}
     with pytest.raises(ValidationError):
         CustomProcess.model_validate(custom)
+
+
+@pytest.mark.parametrize(
+    "value", ["EvidenceForgeFake-simple", "EvidenceForgeFake space!", "EvidenceForgeFake'quote"]
+)
+def test_mac_exposure_carriers_preserve_argv_value_wire_projection_and_bounded_lifetime(
+    value: str,
+) -> None:
+    import shlex
+
+    from evidenceforge.generation.activity.process_helpers import _macos_foreground_lifetime
+    from evidenceforge.generation.adversarial_payload import render_for_surface as render_payload
+    from evidenceforge.generation.spillage import render_for_surface as render_secret
+
+    for render in (render_secret, render_payload):
+        result = render(value, "process_command_line", "", "mac-carrier", os_category="macos")
+        arguments = shlex.split(result.command)
+        assert arguments[0] == "/usr/bin/env" and len(arguments) == 2
+        assert arguments[1].split("=", 1)[1] == value
+        assert result.encoded_value in result.command
+        assert _macos_foreground_lifetime(arguments[0], result.command) is not None
+    assert (
+        _macos_foreground_lifetime("/usr/bin/env", "/usr/bin/env SECRET=x another-program") is None
+    )

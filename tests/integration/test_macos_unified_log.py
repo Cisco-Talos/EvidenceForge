@@ -104,14 +104,20 @@ def test_native_workspace_generation_is_deterministic_filtered_and_mac_local(
         for name, content in outputs[0].items()
         if "MAC-01." in name and name.endswith("/ecar.json")
     )
+    truth = json.loads((tmp_path / "all" / "GROUND_TRUTH.json").read_text())
+    authored_login = next(
+        event for event in truth["events"] if event["storyline_id"] == "workspace-login"
+    )
+    logon_id = authored_login["attributes"]["logon_id"]
     logins = [
         json.loads(line)
         for line in mac_ecar.splitlines()
         if json.loads(line).get("object") == "USER_SESSION"
         and json.loads(line).get("action") == "LOGIN"
         and json.loads(line)["properties"].get("outcome") == "success"
-        and json.loads(line)["properties"].get("logon_id") is not None
+        and json.loads(line)["properties"].get("session_type") == "local"
+        and json.loads(line)["properties"].get("logon_id") == logon_id
     ]
-    assert len(records) == len(logins)
+    assert len(records) == len(logins) == 1
     # Mac GUI audit attribution is independent of a Windows-style session ID.
     assert all("session_id" not in login["properties"] for login in logins)

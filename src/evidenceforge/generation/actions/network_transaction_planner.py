@@ -2661,7 +2661,9 @@ class NetworkTransactionPlanner:
         this decision neither creates nor releases a process reservation.
         """
         executor = self._executor
-        resolved_process = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+        resolved_process = executor.state_manager.get_process_at(
+            resolved_source_system.hostname, pid, time
+        )
         drop_explicit_pid_without_inference = False
         if resolved_process and resolved_process.start_time and time < resolved_process.start_time:
             logger.debug(
@@ -2677,7 +2679,7 @@ class NetworkTransactionPlanner:
             pid = -1
             resolved_process = None
             drop_explicit_pid_without_inference = caller_supplied_pid
-        elif executor._process_termination_recorded(
+        elif resolved_process is None and executor._process_termination_recorded(
             resolved_source_system.hostname,
             pid,
             resolved_process.start_time if resolved_process is not None else None,
@@ -5060,6 +5062,7 @@ class NetworkTransactionPlanner:
             or event.network.initiating_pid <= 0
             or request_header_finalized
             or event.http.user_agent_known_absent
+            or event.http.user_agent
         ):
             return
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
@@ -6304,10 +6307,32 @@ class NetworkTransactionPlanner:
                 SessionActivityPatch,
             )
 
-            process_identity = executor.state_manager.get_process_identity(
-                endpoints.resolved_source_system.hostname,
+            source_host = endpoints.resolved_source_system.hostname
+            occurrence_owner = executor.state_manager.get_process_identity_at(
+                source_host,
                 publication_inputs.pid,
+                publication_inputs.event.network.started_at,
             )
+            live = executor.state_manager.get_process(source_host, publication_inputs.pid)
+            latest_identity = (
+                executor.state_manager.get_process_identity(source_host, publication_inputs.pid)
+                if live is not None
+                else None
+            )
+            process_identity = (
+                latest_identity
+                if latest_identity is not None
+                and occurrence_owner is not None
+                and latest_identity.object_id == occurrence_owner.object_id
+                and (
+                    publication_inputs.process_ctx is None
+                    or publication_inputs.process_ctx.start_time is None
+                    or publication_inputs.process_ctx.start_time == occurrence_owner.started_at
+                )
+                else None
+            )
+            # Retained historical attribution describes past evidence. It cannot
+            # mutate an ended owner or a later lifetime that reused the PID.
             activity_time = (
                 publication_inputs.event.network.closed_at
                 or publication_inputs.event.network.started_at

@@ -5,8 +5,9 @@
 
 These are wire records, not canonical process or file state. Version 6 and 9
 profiles describe historical references; version 10 covers fork. The privately
-reviewed macOS 27/message-11 profile covers fork, exec with null or bounded flat-object
-entitlements, and exit. Decoder admission does not enable generator sources or establish
+reviewed macOS 27/message-11 profile covers fork, exec with bounded entitlement
+objects, exit and the controlled create/close/rename/unlink reference shapes.
+Decoder admission does not enable generator sources or establish
 macOS 26 fidelity. Unsupported combinations fail closed. A notification result
 is not an authorization callback or a synthetic policy decision.
 """
@@ -245,14 +246,19 @@ class ESExecV11(ESExec):
     """Bounded v11 entitlement objects; decoding does not qualify a source profile."""
 
     dyld_exec_path: str = Field(description="Required native execution path")
-    entitlements: Annotated[FrozenEntitlements, Field(max_length=128)] | None = Field(
+    entitlements: Annotated[FrozenEntitlements, Field(max_length=256)] | None = Field(
         description="Required null or a bounded entitlement property object"
     )
 
-    @field_validator("entitlements", mode="before")
+    @field_validator("entitlements", mode="plain")
     @classmethod
     def bounded_entitlements(cls, value: object) -> object:
-        """Admit bounded exact values independently of generation-profile qualification."""
+        """Validate once, retaining empty object/array tags in the frozen value.
+
+        Union coercion after freezing would reinterpret an empty named-tuple
+        object as a string-array tuple. The shared freezer owns every bound and
+        exact property type, so its immutable result is already authoritative.
+        """
         return freeze_entitlements(value) if value is not None else None
 
     @field_serializer("entitlements")
@@ -326,6 +332,29 @@ class ESCreateEvent(_Record):
     create: ESCreate
 
 
+class ESClose(_Record):
+    """A close observation; modified is not a count of file-write syscalls."""
+
+    target: ESFile
+    modified: bool
+    was_mapped_writable: bool
+
+
+class ESCloseEvent(_Record):
+    close: ESClose
+
+
+class ESUnlink(_Record):
+    """The target and its parent at unlink observation, not a later stat lookup."""
+
+    target: ESFile
+    parent_dir: ESFile
+
+
+class ESUnlinkEvent(_Record):
+    unlink: ESUnlink
+
+
 class ESRenameExisting(_Record):
     source: ESFile
     destination_type: Literal[0]
@@ -347,7 +376,7 @@ class EndpointSecurityRecord(_Record):
 
     schema_version: Literal[1]
     version: Literal[6, 9, 10, 11]
-    event_type: Literal[9, 11, 13, 15, 25]
+    event_type: Literal[9, 11, 12, 13, 15, 25, 32]
     action_type: Literal[1]
     action: ESAction
     time: NativeTime
@@ -356,7 +385,15 @@ class EndpointSecurityRecord(_Record):
     global_seq_num: UInt64
     thread: ESThread
     process: ESProcess
-    event: ESExecEvent | ESForkEvent | ESCreateEvent | ESExitEvent | ESRenameEvent
+    event: (
+        ESExecEvent
+        | ESForkEvent
+        | ESCloseEvent
+        | ESCreateEvent
+        | ESExitEvent
+        | ESRenameEvent
+        | ESUnlinkEvent
+    )
 
     @field_validator("time")
     @classmethod
@@ -368,15 +405,17 @@ class EndpointSecurityRecord(_Record):
     @model_validator(mode="after")
     def supported_profile(self) -> Self:
         """Do not silently promote a historical reference to a current-build family."""
-        allowed = {6: {9, 11, 13, 25}, 9: {9, 15}, 10: {11}, 11: {9, 11, 15}}
+        allowed = {6: {9, 11, 13, 25}, 9: {9, 15}, 10: {11}, 11: {9, 11, 12, 13, 15, 25, 32}}
         if self.event_type not in allowed[self.version]:
             raise ValueError("Unsupported Endpoint Security message-version/event-family pair")
         expected = {
             9: ESExecEvent,
             11: ESForkEvent,
+            12: ESCloseEvent,
             13: ESCreateEvent,
             15: ESExitEvent,
             25: ESRenameEvent,
+            32: ESUnlinkEvent,
         }
         if type(self.event) is not expected[self.event_type]:
             raise ValueError("Endpoint Security event tag disagrees with its payload")

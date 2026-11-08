@@ -75,6 +75,10 @@ from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
+from evidenceforge.events.macos_native_coverage import (
+    MacosNativeCoverage,
+    MacosProcessCoverageSummary,
+)
 from evidenceforge.models.exceptions import (
     ConfigurationError,
     EvidenceForgeError,
@@ -719,6 +723,42 @@ class ScorecardCriterion(BaseModel):
     applicable: bool | None = None
 
 
+class ScorecardMacosHost(BaseModel):
+    """Compact native process census for one host in a saved evaluation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hostname: str
+    source_profile: str
+    policy: Literal["complete", "partial"]
+    census: MacosProcessCoverageSummary | None = None
+
+
+def _scorecard_macos_hosts(report: QualityReport) -> list[ScorecardMacosHost]:
+    """Project saved coverage without inventing absent historical measurements."""
+    for pillar in report.pillars:
+        raw = pillar.supplementary.get("macos_native_coverage")
+        if raw is None:
+            continue
+        try:
+            coverage = MacosNativeCoverage.model_validate(raw)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Saved macOS process coverage is invalid. Re-evaluate this bundle.",
+            ) from exc
+        return [
+            ScorecardMacosHost(
+                hostname=host.hostname,
+                source_profile=host.source_profile,
+                policy=coverage.policy,
+                census=host.process_census,
+            )
+            for host in coverage.hosts
+        ]
+    return []
+
+
 class ScorecardDetail(BaseModel):
     """Bounded, readable projection of an authoritative evaluation report."""
 
@@ -733,6 +773,7 @@ class ScorecardDetail(BaseModel):
     pillars: list[ScorecardPillar]
     acceptance_criteria: list[ScorecardCriterion]
     flags: list[str]
+    macos_hosts: list[ScorecardMacosHost] = Field(default_factory=list)
 
 
 class JobSummary(BaseModel):
@@ -4790,6 +4831,7 @@ def create_app(
                 for criterion in report.acceptance_criteria
             ],
             flags=report.flags,
+            macos_hosts=_scorecard_macos_hosts(report),
         )
 
     def external_bundle(studio: StudioService, bundle_id: str) -> ImportedBundle:

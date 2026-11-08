@@ -32,7 +32,7 @@ def test_macos_receiver_implicit_client_real_engine(
 ) -> None:
     data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json")
     data["environment"]["systems"][1].update(
-        os="macOS 26", architecture="arm64", type="workstation", assigned_user="test_user"
+        os="macOS 27", architecture="arm64", type="workstation", assigned_user="test_user"
     )
     if platform != "macos":
         data["environment"]["systems"][0].update(
@@ -43,9 +43,12 @@ def test_macos_receiver_implicit_client_real_engine(
         data["output"]["logs"] = [{"format": "zeek"}]
     scenario = Scenario.model_validate(data)
     engine = GenerationEngine(scenario, tmp_path)
+    engine._chronological_es_delivery = True
     clients: list[tuple[int, str] | None] = []
     try:
-        engine._initialize()
+        with generation_seed_scope(scenario.generation_seed):
+            reset_thread_rng()
+            engine._initialize()
         generator = engine.activity_generator
         user = scenario.environment.users[0]
         source, target = scenario.environment.systems
@@ -121,7 +124,15 @@ def test_macos_receiver_implicit_client_real_engine(
         and row.get("object") == "PROCESS"
         and row["properties"].get("image_path") == client_image
     ]
-    creates = [row for row in client_rows if row["action"] == "CREATE"]
+    creates = [
+        row
+        for row in client_rows
+        if (
+            row["action"] == "MODIFY" and row["properties"].get("operation") == "exec"
+            if platform == "macos"
+            else row["action"] == "CREATE"
+        )
+    ]
     deletes = [row for row in client_rows if row["action"] == "TERMINATE"]
     assert len(creates) == len(deletes) == 1
     assert creates[0]["objectID"] == deletes[0]["objectID"]
@@ -158,10 +169,14 @@ def test_authored_mac_receiver_command_uses_remote_shell_and_closes(tmp_path: Pa
     command = next(
         row
         for row in rows
-        if row["action"] == "CREATE"
+        if row["action"] == "MODIFY"
+        and row.get("properties", {}).get("operation") == "exec"
         and row.get("properties", {}).get("command_line") == "/usr/bin/id"
     )
-    assert command["properties"]["parent_image_path"] == "/bin/zsh"
+    birth = next(
+        row for row in rows if row["objectID"] == command["objectID"] and row["action"] == "CREATE"
+    )
+    assert birth["properties"]["parent_image_path"] == "/bin/zsh"
     sessions = [
         row
         for row in rows

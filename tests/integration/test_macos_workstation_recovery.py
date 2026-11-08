@@ -31,7 +31,12 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         description="All supported families across exact recovery",
         steps=tuple(step["id"] for step in document["storyline"]),
         required_images=tuple(
-            dict.fromkeys(image for member in spec.cases for image in member.required_images)
+            dict.fromkeys(
+                [
+                    *(image for member in spec.cases for image in member.required_images),
+                    "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
+                ]
+            )
         ),
         required_executions=tuple(
             role for member in spec.cases for role in member.required_executions
@@ -216,10 +221,11 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         item.activity_supported and item.census_complete and item.background_native_execs > 0
         for item in measurements
     ), measurements
-    # One background compound shell is outside the bounded completion policy.
-    # Keep its unknown result as a negative control rather than invent success.
+    # Background command selection may add other unqualified outcomes. Require
+    # unknown results, reconcile every host below, and independently verify the
+    # exact compound-command negative control rather than freeze a sampled total.
     assert all(
-        item.native_exit_rows > 0 and item.exit_outcomes_unknown == 1 for item in measurements
+        item.native_exit_rows > 0 and item.exit_outcomes_unknown >= 1 for item in measurements
     )
     for host in measurements[0].coverage.hosts:
         census = host.process_census
@@ -235,12 +241,20 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         assert census.expected_exits == census.known_exits + unknown
         assert census.published_exits == census.known_exits
         assert census.exit_complete is (unknown == 0)
+    compound_intent = next(
+        event
+        for event in truth["events"]
+        if event["storyline_id"] == "compound-unknown" and event["kind"] == "process"
+    )
+    compound_pid = compound_intent["attributes"]["pid"]
     compound_occurrences = [
         (path, record["event"]["exec"]["target"]["audit_token"])
         for path in (output / "data").glob("*/macos_endpoint_security.ndjson")
         for line in path.read_text().splitlines()
         if (record := json.loads(line))["event_type"] == 9
         and record["event"]["exec"]["args"] == ["/bin/zsh", "-c", "id; groups"]
+        and record["event"]["exec"]["target"]["audit_token"]["pid"] == compound_pid
+        and path.parent.name.startswith(compound_intent["system"] + ".")
     ]
     assert len(compound_occurrences) == 1
     compound_path, compound_token = compound_occurrences[0]

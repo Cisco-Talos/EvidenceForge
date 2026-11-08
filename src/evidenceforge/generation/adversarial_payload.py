@@ -42,9 +42,11 @@ from evidenceforge.config.payload_families import (
     payload_markers,
 )
 from evidenceforge.generation.spillage import (
+    _canonical_macos_process_carrier,
     _escape_controls,
     _extract_hosts,
     _host_allowed,
+    _macos_process_carriers,
     _quote_windows,
 )
 from evidenceforge.utils.rng import _stable_seed
@@ -545,10 +547,8 @@ def _choose_carrier(
         )
     elif surface == "process_command_line" and os_category == "macos":
         # Family-specific Linux tool paths cannot imply Mac application availability.
-        # Reuse the existing local POSIX env carriers unless a Mac variant is provided.
-        carriers = fam_carriers.get("process_command_line_macos") or list(
-            _GENERIC_CARRIERS["process_command_line"]
-        )
+        # Assignment-only env needs no unmodeled secondary program execution.
+        carriers = fam_carriers.get("process_command_line_macos") or _macos_process_carriers()
     else:
         carriers = fam_carriers.get(surface) or list(_GENERIC_CARRIERS.get(surface, ("{value}",)))
     return rng.choice(sorted(carriers))
@@ -630,6 +630,8 @@ def render_for_surface(
             syslog_message=line,
         )
     if surface == "process_command_line":
+        if os_category == "macos":
+            line, encoded = _canonical_macos_process_carrier(line, encoded)
         tokens = line.split()
         default_proc = r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
         return SurfaceRender(

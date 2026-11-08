@@ -1,0 +1,16 @@
+[
+  ["BACKEND", "Contents/MacOS/com.docker.backend"],
+  ["VIRTUALIZATION", "Contents/MacOS/com.docker.virtualization"],
+  ["KRUN", "Contents/MacOS/com.docker.krun"],
+  ["BUILD", "Contents/MacOS/com.docker.build"],
+  ["SAILOR", "Contents/MacOS/com.docker.sailor"],
+  ["SOCKET", "Contents/MacOS/com.docker.socket"],
+  ["CLI", "Contents/Resources/bin/docker"],
+  ["DESKTOP_CLI", "Contents/Resources/cli-plugins/docker-desktop"],
+  ["DESKTOP", "Contents/MacOS/Docker Desktop.app/Contents/MacOS/Docker Desktop"],
+  ["HELPER", "Contents/MacOS/Docker Desktop.app/Contents/Frameworks/Docker Desktop Helper.app/Contents/MacOS/Docker Desktop Helper"],
+  ["GPU", "Contents/MacOS/Docker Desktop.app/Contents/Frameworks/Docker Desktop Helper (GPU).app/Contents/MacOS/Docker Desktop Helper (GPU)"],
+  ["PLUGIN", "Contents/MacOS/Docker Desktop.app/Contents/Frameworks/Docker Desktop Helper (Plugin).app/Contents/MacOS/Docker Desktop Helper (Plugin)"],
+  ["RENDERER", "Contents/MacOS/Docker Desktop.app/Contents/Frameworks/Docker Desktop Helper (Renderer).app/Contents/MacOS/Docker Desktop Helper (Renderer)"],
+  ["CRASHPAD", "Contents/MacOS/Docker Desktop.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler"]
+]

@@ -36,7 +36,22 @@ finder_launch_relationships: launchd_self
 # Explicit synthetic clean launch inputs; never copied from the later main-entry
 # environment or extrapolated to arbitrary installed GUI applications.
 finder_launch_execution: xpcproxy_app_exec
+command_environments:
+  # Homebrew wrapper default; catalog intent addresses the real Mach-O directly.
+  - image: /opt/homebrew/opt/powershell/libexec/pwsh
+    environment: [DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec]
 finder_launch_images:
+  # Provisional regular-GUI models authorized November 7; full catalog audit is P2.
+  - /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+  - /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+  - /Applications/Postman.app/Contents/MacOS/Postman
+  - /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+  - /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+  - /Applications/Safari.app/Contents/MacOS/Safari
+  - /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+  - /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+  - /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+  - /Applications/Visual Studio Code.app/Contents/MacOS/Code
   - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
   - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
   - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
@@ -57,6 +72,26 @@ finder_launch_images:
 # Explicit bundle metadata; never inferred from a signing identifier.
 # Public packaging/vendor provenance is recorded in catalog-native-metadata.md.
 finder_applications:
+  - image: /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+    bundle_identifier: com.jetbrains.intellij
+  - image: /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+    bundle_identifier: com.sublimetext.4
+  - image: /Applications/Postman.app/Contents/MacOS/Postman
+    bundle_identifier: com.postmanlabs.mac
+  - image: /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+    bundle_identifier: org.mozilla.thunderbird
+  - image: /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+    bundle_identifier: com.microsoft.Excel
+  - image: /Applications/Safari.app/Contents/MacOS/Safari
+    bundle_identifier: com.apple.Safari
+  - image: /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+    bundle_identifier: com.apple.finder
+  - image: /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+    bundle_identifier: com.microsoft.edgemac
+  - image: /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+    bundle_identifier: com.microsoft.teams2
+  - image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    bundle_identifier: com.microsoft.VSCode
   - image: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
     bundle_identifier: com.paloaltonetworks.GlobalProtect.client
   - image: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
@@ -96,6 +131,23 @@ finder_applications:
 # The dedicated GPU bundle, Crashpad double-fork, alerts and other helper classes
 # remain outside this invocation contract. There is no automatic whole-graph claim.
 browser_helpers:
+  # Two controlled Code 1.143.0 repeats qualify these exact roles. Descriptor
+  # slots are selected simulation policy; reference pipe IDs are not copied.
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=gpu-process]
+    seatbelt_fd: 21
+    environment: ["XPC_FLAGS=0x0"]
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=utility, --utility-sub-type=network.mojom.NetworkService]
+    seatbelt_fd: 29
+    environment: ["XPC_FLAGS=0x0"]
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=utility, --utility-sub-type=node.mojom.NodeService]
+    io_layout: utility_pipes
+    environment: ["XPC_FLAGS=0x0", "VSCODE_ESM_ENTRYPOINT=vs/code/electron-utility/sharedProcess/sharedProcessMain"]
   - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
     image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
     arguments: [--type=renderer]
@@ -163,6 +215,9 @@ ordinary_close:
   ssh_client_images: [/usr/bin/ssh, /opt/homebrew/bin/ssh]
   ssh_receiver_image: /usr/libexec/sshd-session
 command_completions:
+  # OpenSSH ssh.c -V prints the release and exits zero without opening a session.
+  - arguments: ["/opt/homebrew/bin/ssh", "-V"]
+    exit_code: 0
   - arguments: ["/usr/bin/true"]
     exit_code: 0
   - arguments: ["/usr/bin/id"]
@@ -372,6 +427,13 @@ code_validation:
     validation_category: 10
   # Reviewed macOS 27 Developer ID execution flags. This is a bounded synthetic
   # successful validation policy, not exact installed-build parity or Gatekeeper.
+  # Independently reviewed Code 1.143.0 main/generic-helper exec properties.
+  - product_id: vscode
+    artifact_names: [Code, Code Helper]
+    codesigning_flags: 570495761
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
   - product_id: chrome
     artifact_names: [Google Chrome]
     codesigning_flags: 0x22017b01
@@ -498,3 +560,182 @@ code_validation:
     is_platform_binary: false
     validation_category: 6
     cpu_subtype: 0
+
+  # November 7 exact static templates; successful runtime validation is modeled.
+  # Apple arm64e mains retain their own entitlement dictionaries and slice policy.
+  - product_id: apple-macos
+    artifact_names: [Finder, Safari]
+    codesigning_flags: 0x24006001
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: edge
+    artifact_names: [Microsoft Edge]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: teams
+    artifact_names: [MSTeams]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: ssh
+    artifact_names: [ssh]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+
+  - product_id: nano
+    artifact_names: [nano]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: excel
+    artifact_names: [Microsoft Excel]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+
+  # Provisional desktop runtime policy, not observed vendor-build flags.
+  - product_id: intellij
+    artifact_names: [idea]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: sublimetext
+    artifact_names: [sublime_text]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: postman
+    artifact_names: [Postman]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: thunderbird
+    artifact_names: [thunderbird]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+
+  # Installed CLI/reference templates; startup flags/category measured twice via csops.
+  - product_id: 7zip
+    artifact_names: [7zz]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: git
+    artifact_names: [git]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: docker
+    artifact_names: [docker]
+    codesigning_flags: 0x22011311
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: kubectl
+    artifact_names: [kubectl]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: make
+    artifact_names: [gmake]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: vim
+    artifact_names: [vim]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: emacs
+    artifact_names: [emacs]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: gcc
+    artifact_names: [gcc-16]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: cargo
+    artifact_names: [cargo]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: dotnet
+    artifact_names: [dotnet]
+    codesigning_flags: 0x22000205
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: nodejs
+    artifact_names: [node]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: python3
+    artifact_names: [Python]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: redis-cli
+    artifact_names: [redis-cli]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: ldapsearch
+    artifact_names: [ldapsearch]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: powershell
+    artifact_names: [pwsh]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+
+# Selected nominal document activity, not a claim about every Code save or APFS
+# allocation behavior. Parent NOTIFY stat phases remain separately qualified.
+filesystem_workload:
+  applications: [vscode]
+  directory_name: Documents
+  filenames: [work-notes.md, review-notes.md, project-notes.md]
+  first_inode: 4398046511104
+  count_min: 0
+  count_max: 2
+  size_min: 128
+  size_max: 2048
+  file_permissions: 384
+  allocated_blocks: 8
+  close_delay_min: 0.01
+  close_delay_max: 0.75
+  idle_probability: 0.25
+  atomic_replace_probability: 0.35
+  cleanup_probability: 0.15
+  parent_stat_phase: before
+  directory_entry_bytes: 32

@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_terminal_startup_review as review
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _file, _process, _record
 from tests.unit.test_macos_terminal_startup_reference import _manifest
 
@@ -440,6 +441,7 @@ def _bundle(root: Path, terminal: str = "apple") -> tuple[review.capture.Manifes
     return manifest, run
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("terminal", ["apple", "iterm2"])
 def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_app_reads(
     tmp_path: Path,
@@ -469,6 +471,7 @@ def test_offline_review_verifies_controlled_bundle_without_writing_or_installed_
     assert _CANARY not in report.model_dump_json()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "codec,lineage",
     [
@@ -490,6 +493,7 @@ def test_offline_review_preserves_the_exact_qualified_predecessor_codec(
     assert report.provenance == report.retained_chain == "PASS"
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "mutation",
     ["provenance", "code", "guard", "codec", "control", "extra_row", "exit", "public_records"],

@@ -76,6 +76,8 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
         "_macos_terminal_slots",
         "_macos_terminal_ordinals",
         "_macos_pipe_counters",
+        "_macos_filesystem_directories",
+        "_macos_filesystem_inodes",
         "_macos_policy_refusals",
         "_posix_job_control_reservation_counts",
         "_pid_rngs",

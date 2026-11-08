@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 prerelease published and verified; stable target 2.2.0
+**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and release validation underway; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 
@@ -71,6 +71,63 @@ Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
+
+- [x] **P0 — Restore integrated MacOS-test acceptance:** Revision 482 passes the
+  unchanged workload with 200/200 native forks, 256/256 execs, 176/176 known exits,
+  all 85 authored Mac starts and zero same-profile browser overlaps. Evaluation
+  passes at 95.70 across 251,687 records; combined workstation and positive
+  filesystem exact recovery/filter checks pass. Shared launch preflight and
+  event-time process/network ownership address the causes. Broader catalog
+  audit across platforms, user acceptance and release gates remain separate. See the
+  [fresh acceptance worklog](docs/worklog/2026-11-06-macos-final-acceptance.md).
+
+- [x] **P1 — Standard Mac app/tool launch qualification:** All sixteen standard/default
+  persona profiles pass native launch preflight. Fifteen installed CLI/runtime images
+  have functional tests and repeated startup-signing checks; four desktop mains use
+  user-accepted provisional research models. Query admission, bundled Python shell
+  ownership and PowerShell's real image/exec environment are repaired. Full helper
+  graphs, exact build parity and broader catalog behavior remain separate. See the
+  [catalog worklog](docs/worklog/2026-11-07-macos-catalog-qualification.md) and
+  [metadata scope](docs/design/macos-workstation-feasibility/catalog-native-metadata.md).
+
+- [ ] **P2 — Audit the entire application catalog on every supported platform:**
+  Perform specific installations and execution tests for Windows, Linux and macOS
+  catalog apps/tools/runtimes. Review paths, versions, executable/signing metadata,
+  launch ownership, argv, helpers, completion and process/network attribution;
+  replace research/model assumptions with measured contracts where practical.
+  The user accepts provisional researched desktop-app metadata for this release.
+  Current Mac qualification evidence and remaining assumptions are tracked in the
+  [catalog worklog](docs/worklog/2026-11-07-macos-catalog-qualification.md).
+
+- [x] **P1 — Bounded Mac background/helper expansion:** Shared pre-window root
+  cfprefsd/launchservicesd and qualified VS Code main/helpers now use canonical
+  ownership and recovery. Browser instance ownership and process/network attribution
+  are repaired. Docker Desktop and broader helper populations remain explicitly
+  deferred; additional installations are not required for this release. See the
+  [research scope](docs/design/macos-workstation-feasibility/background-process-research.md)
+  and [follow-through worklog](docs/worklog/2026-11-06-macos-realism-follow-through.md).
+
+- [x] **P1 — Bounded native Mac filesystem integration:** Controlled create,
+  modified-close, rename/replacement and unlink references now drive canonical
+  file/process identity and native/eCAR rendering, including positive VS Code save
+  activity and exact recovery/filter tests. Broader reads, mapping and filesystem
+  artifacts remain outside scope. See the same follow-through worklog.
+
+- [ ] **P2 — Recalibrate Mac-inclusive memory forecasts:** Compare forecasts with
+  retained measurements of Mac native/process/helper workloads, including peak live
+  process-tree RSS and checkpoint hydration. The bounded 26-hour three-host probe
+  reaches about 320 MiB, slightly above its 314 MiB upper estimate; the earlier
+  six-host MacOS-test run showed a larger miss. Improve per-family budgeting using
+  representative measured inputs; do not present forecast ranges as hard capacity
+  guarantees. See the [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
+
+- [ ] **P2 — Retire owned Windows/Sysmon scratch after checkpoint operations:**
+  A verified 26-hour mixed-fleet suspend/verify/resume run leaves four owned SQLite
+  spool directories (about 7.5 MiB allocated) after successful completion. Preserve
+  immutable recovery and source-finalization safety while releasing obsolete runtime
+  scratch from suspension and verification; add exact owned-path/identity cleanup
+  checks. Keep this distinct from broader spool relocation. Evidence is in the
+  [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
 
 - [x] **P0 — Native Mac mounted-SMB helper coverage:** Mounted-share helpers now use
   the supported native process lifecycle. The fixed Mac-inclusive assessment keeps
@@ -226,8 +283,8 @@ without turning `TODO.md` back into a high-conflict work journal.
   shared timing owner and reconcile moved selectors without weakening the inventory cap.
   The slow static guard has nine pre-existing excess calls; the November 4 exit repair
   adds none. See the [Mac worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
-- [ ] **P2** Add native sqlcmd process/network correlation with explicit endpoint ownership
-  and qualify baseline Homebrew SSH metadata. Keep the new network action independent of
+- [ ] **P2** Add native sqlcmd process/network correlation with explicit endpoint ownership.
+  Keep the new network action independent of
   later activity selection/ownership; prototype failures and scope are recorded in the
   same Mac worklog. This is separate from the supported workload's exit-completeness gate.
 - [ ] **P1/P2** Correct native SMB service-type and NTP reference-ID semantics through the

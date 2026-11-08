@@ -3686,15 +3686,15 @@ class TestActivityGenerator:
             445,
             3306,
         }
-        assert {
-            request.get("service") for request in service_requests if request.get("service")
-        } >= {
-            "ssh",
-            "http",
-            "ssl",
-            "smb",
-            "mysql",
-        }
+        # Failed scan attempts do not establish an application service. Every
+        # identified response must still agree with its probed destination port.
+        services_by_port = {22: "ssh", 80: "http", 443: "ssl", 445: "smb", 3306: "mysql"}
+        assert any(request.get("service") for request in service_requests)
+        assert all(
+            request["service"] == services_by_port[request["dst_port"]]
+            for request in service_requests
+            if request.get("service")
+        )
         assert all(
             request["suppress_application_side_effects"] is True for request in probe_requests
         )
@@ -5422,6 +5422,61 @@ class TestActivityGenerator:
             LinuxShellCommandActionBundle(Mock(), request).anchor
             == LinuxShellCommandActionBundle(Mock(), request).anchor
         )
+
+    def test_editor_workflows_resume_after_sampled_completion_instead_of_maximum_slot(
+        self,
+        activity_gen: ActivityGenerator,
+        state_manager: StateManager,
+        mock_emitters: dict[str, Mock],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(hostname="EDIT-01", ip="10.0.0.2", os="Ubuntu 24.04", type="workstation")
+        user = User(
+            username="alex",
+            full_name="Alex Example",
+            email="alex@example.test",
+            persona="developer",
+        )
+        start = datetime(2024, 1, 15, 10, tzinfo=UTC)
+        state_manager.set_current_time(start - timedelta(minutes=5))
+        activity_gen.generate_logon(user, linux, start - timedelta(minutes=5))
+        commands = iter(f"vim /home/alex/project/file{i}.py" for i in range(8))
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/vim", next(commands)),
+        )
+        for index in range(8):
+            activity_gen.execute_baseline_activity(
+                user, linux, start + timedelta(seconds=index), "process_code"
+            )
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        creates = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process
+            and event.process.image == "/usr/bin/vim"
+        ]
+        exits = {
+            event.process.pid: event.timestamp
+            for event in events
+            if event.event_type == "process_terminate" and event.process
+        }
+        assert len(creates) == 8
+        for previous, current in zip(creates, creates[1:], strict=False):
+            assert exits[previous.process.pid] < current.timestamp
+            assert (current.timestamp - exits[previous.process.pid]).total_seconds() < 22
+        gaps = [
+            (current.timestamp - previous.timestamp).total_seconds()
+            for previous, current in zip(creates, creates[1:], strict=False)
+        ]
+        assert min(gaps) < 90
+        assert max(gaps) - min(gaps) > 5
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -12535,6 +12590,13 @@ class TestActivityGenerator:
         running = state_manager.get_process(test_system.hostname, pid)
         assert running is not None
         activity_gen._terminated_process_keys.add((test_system.hostname, pid, running.start_time))
+        state_manager.materialize_process_termination(
+            state_manager.plan_process_termination_materialization(
+                system=test_system.hostname,
+                pid=pid,
+                end_time=start_time + timedelta(minutes=1),
+            )
+        )
         activity_gen._ip_to_system = {test_system.ip: test_system}
 
         activity_gen.generate_connection(

@@ -5,7 +5,9 @@ The canonical event model is the same, but the target may change file layout,
 line breaking, envelopes, or record shape so a parser can ingest the data.
 
 Use these guides when deciding which target to generate and what the downstream
-tooling proves.
+tooling proves. For source ownership by simulated Windows/Linux/Mac platform versus
+network sensors and application servers, start with the
+[platform/source matrix](../reference/EVIDENCE_FORMATS.md#platform-and-source-matrix).
 
 | Target | Best use | Guide |
 | --- | --- | --- |
@@ -54,10 +56,24 @@ families when no corresponding source exists:
   NAT, firewall policy, or firewall deny baseline.
 - No `web_server` hosts means no web access logs.
 - No `forward_proxy` hosts means no proxy access logs.
+- Windows Security/Sysmon belong to Windows hosts; syslog belongs to Linux hosts.
+- Mac ES/ULF and zsh history belong to the qualified Mac target; Bash history
+  requires an explicit interactive shell on Linux or Mac.
+- Web/proxy server roles belong to Windows/Linux hosts; supported Mac clients can
+  appear in their logs without producing a Mac-local web/proxy server source.
 - Host logs are scoped to concrete host directories.
 
 This matters when building parser smoke scenarios: a minimal scenario may be
 valid but still omit entire source families.
+
+## Native Mac output and parser coverage
+
+Mac ES/ULF NDJSON and zsh-history rendering remain unchanged across output targets.
+Selecting `sof-elk` or `splunk` does not add native Mac sourcetypes, normalization
+or parser support. These files are outside the current external-parser harness's
+recognized file patterns; a successful harness run does not validate them or prove
+that every file in a mixed bundle was ingested. Internal native codecs/evaluation
+and exact recovery tests are separate from external parser acceptance.
 
 ## Related Developer Docs
 

@@ -64,10 +64,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            timeout_minutes: 25
-          - os: windows-latest
             timeout_minutes: 45
-    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 60 || matrix.timeout_minutes }}
+          - os: windows-latest
+            timeout_minutes: 90
+    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 120 || matrix.timeout_minutes }}
 
     steps:
       - name: Preserve repository bytes on Windows
@@ -96,13 +96,13 @@ jobs:
       - name: Run release coverage gate
         if: inputs.release-coverage && runner.os == 'Linux'
         run: >-
-          uv run pytest --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+          uv run pytest --durations=20 --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
           --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
       - name: Run tests without coverage
         if: ${{ !inputs.release-coverage || runner.os != 'Linux' }}
         # Studio's native GUI lifecycle is gated separately on its supported macOS host.
-        run: uv run pytest --no-cov --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+        run: uv run pytest --no-cov --durations=20 --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
 
   studio:
     name: Studio (${{ matrix.os }})

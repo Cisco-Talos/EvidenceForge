@@ -318,9 +318,9 @@ class _WindowsSnareParser(_WindowsXmlParser):
         groups = match.groupdict()
         source_host = groups["hostname"]
         timestamp = _resolve_bsd_year(groups["timestamp"], seed_year, last_ts)
-        if timestamp is None:
-            errors.append(f"Invalid Snare syslog timestamp: {groups['timestamp']}")
-        else:
+        # The payload below owns the year. A yearless Feb 29 header can be
+        # valid even when the path/scenario fallback year is not a leap year.
+        if timestamp is not None:
             timestamp = timestamp.replace(tzinfo=UTC)
 
         fields["pri"] = int(groups["pri"])
@@ -378,7 +378,10 @@ class _WindowsSnareParser(_WindowsXmlParser):
                 native_time = datetime.strptime(snare_time, "%a %b %d %H:%M:%S %Y").replace(
                     tzinfo=UTC
                 )
-                if native_time.strftime("%b %d %H:%M:%S").split() != groups["timestamp"].split():
+                header_time = datetime.strptime(
+                    f"{groups['timestamp']} {native_time.year}", "%b %d %H:%M:%S %Y"
+                ).replace(tzinfo=UTC)
+                if native_time != header_time:
                     errors.append("Conflicting Snare timestamps")
                 timestamp = native_time
                 fields["TimeCreated"] = timestamp.isoformat()

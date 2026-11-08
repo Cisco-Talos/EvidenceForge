@@ -459,6 +459,17 @@ linux:
 # Native macOS ancestry. These are eligible relationships, not a claim that
 # every application or helper starts in every session.
 macos:
+  # Assignment-only env prints the environment and starts no second executable.
+  # These are modeled carrier lifetimes, not measured command/result references.
+  env:
+    command_templates:
+      - /usr/bin/env API_TOKEN={value}
+      - /usr/bin/env SECRET={value}
+      - /usr/bin/env LOG_FIELD={value}
+      - /usr/bin/env USER_INPUT={value}
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.05, maximum: 2.5, sigma: 0.85}
+    children: []
   # Explicit no-op command; nominal synthetic timing, not a host benchmark.
   "true":
     command_templates: [/usr/bin/true]
@@ -525,6 +536,12 @@ macos:
     lifetime: short
     short_timing: {minimum: 0.03, median: 0.65, maximum: 30, sigma: 0.9}
     children: []
+  Code:
+    command_templates: ['"/Applications/Visual Studio Code.app/Contents/MacOS/Code"']
+    lifetime: long
+    spawn_delay: [0.5, 3.0]
+    max_children: 3
+    children: [Code Helper]
   Google Chrome:
     command_templates: ['"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"']
     lifetime: long
@@ -905,8 +922,8 @@ macos:
 
   pwsh:
     command_templates:
-    - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
-    - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
+    - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
+    - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
     lifetime: short
     short_timing: {minimum: 0.04, median: 0.7, maximum: 12, sigma: 0.85}
     children: []

@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 from scripts import macos_launchd_reference as kit
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _process, _record
 
 _CANARY = "INVENTED_PRIVATE_LAUNCHD_CANARY"
@@ -270,6 +271,7 @@ def test_report_rejects_untrusted_text(field: str) -> None:
         kit.Report.model_validate({field: _CANARY})
 
 
+@requires_posix_reference
 def test_prepare_is_code_only_exclusive_and_loads_all_shared_comparisons(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "fresh")
     assert set(path.name for path in root.iterdir()) == set(kit.CODE) | {"PRIVATE-RUN.md"}
@@ -289,19 +291,22 @@ def test_prepare_is_code_only_exclusive_and_loads_all_shared_comparisons(tmp_pat
         kit.prepare(root)
 
 
+@requires_posix_reference
 def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = kit.prepare(tmp_path / "fresh")
     monkeypatch.setattr(kit, "__file__", str(root / kit.CODE[0]))
     monkeypatch.setattr(kit.reference, "_preflight", lambda: ("27.0", "invented"))
-    monkeypatch.setattr(kit.os, "getuid", lambda: 501)
-    monkeypatch.setattr(kit.os, "getgid", lambda: 20)
+    owner = root.stat()
     monkeypatch.setattr(
-        kit.pwd,
-        "getpwuid",
-        lambda _uid: SimpleNamespace(
-            pw_name=_CANARY, pw_dir=f"/Users/{_CANARY}", pw_uid=501, pw_gid=20
+        kit,
+        "_current_account",
+        lambda: SimpleNamespace(
+            pw_name=_CANARY,
+            pw_dir=f"/Users/{_CANARY}",
+            pw_uid=owner.st_uid,
+            pw_gid=owner.st_gid,
         ),
     )
     manifest = _manifest()
@@ -317,15 +322,6 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
         ),
     )
     monkeypatch.setattr(kit.support, "_image", lambda _path: manifest.ready_marker)
-    # The private reader still checks real test-file ownership, independently of mocked uid.
-    real_read = kit.reference._read
-    monkeypatch.setattr(
-        kit.reference,
-        "_read",
-        lambda path, limit=kit.reference.MAX_LINE: (
-            path.read_bytes() if path.is_relative_to(root) else real_read(path, limit)
-        ),
-    )
     commands = []
 
     def command(args: list[str], _root: Path) -> None:
@@ -338,6 +334,7 @@ def test_setup_and_manifest_bind_guards_code_codec_and_installed_images(
     assert report.stage == "SETUP_READY"
     assert commands == ["/usr/bin/clang"] * 3 + ["/usr/bin/codesign"]
     assert kit._manifest(root).username == _CANARY
+    assert kit._manifest(root).uid == owner.st_uid
     for name in ("job-guard", "collector-guard", "job_guard.c", "ssh_analysis_support.py"):
         path = root / name
         original = path.read_bytes()
@@ -420,6 +417,7 @@ def test_guard_timeout_does_not_claim_cleanup_and_closes_cancellation_pipe() -> 
     assert job.stdin.closed
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure",
     [
@@ -542,6 +540,7 @@ def test_capture_is_automatic_single_use_and_cleans_before_native_disk(
         kit.capture()
 
 
+@requires_posix_reference
 def test_report_only_reads_fixed_saved_json_and_never_native_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

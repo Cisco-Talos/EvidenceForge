@@ -396,7 +396,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         owner for owner, _call in _calls("_baseline_persona_connection_close_bounds_seconds")
     ) == Counter(
         {
-            "_generate_profile_traffic": 2,
+            "_generate_profile_traffic": 3,
             "_generate_pack_persona_traffic": 2,
         }
     )
@@ -1702,6 +1702,7 @@ def test_terminal_user_activity_applies_selected_network_family_bound_before_exe
         set_current_time=Mock(),
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1773,6 +1774,7 @@ def test_terminal_user_activity_recomputes_rendered_bound_after_startup_pacing(
         explorer_pid=222,
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1842,6 +1844,7 @@ def test_terminal_user_activity_does_not_create_unowned_local_session(
     system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")
     end_time = _WINDOW_START + timedelta(minutes=10)
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1915,6 +1918,7 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
         network_close_time=None,
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity.get_baseline_pattern.return_value = [(activity_type, 1.0)]
     baseline = BaselineMixin()
     baseline.start_time = _WINDOW_START

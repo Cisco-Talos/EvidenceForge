@@ -21,7 +21,10 @@ Splunk-specific JSON records.
 | Proxy access | `<proxy-host>/proxy_access.log` | Apache/Nginx combined forward proxy log. |
 | eCAR | `<host>/ecar.json` | Custom simulated EDR NDJSON. |
 | Snort/Suricata | `<ids-sensor>/snort_alert.log` | Fast alert style, emitted only for configured IDS sensors. |
-| Bash history | `<host>/bash_history/<user>.bash_history` | Command history text files. |
+| Bash history | `<host>/bash_history/<user>.bash_history` | Explicit interactive Bash on Linux/Mac. |
+| Zsh history | `<host>/zsh_history/<user>.zsh_history` | Experimental interactive Mac submissions. |
+| Mac Endpoint Security | `<host>/macos_endpoint_security.ndjson` | Qualified v11 process and bounded regular-file events. |
+| Mac Unified Log | `<host>/macos_unified_log.ndjson` | Selected workspace, policy-refusal and SSH authentication messages. |
 
 ## Generate
 
@@ -62,7 +65,9 @@ Non-obvious gotchas:
 | Proxy access | Generated only | No external parser claim for this target. |
 | eCAR | Generated only | Custom format. |
 | Snort/Suricata | Generated only | No external parser claim. |
-| Bash history | Generated only | Command history text, not a parser-normalized log family. |
+| Bash/zsh history | Generated only | Interactive submissions, not a parser-normalized log family. |
+| Mac ES/ULF | Generated only | Internal native codecs/evaluation; no external native parser/normalization claim. |
 
-For parser validation, regenerate with [sof-elk.md](sof-elk.md) or
-[splunk.md](splunk.md).
+For supported-family parser validation, regenerate with [sof-elk.md](sof-elk.md) or
+[splunk.md](splunk.md). Mac ES/ULF and zsh history remain outside those harnesses
+and their discovery patterns; target selection does not establish ingestion support.

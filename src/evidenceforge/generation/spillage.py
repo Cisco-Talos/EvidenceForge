@@ -654,6 +654,29 @@ def _encode_for_surface(value: str, surface: str, os_category: str = "linux") ->
     return value
 
 
+def _canonical_macos_process_carrier(line: str, encoded: str) -> tuple[str, str]:
+    """Keep the exposure's exact wire substring through canonical argv quoting."""
+    canonical = shlex.join(shlex.split(line))
+    if encoded in canonical:
+        return canonical, encoded
+    # A quoted value inside KEY=value becomes part of the quoted whole argv
+    # element. Its interior escaping remains exact; the outer quotes move.
+    interior = encoded[1:-1] if encoded.startswith("'") and encoded.endswith("'") else ""
+    if interior and interior in canonical:
+        return canonical, interior
+    raise ValueError("Mac process carrier must preserve its encoded value in canonical argv")
+
+
+def _macos_process_carriers() -> list[str]:
+    """Use the same assignment-only env forms as the Mac lifetime owner."""
+    from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+    carriers = get_parent_config("macos", "env").get("command_templates", [])
+    if not carriers:
+        raise ValueError("Mac process exposures require configured assignment-only env carriers")
+    return carriers
+
+
 def _choose_carrier(
     family: str, surface: str, rng: random.Random, os_category: str = "linux"
 ) -> str:
@@ -667,10 +690,8 @@ def _choose_carrier(
         )
     elif surface == "process_command_line" and os_category == "macos":
         # Family-specific Linux tool paths cannot imply Mac application availability.
-        # Reuse the existing local POSIX env carriers unless a Mac variant is provided.
-        carriers = fam_carriers.get("process_command_line_macos") or list(
-            _GENERIC_CARRIERS["process_command_line"]
-        )
+        # Assignment-only env needs no unmodeled secondary program execution.
+        carriers = fam_carriers.get("process_command_line_macos") or _macos_process_carriers()
     else:
         carriers = fam_carriers.get(surface) or list(_GENERIC_CARRIERS.get(surface, ("{value}",)))
     return rng.choice(sorted(carriers))
@@ -698,6 +719,8 @@ def render_for_surface(
         )
 
     if surface == "process_command_line":
+        if os_category == "macos":
+            line, encoded = _canonical_macos_process_carrier(line, encoded)
         tokens = line.split()
         default_proc = r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
         return SurfaceRender(

@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from scripts import macos_ssh_startup_reference as kit
 from scripts import macos_ssh_startup_review as review
 
+from tests.support.platforms import requires_posix_reference
 from tests.unit.test_macos_endpoint_security_contracts import _file
 from tests.unit.test_macos_ssh_startup_reference import (
     _CANARY,
@@ -92,6 +93,7 @@ def _pty_chain() -> list[dict]:
     return rows
 
 
+@requires_posix_reference
 def test_pty_graph_distinguishes_shell_command_fork_and_foreground_group() -> None:
     manifest = _pty_manifest()
     tracker = kit.Tracker(manifest)
@@ -142,6 +144,7 @@ def test_pty_graph_distinguishes_shell_command_fork_and_foreground_group() -> No
         assert sensitive not in text
 
 
+@requires_posix_reference
 def test_prepare_pty_writes_only_code_and_an_immutable_experiment_selection(tmp_path: Path) -> None:
     root = kit.prepare(tmp_path / "pty", pty=True)
     assert {path.name for path in root.iterdir()} == set(kit.CODE) | {
@@ -157,6 +160,7 @@ def test_prepare_pty_writes_only_code_and_an_immutable_experiment_selection(tmp_
         kit.prepare(root, pty=True)
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["mode", "extra", "symlink", "dangling_symlink"])
 def test_invalid_experiment_does_not_fall_back_to_non_pty(tmp_path: Path, damage: str) -> None:
     root = kit.prepare(tmp_path / "pty", pty=True)
@@ -235,6 +239,7 @@ def test_terminal_equivalence_ignores_stat_times_but_requires_exact_identity(cha
     )
 
 
+@requires_posix_reference
 @pytest.mark.parametrize(
     "failure", [None, "collector", "interrupted", "analysis", "cleanup", "limit"]
 )
@@ -290,6 +295,7 @@ def test_compact_capture_status_and_saved_full_report_do_not_depend_on_scrollbac
     assert output["terminal_mode"] == "PTY" and output["stage"] == "COMPLETE"
 
 
+@requires_posix_reference
 def test_graph_loader_is_code_only_and_works_from_the_prepared_kit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -301,6 +307,7 @@ def test_graph_loader_is_code_only_and_works_from_the_prepared_kit(
     assert not (root / "SETUP.json").exists()
 
 
+@requires_posix_reference
 @pytest.mark.parametrize("damage", ["remove", "content", "manifest_mode"])
 def test_provenance_freezes_pty_selection_without_live_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
@@ -338,6 +345,7 @@ def test_provenance_freezes_pty_selection_without_live_commands(
         kit._manifest(root)
 
 
+@requires_posix_reference
 def test_report_recovery_reads_only_saved_fixed_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -365,6 +373,7 @@ def test_report_recovery_reads_only_saved_fixed_json(
     assert kit.Report.model_validate_json(output.out) == report
 
 
+@requires_posix_reference
 def test_ancestry_unknown_image_reports_other_without_exposing_it_or_admitting_a_template() -> None:
     rows = _pty_chain()
     for row in rows:
@@ -386,6 +395,7 @@ def test_timeout_is_reported_as_timeout_without_private_exception_text() -> None
     assert kit._failure(kit.reference.PrivateError("TIMEOUT")) == "TIMEOUT"
 
 
+@requires_posix_reference
 def test_connect_preserves_window_streams_and_uses_only_the_prepared_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -468,6 +478,7 @@ def _with_startup_branches(*, helper_siblings: bool = False) -> list[dict]:
     return rows
 
 
+@requires_posix_reference
 def test_pty_core_selection_precedes_limits_and_excludes_large_shell_startup_trees() -> None:
     rows, manifest = _with_startup_branches(), _pty_manifest()
     tracker = kit.Tracker(manifest)

@@ -116,8 +116,10 @@ def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_de
     coverage = ground_truth["macos_native_coverage"]
     assert coverage["scope"] == "canonical_process_window"
     host = next(host for host in coverage["hosts"] if host["hostname"] == "MAC-01")
-    # The independent census also includes terminal/bootstrap starts which are
-    # absent from the old authored-birth-only diagnostic.
-    assert host["process_census"]["aggregate_births"] > 0
-    assert not host["process_census"]["complete"]
+    # Canonical starts use fork/exec; this fixture selects no native source.
+    census = host["process_census"]
+    assert census["aggregate_births"] == 0
+    assert census["expected_forks"] == census["expected_execs"] == 1
+    assert census["published_forks"] == census["published_execs"] == 0
+    assert not census["complete"]
     assert not (outputs[0] / "data" / ".eforge-es-ingress").exists()

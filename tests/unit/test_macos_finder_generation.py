@@ -88,6 +88,19 @@ def _finder_engine(
     gui_application: str | None = None,
 ) -> GenerationEngine:
     raw = _scenario().model_dump(mode="json", exclude_none=True)
+    # This fixture exercises one launch contract, not every installed developer tool.
+    raw["environment"]["deployment_overrides"] = [
+        {
+            "system": "MAC-01",
+            "user_applications": [
+                {
+                    "user": "alex",
+                    "applications": ["macos-reference-app"]
+                    + ([gui_application] if gui_application is not None else []),
+                }
+            ],
+        }
+    ]
     if native:
         raw["output"]["logs"].append({"format": "macos_endpoint_security"})
         raw["macos_process_coverage"] = "complete" if complete else "partial"
@@ -106,7 +119,9 @@ def _finder_engine(
         ]
     overlay = tmp_path / ".eforge/config/activity/application_catalog.yaml"
     overlay.parent.mkdir(parents=True)
-    catalog = yaml.safe_load((get_activity_directory() / "application_catalog.yaml").read_text())
+    catalog = yaml.safe_load(
+        (get_activity_directory() / "application_catalog.yaml").read_text(encoding="utf-8")
+    )
     overlay.write_text(
         yaml.safe_dump(
             {
@@ -116,7 +131,13 @@ def _finder_engine(
                     {
                         "id": application["id"],
                         "personas": ["developer"]
-                        if application["id"] in {"macos-reference-app", gui_application}
+                        if application["id"]
+                        in {
+                            "macos-reference-app",
+                            gui_application,
+                            "macos-terminal",
+                            "macos-iterm2",
+                        }
                         else [],
                         "_replace": True,
                         **(
@@ -127,12 +148,6 @@ def _finder_engine(
                     }
                     for application in catalog["applications"]
                     if "macos" in application["platforms"]
-                    and (
-                        "code" in application["categories"]
-                        or gui_application is not None
-                        and ".app/Contents/MacOS/"
-                        in application["platforms"]["macos"]["image_path"]
-                    )
                 ],
             }
         )
@@ -186,6 +201,15 @@ def _finder_engine(
         "outlook",
         "slack",
         "onedrive",
+        "edge",
+        "teams",
+        "macos-safari",
+        "macos-finder",
+        "excel",
+        "intellij",
+        "sublimetext",
+        "postman",
+        "thunderbird",
     ],
 )
 @pytest.mark.parametrize("native", [False, True], ids=["filtered", "native"])
@@ -232,7 +256,9 @@ def test_existing_user_scenario_gui_apps_share_the_canonical_launch_owner(
 def test_unknown_app_signer_keeps_canonical_gui_chain_and_complete_coverage_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine = _finder_engine(tmp_path, monkeypatch, native=True, missing_app_signature=True)
+    engine = _finder_engine(
+        tmp_path, monkeypatch, native=True, complete=False, missing_app_signature=True
+    )
     try:
         with effective_config_scope(engine.compiled_scenario.effective_config):
             engine._initialize()
@@ -272,6 +298,7 @@ def test_unknown_app_signer_keeps_canonical_gui_chain_and_complete_coverage_fail
             ).code_signature.entitlements
             is None
         )
+        engine.scenario.macos_process_coverage = "complete"
         with pytest.raises(StateError, match="Incomplete native macOS process coverage"):
             engine._finalize_macos_process_coverage()
         host = engine.dispatcher.macos_es_ingress.coverage.hosts[0]
@@ -363,7 +390,7 @@ def test_finder_app_exec_and_known_exit_use_the_shared_engine(
     records = [
         record
         for path in tmp_path.rglob("macos_endpoint_security.ndjson")
-        for line in path.read_text().splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if (record := decode_endpoint_security_record(line)).process.audit_token.pid == pid
         or record.event_type == 11
         and record.event.fork.child.audit_token.pid == pid

@@ -7,10 +7,8 @@ A stage is a modeled completed operation. Registration, activation, process exit
 unload and file removal remain distinct; none implies native policy evidence.
 """
 
-import math
-import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Literal
 
 from evidenceforge.events.base import OccurrenceBuilder
@@ -65,9 +63,13 @@ from evidenceforge.generation.runtime_content import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph, TimingScope
+from evidenceforge.generation.timing import (
+    TemporalConstraintGraph,
+    TimingScope,
+    TruncatedLognormalDistribution,
+)
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import stable_uuid
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,14 +499,24 @@ class MacosPersistenceActionBundle:
             timing = provider.profile.system_job_phase_timing
             if timing is None:
                 raise StateError("Native system job requires its explicit phase timing policy")
-            rng = random.Random(_stable_seed(f"macos-system-job-phases:{request.action_id}"))
             times = [request.timestamp]
-            for _ in range(3):
-                delay = min(
-                    timing.maximum,
-                    max(timing.minimum, rng.lognormvariate(math.log(timing.median), timing.sigma)),
+            for phase in range(3):
+                delay = self.dispatcher.timing_runtime.sampler.sample_timedelta(
+                    TruncatedLognormalDistribution(
+                        minimum=timing.minimum * 1_000_000,
+                        median=timing.median * 1_000_000,
+                        maximum=timing.maximum * 1_000_000,
+                        sigma=timing.sigma,
+                    ),
+                    relationship_key="macos.system_job.startup_phase",
+                    scope=TimingScope(
+                        stable_id=request.action_id,
+                        host=request.host.hostname,
+                        lifecycle_id=service_object_id,
+                        ordinal=phase,
+                    ),
                 )
-                times.append(times[-1] + timedelta(seconds=delay))
+                times.append(times[-1] + delay)
             startup = MacosSystemJobStartup(
                 state=self.state,
                 dispatcher=self.dispatcher,

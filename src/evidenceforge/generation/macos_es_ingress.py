@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from evidenceforge.events.dispatcher import EventDispatcher
 
 _MAX_INGRESS_BYTES = 2 * 1024 * 1024
-_PHASE_ORDER = {11: 0, 9: 1, 15: 2}
+_PHASE_ORDER = {11: 0, 9: 1, 13: 2, 12: 3, 25: 4, 32: 5, 15: 6}
 _PHASE_NAMES = {11: "fork", 9: "exec", 15: "exit"}
 
 
@@ -56,7 +56,7 @@ class ESProcessIngressRow(BaseModel):
     host: HostContext
     initial: ESCollectorState
     occurrence_id: str = Field(min_length=1, max_length=256)
-    event_type: Literal[9, 11, 15]
+    event_type: Literal[9, 11, 12, 13, 15, 25, 32]
     reason: NativeReason = "not_recorded"
     storyline_cluster_id: str | None = Field(default=None, max_length=512)
     observed_at: AwareDatetime
@@ -285,8 +285,13 @@ class MacosESIngress:
                         decision=ObservationDecision(row.status, row.delay),
                     )
                     profiles[row.host.hostname] = row.initial.source_profile.profile_id
-                    fact = (_PHASE_NAMES[row.event_type], row.reason, row.status)
-                    totals.setdefault(row.host.hostname, Counter())[fact] += 1
+                    fact = (
+                        (_PHASE_NAMES[row.event_type], row.reason, row.status)
+                        if row.event_type in _PHASE_NAMES
+                        else None
+                    )
+                    if fact is not None:
+                        totals.setdefault(row.host.hostname, Counter())[fact] += 1
                     census = canonical.get(row.host.hostname)
                     if (
                         row.event_type == 15
@@ -296,7 +301,7 @@ class MacosESIngress:
                         observed_exits[row.host.hostname] = observed_exits.get(
                             row.host.hostname, MacosOccurrenceDigest()
                         ).add(row.host.hostname, row.occurrence_id)
-                    if row.storyline_cluster_id:
+                    if row.storyline_cluster_id and fact is not None:
                         authored.setdefault(row.host.hostname, {}).setdefault(
                             row.storyline_cluster_id, Counter()
                         )[fact] += 1
