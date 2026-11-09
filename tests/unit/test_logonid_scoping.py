@@ -31,6 +31,7 @@ import pytest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import System, User
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import (
@@ -916,7 +917,9 @@ def test_log_cleared_storyline_event_rejects_different_actor_wevtutil_logon_id(
     assert captured["subject_logon_id"] is None
 
 
-def test_linux_daemon_storyline_process_does_not_create_service_logon(state_manager):
+def test_linux_daemon_storyline_process_does_not_create_service_logon(
+    state_manager: StateManager,
+) -> None:
     """Linux web-daemon storyline processes should not fabricate user-session logins."""
     engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
         type("FakeEngine", (StorylineMixin,), {})
@@ -934,8 +937,15 @@ def test_linux_daemon_storyline_process_does_not_create_service_logon(state_mana
         email="apache@system.local",
         enabled=True,
     )
+    process_time = datetime(2024, 3, 18, 13, 19, 47, tzinfo=UTC)
     activity = Mock()
-    activity.generate_process.return_value = 24119
+    activity.timing_runtime = TimingRuntime(reference_time=process_time)
+    activity.state_manager = state_manager
+    activity.generate_process.side_effect = [24119, 24120, 24121]
+    activity.foreground_process_termination_time.return_value = None
+    activity._generate_bounded_foreground_process_termination.return_value = (
+        process_time + timedelta(seconds=1)
+    )
     activity._resolve_parent.return_value = 24118
     engine.activity_generator = activity
     engine.state_manager = state_manager
@@ -951,12 +961,19 @@ def test_linux_daemon_storyline_process_does_not_create_service_logon(state_mana
         ),
         apache,
         web_system,
-        datetime(2024, 3, 18, 13, 19, 47, tzinfo=UTC),
+        process_time,
         "Apache spawned shell",
         {"process"},
     )
 
     activity.generate_service_logon.assert_not_called()
-    activity.generate_process.assert_called_once()
-    assert activity.generate_process.call_args.kwargs["logon_id"] == ""
+    process_calls = activity.generate_process.call_args_list
+    assert [call.kwargs["process_name"] for call in process_calls] == [
+        "/bin/bash",
+        "/usr/bin/curl",
+        "/bin/bash",
+    ]
+    assert all(call.kwargs["logon_id"] == "" for call in process_calls)
+    assert all(call.kwargs["user"] == apache for call in process_calls)
+    assert all(call.kwargs["parent_pid"] == 24119 for call in process_calls[1:])
     assert event["pid"] == 24119
