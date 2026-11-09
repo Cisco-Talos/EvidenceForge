@@ -2,6 +2,16 @@
 
 ## Latest handoff — November 9
 
+Integration PR [#463](https://github.com/Cisco-Talos/EvidenceForge/pull/463) merged
+into dev as `0c8e5394`, before the timeout fix was pushed. Its first CI run
+(`42665845072`) exhausted the 45-minute Linux routine
+budget; the user reported 56% progress shortly before cancellation. All eight
+non-routine-suite jobs passed. The user requested 120-minute limits for all full
+suites, so the shared Linux/Windows routine job now has a fixed 120-minute budget,
+including release coverage invocations. Specialized Studio, recovery and sharded
+slow jobs retain their separate limits. The timeout change is on the follow-up
+branch `codex/full-suite-timeouts`; a fresh run is required to apply it.
+
 The user reports Studio testing is fine, closing interactive acceptance of the
 source-launched app (`uv run eforge-desktop`) after the fixes below. The earlier
 pending-Studio statements in this worklog describe historical checkpoints.
