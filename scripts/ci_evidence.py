@@ -169,7 +169,28 @@ def requirements(kind: KINDS, check_id: str) -> list[str]:
 
 def fingerprint(check_id: str, kind: KINDS) -> str:
     """Bind source, policy, platform, actual runner image and toolchain versions."""
-    versions = {"python": sys.version, "machine": platform.machine()}
+    versions = {
+        "python": sys.version,
+        "machine": platform.machine(),
+        "uv": subprocess.check_output(["uv", "--version"], text=True, timeout=30).strip(),
+    }
+    if kind == "portability":
+        versions["resume_python"] = subprocess.check_output(
+            [
+                "uv",
+                "run",
+                "--python",
+                "3.13",
+                "--isolated",
+                "--locked",
+                "python",
+                "-c",
+                "import sys; print(sys.version)",
+            ],
+            cwd=ROOT,
+            text=True,
+            timeout=180,
+        ).strip()
     if kind == "studio":
         for name, command in {
             "node": ["node", "--version"],
@@ -317,6 +338,7 @@ def resolve(check_id: str, kind: KINDS, destination: Path) -> bool:
     """Restore eligible successful evidence; unavailable evidence always executes fresh."""
     destination.mkdir(parents=True, exist_ok=True)
     expected = fingerprint(check_id, kind)
+    (destination.parent / (destination.name + ".profile")).write_text(expected, encoding="utf-8")
     artifact = f"ci-evidence-{check_id}-{expected}"
     output("artifact", artifact)
     output("fingerprint", expected)
@@ -388,6 +410,10 @@ def resolve(check_id: str, kind: KINDS, destination: Path) -> bool:
 
 def record(check_id: str, kind: KINDS, destination: Path) -> None:
     """Record executed results; a reused record retains its original provenance."""
+    actual_fingerprint = fingerprint(check_id, kind)
+    profile = destination.parent / (destination.name + ".profile")
+    if profile.read_text(encoding="utf-8") != actual_fingerprint:
+        raise ValueError("CI execution environment changed after result resolution")
     if (destination / "evidence.json").exists():
         return
     jobs = api(f"repos/{repository()}/actions/runs/{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100")
@@ -408,7 +434,7 @@ def record(check_id: str, kind: KINDS, destination: Path) -> None:
         repository=repository(),
         check_id=check_id,
         kind=kind,
-        fingerprint=fingerprint(check_id, kind),
+        fingerprint=actual_fingerprint,
         source_digest=source_digest(),
         source_sha=git("rev-parse", "HEAD"),
         run_id=int(os.environ["GITHUB_RUN_ID"]),

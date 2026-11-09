@@ -290,9 +290,52 @@ def test_record_identifies_active_native_job_when_multiple_callers_share_a_run(
     monkeypatch.setattr(ci, "fingerprint", lambda *args: evidence.fingerprint)
     monkeypatch.setattr(ci, "git", lambda *args: evidence.source_sha)
     monkeypatch.setattr(ci.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    (tmp_path.parent / (tmp_path.name + ".profile")).write_text(evidence.fingerprint)
     ci.record("recovery-ubuntu-latest", "recovery", tmp_path)
     recorded = ci.Evidence.model_validate_json((tmp_path / "evidence.json").read_bytes())
     assert recorded.job_id == 3
+
+
+def test_environment_drift_cannot_record_or_reupload_results(
+    evidence: ci.Evidence,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(ci, "fingerprint", lambda *args: "d" * 64)
+    (tmp_path.parent / (tmp_path.name + ".profile")).write_text(evidence.fingerprint)
+    with pytest.raises(ValueError, match="environment changed"):
+        ci.record(evidence.check_id, evidence.kind, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("kind", "tool"),
+    [("routine", "uv"), ("studio", "node"), ("studio", "rustc"), ("portability", "resume")],
+)
+def test_actual_toolchain_changes_invalidate_the_result_fingerprint(
+    evidence: ci.Evidence,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: ci.KINDS,
+    tool: str,
+) -> None:
+    for key, value in {
+        "RUNNER_OS": "macOS",
+        "RUNNER_ARCH": "ARM64",
+        "ImageOS": "macos26",
+        "ImageVersion": "test-image",
+    }.items():
+        monkeypatch.setenv(key, value)
+    changed = False
+
+    def version(command: list[str], **kwargs: Any) -> str:
+        name = "resume" if command[:2] == ["uv", "run"] else command[0]
+        if name == "resume":
+            assert "--locked" in command and "3.13" in command
+        return "new-version" if changed and name == tool else "old-version"
+
+    monkeypatch.setattr(ci.subprocess, "check_output", version)
+    before = ci.fingerprint(evidence.check_id, kind)
+    changed = True
+    assert ci.fingerprint(evidence.check_id, kind) != before
 
 
 def test_shard_group_cannot_omit_an_entire_platform(evidence: ci.Evidence, tmp_path: Path) -> None:

@@ -25,11 +25,14 @@ the a5 source snapshot `4302afd5`. The changes are:
   Match all tracked paths/modes/Git blob IDs except `CHANGELOG.md`, `TODO.md`,
   `docs/releases.md`, and `docs/worklog/**`. All other docs, tests, fixtures,
   configuration, versions, lockfiles, scripts and workflows invalidate reuse.
-- Bind evidence to the actual Python/toolchain, runner label/architecture/image,
+- Bind evidence to the actual Python/uv/toolchain (including portability's 3.13
+  interpreter), runner label/architecture/image,
   Linux installed-package inventory, coverage mode and execution policy. Verify
   artifact-uploader source metadata and original successful job/steps through
   GitHub's API; reject forks, altered archives, incompatible inputs and results
   older than seven days. Reuploads retain the original producer and age.
+  Compare the execution environment before and after a check; drift cannot be
+  recorded as a successful result under a different profile.
 - For PRs, verify the tested merge's parent/head relationship and require both its
   inputs and the API-authenticated PR head inputs to match. GitHub can clear
   `pull_requests` after merge. A PR merge containing additional base changes is a
