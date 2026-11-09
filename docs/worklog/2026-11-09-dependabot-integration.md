@@ -39,10 +39,22 @@ historical checks do not establish the combined snapshot's result.
 `uv sync --locked --all-extras` accepts the combined lock without changing it.
 Ruff 0.17.0 lint/format pass across the repository (1,512 Python files). Version
 synchronization and the revision-499 generation-behavior declaration pass.
-Focused CLI/model/schema/Studio/config/release-pipeline tests are in progress.
+Focused CLI/model/schema/Studio/config/release-pipeline tests pass: 375 passed,
+107 deselected, in 139.25 seconds.
 
 Use a merge-preserving integration PR into dev so all reviewed Dependabot heads
 remain in dev's ancestry and the normal PR workflow starts fresh full Linux and
 Windows suites with the 120-minute budget, plus native Studio/recovery checks.
 Check results on the combined snapshot; older individual dependency checks and
 the cancelled 45-minute Linux run cannot substitute for them.
+
+PR #465 merged the integration as `c922fffb`; all eleven original Dependabot PRs
+are marked merged and none remain open. CI run `42675010508` started on the
+integration PR; its source tree is identical to the merged dev tree.
+
+The user then requested synchronization and a fresh CI run directly on dev.
+Local dev matches origin/dev. CI previously triggered only on main pushes and
+PRs, with no manual dispatch. Add dev to its push branches and a manual dispatch
+entry point; manual runs compare generation behavior with HEAD's first parent.
+Keep existing read-only permissions, concurrency, suites and 120-minute full-suite
+timeouts. Merging this workflow change starts CI on the resulting dev commit.
