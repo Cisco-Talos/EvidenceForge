@@ -88,6 +88,32 @@ core routine cases (over 19,000) and all 2,203 slow cases exactly once across th
 respective shard groups. These are local collected counts before runtime skips,
 not claims that the full suites have passed on the new infrastructure.
 
+## First integration findings and workflow-test repair
+
+PR run `42710254492` and coverage/readiness run `42710286582` each failed exactly
+two distinct tests in `tests/unit/test_github_workflows.py`, repeated across Linux
+and Windows shards. The missed legacy assertions expected `uv run pytest`, the
+old `--slow-shard-*` flags, and inline YAML `needs` formatting. Their intended
+contracts remain valid; the new workflow uses `uv run --no-sync pytest`, the
+balanced `--ci-shard-*` flags, and expanded YAML lists.
+
+Repair the existing tests by parsing YAML and shell arguments, retaining explicit
+slow-only/no-coverage selection, four unique shard indices, matrix-number mapping,
+parallel portability execution and both required gate dependencies. The focused
+workflow, tier-policy and release-pipeline selection passes locally (86 tests).
+
+All other executed checks in those runs passed. The PR run reused successful
+Studio and native-recovery checks on all three native platforms, plus six Windows
+routine shards, from the readiness producer. Failed shards executed fresh rather
+than reusing failed evidence. Combined coverage and final complete-inventory
+validation were blocked by the routine test failures and still need a passing run.
+
+GitHub's failed-job rerun retains the original event SHA, so it cannot exercise a
+test repair on a new commit. The current broad input policy includes this test
+file in every job's digest; this repair therefore requires fresh checks on the new
+source. Do not weaken that policy to reuse old results for the repair. Narrower
+per-suite input scopes require the separate dependency audit described below.
+
 ## Separate a5 release blocker
 
 The unchanged a5 release run `42699295865` failed slow checks: eight variants of

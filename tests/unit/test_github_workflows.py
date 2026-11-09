@@ -23,10 +23,32 @@
 """Security invariants for GitHub Actions workflows."""
 
 import re
+import shlex
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 _USES_PATTERN = re.compile(r"^\s*uses:\s*(?P<action>\S+)", re.MULTILINE)
 _FULL_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def _release_slow_jobs() -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load(
+        (repo_root / ".github/workflows/release-slow.yml").read_text(encoding="utf-8")
+    )
+    return workflow["jobs"]
+
+
+def _slow_test_arguments(jobs: dict[str, Any]) -> list[str]:
+    commands = [
+        step["run"]
+        for step in jobs["slow-comprehensive"]["steps"]
+        if step.get("name") == "Run slow shard"
+    ]
+    assert len(commands) == 1
+    return shlex.split(commands[0])
 
 
 def test_external_github_actions_are_pinned_to_full_commit_shas() -> None:
@@ -56,24 +78,31 @@ def test_external_github_actions_are_pinned_to_full_commit_shas() -> None:
 def test_release_slow_workflow_excludes_soak_diagnostics() -> None:
     """The release lane selects the exclusive slow tier through native pytest markers."""
 
-    repo_root = Path(__file__).resolve().parents[2]
-    workflow = (repo_root / ".github" / "workflows" / "release-slow.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "uv run pytest -m slow --no-cov" in workflow
-    assert "--include-slow" not in workflow
-    assert "--include-soak" not in workflow
+    arguments = _slow_test_arguments(_release_slow_jobs())
+    assert arguments[:2] == ["uv", "run"]
+    assert "pytest" in arguments
+    assert arguments[arguments.index("-m") + 1] == "slow"
+    assert arguments[arguments.index("--ci-tier") + 1] == "slow"
+    assert "--no-cov" in arguments
+    assert not any(argument == "--cov" or argument.startswith("--cov=") for argument in arguments)
+    assert "--include-slow" not in arguments
+    assert "--include-soak" not in arguments
 
 
 def test_release_slow_workflow_shards_tests_and_parallelizes_portability() -> None:
     """The release lane preserves all slow tests across four independent shards."""
 
-    repo_root = Path(__file__).resolve().parents[2]
-    workflow = (repo_root / ".github" / "workflows" / "release-slow.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "--slow-shard-count 4" in workflow
-    assert '--slow-shard-index "${{ matrix.shard_index }}"' in workflow
-    assert workflow.count("shard_index:") == 4
-    assert "checkpoint-portability:" in workflow
-    assert "needs: [slow-comprehensive, checkpoint-portability]" in workflow
+    jobs = _release_slow_jobs()
+    arguments = _slow_test_arguments(jobs)
+    assert arguments[arguments.index("--ci-shard-count") + 1] == "4"
+    assert arguments[arguments.index("--ci-shard-index") + 1] == "${{ matrix.shard_index }}"
+    shards = jobs["slow-comprehensive"]["strategy"]["matrix"]["include"]
+    assert len(shards) == 4
+    assert {shard["shard_index"] for shard in shards} == set(range(4))
+    assert all(shard["shard_number"] == shard["shard_index"] + 1 for shard in shards)
+    assert "checkpoint-portability" not in jobs["slow-comprehensive"]["needs"]
+    assert "slow-comprehensive" not in jobs["checkpoint-portability"]["needs"]
+    assert set(jobs["release-required"]["needs"]) == {
+        "slow-comprehensive",
+        "checkpoint-portability",
+    }
