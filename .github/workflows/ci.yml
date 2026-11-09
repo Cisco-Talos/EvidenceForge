@@ -62,12 +62,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            timeout_minutes: 45
-          - os: windows-latest
-            timeout_minutes: 90
-    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 120 || matrix.timeout_minutes }}
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 120
 
     steps:
       - name: Preserve repository bytes on Windows
