@@ -2,6 +2,22 @@
 
 ## Latest handoff — November 9
 
+The user requested the alpha-5 release after all PR #467 CI checks passed, and
+merged that final test repair into dev as `c196d057`. All implementation,
+Dependabot and CI timeout/trigger changes are integrated. Alpha 5 remains unused;
+the synchronized product/Studio versions are 2.2.0a5 / 2.2.0-alpha.5.
+
+Finalize the public changelog date/status and include the later CI/test/dependency
+maintenance, then publish the immutable annotated `v2.2.0a5` tag from the clean
+committed dev snapshot. The tag starts the gated Release workflow. Its exact
+snapshot must pass routine coverage, slow/portability, native Studio/recovery and
+all three packaged installer checks before automatic prerelease publication.
+The successful PR #467 CI run is `42684703438`; verified three-platform preview
+installers from the dependency snapshot are in run `42675168961`. These support
+readiness but do not replace the new release run. Main remains unchanged.
+
+The earlier status paragraphs below describe previous preparation checkpoints.
+
 Integration PR [#463](https://github.com/Cisco-Talos/EvidenceForge/pull/463) merged
 into dev as `0c8e5394`, before the timeout fix was pushed. Its first CI run
 (`42665845072`) exhausted the 45-minute Linux routine

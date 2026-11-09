@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and source-launched Studio accepted; integration and final-snapshot release gates remain; stable target 2.2.0
+**Status:** 2.2.0a4 published; 2.2.0a5 integrated on dev with source-launched Studio accepted; alpha-5 release pipeline preparation; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 

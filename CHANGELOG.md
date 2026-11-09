@@ -4,14 +4,13 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v2.2.0a5 (2026-11-07)
+## v2.2.0a5 (2026-11-09)
 
 Fifth alpha of the planned 2.2.0 release. This alpha introduces experimental
 **macOS 27 workstation simulation**, alongside existing Windows and Linux support.
 Scenarios can now model mixed environments containing all three operating systems.
 Simulated-host support is independent of the computer running EvidenceForge.
-Source-launched Studio testing has been accepted; publication remains pending
-integration and final release-snapshot checks.
+Source-launched Studio testing has been accepted.
 
 **Introducing simulated macOS hosts**
 
@@ -87,6 +86,17 @@ integration and final release-snapshot checks.
   configuration references, parser quickstarts and release guidance. Preserve
   bounded acceptance evidence and private-reference collection/review workflows
   (`d0e97a8a`, `1bf7be99`, `acbaf51f`, `d256ad6f`).
+
+**CI and dependency maintenance**
+
+- Give Linux and Windows full test suites a 120-minute budget, including release
+  coverage checks (`7186f6e9`). Run CI on dev pushes and support manual CI runs
+  (`9a5f7df6`).
+- Update the proxy population and Linux daemon test fixtures to reflect the supported
+  User-Agent catalog and canonical pipeline timing/process ownership (`fb101f9c`).
+- Integrate dependency updates, including Pydantic 2.14.1, FastAPI 0.143.0,
+  Typer 0.27.3, Ruff 0.17.0, filelock 4.2.1 and the reviewed GitHub Actions pins
+  (`c922fffb`, `af14962d`).
 
 **Scope and limitations**
 

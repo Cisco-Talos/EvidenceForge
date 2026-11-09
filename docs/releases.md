@@ -12,15 +12,14 @@ See [Studio installation](studio.md#macos-installation).
 ## Source capabilities and release scope
 
 Installer host support is separate from simulated OS/log-source support. The current
-source tree adds experimental macOS 27 arm64 workstation process/helper and bounded
+source tree adds experimental macOS 27 workstation process/helper and bounded
 filesystem evidence; older published installers do not gain those capabilities merely
 because the product version has not yet been bumped. Release notes must state the
 snapshot's admitted source profile and limits. Use the [platform/log matrix](../README.md#supported-log-formats)
 and [Mac guide](macos.md) when preparing those notes.
 
-The Mac documentation pass does not close user acceptance or authorize integration,
-a version bump, tagging or publication. Before the next release, retain the outstanding
-representative Mac/Studio acceptance and final-snapshot release checks. Launchd ULF,
+Source-launched Mac/Studio acceptance was completed on November 9 for alpha 5.
+Retain the final-snapshot automated release and packaged-installer checks. Launchd ULF,
 Docker Desktop's complete helper graph, broader native filesystem behavior and external
 Mac SIEM normalization remain explicit limits, rather than implied release capabilities.
 
@@ -113,8 +112,8 @@ gh workflow run release.yml --ref dev -f tag=v2.2.0a1
 ```
 
 This repeats every release gate and retains the tag's original source commit. It does not move
-the tag or merge main. Instrumented Linux release coverage has a 120-minute job budget;
-Windows routine tests have a 90-minute budget and routine Linux checks have 45 minutes.
+the tag or merge main. Full Linux and Windows suites, including instrumented Linux release
+coverage, have a 120-minute job budget.
 Prefer the original run's failed-job retry when a
 draft already contains assets, since rebuilding can change installer bytes.
 
