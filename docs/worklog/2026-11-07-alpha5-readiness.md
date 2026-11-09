@@ -18,11 +18,14 @@ configuration validation passes all 101 files. The original full readiness matri
 below validated revision 488, before the later realism and acceptance fixes.
 It cannot substitute for the final release snapshot's full automated gates.
 
-The user authorized committing these fixes and requested a release-note proposal;
-release notes are unchanged pending that review. Remaining release preparation:
-reconcile the release notes, integrate the reviewed source into dev, and pass the required gates and
-installer verification on the exact eventual release snapshot. No integration,
-tagging or publication was performed by recording this acceptance.
+The fixes are committed in `d256ad6f`. The user approved the revised release notes,
+which now lead with the first simulated macOS host support, use Apple Silicon for
+hardware wording, and summarize the subsequent realism and Studio fixes. The a5
+entry retains its preparation date and records source Studio acceptance separately
+from pending integration and final release checks. Remaining release preparation:
+integrate the reviewed source into dev, then pass the required gates and installer
+verification on the exact eventual release snapshot. Approval of the release-note
+text did not perform integration, tagging or publication.
 
 Related handoffs: [request feedback](2026-11-09-studio-request-feedback.md),
 [chat engine](2026-11-09-studio-chat-engine-selection.md), and

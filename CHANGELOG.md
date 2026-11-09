@@ -6,73 +6,101 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## v2.2.0a5 (2026-11-07)
 
-Fifth alpha of the planned 2.2.0 release. Adds bounded macOS 27 arm64 workstation
-simulation and native endpoint evidence alongside the existing Windows, Linux and
-network sources. This entry describes prepared source; publication and interactive
-Studio acceptance remain separate release steps.
+Fifth alpha of the planned 2.2.0 release. This alpha introduces experimental
+**macOS 27 workstation simulation**, alongside existing Windows and Linux support.
+Scenarios can now model mixed environments containing all three operating systems.
+Simulated-host support is independent of the computer running EvidenceForge.
+Source-launched Studio testing has been accepted; publication remains pending
+integration and final release-snapshot checks.
 
-**Mac workstation and canonical process ownership**
+**Introducing simulated macOS hosts**
 
-- Add explicit Mac platform capabilities, catalog/defaults, SSH receivers and
-  mixed-fleet routing. Keep unsupported Mac targets and source combinations out of
-  generation; the active native target is macOS 27 arm64 (`d76c7e77`, `43d52356`,
-  `af6a355d`, `e07bbe4a`).
-- Model POSIX arguments, environments, credentials, groups, sessions, terminal
-  ownership and exit results through canonical state and transactional action
-  bundles. Preserve parent lifetimes, executable versions, loaded content and
-  event-time observations through fork, exec, close and recovery (`5f2d4c16`,
-  `01800dd8`, `120a0231`, `913c1932`, `a3f5781f`, `9f8c619c`).
-- Add qualified Finder, Terminal/iTerm2, Chrome helper, SSH client/receiver and
-  selected launchd process chains. Model returning exec failures, policy refusals,
-  persistence writes/removal and ordinary process closure with explicit limits
-  (`f529e12a`, `bf03e53e`, `b32fb552`, `bec1e3c9`, `28e66791`, `84c9864a`,
-  `dda966ac`, `e928bf5d`, `23705907`, `56452271`).
+- Add Mac application catalogs, persona defaults, deployment rules, SSH receivers
+  and network visibility (`d76c7e77`, `43d52356`, `af6a355d`, `e07bbe4a`).
+- Model supported Terminal, iTerm2, Finder, browser/helper, SSH and selected system-job
+  process lifecycles (`f529e12a`, `bf03e53e`, `b32fb552`, `bec1e3c9`, `28e66791`,
+  `84c9864a`, `dda966ac`, `e928bf5d`, `23705907`, `56452271`).
+- Preserve process ancestry, arguments, environment, credentials, terminal ownership,
+  executable metadata, signing facts and known exit results across correlated evidence
+  (`5f2d4c16`, `01800dd8`, `120a0231`, `913c1932`, `a3f5781f`, `9f8c619c`).
+- Add native Endpoint Security observations for process fork, execution, known exit
+  and selected file operations (`33372a78`, `239b0041`, `74e87fdb`, `4586fcb2`,
+  `74907aa9`, `09acf964`, `1d4a0351`, `4cf5ac22`, `acbaf51f`).
+- Add selected Unified Log messages for workspace entry, application-policy refusal
+  and accepted SSH authentication (`a592c0cf`, `d28f1f8c`, `87f677aa`, `352bc159`).
+- Add interactive zsh history and explicitly modeled interactive Bash history
+  (`acbaf51f` and preceding Mac implementation commits).
+- Support bounded file creation, modified-close, rename/replacement and deletion,
+  including a VS Code document-save workload (`acbaf51f`).
+- Add native process-coverage accounting, output filtering and checkpoint recovery.
+  Distinguish complete process starts, known exits and unknown outcomes (`acbaf51f`
+  and preceding Mac implementation commits).
 
-**Native Mac evidence and qualification**
+**Generation realism and correctness**
 
-- Publish bounded Endpoint Security v11 fork/exec/known-exit observations from
-  retained canonical facts, with collector epochs, ordered counters, independent
-  process census and exact native filtering/recovery. Retain script/interpreter,
-  descriptor, file-placement and signing facts without recreating them in emitters
-  (`33372a78`, `239b0041`, `74e87fdb`, `4586fcb2`, `74907aa9`, `09acf964`,
-  `1d4a0351`, `4cf5ac22`).
-- Add reference-qualified ordinary-verbosity SSH authentication and bounded app
-  policy-refusal Unified Log messages. Keep unqualified launchd Unified Log
-  messages gated; native references do not imply universal source fidelity
-  (`a592c0cf`, `d28f1f8c`, `87f677aa`, `352bc159`).
-- Integrate reference-supported create, modified-close, rename/replacement and
-  unlink telemetry through canonical process/file identity, including a bounded
-  VS Code document workload, shared stat/inode ownership and fault-safe recovery.
-  Expand measured OS/app helpers and qualify installed CLI/runtime launch metadata;
-  provisional desktop metadata and the cross-platform catalog audit remain explicit
-  (`acbaf51f`).
+- Improve interactive developer activity pacing and browser-instance ownership
+  (`cc97f09f`, `acbaf51f`).
+- Bind generated Windows browser User-Agent versions to modeled application versions
+  while preserving explicitly authored headers (`cc97f09f`).
+- Give Windows interactive sessions their own session-specific SMSS process ancestry
+  and corresponding lifecycle handling (`cc97f09f`).
+- Replace clock-derived Linux logind session numbering with modeled allocation
+  ownership (`cc97f09f`).
+- Correct Debian sysstat collection to its ten-minute schedule (`cc97f09f`).
+- Expand typed Linux shell pipelines into their constituent processes and retain
+  parent lifetimes through dependent child activity (`cc97f09f`).
+- Model UDP firewall-state expiration separately from application completion
+  (`cc97f09f`).
+- Improve mixed-fleet identity and protocol consistency, network attribution, command
+  completion and interactive-only shell-history eligibility (`42d6440a`, `e30c1875`,
+  `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).
 
-**Realism, Studio and validation**
+**Studio workflow improvements**
 
-- Repair canonical browser instance ownership, historical process/network
-  attribution and task pacing. Route remaining Mac/baseline timing samples through
-  semantic timing scopes without increasing the temporal RNG inventory budget.
-  Preserve positive helper and complete SSH lifecycle assertions in extended tests.
-- Preserve nested native entitlement object/array types through wire validation,
-  separate historical network/SSH attribution from live process updates, and make
-  Mac reference-tool imports portable to Windows test collection. Keep SSH lifecycle
-  construction independent of eCAR selection and decline backdated use of a session
-  shell whose terminal startup is already reserved for a later occurrence. Use
-  assignment-only Mac env exposure carriers with bounded modeled lifetimes and
-  stable canonical argv/wire quoting. Compare Snare timestamps as calendar values,
-  accepting valid day padding and payload-owned leap years while rejecting conflicts.
-  Preserve exact Linux SSH publication with endpoint collection omitted, and reject
-  checkpoint capture when the retained source process has lost canonical authority.
-- Repair mixed-fleet identity and protocol consistency, passive histories, Mac
-  query lifetimes, process completion and interactive-only shell history
-  (`42d6440a`, `e30c1875`, `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).
-- Expose Mac assets, native previews and coverage in Studio; fix platform-specific
-  application editing and scorecard presentation. Add packaged native Mac generation
-  and evaluation smoke coverage (`6b543989` and subsequent source changes).
+- Make authoring chat use the same selected engine and configuration as GUI
+  validation, including source-launched Studio sessions (`d256ad6f`).
+- Add spinners, updated check times and persistent inline failure messages across
+  validation, environment inspection, library refresh, resource forecasts, import
+  checks and log previews (`d256ad6f`).
+- Temporarily hide superseded validation findings during a check; retain previous
+  forecasts and log previews with clear labels during refreshes and failures (`d256ad6f`).
+- Show **Ready to import** or **Needs attention** for import reviews. Prevent
+  confirmation of an expired review after refresh failure (`d256ad6f`).
+- Retain Environment inspection when its section is collapsed and reopened. Changed
+  inputs and explicit refresh still trigger inspection (`d256ad6f`).
+- Put Environment progress and check time in its header (`d256ad6f`).
+- Expose Mac assets, native previews and process coverage in Studio; correct
+  platform-specific application editing and scorecard presentation (`6b543989`, `acbaf51f`).
+
+**Validation and recovery fixes**
+
+- Prevent Cisco IOS XE/XR labels from being misclassified as macOS (`d256ad6f`).
+- Preserve native entitlement object and array types during serialization (`acbaf51f`).
+- Correct historical process/network attribution without modifying already-ended
+  process state (`acbaf51f`).
+- Preserve SSH lifecycle construction and publication when endpoint output is
+  omitted; reject checkpoint capture when retained process authority is invalid (`acbaf51f`).
+- Correct bounded command lifetimes, environment-carrier quoting and Snare calendar
+  timestamp validation (`acbaf51f`).
+- Improve test portability and packaged Mac generation/evaluation checks (`acbaf51f`).
 - Revise platform/log-format mappings, Mac capability/limitations documentation,
   configuration references, parser quickstarts and release guidance. Preserve
   bounded acceptance evidence and private-reference collection/review workflows
-  (`d0e97a8a`, `1bf7be99` and subsequent documentation changes).
+  (`d0e97a8a`, `1bf7be99`, `acbaf51f`, `d256ad6f`).
+
+**Scope and limitations**
+
+- Mac simulation currently targets macOS 27 workstations and the documented supported
+  launch families.
+- Unified Log coverage includes selected messages; general launchd logging remains
+  unavailable.
+- Filesystem coverage is limited to qualified operations. Complete application helper
+  graphs, including Docker Desktop's full helper population, remain outside scope.
+- Some desktop-application metadata remains provisional pending the broader
+  installation audit.
+- Mac source parsing does not establish external SIEM normalization compatibility.
+- Studio installers remain available for Apple Silicon macOS and supported Ubuntu
+  24.04 architectures. The macOS installer has no Developer ID signature or notarization.
 
 ## v2.2.0a4 (2026-10-14)
 
