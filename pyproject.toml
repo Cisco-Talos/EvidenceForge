@@ -116,6 +116,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
+relative_files = true
 source = ["src"]
 branch = true
 omit = [

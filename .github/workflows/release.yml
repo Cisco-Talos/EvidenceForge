@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -64,6 +65,7 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       prerelease: ${{ steps.plan.outputs.prerelease }}
       dmg_name: ${{ steps.plan.outputs.dmg_name }}
+      ci-modern: ${{ steps.ci-policy.outputs.modern }}
     steps:
       - name: Checkout release snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -84,9 +86,17 @@ jobs:
         run: >-
           env GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"
           uv run --no-sync python -m scripts.release_pipeline prepare
+      - name: Detect snapshot CI policy
+        id: ci-policy
+        run: |
+          if [ -f scripts/ci_evidence.py ]; then
+            echo "modern=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "modern=false" >> "$GITHUB_OUTPUT"
+          fi
 
   release-ci:
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
     needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/ci.yml
     with:
@@ -94,24 +104,83 @@ jobs:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   release-slow:
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
     needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/release-slow.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   build-installers:
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
-    needs: [release-scope, validate-release-version, release-ci, release-slow]
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
+    needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/installers.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
       release: true
 
+  # Immutable snapshots such as a5 predate the shard/evidence helpers. Preserve
+  # manual recovery using their known CI policy, without overlaying source files.
+  release-ci-legacy:
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'false'
+    needs: [release-scope, validate-release-version]
+    uses: Cisco-Talos/EvidenceForge/.github/workflows/ci.yml@4302afd5f38126118ad4346efb7c76b3dac8d06d
+    with:
+      release-coverage: true
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
+
+  release-slow-legacy:
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'false'
+    needs: [release-scope, validate-release-version]
+    uses: Cisco-Talos/EvidenceForge/.github/workflows/release-slow.yml@4302afd5f38126118ad4346efb7c76b3dac8d06d
+    with:
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
+
+  build-installers-legacy:
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'false'
+    needs: [release-scope, validate-release-version, release-ci-legacy, release-slow-legacy]
+    uses: Cisco-Talos/EvidenceForge/.github/workflows/installers.yml@4302afd5f38126118ad4346efb7c76b3dac8d06d
+    with:
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
+      release: true
+
+  release-gates:
+    name: Release publication gates
+    if: always() && !cancelled() && github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    needs: [release-scope, validate-release-version, release-ci, release-slow, build-installers, release-ci-legacy, release-slow-legacy, build-installers-legacy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERSION_RESULT: ${{ needs.validate-release-version.result }}
+      MODERN: ${{ needs.validate-release-version.outputs.ci-modern }}
+      CI_RESULT: ${{ needs.release-ci.result }}
+      SLOW_RESULT: ${{ needs.release-slow.result }}
+      INSTALLER_RESULT: ${{ needs.build-installers.result }}
+      LEGACY_CI_RESULT: ${{ needs.release-ci-legacy.result }}
+      LEGACY_SLOW_RESULT: ${{ needs.release-slow-legacy.result }}
+      LEGACY_INSTALLER_RESULT: ${{ needs.build-installers-legacy.result }}
+    steps:
+      - name: Require every gate for the selected snapshot policy
+        run: |
+          test "$VERSION_RESULT" = success
+          if [ "$MODERN" = true ]; then
+            results=("$CI_RESULT" "$SLOW_RESULT" "$INSTALLER_RESULT")
+          elif [ "$MODERN" = false ]; then
+            results=("$LEGACY_CI_RESULT" "$LEGACY_SLOW_RESULT" "$LEGACY_INSTALLER_RESULT")
+          else
+            echo "Missing snapshot CI policy"
+            exit 1
+          fi
+          for result in "${results[@]}"; do
+            if [ "$result" != success ]; then
+              echo "Required release gate finished with result: $result"
+              exit 1
+            fi
+          done
+
   publish-release:
     name: Publish GitHub Release
     if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
-    needs: [release-scope, validate-release-version, release-ci, release-slow, build-installers]
+    needs: [release-scope, validate-release-version, release-gates]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

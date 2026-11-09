@@ -1,15 +1,17 @@
 name: Installer Builds
-
 on:
   workflow_call:
     inputs:
       source-ref:
         type: string
-        default: ""
+        default: ''
       platform:
         type: string
         default: all
       release:
+        type: boolean
+        default: false
+      force-tests:
         type: boolean
         default: false
   workflow_dispatch:
@@ -17,27 +19,54 @@ on:
       platform:
         description: Native installer to build for testing (never publishes)
         type: choice
-        options: [all, macos-aarch64, linux-aarch64, linux-x86_64]
+        options:
+          - all
+          - macos-aarch64
+          - linux-aarch64
+          - linux-x86_64
         default: linux-x86_64
+      force-tests:
+        type: boolean
+        default: false
+        description: Execute fresh native source checks
   push:
-    branches: [dev]
+    branches:
+      - dev
     paths:
       - .github/workflows/installers.yml
       - scripts/package_studio_*.py
       - scripts/verify_studio_*.py
       - scripts/release_pipeline.py
       - desktop-ui/packaging/**
-
 permissions:
   contents: read
-
+  actions: read
 jobs:
   plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      digest: ${{ steps.identity.outputs.digest }}
+      linux: ${{ steps.matrix.outputs.linux }}
+      has-linux: ${{ steps.matrix.outputs.has_linux }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: uv sync --locked --extra studio --extra dev
+      - name: Identify tested inputs
+        id: identity
+        run: uv run --no-sync python -m scripts.ci_evidence identity
       - name: Select native builders
         id: matrix
         env:
@@ -57,11 +86,15 @@ jobs:
               raise SystemExit("Unknown installer platform")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("matrix=" + json.dumps({"include": matrix}), file=output)
+              linux = [row for row in matrix if row["os"] == "linux"]
+              print("linux=" + json.dumps({"include": linux or [targets[1]]}), file=output)
+              print("has_linux=" + str(bool(linux)).lower(), file=output)
           PY
-
   build:
     name: Installer (${{ matrix.platform }})
-    needs: plan
+    needs:
+      - plan
+      - native-recovery
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -72,10 +105,10 @@ jobs:
       INSTALLER_DIRECTORY: dist/${{ matrix.os }}
       BUILD_RELEASE: ${{ inputs.release && 'true' || 'false' }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/studio-${{ matrix.os }}/target
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: '2'
     steps:
       - name: Checkout exact source snapshot
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source-ref || github.sha }}
           fetch-depth: 0
@@ -92,15 +125,15 @@ jobs:
             patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-tools libfuse2t64
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
-          python-version: "3.12"
+          python-version: '3.12'
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: "22"
+          node-version: '22'
           cache: npm
           cache-dependency-path: desktop-ui/package-lock.json
       - name: Install locked dependencies and native Rust target
@@ -112,18 +145,20 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add "$RUST_TARGET" --toolchain stable
           uv run --no-sync python scripts/sync_studio_version.py --check
-      - name: Linux helper lifecycle and state recovery
-        if: runner.os == 'Linux'
-        run: >-
-          uv run --no-sync pytest --no-cov
-          tests/unit/test_studio_runtime.py tests/unit/test_studio_ownership.py
-          tests/integration/test_studio_helper.py tests/integration/test_studio_ownership.py
-          tests/integration/test_studio_state_upgrade.py tests/integration/test_studio_state_edges.py
-          tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_migrations.py
-          tests/unit/test_studio_state_durability.py tests/unit/test_studio_state_contracts.py
+      - name: Resolve prior Studio source tests
+        id: studio-evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CHECK_ID: studio-${{ matrix.runner }}
+          CI_CHECK_KIND: studio
+          CI_JOB_NAME: Installer (${{ matrix.platform }})
+          CI_RUNNER: ${{ matrix.runner }}
+          CI_FORCE_RUN: ${{ inputs.force-tests || false }}
+        run: uv run --no-sync python -m scripts.ci_evidence resolve
       - name: Test native shell contracts
         working-directory: desktop-ui/src-tauri
         run: cargo +stable test --locked
+        if: steps.studio-evidence.outputs.reused != 'true'
       - name: Build standalone installer
         env:
           INSTALLER_OS: ${{ matrix.os }}
@@ -152,10 +187,24 @@ jobs:
           uv run --no-sync python -m scripts.release_pipeline verify-installer \
             --platform "$INSTALLER_PLATFORM" --directory "$INSTALLER_DIRECTORY" "${preview_flags[@]}"
       - name: Upload verified installer and checksum
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.release && 'release' || 'preview' }}-installer-${{ matrix.platform }}
           path: dist/${{ matrix.os }}/*
           if-no-files-found: error
           overwrite: true
           retention-days: 14
+    if: always() && needs.plan.result == 'success' && (needs.native-recovery.result == 'success' || needs.native-recovery.result == 'skipped')
+  native-recovery:
+    name: Installer source recovery (${{ matrix.platform }})
+    needs:
+      - plan
+    if: needs.plan.outputs.has-linux == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.linux) }}
+    uses: ./.github/workflows/ci-recovery.yml
+    with:
+      runner: ${{ matrix.runner }}
+      source-ref: ${{ inputs.source-ref || github.sha }}
+      force-tests: ${{ inputs.force-tests || false }}

@@ -38,6 +38,15 @@ from evidenceforge.utils.rng import _thread_local
 def pytest_addoption(parser):
     """Register custom CLI options."""
     parser.addoption(
+        "--ci-tier",
+        choices=("routine", "slow"),
+        default=None,
+        help="Select and record one balanced CI test tier",
+    )
+    parser.addoption("--ci-shard-count", type=int, default=1)
+    parser.addoption("--ci-shard-index", type=int, default=0)
+    parser.addoption("--ci-report", default="ci-results/shard.json")
+    parser.addoption(
         "--include-external-parsers",
         action="store_true",
         default=False,
@@ -111,6 +120,43 @@ def _validate_test_tiers(items: list[pytest.Item]) -> None:
 def pytest_collection_modifyitems(config, items):
     """Enforce exclusive cost tiers and skip unrequested external parser tests."""
     _validate_test_tiers(items)
+    ci_tier = config.getoption("ci_tier")
+    if ci_tier:
+        from scripts.ci_shards import ShardRecorder, ShardReport, load_timings, plan_shards
+
+        count = config.getoption("ci_shard_count")
+        index = config.getoption("ci_shard_index")
+        expected_markexpr = "slow" if ci_tier == "slow" else "not slow and not soak"
+        if config.option.keyword or config.option.markexpr != expected_markexpr:
+            raise pytest.UsageError(
+                "CI shards require the complete tier without additional filters"
+            )
+        _validate_slow_shard_coordinates(shard_count=count, shard_index=index)
+        eligible = [
+            item
+            for item in items
+            if "soak" not in item.keywords and ("slow" in item.keywords) == (ci_tier == "slow")
+        ]
+        inventory = sorted(item.nodeid for item in eligible)
+        selected = plan_shards(inventory, count, load_timings(tier=ci_tier))[index]
+        if not selected:
+            raise pytest.UsageError("CI shard selection is empty")
+        chosen = set(selected)
+        deselected = [item for item in items if item.nodeid not in chosen]
+        items[:] = [item for item in eligible if item.nodeid in chosen]
+        config.hook.pytest_deselected(items=deselected)
+        recorder = ShardRecorder(
+            ShardReport(
+                tier=ci_tier,
+                index=index,
+                count=count,
+                inventory=inventory,
+                selected=selected,
+                exit_code=-1,
+            ),
+            Path(config.getoption("ci_report")),
+        )
+        config.pluginmanager.register(recorder, "eforge-ci-shard-recorder")
     shard_count = config.getoption("slow_shard_count")
     shard_index = config.getoption("slow_shard_index")
     _validate_slow_shard_coordinates(shard_count=shard_count, shard_index=shard_index)

@@ -189,3 +189,7 @@ scenarios/macos27-native-assessment/*
 !scenarios/macos27-native-assessment/blind-test/
 scenarios/macos27-native-assessment/output/
 scenarios/macos27-native-assessment/data/
+
+# Local/CI test result data
+ci-results/
+ci-timings/

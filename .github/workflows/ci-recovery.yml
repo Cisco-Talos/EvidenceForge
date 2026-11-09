@@ -1,0 +1,88 @@
+name: Native recovery
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inputs:
+    name: CI input identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      digest: ${{ steps.identity.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: uv sync --locked --extra studio --extra dev
+      - name: Identify tested inputs
+        id: identity
+        run: uv run --no-sync python -m scripts.ci_evidence identity
+  verify:
+    name: Native recovery (${{ inputs.runner }})
+    needs:
+      - inputs
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CI_CHECK_ID: recovery-${{ inputs.runner }}
+      CI_CHECK_KIND: recovery
+      CI_JOB_NAME: Native recovery (${{ inputs.runner }})
+      CI_RUNNER: ${{ inputs.runner }}
+      CI_FORCE_RUN: ${{ inputs.force-tests || false }}
+    concurrency:
+      group: eforge-${{ needs.inputs.outputs.digest }}-recovery-${{ inputs.runner }}
+      queue: max
+    steps:
+      - name: Preserve frozen fixture bytes
+        run: git config --global core.autocrlf false
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: uv sync --locked --extra studio --extra dev
+      - name: Resolve verified prior result
+        id: evidence
+        run: uv run --no-sync python -m scripts.ci_evidence resolve
+      - name: Run native recovery check
+        if: steps.evidence.outputs.reused != 'true'
+        run: uv run --no-sync python -m scripts.ci_native_recovery
+      - name: Record verified execution
+        run: uv run --no-sync python -m scripts.ci_evidence record
+      - name: Upload CI evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.evidence.outputs.artifact }}
+          path: ci-results/${{ env.CI_CHECK_ID }}/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+on:
+  workflow_call:
+    inputs:
+      source-ref:
+        type: string
+        default: ''
+      runner:
+        type: string
+        required: true
+      force-tests:
+        type: boolean
+        default: false
