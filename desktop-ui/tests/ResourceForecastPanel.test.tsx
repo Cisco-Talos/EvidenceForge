@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { currentPrediction, ResourceForecastPanel } from "../src/ResourceForecastPanel";
@@ -46,4 +46,28 @@ test("stale projections disappear immediately and failures are informational", (
   expect(screen.getByRole("status")).toHaveTextContent("Calculating an estimate");
   rerender(<ResourceForecastPanel {...props} snapshot={{ ...snapshot, forecasts: { scenario: { ...record, result: { ...record.result, available: false, forecast: null, error: "Missing exact pack" } } } }} />);
   expect(screen.getByRole("status")).toHaveTextContent("Estimate unavailable: Missing exact pack");
+});
+
+test("forecast refresh retains the estimate, reports failure inline, and supports retry", async () => {
+  let finish!: (value: PredictionRecord) => void;
+  let fail!: (error: Error) => void;
+  const request = vi.fn(() => new Promise<PredictionRecord>((resolve, reject) => { finish = resolve; fail = reject; }));
+  const onChanged = vi.fn(async () => undefined);
+  render(<ResourceForecastPanel item={item} snapshot={snapshot} api={{ request } as unknown as StudioApi} onError={vi.fn()} onChanged={onChanged} />);
+  const user = userEvent.setup();
+  const refresh = screen.getByRole("button", { name: "Refresh resource forecast" });
+  await user.click(refresh);
+  expect(screen.getByText("Updating estimate…")).toBeVisible();
+  expect(screen.getByText("Previous estimate is shown below.")).toBeVisible();
+  expect(screen.getByText("2.0 MB")).toBeVisible();
+  expect(refresh).toBeDisabled();
+  await act(async () => fail(new Error("Capacity check unavailable")));
+  expect(screen.getByRole("alert")).toHaveTextContent("Capacity check unavailable");
+  expect(screen.getByText("2.0 MB")).toBeVisible();
+  await user.click(refresh);
+  expect(screen.queryByRole("alert")).toBeNull();
+  await act(async () => finish(record));
+  expect(onChanged).toHaveBeenCalledOnce();
+  expect(screen.getByRole("status")).toHaveTextContent("Checked");
+  expect(screen.queryByText("Previous estimate is shown below.")).toBeNull();
 });

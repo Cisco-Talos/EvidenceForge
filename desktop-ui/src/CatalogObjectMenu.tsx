@@ -3,6 +3,7 @@ import type { CatalogItem, PackReview, StudioApi } from "./api";
 import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { artifactTitle } from "./artifactNaming";
+import type { RequestState } from "./RequestFeedback";
 
 interface CatalogActionEnvironment {
   api: StudioApi;
@@ -14,6 +15,8 @@ interface CatalogActionEnvironment {
   onError: (message: string) => void;
   environmentRefreshing?: string | null;
   environmentRefreshVersion?: (item: CatalogItem) => number;
+  environmentFeedback?: (item: CatalogItem) => RequestState | undefined;
+  packValidationFeedback?: (item: CatalogItem) => RequestState | undefined;
   packReview?: (item: CatalogItem) => PackReview | null;
   onPackReview?: (item: CatalogItem, review: PackReview) => void;
 }

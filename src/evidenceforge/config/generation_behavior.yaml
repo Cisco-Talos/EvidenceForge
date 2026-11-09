@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 498
+current_revision: 499
 history_start_revision: 1
-behavior_surface_sha256: 1f6ce29f7a60925737a9e9027c15062301066631c3cb2809c54c5fbda9669ce5
+behavior_surface_sha256: d92c296f8e1fdb12c2d75a88bc6db9160e342408fb9047eec3e18737fc5b31ac
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5756,3 +5756,12 @@ changes:
   - syslog
   summary: Extends the typed pipeline shell parent's termination deadline when a
     transport extends its exact final child process.
+- revision: 499
+  id: bound-legacy-os-x-platform-alias
+  impact: localized
+  domains:
+  - modeled-os-classification
+  - source-deployment
+  formats: []
+  summary: Recognizes legacy OS X only at word boundaries, preventing Cisco IOS XE
+    and IOS XR from receiving Mac platform, deployment and validation semantics.

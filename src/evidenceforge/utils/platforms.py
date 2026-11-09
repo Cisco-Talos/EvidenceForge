@@ -3,6 +3,8 @@
 
 """Classification of modeled operating systems, independent of the execution host."""
 
+import re
+
 
 def platform_for_os(os_name: str) -> str:
     """Resolve a scenario OS label without inspecting the running computer."""
@@ -14,6 +16,9 @@ def platform_for_os(os_name: str) -> str:
         for marker in ("linux", "ubuntu", "centos", "debian", "rhel", "red hat")
     ):
         return "linux"
-    if any(marker in normalized for marker in ("macos", "mac os", "darwin", "os x")):
+    # Keep legacy OS X recognizable without matching the interior of Cisco IOS XE/XR.
+    if any(marker in normalized for marker in ("macos", "mac os", "darwin")) or re.search(
+        r"\bos x\b", normalized
+    ):
         return "macos"
     return "unknown"

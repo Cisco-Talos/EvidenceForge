@@ -12,6 +12,8 @@ from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
 )
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import Scenario, System
+from evidenceforge.utils import load_yaml
 from evidenceforge.validation.schema import ScenarioValidator
 from tests.unit.test_macos_installed_provisioning import _scenario
 
@@ -19,7 +21,10 @@ from tests.unit.test_macos_installed_provisioning import _scenario
 @pytest.mark.parametrize(
     "format_name", ["ecar", "zsh_history", "macos_unified_log", "macos_endpoint_security"]
 )
-@pytest.mark.parametrize("os_name", ["macOS 26", "macOS 26.1", "macOS 28", "Darwin 25", "macOS"])
+@pytest.mark.parametrize(
+    "os_name",
+    ["macOS 26", "macOS 26.1", "macOS 28", "Darwin 25", "macOS", "OS X", "OS X 10.11"],
+)
 def test_unsupported_mac_target_fails_independently_of_output(
     format_name: str, os_name: str
 ) -> None:
@@ -32,6 +37,17 @@ def test_unsupported_mac_target_fails_independently_of_output(
     assert findings[0].severity == "error"
     assert findings[0].field_path == "environment.systems.0.os"
     assert "macOS 27 arm64 workstation" in findings[0].suggestion
+
+
+@pytest.mark.parametrize("os_name", ["Cisco IOS XE", "Cisco IOS XE 17.12.1", "Cisco IOS XR"])
+def test_network_appliance_os_does_not_trigger_mac_target_rejection(os_name: str) -> None:
+    scenario = Scenario.model_validate(load_yaml(Path("tests/fixtures/scenarios/minimal.yaml")))
+    scenario.environment.systems.append(
+        System(hostname="EDGE-01", ip="10.0.0.2", os=os_name, type="server")
+    )
+    scenario.environment.network.segments[0].systems.append("EDGE-01")
+    issues = ScenarioValidator(scenario).validate()
+    assert not [issue for issue in issues if issue.severity == "error"]
 
 
 @pytest.mark.parametrize("os_name", ["macOS 27", "macOS 27.0", "macOS 27.1.2"])

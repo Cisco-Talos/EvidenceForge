@@ -69,6 +69,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const [expanded, setExpanded] = useState(false);
   const [logRequested, setLogRequested] = useState(false);
   const [logRefresh, setLogRefresh] = useState(0);
+  const [logLoading, setLogLoading] = useState(false);
   useEffect(() => { if (focusScorecard) setShowScorecard(true); }, [focusScorecard]);
   const linked = context?.jobs.filter((entry) => entry.kind === "evaluation" && entry.generation_id === job.id) || [];
   const savedEvaluation = latestSavedEvaluation(linked);
@@ -139,7 +140,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     { id: "scorecard", label: "View scorecard", group: "inspect", disabled: !scorecardId, reason: "Complete an evaluation to save a scorecard", run: () => setScorecardOpen(true) },
     { id: "log", label: "View log", group: "inspect", run: () => { setLogRequested(true); openDetails(); } },
     { id: "hide-log", label: "Hide log", group: "inspect", disabled: !logRequested, reason: "Open the log first", run: () => setLogRequested(false) },
-    { id: "refresh-log", label: "Refresh log", group: "inspect", run: () => { setLogRequested(true); setLogRefresh((value) => value + 1); openDetails(); } },
+    { id: "refresh-log", label: "Refresh log", group: "inspect", disabled: logLoading, reason: "The log is refreshing", run: () => { setLogRequested(true); setLogRefresh((value) => value + 1); openDetails(); } },
     ...(!generation && job.generation_id ? [{ id: "source", label: "Open generation", group: "inspect" as const, disabled: !onShowSource && !context?.showGeneration, reason: "Open this generation from Job center", run: () => (onShowSource || context?.showGeneration)?.(job.generation_id!) }] : []),
     ...(generation ? [
       { id: "pause", label: "Pause", group: "work" as const, disabled: working || job.status !== "running" || job.checkpoint_hours === 0, reason: job.checkpoint_hours === 0 ? "Checkpointing is disabled for this run" : "Available while generation is running", run: () => requestJob(`/v1/jobs/${job.id}/suspend`) },
@@ -161,7 +162,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
       {!generation && job.scorecard && !job.scorecard.error && <p className="muted small">{(job.scorecard.total_records || 0).toLocaleString()} records evaluated</p>}
       {showScorecard && !generation && <ScorecardPanel jobId={job.id} api={api} />}
       {job.status_message && generation && <p className="job-message">{job.status_message}</p>}
-      {expanded && <JobDiagnostics job={job} api={api} onError={onError} requestedLog={logRequested} refreshVersion={logRefresh} />}
+      {expanded && <JobDiagnostics job={job} api={api} onError={onError} requestedLog={logRequested} refreshVersion={logRefresh} onLoading={setLogLoading} />}
       {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
       {savedExport && <div className="path-with-copy muted small"><span className="path-value" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved ZIP path" onError={onError} /></div>}
       {expanded && detailsExtra}

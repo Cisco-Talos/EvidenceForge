@@ -630,6 +630,18 @@ p { line-height: 1.5; }
 .status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; align-self: start; padding: 5px 8px; border-radius: 20px; color: #b8c7d8; background: #29394a; font-size: 11px; text-transform: capitalize; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-running { color: #9dd4ff; background: #254667; }
+.validation-progress { display: flex; align-items: center; gap: 9px; color: #9dd4ff; }
+.request-feedback p { margin: 5px 0; }
+.request-progress { display: flex; align-items: center; gap: 8px; color: #9dd4ff; }
+.import-readiness { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.request-spinner { flex-shrink: 0; animation: display-name-spin 1s linear infinite; }
+.library-refresh-feedback { max-width: 360px; font-size: 12px; }
+.workspace-operation-feedback .request-feedback { padding: 0 18px; }
+[data-workspace-section="environment"][aria-busy="true"] .state-working svg { animation: display-name-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { [data-workspace-section="environment"][aria-busy="true"] .state-working svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .request-spinner { animation: none; } }
+.validation-progress svg, [data-workspace-section="validation"][aria-busy="true"] .state-working svg { animation: display-name-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .validation-progress svg, [data-workspace-section="validation"][aria-busy="true"] .state-working svg { animation: none; } }
 .status-completed { color: #9ee6c8; background: #205043; }
 .status-paused, .status-queued { color: #f5cf91; background: #594527; }
 .status-failed, .status-stopped, .status-cancelled { color: #efafb8; background: #603642; }

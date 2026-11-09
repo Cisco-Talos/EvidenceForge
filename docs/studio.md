@@ -233,6 +233,10 @@ source declarations, merge decisions, and the composed environment. **Choose pac
 conversation request for you to review and send. Optional project-shared and scenario-private
 configuration contexts are selected explicitly and are disabled by default. They also work
 through the CLI; see [configuration contexts](reference/configuration-contexts.md).
+Environment loads on first expansion and retains its inspection when collapsed and reopened
+within the scenario workspace. Changed scenario/dependency/configuration inputs or **Refresh
+environment** trigger a new inspection. Progress and the last check time appear in the section
+header; refresh failures remain inline.
 
 ### Drafts and local releases
 
@@ -314,6 +318,18 @@ backups do not provide an undo for deletion.
 Before a large run, open **Runs → Forecast** and refresh it to check current machine capacity.
 Forecasts show estimated output size, peak memory/disk requirements, and warnings. They are
 cached across restarts; they do not replace validation or reserve capacity for other jobs.
+
+Clicking **Validate** shows a spinner and temporarily hides earlier findings.
+When the check finishes, the findings return and the check time updates even if the
+findings are unchanged. If validation cannot finish, the failure message appears inline
+with any previous results labeled separately.
+
+Pack validation and Environment refresh use the same spinner and check-time feedback.
+Library refresh keeps the list visible and confirms completion. Resource-forecast and
+log refreshes retain the previous estimate or preview, label it while updating, and
+show failures inline. Import review and optional prepared-scenario validation hide
+superseded findings while checking; reviews show **Ready to import** or **Needs attention**.
+A failed review refresh requires a fresh review before confirming import.
 
 Queued generation captures self-contained resolved inputs, including exact packs, includes,
 selected overlays, and embedded corpora. Later authoring affects new runs only. **Regenerate**

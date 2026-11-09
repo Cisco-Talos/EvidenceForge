@@ -1,5 +1,35 @@
 # Alpha 5 preparation and automated readiness
 
+## Latest handoff — November 9
+
+The user reports Studio testing is fine, closing interactive acceptance of the
+source-launched app (`uv run eforge-desktop`) after the fixes below. The earlier
+pending-Studio statements in this worklog describe historical checkpoints.
+
+The November 9 acceptance fixes follow `cc97f09f` on the Mac implementation branch.
+They align chat with Studio's selected engine, add the accepted request-feedback
+pattern, retain Environment inspection across collapse/reopen, and correct the
+IOS XE/XR false Mac classification. Current generation behavior revision is 499.
+The source Studio acceptance does not establish fresh installer acceptance.
+
+Latest local evidence: 360 frontend tests and production build pass; the OS
+classifier/target/behavior/evaluation/reachability selection passes 204 tests;
+configuration validation passes all 101 files. The original full readiness matrix
+below validated revision 488, before the later realism and acceptance fixes.
+It cannot substitute for the final release snapshot's full automated gates.
+
+The user authorized committing these fixes and requested a release-note proposal;
+release notes are unchanged pending that review. Remaining release preparation:
+reconcile the release notes, integrate the reviewed source into dev, and pass the required gates and
+installer verification on the exact eventual release snapshot. No integration,
+tagging or publication was performed by recording this acceptance.
+
+Related handoffs: [request feedback](2026-11-09-studio-request-feedback.md),
+[chat engine](2026-11-09-studio-chat-engine-selection.md), and
+[IOS classification](2026-11-09-ios-platform-classification.md).
+
+## Historical preparation and gate execution
+
 The user explicitly requested the next alpha version bump and items 1–2 of the
 remaining readiness plan: full automated release validation and a bounded longer
 Mac/mixed-fleet resource measurement. Studio interactive acceptance remains for

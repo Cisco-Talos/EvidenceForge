@@ -3,6 +3,7 @@ import { ShieldCheck, TriangleAlert } from "lucide-react";
 import { CatalogActionContext } from "./CatalogObjectMenu";
 import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import type { CatalogItem, PackReview, StudioApi } from "./api";
+import { RequestFeedback } from "./RequestFeedback";
 
 export function PackWorkflow({ item, api, onPrepare }: {
   item: CatalogItem; api: StudioApi; onPrepare: (prompt: string) => Promise<void>;
@@ -11,7 +12,11 @@ export function PackWorkflow({ item, api, onPrepare }: {
   const [localReview, setReview] = useState<PackReview | null>(null);
   const review = catalog?.packReview?.(item) || localReview;
   const [busy, setBusy] = useState(false);
+  const [inspecting, setInspecting] = useState(true);
   const [error, setError] = useState("");
+  const [checkedAt, setCheckedAt] = useState<number>();
+  const activity = catalog?.packValidationFeedback?.(item);
+  const checking = inspecting || activity?.pending;
   async function prepareRepair() {
     setBusy(true); setError("");
     try { await onPrepare(`Review and repair this pack. First rerun eforge pack validate against the current files. Explain the proposed changes and preserve existing shared or referenced versions by creating a new version before editing. Revalidate the pack and a representative consumer scenario. Current finding: ${review?.error}`); }
@@ -20,17 +25,17 @@ export function PackWorkflow({ item, api, onPrepare }: {
   }
   useEffect(() => {
     let cancelled = false;
-    setBusy(true); setReview(null); setError("");
-    api.request<PackReview>(`/v1/packs/${item.id}/review`).then((value) => { if (!cancelled) { setReview(value); catalog?.onPackReview?.(item, value); } })
+    setBusy(true); setInspecting(true); setReview(null); setError("");
+    api.request<PackReview>(`/v1/packs/${item.id}/review`).then((value) => { if (!cancelled) { setReview(value); setCheckedAt(Date.now() / 1000); catalog?.onPackReview?.(item, value); } })
       .catch((failure) => { if (!cancelled) setError(String(failure)); })
-      .finally(() => { if (!cancelled) setBusy(false); });
+      .finally(() => { if (!cancelled) { setBusy(false); setInspecting(false); } });
     return () => { cancelled = true; };
   }, [api, item.id, item.source_sha256]);
   const fixAction: ObjectAction = catalog?.actions(item).find((action) => action.id === "fix") || { id: "fix", label: "Fix in chat", group: "work", disabled: busy || !review || review.valid, reason: "Validate to find issues requiring changes", run: prepareRepair };
   return <div className="pack-workflow">
     <p>Create and revise reusable content in Conversations or Assets. Draft edits keep the same draft. Publish locally to choose a version and freeze its contents.</p>
-    {error && <p className="error-text" role="alert">{error}</p>}
-    {review && (review.valid ? <>
+    <RequestFeedback pending={!!checking} label="Validating pack and locked dependencies…" error={activity?.error || error} completedAt={activity?.completedAt || checkedAt} completedLabel="Checked" previousLabel={!checking && (activity?.error || error) && review ? "Last available pack review:" : undefined} />
+    {!checking && review && (review.valid ? <>
       <p className="state-success"><ShieldCheck size={16} /> Pack and locked dependencies passed validation.</p>
       <p><strong>{review.reference}</strong></p>
       <p className="muted small">Digest: <code>{review.digest}</code></p>

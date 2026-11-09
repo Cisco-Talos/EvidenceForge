@@ -8,6 +8,7 @@ import { ValidationPanel } from "./components";
 import { scenarioNameError } from "./scenarioName";
 import { packSelection } from "./packSelection";
 import { DisplayNameField } from "./DisplayNameField";
+import { RequestFeedback, type RequestState } from "./RequestFeedback";
 
 export function DependencyRows({ rows, selection, onOpen, canOpen, renderActions }: { renderActions?: (row: DependencyRow) => ReactNode; rows: DependencyRow[]; onOpen?: (row: DependencyRow) => void; canOpen?: (row: DependencyRow) => boolean; selection?: {
   selected: Set<string>; requiredBy: Map<string, string[]>; busy: boolean;
@@ -49,11 +50,23 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
   const [packChoices, setPackChoices] = useState<Set<string> | null>(null);
   const [validation, setValidation] = useState<ValidationResult>();
   const [working, setWorking] = useState(false);
+  const [operation, setOperation] = useState<"review" | "validation" | "import" | null>(null);
+  const [reviewFeedback, setReviewFeedback] = useState<RequestState>({ pending: false });
+  const [validationFeedback, setValidationFeedback] = useState<RequestState>({ pending: false });
+  const [previousReview, setPreviousReview] = useState<ImportReview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const busy = working || creating;
   const nameError = kind === "scenario" ? scenarioNameError(name) : null;
   const selection = packSelection(review?.rows || [], packChoices || new Set());
   const selectedPublishers = kind === "pack" ? (review?.publishers || []).filter((publisher) => [...selection.selected].some((key) => key.startsWith(`${publisher}:`))) : review?.publishers || [];
+  const reviewedRows = review?.rows.filter((row) => kind !== "pack" || row.kind !== "pack" || selection.selected.has(row.key)) || [];
+  const validationFindings = Array.isArray(validation?.report?.issues) ? validation.report.issues as { severity?: unknown }[] : [];
+  const validationNeedsAttention = !!validation && (validation.exit_code !== 0 || validation.report?.valid === false || validationFindings.some((issue) => ["error", "warning"].includes(String(issue.severity))));
+  const needsAttention = !!review && ((kind === "pack" ? selection.blocked : !review.can_import) || reviewedRows.some((row) => ["missing", "conflict", "warning"].includes(row.status)) || validationNeedsAttention || !!validationFeedback.error);
+
+  function resetReviewFeedback() {
+    setPreviousReview(null); setReviewFeedback({ pending: false }); setValidationFeedback({ pending: false });
+  }
 
   async function chooseFile() {
     setError(null);
@@ -61,7 +74,7 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
       const chosen = sourceMode === "workspace"
         ? await invoke<string | null>("choose_bundle_folder")
         : await invoke<string | null>("choose_import_file", { kind });
-      if (chosen) { setPath(chosen); setDocuments(null); setPackChoices(null); }
+      if (chosen) { setPath(chosen); setDocuments(null); setPackChoices(null); resetReviewFeedback(); }
     } catch (failure) { setError(String(failure)); }
   }
   async function chooseSource(index: number) {
@@ -72,13 +85,15 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
   }
   async function preview() {
     if ((nameError && !/\.(efscenario|efpack)$/i.test(path.trim())) || !path.trim()) return;
-    setWorking(true); setError(null); setValidation(undefined);
+    setWorking(true); setOperation("review"); setError(null); setValidation(undefined);
+    setReviewFeedback({ pending: true }); setValidationFeedback({ pending: false });
+    const oldReview = review;
+    setPreviousReview(oldReview || previousReview); setReview(null); setPortable(null);
     try {
-      if (review) await api.request(`/v1/imports/${review.id}`, "DELETE");
-      setReview(null); setPortable(null);
+      if (oldReview) await api.request(`/v1/imports/${oldReview.id}`, "DELETE");
       if (sourceMode === "file" && /\.(efscenario|efpack)$/i.test(path.trim())) {
         const artifact = await api.request<{ name: string; kind: string; schema_version?: string; lifecycle?: { publisher?: string; version?: string; release_notes?: string } }>(`/v1/artifacts/inspect?path=${encodeURIComponent(path.trim())}`);
-        if (artifact.schema_version === "3.0") { setPortable(artifact); setName(artifact.name); return; }
+        if (artifact.schema_version === "3.0") { setPortable(artifact); setName(artifact.name); setReviewFeedback({ pending: false, completedAt: Date.now() / 1000 }); setPreviousReview(null); return; }
       }
       const next = await api.request<ImportReview>(`/v1/imports/${kind}/preview`, "POST", {
         path: path.trim(), source_workspaces: sources.filter((source) => source.trim()).map((source) => source.trim()),
@@ -86,31 +101,36 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
         ...(kind === "scenario" ? { name, documents, ...(configurationContext.trim() ? { configuration_context: configurationContext.trim() } : {}) } : {}),
       }, 180000);
       setReview(next);
+      setReviewFeedback({ pending: false, completedAt: Date.now() / 1000 }); setPreviousReview(null);
       if (kind === "pack") setPackChoices((current) => current === null ? new Set(next.rows.filter((row) => row.kind === "pack").map((row) => row.key)) : new Set([...current].filter((key) => next.rows.some((row) => row.key === key))));
       if (documents === null) setDocuments(next.documents || []);
-    } catch (failure) { setError(String(failure)); }
-    finally { setWorking(false); }
+    } catch (failure) { setReviewFeedback({ pending: false, error: String(failure) }); }
+    finally { setWorking(false); setOperation(null); }
   }
   async function validate() {
     if (!review) return;
-    setWorking(true); setError(null);
-    try { setValidation(await api.request<ValidationResult>(`/v1/imports/${review.id}/validate`, "POST", undefined, 190000)); }
-    catch (failure) { setError(String(failure)); }
-    finally { setWorking(false); }
+    setWorking(true); setOperation("validation"); setError(null); setValidationFeedback({ pending: true });
+    try {
+      const result = await api.request<ValidationResult>(`/v1/imports/${review.id}/validate`, "POST", undefined, 190000);
+      if (!result.report) setValidationFeedback({ pending: false, error: result.error || `CLI exited with code ${result.exit_code}` });
+      else { setValidation(result); setValidationFeedback({ pending: false, completedAt: Date.now() / 1000 }); }
+    }
+    catch (failure) { setValidationFeedback({ pending: false, error: String(failure) }); }
+    finally { setWorking(false); setOperation(null); }
   }
   async function commit() {
     if (portable) {
-      setWorking(true); setError(null);
+      setWorking(true); setOperation("import"); setError(null);
       try {
         const result = await api.request<{ path: string }>("/v1/artifacts/import", "POST", { path: path.trim() }, 180000);
         const items = await api.request<CatalogItem[]>("/v1/items");
         await onImported(items.find((item) => item.path === result.path) || null);
       } catch (failure) { setError(String(failure)); }
-      finally { setWorking(false); }
+      finally { setWorking(false); setOperation(null); }
       return;
     }
     if (!review || nameError || kind === "pack" && selection.blocked) return;
-    setWorking(true); setError(null);
+    setWorking(true); setOperation("import"); setError(null);
     try {
       const result = await api.request<ImportResult>(`/v1/imports/${review.id}/commit`, "POST", {
         accepted_publishers: selectedPublishers,
@@ -118,7 +138,7 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
       }, 240000);
       await onImported(result.item || null);
     } catch (failure) { setError(String(failure)); }
-    finally { setWorking(false); }
+    finally { setWorking(false); setOperation(null); }
   }
   async function close() {
     if (busy) return;
@@ -132,21 +152,25 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
     setSources(next);
     setValidation(undefined);
     setPortable(null);
+    resetReviewFeedback();
     if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); }
   }
   return <Dialog.Root open onOpenChange={(open) => { if (!open) void close(); }}><Dialog.Portal>
     <Dialog.Overlay className="modal-backdrop" />
-    <Dialog.Content className={`close-modal import-dialog ${review ? "import-review-dialog" : ""}`} aria-label={kind === "scenario" ? "New scenario" : "Import packs"} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
+    <Dialog.Content className={`close-modal import-dialog ${review || previousReview || operation === "review" ? "import-review-dialog" : ""}`} aria-label={kind === "scenario" ? "New scenario" : "Import packs"} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
       <form onSubmit={(event) => { event.preventDefault(); if (review || portable) void commit(); else if (action === "create" && !nameError) void (displayName.trim() ? onCreate?.(name, projectId, displayName.trim()) : onCreate?.(name, projectId)); else void preview(); }}>
-        <Dialog.Title>{review || portable ? "Review import" : kind === "scenario" ? "New scenario" : "Import packs"}</Dialog.Title>
+        <Dialog.Title>{review || portable || previousReview || operation === "review" ? "Review import" : kind === "scenario" ? "New scenario" : "Import packs"}</Dialog.Title>
         <Dialog.Description>{review ? "Review the copies and dependency actions before importing. Original files stay in place." : action === "create" ? "Name this scenario now. It will appear in the library while you author it." : kind === "pack" ? "Choose a pack release or source workspace to prepare local copies." : "Choose an existing file to prepare a copy in this workspace."}</Dialog.Description>
+        <RequestFeedback {...reviewFeedback} label="Preparing import review…" completedLabel="Reviewed" />
+        {!working && (review || portable) && <p className={needsAttention ? "import-readiness state-warning" : "import-readiness state-success"} role="status">{needsAttention ? <TriangleAlert size={16} /> : <CheckCircle2 size={16} />}{needsAttention ? "Needs attention" : "Ready to import"}</p>}
+        {reviewFeedback.error && previousReview && <section aria-label="Previous import review"><p className="muted">Previous review · refresh it before importing.</p><DependencyRows rows={previousReview.rows} /></section>}
         {portable && <div className="import-destination"><strong>{portable.name} · {portable.lifecycle?.version}</strong><p>Publisher: {portable.lifecycle?.publisher}</p><p>This immutable release includes sources, frozen configuration, dependencies and integrity receipts.</p>{portable.lifecycle?.release_notes && <p>{portable.lifecycle.release_notes}</p>}</div>}
-        {!review && !portable && <>
+        {!review && !portable && operation !== "review" && <>
           {kind === "scenario" && <><label className="modal-field">Scenario Name<input name="scenario-name" autoComplete="off" aria-label="Scenario Name" value={name} disabled={busy} aria-invalid={!!name && !!nameError} aria-describedby={name && nameError ? "new-scenario-name-error" : undefined} onChange={(event) => setName(event.target.value)} /></label>{name && nameError && <p className="field-error" id="new-scenario-name-error" role="status">{nameError}</p>}{action === "create" && <DisplayNameField label="Scenario display name" value={displayName} onChange={setDisplayName} disabled={busy} placeholder="For example, Healthcare Threat Hunt" api={api} source={nameError ? null : { context: { kind: "scenario", name } }} />}<label className="modal-field">Project<select aria-label="Project for new scenario" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></>}
           {action === "import" && <>
             {kind === "pack" && <label className="modal-field">Project<select aria-label="Project for imported packs" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
-            {kind === "pack" && <label className="modal-field">Import from<select aria-label="Pack import source" value={sourceMode} disabled={busy} onChange={(event) => { setSourceMode(event.target.value as "file" | "workspace"); setPath(""); setPackChoices(null); }}><option value="file">Pack release (.efpack)</option><option value="workspace">Source workspace</option></select></label>}
-            <label className="modal-field">{sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"}<div className="import-path-field"><input aria-label={sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"} name="import-source-path" autoComplete="off" value={path} disabled={busy} placeholder={kind === "scenario" ? "/path/to/scenario.yaml" : sourceMode === "workspace" ? "/path/to/workspace" : "/path/to/release.efpack"} onChange={(event) => { setPath(event.target.value); setDocuments(null); setPackChoices(null); }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} onClick={() => void chooseFile()}><FolderOpen size={15} /> Browse…</button>}</div></label>
+            {kind === "pack" && <label className="modal-field">Import from<select aria-label="Pack import source" value={sourceMode} disabled={busy} onChange={(event) => { resetReviewFeedback(); setSourceMode(event.target.value as "file" | "workspace"); setPath(""); setPackChoices(null); }}><option value="file">Pack release (.efpack)</option><option value="workspace">Source workspace</option></select></label>}
+            <label className="modal-field">{sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"}<div className="import-path-field"><input aria-label={sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"} name="import-source-path" autoComplete="off" value={path} disabled={busy} placeholder={kind === "scenario" ? "/path/to/scenario.yaml" : sourceMode === "workspace" ? "/path/to/workspace" : "/path/to/release.efpack"} onChange={(event) => { resetReviewFeedback(); setPath(event.target.value); setDocuments(null); setPackChoices(null); }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} onClick={() => void chooseFile()}><FolderOpen size={15} /> Browse…</button>}</div></label>
             <p className="muted small">{kind === "scenario" ? "Copies YAML, nested includes, referenced assets, and selected Markdown notes. Packs are checked against this workspace first." : "Imports reviewed exact versions and their locked dependencies into this workspace’s pack library."}</p>
           </>}
         </>}
@@ -157,12 +181,12 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
             onAll: () => setPackChoices(new Set(review.rows.filter((row) => row.kind === "pack").map((row) => row.key))),
             onNone: () => setPackChoices(new Set()),
           } : undefined} />
-          {review.documents && review.documents.length > 0 && <details className="import-documents"><summary>Supporting documents · {(documents || []).length} selected</summary>{review.documents.map((document) => <label key={document}><input className="visible-check" type="checkbox" checked={(documents || []).includes(document)} onChange={(event) => { setDocuments(event.target.checked ? [...(documents || []), document] : (documents || []).filter((entry) => entry !== document)); void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); }} />{document}</label>)}</details>}
+          {review.documents && review.documents.length > 0 && <details className="import-documents"><summary>Supporting documents · {(documents || []).length} selected</summary>{review.documents.map((document) => <label key={document}><input className="visible-check" type="checkbox" disabled={busy} checked={(documents || []).includes(document)} onChange={(event) => { resetReviewFeedback(); setDocuments(event.target.checked ? [...(documents || []), document] : (documents || []).filter((entry) => entry !== document)); void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); }} />{document}</label>)}</details>}
           {review.publishers && review.publishers.length > 0 && <p className="muted small">Confirming imports these publisher namespaces: {selectedPublishers.join(", ") || "none selected"}.</p>}
-          {kind === "scenario" && <div className="import-validation"><button type="button" className="button-quiet" disabled={busy} onClick={() => void validate()}><ShieldCheck size={15} /> {working ? "Working…" : "Validate prepared scenario"}</button><small>Optional check. Findings do not block import. If checked, the imported copy is revalidated and its results saved in the workspace.</small>{validation && <ValidationPanel result={validation} />}</div>}
+          {kind === "scenario" && <div className="import-validation"><button type="button" className="button-quiet" disabled={busy} onClick={() => void validate()}><ShieldCheck size={15} />Validate prepared scenario</button><small>Optional check. Findings do not block import. If checked, the imported copy is revalidated and its results saved in the workspace.</small><RequestFeedback {...validationFeedback} label="Validating prepared scenario…" completedLabel="Checked" />{operation !== "validation" && validation && <>{validationFeedback.error && <p className="muted">Previous validation results:</p>}<ValidationPanel result={validation} /></>}</div>}
         </>}
-        {action === "import" && kind === "scenario" && <details className="import-locations"><summary>Source configuration (optional)</summary><p className="muted small">Select an explicit context file to copy its workspace and ordered overlays into private scenario layers. Review their effect after destination workspace and project configuration. Missing packs are searched in its declared source root.</p><label className="modal-field">Configuration context<div className="import-path-field"><input aria-label="Configuration context" name="configuration-context-file" autoComplete="off" value={configurationContext} disabled={busy} placeholder="/path/to/context.yaml" onChange={(event) => { setConfigurationContext(event.target.value); setPortable(null);
-    if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} aria-label="Browse configuration context" onClick={() => void invoke<string | null>("choose_import_file", { kind: "scenario" }).then((chosen) => { if (chosen) { setConfigurationContext(chosen); setPortable(null);
+        {action === "import" && kind === "scenario" && <details className="import-locations"><summary>Source configuration (optional)</summary><p className="muted small">Select an explicit context file to copy its workspace and ordered overlays into private scenario layers. Review their effect after destination workspace and project configuration. Missing packs are searched in its declared source root.</p><label className="modal-field">Configuration context<div className="import-path-field"><input aria-label="Configuration context" name="configuration-context-file" autoComplete="off" value={configurationContext} disabled={busy} placeholder="/path/to/context.yaml" onChange={(event) => { resetReviewFeedback(); setConfigurationContext(event.target.value); setPortable(null);
+    if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} aria-label="Browse configuration context" onClick={() => void invoke<string | null>("choose_import_file", { kind: "scenario" }).then((chosen) => { if (chosen) { resetReviewFeedback(); setConfigurationContext(chosen); setPortable(null);
     if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } } }).catch((failure) => setError(String(failure)))}><FolderOpen size={15} /> Browse…</button>}</div></label></details>}
         {action === "import" && <details className="import-locations" open={sources.length > 0}><summary>Source workspaces for missing packs</summary><p className="muted small">Add locations to search for exact missing versions. Referenced packs will be copied here.</p>{sources.map((source, index) => <div className="import-path-field" key={index}><input aria-label={`Source workspace ${index + 1}`} name={`source-workspace-${index + 1}`} autoComplete="off" value={source} disabled={busy} onChange={(event) => editSources(sources.map((entry, i) => i === index ? event.target.value : entry))} />{isTauri() && <button type="button" className="icon-button" aria-label={`Browse source workspace ${index + 1}`} disabled={busy} onClick={() => void chooseSource(index)}><FolderOpen size={16} /></button>}<button type="button" className="icon-button" aria-label={`Remove source workspace ${index + 1}`} disabled={busy} onClick={() => editSources(sources.filter((_, i) => i !== index))}><X size={14} /></button></div>)}<button type="button" className="button-quiet" disabled={busy} onClick={() => editSources([...sources, ""])}><Plus size={14} /> Add source workspace</button></details>}
         {error && <p className="field-error" role="alert">{error}</p>}

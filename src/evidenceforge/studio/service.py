@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -171,7 +172,7 @@ from evidenceforge.studio.pack_lifecycle import (
     review_pack_deletion,
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
-from evidenceforge.studio.runtime import runtime_id, runtime_root
+from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanup,
     RuntimeCleanupReport,
@@ -4182,13 +4183,16 @@ def create_app(
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
-            configuration_instructions = ""
-            if runtime_root() is not None:
-                configuration_instructions = (
-                    f" The standalone EvidenceForge CLI is {str(runtime_root() / 'bin/eforge')!r}. "
-                    "Use that absolute executable for EvidenceForge commands in this conversation; "
-                    "it includes its own runtime and requires no uv or Python installation."
-                )
+            cli_command = shlex.join(_eforge_command(controller_settings(studio.settings)))
+            configuration_instructions = (
+                f" The EvidenceForge CLI command prefix selected by Studio is {cli_command}. "
+                "Use that exact command prefix for every EvidenceForge command in this conversation, "
+                "including commands shown as eforge or uv run eforge in skills. "
+                "It uses the same engine as Studio's Validation button and generation jobs. "
+                "Do not substitute an eforge executable found on PATH or another Python environment. "
+                "If this command cannot run or lacks a requested capability, report the blocker; "
+                "do not fall back to another installation or claim equivalent validation."
+            )
             context_source = (
                 item.path
                 if item is not None and item.kind == "scenario"
@@ -4202,10 +4206,14 @@ def create_app(
                 if item is None:
                     configure_scenario(context_source, conversation.workspace, project)
                 arguments = context_arguments(context_source, conversation.workspace)
+                context_field = (
+                    "configuration_context" if arguments[0] == "--context" else "project_root"
+                )
                 configuration_instructions += (
                     " For authored scenario inspection, validation, resolution, resource forecasting, and generation, "
                     f"use this explicitly selected configuration: {arguments[0]} {arguments[1]!r}. "
-                    "Use eforge info configuration_context --json with that selection to inspect named layers. "
+                    f"Use the selected CLI's info {context_field} --json with that selection "
+                    "to inspect the active configuration selection. "
                     "Pack management continues to use --project-root for this workspace. "
                     "Do not apply the context to authoritative resolved inputs; their configuration is embedded. "
                     "Config edits must target the scope requested by the user, preserving the existing family merge rules."

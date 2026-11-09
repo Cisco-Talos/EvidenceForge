@@ -52,7 +52,9 @@ def _user() -> User:
     )
 
 
-@pytest.mark.parametrize("label", ["macOS 26", "Mac OS X", "Darwin 25", "OS X", "MACOS"])
+@pytest.mark.parametrize(
+    "label", ["macOS 26", "Mac OS X", "Darwin 25", "OS X", "OS X 10.11", "MACOS"]
+)
 def test_mac_aliases_agree_at_runtime_and_deployment_boundaries(label: str) -> None:
     assert platform_for_os(label) == "macos"
     assert _get_os_category(label) == "macos"
@@ -72,6 +74,16 @@ def test_mac_aliases_agree_at_runtime_and_deployment_boundaries(label: str) -> N
 )
 def test_other_platform_classification_is_preserved(label: str, expected: str) -> None:
     assert platform_for_os(label) == expected
+
+
+@pytest.mark.parametrize(
+    "label", ["Cisco IOS XE", "Cisco IOS XE 17.12.1", "Cisco IOS XR 7.11", "IOS XE"]
+)
+def test_network_os_names_do_not_select_mac_runtime_or_deployments(label: str) -> None:
+    assert platform_for_os(label) == "unknown"
+    assert _get_os_category(label) == "unknown"
+    assert source_platform_for_os(label) == "unknown"
+    assert infer_system_platform(_system(label)) is None
 
 
 def test_mac_source_admission_does_not_enable_windows_or_linux_endpoint_logs() -> None:

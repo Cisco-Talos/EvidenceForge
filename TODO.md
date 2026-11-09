@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and release validation underway; stable target 2.2.0
+**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and source-launched Studio accepted; integration and final-snapshot release gates remain; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 
@@ -71,6 +71,12 @@ Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
+
+- [x] **P1 — Alpha-5 source-launched Studio acceptance:** On November 9 the user
+  reported Studio testing is fine after chat-engine alignment, request feedback,
+  Environment inspection retention and the IOS XE/XR classification correction.
+  Final integration and exact-release-snapshot automated gates remain separate.
+  See the [release handoff](docs/worklog/2026-11-07-alpha5-readiness.md).
 
 - [x] **P0 — Restore integrated MacOS-test acceptance:** Revision 482 passes the
   unchanged workload with 200/200 native forks, 256/256 execs, 176/176 known exits,
@@ -455,6 +461,17 @@ Windows maintenance cadence/runtime, and source-aware LSASS call traces. Keep
 further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
+
+- [ ] **P2 — Revamp OS-family modeling and classification:** Evaluate an explicit typed
+  OS-family field in the scenario/system schema, retaining OS name/version/build as
+  descriptive metadata and an intentional category for network appliances/other systems.
+  Resolve platform identity once for validation, generation, deployment, storage,
+  evaluation and resource forecasting. Define conflict diagnostics, legacy-input inference
+  and migration, and corresponding Studio/skill authoring support; keep version,
+  architecture and source-capability admission separate. Field names and schema scope
+  remain design work. Keep the current classifier while this is deferred; the motivating
+  IOS XE/XR collision is recorded in the
+  [classification worklog](docs/worklog/2026-11-09-ios-platform-classification.md).
 
 - [x] **P2** Preserve SSH receiver evidence when filtering an external-source SSH scenario
   from eCAR/Zeek/syslog to eCAR alone. Exact publication now supports an absent Zeek owner;

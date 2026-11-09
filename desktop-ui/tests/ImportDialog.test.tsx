@@ -1,11 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ImportDialog } from "../src/ImportDialog";
 import { DependencyPanel } from "../src/DependencyPanel";
-import type { ImportReview, StudioApi } from "../src/api";
+import type { ImportReview, StudioApi, ValidationResult } from "../src/api";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => Boolean(window.__TAURI_INTERNALS__), invoke: vi.fn() }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); delete window.__TAURI_INTERNALS__; });
@@ -100,6 +100,52 @@ test("optional validation findings do not disable import", async () => {
   expect((screen.getByRole("button", { name: "Import with dependency errors" }) as HTMLButtonElement).disabled).toBe(false);
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(request).toHaveBeenCalledWith("/v1/imports/review-1", "DELETE");
+});
+
+test("import review refresh hides old details and a failed review cannot be confirmed", async () => {
+  const { user, request } = await openReview();
+  expect(screen.getByText("Needs attention")).toBeVisible();
+  const original = request.getMockImplementation()!;
+  let finish!: (value: ImportReview) => void;
+  let fail!: (error: Error) => void;
+  request.mockImplementation((...args) => args[0].endsWith("/preview")
+    ? new Promise((resolve, reject) => { finish = resolve; fail = reject; }) : original(...args));
+  await user.click(screen.getByRole("button", { name: "Refresh review" }));
+  expect(screen.getByText("Preparing import review…")).toBeVisible();
+  expect(screen.queryByText("Import this exact version")).toBeNull();
+  expect(screen.queryByText("Ready to import")).toBeNull();
+  await act(async () => fail(new Error("Cannot prepare dependency copies")));
+  expect(screen.getByRole("alert")).toHaveTextContent("Cannot prepare dependency copies");
+  expect(screen.getByRole("region", { name: "Previous import review" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Confirm import" })).toBeNull();
+  expect(request.mock.calls.some(([path]) => path.endsWith("/commit"))).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Import scenario" }));
+  await act(async () => finish({ ...review, rows: [review.rows[0]] }));
+  expect(screen.getByText("Ready to import")).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Previous import review" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Confirm import" })).toBeEnabled();
+});
+
+test("prepared validation hides prior findings and restores them with the failure message", async () => {
+  const { user, request } = await openReview();
+  const result: ValidationResult = { exit_code: 2, error: "", report: { valid: false, issues: [
+    { severity: "error", field_path: "environment.users", message: "No modeled users" },
+  ] } };
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((...args) => args[0].endsWith("/validate") ? Promise.resolve(result) : original(...args));
+  await user.click(screen.getByRole("button", { name: "Validate prepared scenario" }));
+  await screen.findByText("No modeled users");
+  let fail!: (error: Error) => void;
+  request.mockImplementation((...args) => args[0].endsWith("/validate")
+    ? new Promise((_, reject) => { fail = reject; }) : original(...args));
+  await user.click(screen.getByRole("button", { name: "Validate prepared scenario" }));
+  expect(screen.getByText("Validating prepared scenario…")).toBeVisible();
+  expect(screen.queryByText("No modeled users")).toBeNull();
+  await act(async () => fail(new Error("Validation service disconnected")));
+  expect(screen.getByRole("alert")).toHaveTextContent("Validation service disconnected");
+  expect(screen.getByText("Previous validation results:")).toBeVisible();
+  expect(screen.getByText("No modeled users")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Import with dependency errors" })).toBeEnabled();
 });
 
 test("multiple source workspaces and document choices are retained in a fresh review", async () => {

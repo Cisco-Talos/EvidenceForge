@@ -11,6 +11,7 @@ import { SourceDeclarations } from "./SourceDeclarations";
 import { InspectionSection } from "./InspectionSection";
 import { DependencyRows } from "./ImportDialog";
 import { dependencyPackItem, selectedPackItem } from "./environmentPackLinks";
+import { RequestFeedback, type RequestState } from "./RequestFeedback";
 
 export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
   return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
@@ -59,23 +60,26 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, embedded = false }: {
+export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, onInspection, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; dependencyHealth?: DependencyHealth;
   refreshVersion?: number; onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
   onOpenPack?: (pack: CatalogItem) => void;
+  onInspection?: (state: RequestState) => void;
   onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [checkedAt, setCheckedAt] = useState<number>();
   const pickerTrigger = useRef<HTMLButtonElement>(null);
   const [picker, setPicker] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setReport(null); setLoading(true); setError("");
-    void api.request<EnvironmentReport>(`/v1/scenarios/${item.id}/environment`, "GET", undefined, 180000).then((value) => { if (!cancelled) setReport(value); }).catch((failure) => { if (!cancelled) setError(String(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    onInspection?.({ pending: true });
+    void api.request<EnvironmentReport>(`/v1/scenarios/${item.id}/environment`, "GET", undefined, 180000).then((value) => { if (!cancelled) { setReport(value); const completedAt = Date.now() / 1000; setCheckedAt(completedAt); onInspection?.({ pending: false, completedAt }); } }).catch((failure) => { if (!cancelled) { setError(String(failure)); onInspection?.({ pending: false, error: String(failure) }); } }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; onInspection?.({ pending: false }); };
   }, [api, item.id, item.source_sha256, dependencyFingerprint, refresh, refreshVersion]);
   const packRows = dependencyHealth?.rows.filter((row) => row.kind === "pack") || [];
   const otherRows = dependencyHealth?.rows.filter((row) => row.kind !== "pack") || [];
@@ -98,7 +102,7 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
       {fileErrors.length > 0 && <div className="environment-file-errors"><h3>Files needing attention</h3><DependencyRows rows={fileErrors} /></div>}
       {otherRows.length > fileErrors.length && <InspectionSection title="Included files and dependencies" count={`${otherRows.length - fileErrors.length} checks`}><DependencyRows rows={otherRows.filter((row) => !fileErrors.includes(row))} /></InspectionSection>}
     </section>
-    {loading && <p role="status" className="muted">Resolving environment…</p>}{error && <p role="alert" className="field-error">{error}</p>}
+    {!onInspection && <RequestFeedback pending={loading} label="Resolving environment…" error={error} completedAt={checkedAt} completedLabel="Checked" />}
     {report && <>
       {!report.valid && <p role="alert" className="field-error">{report.error} Use Validation to review findings, or prepare a repair in chat.</p>}
       {report.source_sha256 !== item.source_sha256 && <p className="run-revision-note">The source changed during inspection. Refresh the library to load this revision.</p>}

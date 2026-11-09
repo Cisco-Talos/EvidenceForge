@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -19,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from evidenceforge.desktop.controller import _worker_tick
 from evidenceforge.desktop.job_store import ControlIntent
-from evidenceforge.desktop.jobs import resume_generation
+from evidenceforge.desktop.jobs import _eforge_command, resume_generation
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import load_thresholds
@@ -1587,8 +1588,9 @@ def test_two_generation_progress_streams_reconcile_independently(
         ("organization_pack", "eforge-organization-pack"),
     ],
 )
+@pytest.mark.parametrize("cli_selection", ["source", "packaged", "configured", "environment"])
 def test_codex_turn_uses_item_context_and_preserves_fast_completion(
-    tmp_path: Path, monkeypatch: object, kind: str, skill: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, skill: str, cli_selection: str
 ) -> None:
     workspace = tmp_path / "workspace"
     scenario = _scenario(workspace, "alpha")
@@ -1632,7 +1634,18 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
     fake.chmod(0o755)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
+    monkeypatch.delenv("EFORGE_DESKTOP_EFORGE_BIN", raising=False)
+    monkeypatch.delenv("EFORGE_STUDIO_RUNTIME_ROOT", raising=False)
+    if cli_selection == "packaged":
+        monkeypatch.setattr(
+            "evidenceforge.desktop.jobs.runtime_root", lambda: tmp_path / "Private runtime ü"
+        )
+    elif cli_selection == "environment":
+        monkeypatch.setenv("EFORGE_DESKTOP_EFORGE_BIN", str(tmp_path / "Selected CLI ü/eforge"))
     app = create_app(_paths(tmp_path / "private"), "local-secret")
+    if cli_selection == "configured":
+        app.state.studio.settings.eforge_path = tmp_path / "Configured CLI ü/eforge"
+    selected_cli = _eforge_command(AppSettings(eforge_path=app.state.studio.settings.eforge_path))
     headers = {"X-EForge-Token": "local-secret"}
     with TestClient(app) as client:
         item_id = next(
@@ -1673,12 +1686,22 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
     records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     started = next(record for record in records if record["method"] == "thread/start")
     assert str(scenario) in started["params"]["developerInstructions"]
+    assert shlex.join(selected_cli) in started["params"]["developerInstructions"]
+    if kind == "scenario":
+        assert "info project_root --json" in started["params"]["developerInstructions"]
+        assert "info configuration_context" not in started["params"]["developerInstructions"]
+    assert (
+        "Do not substitute an eforge executable found on PATH"
+        in started["params"]["developerInstructions"]
+    )
     turn = next(record for record in records if record["method"] == "turn/start")
     if kind == "scenario":
         resumed = next(record for record in records if record["method"] == "thread/resume")
         assert resumed["params"]["threadId"] == "thread-alpha"
         assert "--context" in resumed["params"]["developerInstructions"]
         assert selected_context in resumed["params"]["developerInstructions"]
+        assert shlex.join(selected_cli) in resumed["params"]["developerInstructions"]
+        assert "info configuration_context --json" in resumed["params"]["developerInstructions"]
         turns = [record for record in records if record["method"] == "turn/start"]
         assert turns[-1]["params"]["input"] == [
             {"type": "text", "text": "Check the updated configuration"}
