@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       source-ref:
@@ -10,7 +11,7 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main, dev]
 
@@ -54,7 +55,7 @@ jobs:
       - name: Validate generation behavior declaration
         run: >-
           uv run python scripts/check_generation_behavior.py
-          --base-ref "${{ github.event.pull_request.base.sha || (inputs.source-ref && 'HEAD^') || (github.ref_type == 'tag' && 'HEAD^') || github.event.before }}"
+          --base-ref "${{ github.event.pull_request.base.sha || (inputs.source-ref && 'HEAD^') || (github.ref_type == 'tag' && 'HEAD^') || (github.event_name == 'workflow_dispatch' && 'HEAD^') || github.event.before }}"
 
   tests:
     name: Tests (${{ matrix.os }}, Python 3.12)
