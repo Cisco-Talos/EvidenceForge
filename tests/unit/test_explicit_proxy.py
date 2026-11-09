@@ -112,7 +112,9 @@ def test_activity_generator_stabilizes_generic_server_proxy_user_agent():
     assert all("Mozilla/" not in user_agent for user_agent in user_agents)
 
 
-def test_unmodeled_sources_get_stable_population_diverse_user_agents():
+def test_unmodeled_sources_get_stable_population_diverse_user_agents() -> None:
+    from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+
     generator = ActivityGenerator(StateManager(), {})
     sources = [f"198.51.100.{index}" for index in range(1, 65)]
 
@@ -140,7 +142,7 @@ def test_unmodeled_sources_get_stable_population_diverse_user_agents():
     ]
 
     assert first == second
-    assert len(set(first)) >= 5
+    assert set(first) == set(load_proxy_user_agents()["workstation"]["windows"])
     assert max(first.count(user_agent) for user_agent in set(first)) < 32
 
 

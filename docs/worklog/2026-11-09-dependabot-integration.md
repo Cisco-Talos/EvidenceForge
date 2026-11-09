@@ -58,3 +58,30 @@ PRs, with no manual dispatch. Add dev to its push branches and a manual dispatch
 entry point; manual runs compare generation behavior with HEAD's first parent.
 Keep existing read-only permissions, concurrency, suites and 120-minute full-suite
 timeouts. Merging this workflow change starts CI on the resulting dev commit.
+
+## Linux CI failure diagnosis
+
+PR #466 merged as `e3a17905`. Its dev push run `42676596774` completed the Linux
+routine suite in 2,604.45 seconds (43 minutes), within the 120-minute limit:
+19,216 passed, 71 skipped, 2,290 deselected and two failures. The completed job
+log is retained locally at `/private/tmp/eforge-linux-ci-e3a17905.log`.
+
+Both failures reproduce independently on macOS with the updated dependencies.
+They are tests left behind by `cc97f09f`'s realism changes:
+
+- The unmodeled proxy population test still requires five distinct User-Agents,
+  but that change intentionally reduced the Windows catalog to three browser
+  agents matching modeled versions. Require coverage of the actual configured
+  pool, retaining source stability and the population concentration bound.
+- The Linux daemon test supplies a generic Mock as the activity generator and
+  expects one process call. Typed shell pipelines now require a real TimingRuntime
+  and emit shell/curl/bash processes. Supply the real timing owner and concrete
+  lifecycle results, use distinct PIDs and assert all three processes retain the
+  service actor, empty logon ID and correct pipeline parent. Keep the assertion
+  that no service logon is generated.
+
+The related full proxy/logon/pipeline modules pass 137 tests (two slow cases
+deselected); all nine strict Linux timing-runtime contract tests also pass.
+Repository Ruff lint/format and whitespace checks pass. The isolated branch is
+`codex/ci-regression-tests-20261109`. The patch changes tests and this worklog only;
+generation behavior and dependency versions stay at the integrated dev snapshot.
