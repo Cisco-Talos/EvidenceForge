@@ -1,0 +1,9 @@
+{
+  "roles": {
+    "threat": "reports declare only neutral briefing/data and primary public references; no forbidden files",
+    "detection": "reports declare only neutral briefing/data and primary public references; no forbidden files",
+    "network": "reports declare only neutral briefing/data and primary public references; no forbidden files",
+    "host": "reports declare only neutral briefing/data and primary public references; no forbidden files"
+  },
+  "scope": "self-reported actual inputs; generic inherited project instructions remain environmental limitation"
+}

@@ -1,0 +1,11 @@
+{
+  "accepted": [
+    "threat",
+    "detection",
+    "network",
+    "host"
+  ],
+  "all_report_no_forbidden_inputs": true,
+  "public_references": "official domains filters/direct upstream URLs",
+  "scope": "self-reported actual reads; generic inherited metadata remains limitation"
+}

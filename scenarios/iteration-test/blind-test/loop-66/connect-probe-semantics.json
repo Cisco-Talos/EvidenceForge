@@ -1,0 +1,84 @@
+{
+  "baseline_loop": 59,
+  "before": {
+    "counts": {
+      "owned_flow_tuples": 1260,
+      "matched_sensor_rows": 2520,
+      "positive_client_payload": 20,
+      "server_first_banner_rows": 14
+    },
+    "commands": [
+      "nmap -Pn -sT -p 22,80,443,445,3306 10.10.2.0/24"
+    ],
+    "examples": [
+      {
+        "sensor": "zeek-core",
+        "line": 3142,
+        "tuple": [
+          "10.10.3.10",
+          57027,
+          "10.10.2.10",
+          445
+        ],
+        "orig_bytes": 15
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 3153,
+        "tuple": [
+          "10.10.3.10",
+          38577,
+          "10.10.2.40",
+          22
+        ],
+        "orig_bytes": 132
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 3216,
+        "tuple": [
+          "10.10.3.10",
+          58036,
+          "10.10.2.30",
+          443
+        ],
+        "orig_bytes": 102
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 3300,
+        "tuple": [
+          "10.10.3.10",
+          35332,
+          "10.10.2.30",
+          80
+        ],
+        "orig_bytes": 119
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 3327,
+        "tuple": [
+          "10.10.3.10",
+          40981,
+          "10.10.2.11",
+          445
+        ],
+        "orig_bytes": 44
+      }
+    ]
+  },
+  "after": {
+    "counts": {
+      "owned_flow_tuples": 1257,
+      "matched_sensor_rows": 2511,
+      "positive_client_payload": 0,
+      "server_first_banner_rows": 0
+    },
+    "commands": [
+      "nmap -Pn -sT -p 22,80,443,445,3306 10.10.2.0/24"
+    ],
+    "examples": []
+  },
+  "qualification": "Process-object-owned outbound tuples from inert plain-connect command strings joined to sensor rows; sensor duplicates not independent scans. Explicit version/script/data commands excluded."
+}

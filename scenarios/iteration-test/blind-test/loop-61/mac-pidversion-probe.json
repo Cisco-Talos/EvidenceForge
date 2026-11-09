@@ -1,0 +1,182 @@
+{
+  "loop": 61,
+  "scope": "New fork child and exec target assignments only, not later references to existing identities. Host-local native event occurrence order, as exported.",
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "new_fork_exec_assignments": 110,
+      "assignments_below_prior_new_identity_high_water": 47,
+      "adjacent_new_fork_version_reversals": 8,
+      "examples": [
+        {
+          "before": {
+            "line": 1,
+            "time": "2026-11-02T13:20:29.875707000Z",
+            "pid": 19775,
+            "pidversion": 31,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 3,
+            "time": "2026-11-02T13:37:11.846603000Z",
+            "pid": 21356,
+            "pidversion": 10,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 13,
+            "time": "2026-11-02T13:37:12.603536000Z",
+            "pid": 21361,
+            "pidversion": 22,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 16,
+            "time": "2026-11-02T13:37:14.145407000Z",
+            "pid": 21360,
+            "pidversion": 20,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 31,
+            "time": "2026-11-02T13:37:33.909775000Z",
+            "pid": 21396,
+            "pidversion": 40,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 33,
+            "time": "2026-11-02T13:37:33.951775000Z",
+            "pid": 21395,
+            "pidversion": 38,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 33,
+            "time": "2026-11-02T13:37:33.951775000Z",
+            "pid": 21395,
+            "pidversion": 38,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 35,
+            "time": "2026-11-02T13:37:34.111682000Z",
+            "pid": 21394,
+            "pidversion": 36,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 80,
+            "time": "2026-11-02T14:53:10.778665000Z",
+            "pid": 37500,
+            "pidversion": 74,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 83,
+            "time": "2026-11-02T14:58:30.473895000Z",
+            "pid": 38574,
+            "pidversion": 70,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 88,
+            "time": "2026-11-02T15:47:27.396195000Z",
+            "pid": 44149,
+            "pidversion": 83,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 93,
+            "time": "2026-11-02T15:54:39.807415000Z",
+            "pid": 44833,
+            "pidversion": 79,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 104,
+            "time": "2026-11-02T16:05:38.601493000Z",
+            "pid": 45865,
+            "pidversion": 94,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 108,
+            "time": "2026-11-02T16:45:40.440113000Z",
+            "pid": 49716,
+            "pidversion": 90,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 117,
+            "time": "2026-11-02T17:12:27.393377000Z",
+            "pid": 52334,
+            "pidversion": 110,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 120,
+            "time": "2026-11-02T17:19:04.671053000Z",
+            "pid": 52993,
+            "pidversion": 96,
+            "phase": "fork"
+          }
+        }
+      ]
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "new_fork_exec_assignments": 86,
+      "assignments_below_prior_new_identity_high_water": 10,
+      "adjacent_new_fork_version_reversals": 2,
+      "examples": [
+        {
+          "before": {
+            "line": 46,
+            "time": "2026-11-02T14:34:22.665490000Z",
+            "pid": 53438,
+            "pidversion": 54,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 49,
+            "time": "2026-11-02T14:38:20.924113000Z",
+            "pid": 54162,
+            "pidversion": 48,
+            "phase": "fork"
+          }
+        },
+        {
+          "before": {
+            "line": 90,
+            "time": "2026-11-02T16:20:51.905655000Z",
+            "pid": 66137,
+            "pidversion": 81,
+            "phase": "fork"
+          },
+          "after": {
+            "line": 92,
+            "time": "2026-11-02T16:34:18.540152000Z",
+            "pid": 67402,
+            "pidversion": 77,
+            "phase": "fork"
+          }
+        }
+      ]
+    }
+  },
+  "total_adjacent_new_fork_reversals": 10,
+  "qualification": "Shared XNU fork/exec allocation counter per Apple primary source; source-build and intentional sanitization alternatives remain qualified. No actual same-process lifetime inversion is implied."
+}

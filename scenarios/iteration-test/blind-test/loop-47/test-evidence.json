@@ -1,0 +1,8 @@
+{
+  "focused_http_proxy_browser_observation_tests": 226,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 446,
+  "full_routine_suite": "Pre-push gate/reconciliation; not repeated per uncommitted loop",
+  "behavior_digest": "e4ecd308dba520616f4d200ff5eb4846d0eacb8ec052d6443a7add7b6bd683a1"
+}

@@ -1,0 +1,26 @@
+{
+  "loop": 68,
+  "scope": "All new fork-child/exec-target native allocations; all audit-token references and eCAR exec current/previous properties. Pre-window/unselected references do not require a visible allocation.",
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "new_allocations": 123,
+      "inversions": [],
+      "unique_versions": 123,
+      "same_generation_wrong_pid_references": [],
+      "native_ecar_exec_matches": 67,
+      "ecar_previous_version_mismatches": [],
+      "ecar_execs_without_native_pair": [],
+      "native_references_checked": 903
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "new_allocations": 86,
+      "inversions": [],
+      "unique_versions": 86,
+      "same_generation_wrong_pid_references": [],
+      "native_ecar_exec_matches": 46,
+      "ecar_previous_version_mismatches": [],
+      "ecar_execs_without_native_pair": [],
+      "native_references_checked": 633
+    }
+  }
+}

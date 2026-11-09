@@ -70,7 +70,17 @@ relationships:
     class: human_workflow
     position: after
     min_ms: 800
-    max_ms: 18000
+    # Foreground work includes both quick follow-ups and longer review/decision
+    # pauses. A narrow upper bound can make unrelated commands inherit the same
+    # apparent schedule when process completion is otherwise well modeled.
+    max_ms: 180000
+  source.firewall.datagram_teardown:
+    # A firewall state entry expires after datagram activity; it is not the
+    # transport's application close timestamp. ASA renders the expiry in seconds.
+    class: teardown
+    position: after
+    min_ms: 1000
+    max_ms: 120000
   posix.foreground_shell_resume:
     # Modeled foreground wait/wakeup/dispatch cost, not capture-calibrated latency.
     class: causal_prerequisite

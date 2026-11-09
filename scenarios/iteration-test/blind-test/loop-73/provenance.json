@@ -1,0 +1,12 @@
+{
+  "scenario": "scenarios/iteration-test/scenario.yaml",
+  "scenario_seed": 42,
+  "output_directory": "/private/tmp/eforge-iteration-test-loop73/bundle",
+  "neutral_review_directory": "/private/tmp/log-study-loop73/dataset-elm",
+  "scenario_inputs_changed": false,
+  "behavior_revision": 492,
+  "generation_completed": true,
+  "evaluation_completed": true,
+  "review_mode": "four independent standalone blind reviewers",
+  "reviewers_received": "neutral data-only directory, no scenario/environment/ground truth/eval/prior reports"
+}

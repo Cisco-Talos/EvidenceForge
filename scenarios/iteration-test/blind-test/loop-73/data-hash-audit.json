@@ -1,0 +1,8 @@
+{
+  "neutral_data_only": true,
+  "authoritative_file_count": 115,
+  "neutral_file_count": 115,
+  "file_manifests_identical": true,
+  "authoritative_manifest_sha256": "46c44e396ca062e3220f4132e17fea0680932a3d4a51633899a3c2ad2ccc78ae",
+  "neutral_manifest_sha256": "46c44e396ca062e3220f4132e17fea0680932a3d4a51633899a3c2ad2ccc78ae"
+}

@@ -1,0 +1,56 @@
+{
+  "question": "Does the DC-01 WMI/SYSTEM sequence demonstrate a concrete source/effect attribution defect?",
+  "dataset": "fixed-seed output byte-identical to Loop 84, copied to neutral panel directory for fresh review",
+  "window_utc": "2026-11-02T17:12:00Z/2026-11-02T17:22:00Z",
+  "observations": [
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:13:26.596Z",
+      "event_id": 4624,
+      "fields": "Target WS-PPATEL-01$; LogonType 3; source 10.10.1.32:65314; LogonId 0x556ed54"
+    },
+    {
+      "source": "WS-PPATEL-01/DC-01 eCAR FLOW",
+      "timestamp_utc": "2026-11-02T17:13:27Z",
+      "fields": "matching SMB tuple 10.10.1.32:65314 -> 10.10.2.10:445"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:14:30.719Z",
+      "event_id": 4688,
+      "fields": "SYSTEM / LUID 0x3e7; cmd.exe spawned by WmiPrvSE.exe PID 0x980; net user svc_dirsync ... /add /domain"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:14:34.538Z",
+      "event_id": 4720,
+      "fields": "svc_dirsync created by SYSTEM / LUID 0x3e7"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:14:39.216Z",
+      "event_id": 4688,
+      "fields": "SYSTEM / LUID 0x3e7; cmd.exe spawned by WmiPrvSE.exe PID 0x980; net group Domain Admins svc_dirsync /add /domain"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:14:43.361Z",
+      "event_id": 4728,
+      "fields": "svc_dirsync added to Domain Admins by SYSTEM / LUID 0x3e7"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:14:49.458Z",
+      "event_id": 4624,
+      "fields": "priya.patel type3 from 10.10.1.32:51774; distinct LogonId 0x5571887"
+    },
+    {
+      "source": "DC-01 Security XML",
+      "timestamp_utc": "2026-11-02T17:19:50.096Z",
+      "event_id": 4688,
+      "fields": "SYSTEM / LUID 0x3e7; WmiPrvSE.exe PID 0x980 starts sc.exe create DeviceSyncSvc"
+    }
+  ],
+  "interpretation": "The visible SMB rows correlate with separate type-3 SMB logons, not the WmiPrvSE command execution identity. The Security events establish local SYSTEM ownership but no remote initiator. The authored scenario models these actions as SYSTEM-origin actions and does not assert a remote WMI source. No impossible ordering or source-native contradiction was established, so this remains an attribution/collection gap rather than a confirmed defect.",
+  "decision": "No generation or scenario change; carry as contextual finding for fresh panel."
+}

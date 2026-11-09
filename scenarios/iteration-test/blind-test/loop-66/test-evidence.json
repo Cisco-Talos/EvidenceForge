@@ -1,0 +1,15 @@
+{
+  "behavior_revision": 467,
+  "focused_browser_proxy_wire_tests_passed": 169,
+  "config_and_owner_tests_passed": 164,
+  "suites_overlap": true,
+  "new_browser_helper_cases": 6,
+  "new_pre_budget_header_case": 1,
+  "new_invalid_config_cases": 4,
+  "validate_config_files": 101,
+  "config_errors": 0,
+  "config_warnings": 0,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "scope_limit": "Known browser owner defaults only; explicit finalized headers/tool/custom/absent cases retained. Zoom application routing remains separately qualified."
+}

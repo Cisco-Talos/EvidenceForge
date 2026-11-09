@@ -1,0 +1,82 @@
+{
+  "APP-INT-01.meridianhcs.local": {
+    "n": 8,
+    "slope_ids_per_minute": 0.5818039365932888,
+    "r_squared": 0.950602004189218,
+    "max_abs_residual": 23.33124398888289,
+    "first_id": 356,
+    "last_id": 510,
+    "min_increment": 6,
+    "max_increment": 45
+  },
+  "DB-PROD-01.meridianhcs.local": {
+    "n": 5,
+    "slope_ids_per_minute": 0.4038235857336127,
+    "r_squared": 0.9397663106155834,
+    "max_abs_residual": 20.881576349798962,
+    "first_id": 277,
+    "last_id": 398,
+    "min_increment": 16,
+    "max_increment": 49
+  },
+  "FILE-LNX-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 0.48205728175935236,
+    "r_squared": 0.9837729852377556,
+    "max_abs_residual": 10.541917538081321,
+    "first_id": 346,
+    "last_id": 486,
+    "min_increment": 16,
+    "max_increment": 48
+  },
+  "LOG-MON-01.meridianhcs.local": {
+    "n": 8,
+    "slope_ids_per_minute": 0.5995086085773501,
+    "r_squared": 0.8978186966268631,
+    "max_abs_residual": 34.89206124141582,
+    "first_id": 312,
+    "last_id": 479,
+    "min_increment": 5,
+    "max_increment": 42
+  },
+  "MAIL-CLIN-01.meridianhcs.local": {
+    "n": 9,
+    "slope_ids_per_minute": 0.7337102537380897,
+    "r_squared": 0.9658472511273741,
+    "max_abs_residual": 35.92264685195758,
+    "first_id": 228,
+    "last_id": 470,
+    "min_increment": 14,
+    "max_increment": 56
+  },
+  "MAIL-EDGE-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 1.1888499962345125,
+    "r_squared": 0.9589275041792034,
+    "max_abs_residual": 17.986619645987865,
+    "first_id": 306,
+    "last_id": 472,
+    "min_increment": 4,
+    "max_increment": 50
+  },
+  "PROXY-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 0.37692351837659643,
+    "r_squared": 0.8543871770665652,
+    "max_abs_residual": 27.174402136415395,
+    "first_id": 197,
+    "last_id": 331,
+    "min_increment": 10,
+    "max_increment": 40
+  },
+  "WEB-EXT-01.meridianhcs.local": {
+    "n": 9,
+    "slope_ids_per_minute": 0.5269442109488708,
+    "r_squared": 0.9770574465917634,
+    "max_abs_residual": 14.22025984412194,
+    "first_id": 209,
+    "last_id": 356,
+    "min_increment": 1,
+    "max_increment": 40
+  }
+}

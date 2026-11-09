@@ -1,0 +1,3 @@
+# HTTP URI semantics
+
+[RFC9110 §7.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-7.1) excludes client fragments from target URI. [§10.1.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.1.3) excludes fragments and userinfo from Referer. [§10.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.2) permits response Location URI references and fragment inheritance. The shared canonical wire helper therefore applies only to HttpContext URI/referrer and ProxyContext URL/referrer, plus browser cache identity. It does not rewrite response Location or original browser/command navigation intent.

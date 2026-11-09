@@ -1,0 +1,11 @@
+{
+  "roles": [
+    "threat",
+    "detection",
+    "network",
+    "host"
+  ],
+  "all_reports_declare_no_forbidden_file_access": true,
+  "facilitator": "only full supplied neutral report bundle",
+  "limitation": "generic inherited operating metadata; self-reported scope, not OS-enforced isolation"
+}

@@ -1,0 +1,104 @@
+{
+  "loop": 70,
+  "qualification": "Fixed-seed generated output; UDP/514 Zeek records are sensor observations, and ASA lifecycle rows are matched by connection ID.",
+  "zeek_dmz_udp_syslog": 33,
+  "zeek_conn_state_s0": 33,
+  "zeek_duration_present": 0,
+  "multipacket_zeek_without_duration": 8,
+  "asa_udp514_builds": 11,
+  "asa_udp514_teardowns": 11,
+  "matched_asa_pairs": 11,
+  "asa_zero_duration_teardowns": 0,
+  "min_displayed_duration_seconds": 7,
+  "max_displayed_duration_seconds": 78,
+  "pairs": [
+    {
+      "connection_id": "1681558",
+      "built": "2026-11-02T13:00:08",
+      "teardown": "2026-11-02T13:00:15",
+      "displayed_duration_seconds": 7,
+      "timestamp_delta_seconds": 7.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681573",
+      "built": "2026-11-02T13:01:34",
+      "teardown": "2026-11-02T13:02:52",
+      "displayed_duration_seconds": 78,
+      "timestamp_delta_seconds": 78.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681583",
+      "built": "2026-11-02T13:01:58",
+      "teardown": "2026-11-02T13:02:35",
+      "displayed_duration_seconds": 37,
+      "timestamp_delta_seconds": 37.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681632",
+      "built": "2026-11-02T13:08:42",
+      "teardown": "2026-11-02T13:09:07",
+      "displayed_duration_seconds": 24,
+      "timestamp_delta_seconds": 25.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681639",
+      "built": "2026-11-02T13:09:51",
+      "teardown": "2026-11-02T13:10:12",
+      "displayed_duration_seconds": 20,
+      "timestamp_delta_seconds": 21.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681646",
+      "built": "2026-11-02T13:10:31",
+      "teardown": "2026-11-02T13:10:38",
+      "displayed_duration_seconds": 7,
+      "timestamp_delta_seconds": 7.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681706",
+      "built": "2026-11-02T13:12:41",
+      "teardown": "2026-11-02T13:13:25",
+      "displayed_duration_seconds": 44,
+      "timestamp_delta_seconds": 44.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681720",
+      "built": "2026-11-02T13:14:09",
+      "teardown": "2026-11-02T13:14:31",
+      "displayed_duration_seconds": 21,
+      "timestamp_delta_seconds": 22.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681721",
+      "built": "2026-11-02T13:14:10",
+      "teardown": "2026-11-02T13:14:20",
+      "displayed_duration_seconds": 10,
+      "timestamp_delta_seconds": 10.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1681725",
+      "built": "2026-11-02T13:14:27",
+      "teardown": "2026-11-02T13:14:50",
+      "displayed_duration_seconds": 23,
+      "timestamp_delta_seconds": 23.0,
+      "duration_zero": false
+    },
+    {
+      "connection_id": "1682036",
+      "built": "2026-11-02T13:29:47",
+      "teardown": "2026-11-02T13:30:08",
+      "displayed_duration_seconds": 20,
+      "timestamp_delta_seconds": 21.0,
+      "duration_zero": false
+    }
+  ]
+}

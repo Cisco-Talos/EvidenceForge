@@ -1,0 +1,48 @@
+{
+  "baseline_loop": 52,
+  "before": {
+    "totals": {
+      "parsed": 3551,
+      "inspected": 1412,
+      "below_request_line_ua": 264,
+      "below_with_referrer": 475
+    },
+    "examples": [
+      {
+        "line": 34,
+        "actual": 92,
+        "floor": 191
+      },
+      {
+        "line": 71,
+        "actual": 165,
+        "floor": 225
+      },
+      {
+        "line": 88,
+        "actual": 108,
+        "floor": 220
+      },
+      {
+        "line": 91,
+        "actual": 191,
+        "floor": 273
+      },
+      {
+        "line": 93,
+        "actual": 232,
+        "floor": 248
+      }
+    ]
+  },
+  "after": {
+    "totals": {
+      "parsed": 3551,
+      "inspected": 1450,
+      "below_request_line_ua": 0,
+      "below_with_referrer": 0
+    },
+    "examples": []
+  },
+  "qualification": "Conservative origin-form line plus observed UA and optional Referer; excludes Host, content and other headers. cs_bytes counts source request transfer total."
+}

@@ -1,0 +1,7 @@
+{
+  "public_candidate_rows": 574,
+  "distinct": 177,
+  "max_days": 199.0,
+  "above_200": 0,
+  "qualification": "Configured issuer membership, not independent DER trust validation; private and self-issued/CA rows excluded."
+}

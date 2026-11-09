@@ -1,0 +1,15 @@
+{
+  "loop": 72,
+  "authoritative_data_files": 115,
+  "neutral_copy_files": 115,
+  "data_sha256_equal": true,
+  "reviewer_reports_sha256": {
+    "threat-hunter.md": "10c866c3fde746b0f6fdcb4ef43a33969f926aaa1413ee48de51991c2af898fa",
+    "detection-engineer.md": "c68f99897dba714ad806d6a3697717f3ab43d8010574067e86297159d183309d",
+    "network-forensics.md": "a796da94df109f8e3401c03e93caa026a4808e3dfdc69cf8e6706649228fec3d",
+    "host-edr-forensics.md": "1dc3f9b3ae666e20af35c23d48be0bdff1946e619bc9daa4ba08641726aff60b"
+  },
+  "authored_input_files": 6,
+  "scenario_modified": false,
+  "code_changed_for_loop": false
+}

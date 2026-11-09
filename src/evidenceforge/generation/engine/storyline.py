@@ -3420,6 +3420,17 @@ class StorylineMixin:
                     termination_time,
                     ensure_utc(release_time) + timedelta(milliseconds=1),
                 )
+            if _get_os_category(system.os) == "linux":
+                from evidenceforge.generation.engine.typed_handlers.process_pipeline import (
+                    linux_pipeline_parent_termination_time,
+                )
+
+                termination_time = linux_pipeline_parent_termination_time(
+                    self,
+                    system=system,
+                    shell_pid=item["pid"],
+                    requested_time=termination_time,
+                )
             self.activity_generator.generate_process_termination(
                 user=actor,
                 system=system,

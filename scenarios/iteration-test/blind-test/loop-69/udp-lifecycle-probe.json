@@ -1,0 +1,40 @@
+{
+  "loop": 69,
+  "qualification": "UDP/514 Zeek DMZ observation and perimeter ASA state lifecycle; one sampled output, counts are sensor observations.",
+  "zeek_dmz_udp_syslog": 33,
+  "zeek_duration_present": 0,
+  "multipacket_without_duration": 8,
+  "asa_udp514_builds": 11,
+  "asa_udp514_teardowns": 11,
+  "asa_zero_duration_teardowns": 11,
+  "zeek_examples": [
+    {
+      "ts": 1793624408.075153,
+      "orig_p": 36809,
+      "orig_pkts": 1,
+      "orig_ip_bytes": 1110,
+      "conn_state": "S0",
+      "duration": null
+    },
+    {
+      "ts": 1793624494.501793,
+      "orig_p": 41363,
+      "orig_pkts": 2,
+      "orig_ip_bytes": 1683,
+      "conn_state": "S0",
+      "duration": null
+    },
+    {
+      "ts": 1793624518.472509,
+      "orig_p": 48188,
+      "orig_pkts": 3,
+      "orig_ip_bytes": 2549,
+      "conn_state": "S0",
+      "duration": null
+    }
+  ],
+  "asa_examples": [
+    "<166>Nov  2 13:00:08 fw-perimeter %ASA-6-302015: Built inbound UDP connection 1681558 for dmz:10.10.3.10/36809 (10.10.3.10/36809) to inside:10.10.2.21/514 (10.10.2.21/514)",
+    "<166>Nov  2 13:00:08 fw-perimeter %ASA-6-302016: Teardown UDP connection 1681558 for dmz:10.10.3.10/36809 to inside:10.10.2.21/514 duration 0:00:00 bytes 1110"
+  ]
+}

@@ -5060,9 +5060,9 @@ class NetworkTransactionPlanner:
             source_system is None
             or event.http is None
             or event.network.initiating_pid <= 0
-            or request_header_finalized
+            or (request_header_finalized and not event.http.user_agent_is_generated_default)
             or event.http.user_agent_known_absent
-            or event.http.user_agent
+            or (event.http.user_agent and not event.http.user_agent_is_generated_default)
         ):
             return
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
@@ -5073,8 +5073,26 @@ class NetworkTransactionPlanner:
             hostname=hostname,
             domain_tags=get_domain_tags(hostname),
         )
-        if process_ua:
-            event.http = replace(event.http, user_agent=process_ua)
+        self._apply_browser_process_user_agent(event, process_ua)
+
+    @staticmethod
+    def _apply_browser_process_user_agent(
+        event: _NetworkOccurrenceDraft,
+        process_user_agent: str,
+    ) -> None:
+        """Bind a generated default HTTP header to its owning browser process."""
+        if (
+            not process_user_agent
+            or event.http is None
+            or event.http.user_agent_known_absent
+            or (event.http.user_agent and not event.http.user_agent_is_generated_default)
+        ):
+            return
+        event.http = replace(
+            event.http,
+            user_agent=process_user_agent,
+            user_agent_is_generated_default=False,
+        )
 
     def _prepare_transparent_proxy_evidence(
         self,
@@ -5122,13 +5140,7 @@ class NetworkTransactionPlanner:
                 hostname=proxy_hostname,
                 domain_tags=domain_tags,
             )
-            if (
-                process_ua
-                and event.http is not None
-                and not event.http.user_agent
-                and not event.http.user_agent_known_absent
-            ):
-                event.http = replace(event.http, user_agent=process_ua)
+            self._apply_browser_process_user_agent(event, process_ua)
             proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
                 self._proxy_request_presentation(
                     event.http,
@@ -5385,6 +5397,7 @@ class NetworkTransactionPlanner:
             uri=uri,
             version="1.1",
             user_agent=ua,
+            user_agent_is_generated_default=not bool(process_ua),
             request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
             response_body_len=resp_body_len,
             status_code=status_code,
@@ -5771,6 +5784,16 @@ class NetworkTransactionPlanner:
                 endpoints=endpoints,
                 response_bytes=protocol_evidence.resp_bytes,
                 rng=rng,
+            )
+
+        # Automatic HTTP evidence may be assembled after process attribution and
+        # after proxy planning. Rebind its generated profile default now that the
+        # final canonical process owner is available, before source fan-out.
+        if event.http is not None and endpoints.source_system is not None:
+            self._bind_browser_user_agent_to_process(
+                event=event,
+                source_system=endpoints.source_system,
+                hostname=event.http.host or endpoints.hostname or "",
             )
 
         if not facts.suppress_application_side_effects:

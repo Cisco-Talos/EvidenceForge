@@ -69,6 +69,7 @@ class BrowserSessionRequest:
     require_browser_like_domain: bool = True
     transfer_variant_key: str | None = None
     user_agent: str | None = None
+    user_agent_is_generated_default: bool = False
     route_profile: Any | None = None
     same_host_only: bool = False
     page_load_budget: int | None = None
@@ -706,6 +707,7 @@ class BrowserSessionActionBundle:
             uri=req.path,
             version="1.1",
             user_agent=request.user_agent or "",
+            user_agent_is_generated_default=request.user_agent_is_generated_default,
             request_body_len=req.request_body_len,
             request_content_type=req.request_content_type,
             request_entity=request_entity,

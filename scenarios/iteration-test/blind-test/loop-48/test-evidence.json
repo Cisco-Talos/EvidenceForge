@@ -1,0 +1,9 @@
+{
+  "observation_dispatcher_tests": 115,
+  "exact_ssh_rdp_close_tests": 15,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 447,
+  "behavior_digest": "d8ad8f7969c91b875ffca3e9ed46fcd298f5ffa253b1e2decec66abd06955b55",
+  "full_routine_suite": "Pre-push gate/reconciliation; not repeated per uncommitted loop"
+}

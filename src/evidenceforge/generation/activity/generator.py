@@ -2518,6 +2518,11 @@ def _linux_command_process_from_stage(
     command_line = _shell_display_join(parts[index:], executable)
     if parts[index].startswith("/"):
         return parts[index], command_line
+    from evidenceforge.generation.activity.system_processes import get_system_binary_path
+
+    configured_system_path = get_system_binary_path(parts[index], username=username)
+    if configured_system_path is not None:
+        return configured_system_path, command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
         return mapped, command_line
@@ -5054,6 +5059,20 @@ class ActivityGenerator:
             )
             if winlogon is not None and all(item.pid != winlogon.pid for item in processes):
                 processes.append(winlogon)
+            if winlogon is not None:
+                session_smss = self.state_manager.get_process(
+                    identity.hostname,
+                    winlogon.parent_pid,
+                )
+                boot_smss_pid = self._get_windows_boot_smss_pid(identity.hostname)
+                if (
+                    session_smss is not None
+                    and session_smss.pid != boot_smss_pid
+                    and session_smss.parent_pid == boot_smss_pid
+                    and session_smss.image.casefold().endswith("\\smss.exe")
+                    and all(item.pid != session_smss.pid for item in processes)
+                ):
+                    processes.append(session_smss)
         by_pid = {process.pid: process for process in processes}
 
         def process_depth(pid: int) -> int:
@@ -12652,6 +12671,12 @@ class ActivityGenerator:
                                 % 1801
                             )
                         )
+                        parent_for_chain = self._create_windows_session_smss(
+                            system=system,
+                            session=session_for_caller,
+                            boot_smss_pid=parent_for_chain,
+                            winlogon_start=caller_start,
+                        )
                         self.state_manager.set_current_time(caller_start)
                         logon_caller_pid = self.state_manager.create_process(
                             system.hostname,
@@ -12933,6 +12958,12 @@ class ActivityGenerator:
                     if parent_for_chain is not None and not session.windows_shell_bootstrapped:
                         winlogon_pid = session.session_winlogon_pid
                         if winlogon_pid is None:
+                            parent_for_chain = self._create_windows_session_smss(
+                                system=system,
+                                session=session,
+                                boot_smss_pid=parent_for_chain,
+                                winlogon_start=time,
+                            )
                             winlogon_pid = self.state_manager.create_process(
                                 system.hostname,
                                 parent_for_chain,
@@ -16575,6 +16606,20 @@ class ActivityGenerator:
                     process.pid != session_winlogon.pid for process in session_processes
                 ):
                     session_processes.append(session_winlogon)
+                if session_winlogon is not None:
+                    session_smss = self.state_manager.get_process(
+                        session.system,
+                        session_winlogon.parent_pid,
+                    )
+                    boot_smss_pid = self._get_windows_boot_smss_pid(session.system)
+                    if (
+                        session_smss is not None
+                        and session_smss.pid != boot_smss_pid
+                        and session_smss.parent_pid == boot_smss_pid
+                        and session_smss.image.casefold().endswith("\\smss.exe")
+                        and all(process.pid != session_smss.pid for process in session_processes)
+                    ):
+                        session_processes.append(session_smss)
             deferred_ssh_transport_process = (
                 next(
                     (
@@ -36628,6 +36673,27 @@ class ActivityGenerator:
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
 
+    def _get_windows_boot_smss_pid(self, hostname: str) -> int:
+        """Resolve the live host boot SMSS identity from State before using a PID hint."""
+
+        boot_smss = next(
+            (
+                process
+                for process in self.state_manager.get_processes_on_system(hostname)
+                if process.image.casefold().endswith("\\smss.exe")
+                and process.username.casefold() == "system"
+                and process.parent_pid == 4
+            ),
+            None,
+        )
+        if boot_smss is not None:
+            return boot_smss.pid
+        hinted_pid = self._get_system_pid(hostname, "smss", 0)
+        hinted = self.state_manager.get_process_identity(hostname, hinted_pid)
+        if hinted is not None and hinted.image.casefold().endswith("\\smss.exe"):
+            return hinted.pid
+        return 0
+
     def _existing_windows_singleton_service_pid(
         self,
         system: System,
@@ -36958,6 +37024,63 @@ class ActivityGenerator:
         self.dispatcher.dispatch_builder(event)
         self._record_process_source_create_time(system.hostname, pid, event)
 
+    def _create_windows_session_smss(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        boot_smss_pid: int,
+        winlogon_start: datetime,
+    ) -> int:
+        """Create the session-specific SMSS child that owns one Winlogon process."""
+        if session.session_winlogon_pid is not None:
+            winlogon = self.state_manager.get_process(
+                system.hostname,
+                session.session_winlogon_pid,
+            )
+            existing_smss = (
+                self.state_manager.get_process(system.hostname, winlogon.parent_pid)
+                if winlogon is not None
+                else None
+            )
+            if (
+                existing_smss is not None
+                and existing_smss.pid != boot_smss_pid
+                and existing_smss.image.casefold().endswith("\\smss.exe")
+            ):
+                return existing_smss.pid
+
+        boot_smss = self.state_manager.get_process(system.hostname, boot_smss_pid)
+        if boot_smss is None or not boot_smss.image.casefold().endswith("\\smss.exe"):
+            raise StateError("Windows session bootstrap requires the active boot SMSS process")
+        lead_ms = 100 + (
+            _stable_seed(f"windows-session-smss-lead:{system.hostname}:{session.logon_id}") % 1_401
+        )
+        smss_start = ensure_utc(winlogon_start) - timedelta(milliseconds=lead_ms)
+        if smss_start <= boot_smss.start_time:
+            smss_start = boot_smss.start_time + timedelta(milliseconds=1)
+        original_time = self.state_manager.state.current_time
+        try:
+            self.state_manager.set_current_time(smss_start)
+            plan = self.state_manager.plan_process_materialization(
+                system=system.hostname,
+                parent_pid=boot_smss_pid,
+                image=r"C:\Windows\System32\smss.exe",
+                command_line="smss.exe",
+                username="SYSTEM",
+                integrity_level="System",
+                os_category="windows",
+                logon_id="0x3e7",
+                lifecycle_group_id=f"windows-session-smss:{system.hostname}:{session.logon_id}",
+                auth_session_id=session.session_id,
+                auth_logon_type=session.logon_type,
+            )
+            with self.state_manager.materialization_guard(plan.expected_version):
+                return self.state_manager.materialize_process(plan).pid
+        finally:
+            if original_time is not None:
+                self.state_manager.set_current_time(original_time)
+
     def _create_windows_session_shell_lifecycle(
         self,
         *,
@@ -36970,6 +37093,25 @@ class ActivityGenerator:
         """Create a visible Windows session shell and end userinit after handoff."""
         original_time = self.state_manager.state.current_time
         try:
+            winlogon = self.state_manager.get_process(system.hostname, winlogon_pid)
+            session_smss = (
+                self.state_manager.get_process(system.hostname, winlogon.parent_pid)
+                if winlogon is not None
+                else None
+            )
+            if (
+                session_smss is not None
+                and session_smss.image.casefold().endswith("\\smss.exe")
+                and session_smss.pid != self._get_windows_boot_smss_pid(system.hostname)
+            ):
+                self._emit_windows_session_process_create(
+                    system=system,
+                    session=session,
+                    pid=session_smss.pid,
+                    event_username="SYSTEM",
+                    event_logon_id="0x3e7",
+                    integrity_level="System",
+                )
             self._emit_windows_session_process_create(
                 system=system,
                 session=session,

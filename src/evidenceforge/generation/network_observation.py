@@ -2926,11 +2926,21 @@ class NetworkObservationPlanner:
             return "", None
         if network.protocol != "tcp":
             anchor = observed_close or observed_start
+            window = get_timing_window(
+                "source.firewall.datagram_teardown",
+                default_min_ms=1000,
+                default_max_ms=120000,
+                default_position="after",
+                default_class="teardown",
+            )
             return (
                 "",
                 runtime.sampler.after(
                     anchor,
-                    cls._right_skew_distribution(83, 8_500),
+                    cls._right_skew_distribution(
+                        window.min_ms * 1000,
+                        window.max_ms * 1000,
+                    ),
                     relationship_key="source.firewall.datagram_teardown",
                     scope=scope,
                     sample_key="datagram",

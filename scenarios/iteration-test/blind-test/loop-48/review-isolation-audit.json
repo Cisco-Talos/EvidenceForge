@@ -1,0 +1,13 @@
+{
+  "accepted": [
+    "threat",
+    "detection",
+    "network_clean",
+    "host"
+  ],
+  "discarded_unscored": [
+    "network"
+  ],
+  "primary_control": "actual domain filters/direct upstream URLs for public references",
+  "scope": "self-reported actual reads; generic inherited metadata remains limitation"
+}

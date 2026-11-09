@@ -1,0 +1,49 @@
+{
+  "method": "Retrospective self-reported actual-input audit; not an OS-enforced access-control attestation",
+  "valid_reviewer_actual_repo_or_prior_result_reads": false,
+  "inherited_context_limitation": "Generic EvidenceForge/AGENTS operating instructions identify the project environment. Reviewers were instructed not to use harness metadata as origin evidence and report no previous scores, findings, scenario or fix context. Blinding concerns actual evidence/context access, not full removal of inherited operating instructions.",
+  "reviewers": {
+    "threat": {
+      "actual_reads": [
+        "neutral threat-prompt.md",
+        "neutral data/",
+        "own newly written report for format/count check"
+      ],
+      "project_or_prior_results_read": false
+    },
+    "detection": {
+      "actual_reads": [
+        "neutral detection-prompt.md",
+        "neutral data/",
+        "own newly written report to check headings"
+      ],
+      "project_or_prior_results_read": false,
+      "non_evidence_exception": "uv --no-project failed creating a cache temp directory; no cache contents inspected"
+    },
+    "network": {
+      "actual_reads": [
+        "neutral network-prompt.md",
+        "neutral data/",
+        "own newly written report to check headings/scores"
+      ],
+      "project_or_prior_results_read": false
+    },
+    "host": {
+      "actual_reads": [
+        "neutral host-prompt.md",
+        "neutral data/"
+      ],
+      "project_or_prior_results_read": false
+    }
+  },
+  "scores_changed": false,
+  "facilitator": {
+    "actual_reads": [
+      "neutral deliberation-prompt.md (complete, chunked)",
+      "own new deliberation.md and result JSON for verification"
+    ],
+    "project_or_prior_loop_results_or_coordinator_probes_read": false,
+    "inherited_generic_instructions": true,
+    "positions_changed_during_audit": false
+  }
+}

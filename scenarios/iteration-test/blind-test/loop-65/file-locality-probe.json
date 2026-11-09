@@ -1,0 +1,23 @@
+{
+  "loop": 65,
+  "totals": {
+    "comparable": 2480,
+    "sender_locality_mismatch": 0
+  },
+  "sensors": {
+    "zeek-db": {
+      "comparable": 31,
+      "sender_locality_mismatch": 0
+    },
+    "zeek-core": {
+      "comparable": 682,
+      "sender_locality_mismatch": 0
+    },
+    "zeek-dmz": {
+      "comparable": 1767,
+      "sender_locality_mismatch": 0
+    }
+  },
+  "examples": [],
+  "qualification": "Single-connection native Files::Info compared to same sensor conn endpoint locality, selected by is_orig; no public/private-IP assumption."
+}

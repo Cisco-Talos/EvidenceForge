@@ -1,0 +1,7 @@
+{
+  "revision": 465,
+  "behavior_surface_sha256": "122238a61f9c7bf395a33c07b1e1956d0c6d441678fdc1d40426ba007190ff18",
+  "all_surface_source_mtimes_precede_generation_start": true,
+  "generation_source_changed": false,
+  "snapshot_correction": "Original coordinator snapshot raced the manifest update and declared464; preserved as pre-generation-race-behavior-snapshot.yaml. Correct descriptor465 matches the pre-generation revision-update source digest and post-generation source digest. Bundle manifest does not carry a behavior revision; no such runtime claim is made. No code/seed/scenario change or record edit was used."
+}

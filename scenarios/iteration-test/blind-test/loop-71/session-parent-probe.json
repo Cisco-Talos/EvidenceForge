@@ -1,0 +1,58 @@
+{
+  "loop": 71,
+  "probe": "Windows session parent and lifecycle across Sysmon/Security/eCAR",
+  "sysmon_process_create_counts": {
+    "smss.exe": 21,
+    "winlogon.exe": 21
+  },
+  "security_4688_counts": {
+    "smss.exe": 21,
+    "winlogon.exe": 21
+  },
+  "ecar_process_create_counts": {
+    "smss.exe": 21,
+    "winlogon.exe": 20
+  },
+  "sysmon_process_terminate_counts": {
+    "smss.exe": 20,
+    "winlogon.exe": 19
+  },
+  "security_4689_counts": {
+    "smss.exe": 20,
+    "winlogon.exe": 19
+  },
+  "ecar_process_terminate_counts": {
+    "smss.exe": 20,
+    "winlogon.exe": 19
+  },
+  "winlogon_with_visible_matching_smss_parent": 21,
+  "winlogon_parent_errors": [],
+  "parent_guids_reused_across_terminal_sessions": [],
+  "session_smss_unterminated_in_sysmon": [
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "parent_guid": "{fd907e59-aa7b-6ae8-f302-0000e2a406e3}"
+    },
+    {
+      "host": "WS-DRAMIREZ-01.meridianhcs.local",
+      "parent_guid": "{5af96291-8ed3-6ae8-f902-00106d906a99}"
+    },
+    {
+      "host": "WS-EBROOKS-01.meridianhcs.local",
+      "parent_guid": "{2fa70b62-9451-6ae8-4202-00002bffb2fe}"
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "parent_guid": "{7b2a0e3f-ad5c-6ae8-9b00-000009322bd5}"
+    },
+    {
+      "host": "WS-PPATEL-01.meridianhcs.local",
+      "parent_guid": "{398565f9-a7ea-6ae8-3f02-0010828ed46b}"
+    },
+    {
+      "host": "WS-SMARTINEZ-01.meridianhcs.local",
+      "parent_guid": "{f613acc2-8b5d-6ae8-6f02-0000a390b692}"
+    }
+  ],
+  "finding": "Sysmon Winlogon parent identities are session-specific and match visible SMSS parents; cross-source create/termination counts recorded for lifecycle verification."
+}

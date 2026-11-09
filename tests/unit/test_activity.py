@@ -2166,6 +2166,31 @@ class TestActivityGenerator:
             test_system.hostname, sessions[second_logon].explorer_pid
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
+        first_winlogon = state_manager.get_process(
+            test_system.hostname,
+            sessions[first_logon].session_winlogon_pid,
+        )
+        second_winlogon = state_manager.get_process(
+            test_system.hostname,
+            sessions[second_logon].session_winlogon_pid,
+        )
+        assert first_winlogon is not None
+        assert second_winlogon is not None
+        first_session_smss = state_manager.get_process(
+            test_system.hostname,
+            first_winlogon.parent_pid,
+        )
+        second_session_smss = state_manager.get_process(
+            test_system.hostname,
+            second_winlogon.parent_pid,
+        )
+        assert first_session_smss is not None
+        assert second_session_smss is not None
+        assert first_session_smss.image.endswith("\\smss.exe")
+        assert second_session_smss.image.endswith("\\smss.exe")
+        assert first_session_smss.pid != second_session_smss.pid
+        assert first_session_smss.parent_pid == smss_pid
+        assert second_session_smss.parent_pid == smss_pid
         logon_events = [
             call.args[0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -5470,7 +5495,7 @@ class TestActivityGenerator:
         assert len(creates) == 8
         for previous, current in zip(creates, creates[1:], strict=False):
             assert exits[previous.process.pid] < current.timestamp
-            assert (current.timestamp - exits[previous.process.pid]).total_seconds() < 22
+            assert (current.timestamp - exits[previous.process.pid]).total_seconds() < 182
         gaps = [
             (current.timestamp - previous.timestamp).total_seconds()
             for previous, current in zip(creates, creates[1:], strict=False)

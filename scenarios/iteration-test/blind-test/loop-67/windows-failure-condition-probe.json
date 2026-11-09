@@ -1,0 +1,24 @@
+{
+  "loop": 67,
+  "native_failure_conditions": [
+    {
+      "status": "0xc000006d",
+      "substatus": "0xc000006a",
+      "reason": "%%2313",
+      "count": 17
+    },
+    {
+      "status": "0xc000006d",
+      "substatus": "0xc0000072",
+      "reason": "%%2313",
+      "count": 3
+    }
+  ],
+  "generic_status_reason_mismatches": 0,
+  "examples": [],
+  "normalized_failed_reason_counts": {
+    "bad_password": 22,
+    "account_disabled": 3
+  },
+  "scope": "Microsoft4625: native resource reason describes mainStatus, numeric SubStatus supplies specific account condition. No claim generic reason alone means bad password."
+}

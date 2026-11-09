@@ -9136,8 +9136,21 @@ class EventDispatcher:
                 and identity.principal.casefold() == "system"
                 and has_exact_session_activity
             )
+            is_rdp_target_system_smss = bool(
+                executable == "smss.exe"
+                and identity.principal.casefold() == "system"
+                and type(session_identity) is SessionIdentity
+                and session_identity.session_kind == "rdp"
+                and session_identity.hostname == identity.hostname
+                and has_exact_session_activity
+            )
             if (
-                not (is_rdp_target_member or is_rdp_source_mstsc or is_rdp_target_system_winlogon)
+                not (
+                    is_rdp_target_member
+                    or is_rdp_source_mstsc
+                    or is_rdp_target_system_winlogon
+                    or is_rdp_target_system_smss
+                )
                 or termination.identity != identity
                 or termination.end_time != event.timestamp
                 or event.src_host.hostname != identity.hostname
@@ -9152,7 +9165,10 @@ class EventDispatcher:
                     identity_plan.session is not None
                     and (
                         identity_plan.session.hostname != identity.hostname
-                        or identity_plan.session.logon_id != identity.logon_id
+                        or (
+                            identity_plan.session.logon_id != identity.logon_id
+                            and not is_rdp_target_system_smss
+                        )
                     )
                 )
                 or lifecycle.group_id != identity.lifecycle_group_id

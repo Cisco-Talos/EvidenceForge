@@ -1,0 +1,20 @@
+{
+  "status": "REVIEW",
+  "acceptance_passed": false,
+  "failed_criteria": [
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 78.01047120418848,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    }
+  ],
+  "investigation": "TLS policy changes canonical certificate identities, hence fingerprint-keyed chain and OCSP decisions, child events and downstream shared activity planning. Fresh dataset changes widely despite identical authored seed/coverage. Pivot guard now149/191=78.0105 vs80 required. At least one false-missing trace: mac-2-inventory-run-2 has eCAR dropped5 but native ES visible4; macos_launch_item matcher only accepts eCAR. Separate Windows lock/unlock intended18:20/18:35 versus visible18:40/18:42 remains a real timing/ground-truth reconciliation concern. Do not waive it as clean data or alter thresholds.",
+  "decision": "Retain this fresh run as a REVIEW iteration with its hard failure visible; blind assess independently and prioritize owning-layer reconciliation. No product acceptance rules changed, no retry/seed search."
+}

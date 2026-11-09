@@ -1,0 +1,8 @@
+{
+  "focused_native_protocol_observation_tests": 116,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 449,
+  "behavior_digest": "205c1bb44a4a6e7ea9f2b76288764e4f0cac5f625243100c2debc14e773495d6",
+  "full_routine_suite": "Pre-push gate/reconciliation; not repeated per uncommitted loop"
+}

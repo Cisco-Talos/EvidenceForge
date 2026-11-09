@@ -1,0 +1,3 @@
+# Observed TCP packet categories
+
+Pinned [Zeek8.0.5 TCPSessionAdapter.cc](https://github.com/zeek/zeek/blob/v8.0.5/src/packet_analysis/protocol/tcp/TCPSessionAdapter.cc), SHA716fcfd4e195620d756ea7be7e0190dadd8a042b, uses exclusive multi-flag, single-SYN/FIN/RST, data and empty-ACK branches in update_history. Each distinct recorded category in a direction therefore supplies a conservative physical packet lower bound. Ancillary checksum/retransmission/gap annotations do not add an independent packet in this bound. The capture selector preserves the observed categories and partitions actual full-packet loss within remaining capacity; it does not erase history to fit a counter. Small histories with no spare packet capacity cannot authorize that loss projection.

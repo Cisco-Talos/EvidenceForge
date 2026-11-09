@@ -1,0 +1,25 @@
+{
+  "validation": "Scenario valid with pre-existing noise-to-signal warning and pivot information notices; no scenario edits.",
+  "config_validation": "101 files, 0 errors/warnings/info.",
+  "behavior_manifest": "revision 490; digest validated against current source surface.",
+  "focused_tests": {
+    "command": ".venv/bin/pytest tests/unit/test_network_observation.py -q",
+    "result": "39 passed",
+    "cisco_asa_emitter": {
+      "command": ".venv/bin/pytest tests/unit/test_cisco_asa_emitter.py -q",
+      "result": "71 passed"
+    }
+  },
+  "ruff": {
+    "check": "pass",
+    "format_check": "2 files already formatted"
+  },
+  "diff_check": "pass",
+  "full_suite": "not run",
+  "generation": "completed successfully",
+  "quantitative_evaluation": {
+    "records": 135860,
+    "score": 96.7911224204883,
+    "acceptance_passed": true
+  }
+}

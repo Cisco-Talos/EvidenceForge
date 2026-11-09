@@ -1,0 +1,18 @@
+{
+  "loop": 68,
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "unique_paths": 32,
+      "lexical_inode_pair_inversions": 328,
+      "birth_chronology_inversions": 0,
+      "unstable_metadata_paths": []
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "unique_paths": 26,
+      "lexical_inode_pair_inversions": 173,
+      "birth_chronology_inversions": 0,
+      "unstable_metadata_paths": []
+    }
+  },
+  "qualification": "Unique observed executable paths; source metadata only. Sequential modeled allocation follows pre-existing file births; no claim of full APFS history or hidden inode consumption."
+}

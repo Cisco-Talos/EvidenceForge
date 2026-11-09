@@ -3096,6 +3096,10 @@ def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:
         modeled_target_smss=True,
         modeled_source_pid4=True,
         production_timing_runtime=True,
+        session_end_plan=SessionEndPlan(
+            _START + timedelta(minutes=10),
+            "action_bundle",
+        ),
     )
     winlogon = next(
         identity
@@ -3103,10 +3107,20 @@ def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:
         if identity.hostname == harness.target_hostname
         and identity.image.casefold().endswith("winlogon.exe")
     )
-    smss = harness.state.get_process_identity(harness.target_hostname, 420)
-    assert smss is not None
-    assert winlogon.parent_pid == smss.pid
+    boot_smss = harness.state.get_process_identity(harness.target_hostname, 420)
+    assert boot_smss is not None
+    session_smss = next(
+        process
+        for process in harness.state.get_processes_on_system(harness.target_hostname)
+        if process.image.casefold().endswith("smss.exe")
+        and process.pid != boot_smss.pid
+        and process.parent_pid == boot_smss.pid
+    )
+    assert winlogon.parent_pid == session_smss.pid
 
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_process(harness.target_hostname, session_smss.pid) is None
     _close_rdp_terminal_harness(harness)
 
 

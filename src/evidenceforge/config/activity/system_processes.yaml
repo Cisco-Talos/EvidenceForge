@@ -1205,6 +1205,9 @@ system_binaries:
     - exe: "cat"
       path: "/usr/bin/cat"
       release_policy: host_build
+    - exe: "base64"
+      path: "/usr/bin/base64"
+      release_policy: host_build
     - exe: "cut"
       path: "/usr/bin/cut"
       release_policy: unspecified

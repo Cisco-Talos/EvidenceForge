@@ -456,6 +456,36 @@ def handle_process(
         )
     self.activity_generator._record_user_process(system, process_actor, pid, process_name)
     self._record_last_storyline_process(system, pid, process_name, process_command_line)
+    pipeline_children = ()
+    if os_category == "linux":
+        from .process_pipeline import emit_storyline_linux_pipeline_children
+
+        # Child evidence is scoped to this pipeline and must not consume the
+        # storyline's shared RNG stream. In particular, the parent shell's
+        # planned lifetime must remain independent of how many pipeline stages
+        # are rendered.
+        pipeline_rng_state = rng.getstate()
+        try:
+            pipeline_children = emit_storyline_linux_pipeline_children(
+                self,
+                user=process_actor,
+                system=system,
+                start_time=time,
+                logon_id=process_logon_id,
+                shell_pid=pid,
+                shell_image=process_name,
+                command_line=process_command_line,
+            )
+        finally:
+            rng.setstate(pipeline_rng_state)
+        if pipeline_children:
+            effect_owner = pipeline_children[-1]
+            self._record_last_storyline_process(
+                system,
+                effect_owner.pid,
+                effect_owner.image,
+                effect_owner.command_line,
+            )
     process_ref = getattr(spec, "process_ref", None)
     if not isinstance(process_ref, str) or not process_ref:
         process_ref = None
@@ -583,9 +613,11 @@ def handle_process(
         if os_category == "macos"
         else _estimate_process_lifetime(process_name, process_command_line)
     )
+    pipeline_parent_termination_time: datetime | None = None
     if lifetime is not None:
         term_delay = rng.uniform(lifetime[0], lifetime[1])
         term_time = time + timedelta(seconds=term_delay)
+        pipeline_parent_termination_time = term_time
         shell_release_time = term_time
         terminate_immediately = False
         if os_category == "windows":
@@ -649,6 +681,51 @@ def handle_process(
             if canonical_close is not None:
                 term_time = ensure_utc(canonical_close)
                 shell_release_time = term_time
+        if pipeline_children:
+            owner_pid = pipeline_children[-1].pid
+            owner_close_getter = getattr(
+                self.activity_generator,
+                "foreground_process_termination_time",
+                None,
+            )
+            owner_close = (
+                owner_close_getter(system.hostname, owner_pid)
+                if callable(owner_close_getter)
+                else None
+            )
+            if owner_close is not None:
+                parent_release_delay = 80 + (
+                    _stable_seed(
+                        f"storyline_linux_pipeline_parent_wait:{system.hostname}:"
+                        f"{pid}:{owner_pid}:{ensure_utc(owner_close).isoformat()}"
+                    )
+                    % 921
+                )
+                pipeline_parent_termination_time = max(
+                    ensure_utc(term_time),
+                    ensure_utc(owner_close) + timedelta(milliseconds=parent_release_delay),
+                )
+                term_time = pipeline_parent_termination_time
+                shell_release_time = term_time
+                self.activity_generator._remember_foreground_process_finalizer(
+                    system=system,
+                    user=process_actor,
+                    pid=pid,
+                    process_name=process_name,
+                    logon_id=process_logon_id,
+                    termination_time=term_time,
+                )
+            from .process_pipeline import terminate_storyline_linux_pipeline_children
+
+            terminate_storyline_linux_pipeline_children(
+                self,
+                children=pipeline_children,
+                user=process_actor,
+                system=system,
+                logon_id=process_logon_id,
+                parent_termination_time=pipeline_parent_termination_time,
+                owner_pid=pipeline_children[-1].pid,
+            )
         if terminate_immediately:
             self.activity_generator.generate_process_termination(
                 user=process_actor,

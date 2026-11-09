@@ -1,0 +1,20 @@
+{
+  "finding": "Core and DMZ Zeek same-tuple timestamps cluster near a fixed -114.245 ms offset",
+  "observed": {
+    "matching_tuples": 5134,
+    "median_dmz_minus_core_ms": -114.245,
+    "standard_deviation_ms": 1.90,
+    "within_5ms_of_median": 5131
+  },
+  "configured_model": {
+    "file": "src/evidenceforge/config/activity/timing_profiles.yaml",
+    "default_profile": "distributed_taps",
+    "clock_offset_us": [-250000, 250000],
+    "clock_drift_ppm": [-1, 1],
+    "route_delay_us": [200, 3500],
+    "event_jitter_us": [-1500, 1500],
+    "jitter_model": "slow clock wander shared by nearby observations, not independent per-flow timestamp noise"
+  },
+  "code_path": "NetworkObservationPlanner samples per-sensor clock projection and per-transaction route delay; shared sensor clocks are keyed by sensor identity and use five-minute wander knots.",
+  "disposition": "Observed offset is within the declared controlled-clock distributed-tap model. Treat as a weak texture signal rather than a demonstrated source-timing defect; do not add arbitrary per-flow jitter."
+}

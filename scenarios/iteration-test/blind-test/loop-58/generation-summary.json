@@ -1,0 +1,36 @@
+{
+  "generation_seed": 42,
+  "output_target": "default",
+  "formats": [
+    "bash_history",
+    "cisco_asa",
+    "ecar",
+    "macos_endpoint_security",
+    "macos_unified_log",
+    "proxy_access",
+    "snort_alert",
+    "syslog",
+    "web_access",
+    "windows",
+    "zeek",
+    "zsh_history"
+  ],
+  "selected_packs": [
+    {
+      "digest": "11e90fb8aa02c2a97d55b6a90fb9b7c192470215174f10f2832da6c253c62928",
+      "location": "package:evidenceforge:industry:technology@1.0.0",
+      "name": "technology",
+      "publisher": "evidenceforge",
+      "source": "package",
+      "type": "industry",
+      "version": "1.0.0"
+    }
+  ],
+  "resolved_file_sha256": "0fce9023e25e88687389bbed39b352c67df7e018d6d2973011721382762978cb",
+  "evidenceforge_version": "2.2.0a4",
+  "runtime": {
+    "platform": "darwin",
+    "python": "3.12.12"
+  },
+  "created_at": "2026-11-06T07:15:59.682157Z"
+}

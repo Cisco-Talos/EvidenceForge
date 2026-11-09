@@ -1,0 +1,130 @@
+{
+  "browser": {
+    "windows_browser_http_requests_matched_to_sysmon_event3": 179,
+    "matched_process_ua_counts": [
+      {
+        "image": "chrome.exe",
+        "file_version": "120",
+        "ua_family": "Chrome",
+        "ua_major": "120",
+        "requests": 120
+      },
+      {
+        "image": "firefox.exe",
+        "file_version": "121",
+        "ua_family": "Firefox",
+        "ua_major": "121",
+        "requests": 59
+      }
+    ],
+    "all_major_mismatch_count": 0,
+    "generated_profile_mismatch_count": 0,
+    "mismatch_samples": [],
+    "zeek_http_sysmon_event3_exact_tuple_matches": 360
+  },
+  "logind": {
+    "hosts": {
+      "MAIL-EDGE-01.meridianhcs.local": {
+        "new_sessions": 5,
+        "unique_ids": 5,
+        "chronology_inversions": 0,
+        "min_id": 332,
+        "max_id": 432,
+        "max_increment": 56,
+        "repeated_ids": []
+      },
+      "DB-PROD-01.meridianhcs.local": {
+        "new_sessions": 6,
+        "unique_ids": 6,
+        "chronology_inversions": 0,
+        "min_id": 280,
+        "max_id": 436,
+        "max_increment": 64,
+        "repeated_ids": []
+      },
+      "LT-MRIVERA-02.meridianhcs.local": {
+        "new_sessions": 0,
+        "unique_ids": 0,
+        "chronology_inversions": 0,
+        "min_id": null,
+        "max_id": null,
+        "max_increment": 0,
+        "repeated_ids": []
+      },
+      "WEB-EXT-01.meridianhcs.local": {
+        "new_sessions": 11,
+        "unique_ids": 11,
+        "chronology_inversions": 0,
+        "min_id": 178,
+        "max_id": 393,
+        "max_increment": 56,
+        "repeated_ids": []
+      },
+      "LOG-MON-01.meridianhcs.local": {
+        "new_sessions": 5,
+        "unique_ids": 5,
+        "chronology_inversions": 0,
+        "min_id": 302,
+        "max_id": 416,
+        "max_increment": 40,
+        "repeated_ids": []
+      },
+      "PROXY-01.meridianhcs.local": {
+        "new_sessions": 3,
+        "unique_ids": 3,
+        "chronology_inversions": 0,
+        "min_id": 200,
+        "max_id": 249,
+        "max_increment": 36,
+        "repeated_ids": []
+      },
+      "MAIL-CLIN-01.meridianhcs.local": {
+        "new_sessions": 7,
+        "unique_ids": 7,
+        "chronology_inversions": 0,
+        "min_id": 249,
+        "max_id": 425,
+        "max_increment": 63,
+        "repeated_ids": []
+      },
+      "WS-LNGUYEN-01.meridianhcs.local": {
+        "new_sessions": 3,
+        "unique_ids": 3,
+        "chronology_inversions": 0,
+        "min_id": 107,
+        "max_id": 175,
+        "max_increment": 40,
+        "repeated_ids": []
+      },
+      "WS-OHADDAD-01.meridianhcs.local": {
+        "new_sessions": 2,
+        "unique_ids": 2,
+        "chronology_inversions": 0,
+        "min_id": 226,
+        "max_id": 246,
+        "max_increment": 20,
+        "repeated_ids": []
+      },
+      "FILE-LNX-01.meridianhcs.local": {
+        "new_sessions": 6,
+        "unique_ids": 6,
+        "chronology_inversions": 0,
+        "min_id": 241,
+        "max_id": 419,
+        "max_increment": 48,
+        "repeated_ids": []
+      },
+      "APP-INT-01.meridianhcs.local": {
+        "new_sessions": 9,
+        "unique_ids": 9,
+        "chronology_inversions": 0,
+        "min_id": 324,
+        "max_id": 451,
+        "max_increment": 25,
+        "repeated_ids": []
+      }
+    },
+    "total_chronology_inversions": 0,
+    "hosts_with_repeated_ids": []
+  }
+}

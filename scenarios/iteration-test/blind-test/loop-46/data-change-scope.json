@@ -1,0 +1,19 @@
+{
+  "baseline_loop": 45,
+  "dns_changed_sensor_rows_by_type": {
+    "SRV": 120,
+    "TXT": 284,
+    "MX": 8,
+    "SOA": 3
+  },
+  "dns_total_changed_rows": 415,
+  "smb2_mapping_rows_without_unobserved_smb1_fields": 132,
+  "other_fields_unchanged": true,
+  "changed_data_files": [
+    "zeek-db/dns.json",
+    "zeek-core/dns.json",
+    "zeek-core/smb_mapping.json",
+    "zeek-dmz/dns.json"
+  ],
+  "unchanged_data_files": 113
+}

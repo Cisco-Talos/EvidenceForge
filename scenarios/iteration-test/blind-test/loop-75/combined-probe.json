@@ -1,0 +1,221 @@
+{
+  "scan": {
+    "zeek-core": {
+      "counts_by_port": {
+        "443": 254,
+        "3306": 254,
+        "22": 253,
+        "445": 254,
+        "80": 254
+      },
+      "unique_destinations_by_port": {
+        "443": 254,
+        "3306": 254,
+        "22": 253,
+        "445": 254,
+        "80": 254
+      },
+      "start": "2026-11-02T14:40:30.705627+00:00",
+      "end": "2026-11-02T14:40:36.901268+00:00",
+      "conn_states": {
+        "S0": 1235,
+        "REJ": 22,
+        "RSTO": 11,
+        "RSTR": 1
+      }
+    },
+    "zeek-dmz": {
+      "counts_by_port": {
+        "443": 260,
+        "3306": 252,
+        "445": 253,
+        "22": 254,
+        "80": 254
+      },
+      "unique_destinations_by_port": {
+        "443": 254,
+        "3306": 252,
+        "445": 253,
+        "22": 254,
+        "80": 254
+      },
+      "start": "2026-11-02T14:40:23.741394+00:00",
+      "end": "2026-11-02T14:42:41.283154+00:00",
+      "conn_states": {
+        "S0": 1240,
+        "REJ": 21,
+        "RSTO": 11,
+        "RSTR": 1
+      }
+    }
+  },
+  "queues": {
+    "hosts": {
+      "MAIL-EDGE-01.meridianhcs.local": {
+        "syslog_records": 469,
+        "queue_reports": 1,
+        "pending_values": [
+          497
+        ],
+        "pending_max": 497,
+        "checkpoint_range": [
+          88874,
+          89442
+        ]
+      },
+      "DB-PROD-01.meridianhcs.local": {
+        "syslog_records": 216,
+        "queue_reports": 5,
+        "pending_values": [
+          237,
+          97,
+          0,
+          0,
+          0
+        ],
+        "pending_max": 237,
+        "checkpoint_range": [
+          100561,
+          103393
+        ]
+      },
+      "LT-MRIVERA-02.meridianhcs.local": {
+        "syslog_records": 153,
+        "queue_reports": 1,
+        "pending_values": [
+          0
+        ],
+        "pending_max": 0,
+        "checkpoint_range": [
+          19614,
+          19614
+        ]
+      },
+      "WEB-EXT-01.meridianhcs.local": {
+        "syslog_records": 952,
+        "queue_reports": 3,
+        "pending_values": [
+          2812,
+          3698,
+          3404
+        ],
+        "pending_max": 3698,
+        "checkpoint_range": [
+          94661,
+          95128
+        ]
+      },
+      "LOG-MON-01.meridianhcs.local": {
+        "syslog_records": 257,
+        "queue_reports": 6,
+        "pending_values": [
+          1747,
+          1200,
+          1210,
+          1231,
+          416,
+          391
+        ],
+        "pending_max": 1747,
+        "checkpoint_range": [
+          58578,
+          61526
+        ]
+      },
+      "PROXY-01.meridianhcs.local": {
+        "syslog_records": 176,
+        "queue_reports": 2,
+        "pending_values": [
+          766,
+          1702
+        ],
+        "pending_max": 1702,
+        "checkpoint_range": [
+          98038,
+          99145
+        ]
+      },
+      "MAIL-CLIN-01.meridianhcs.local": {
+        "syslog_records": 300,
+        "queue_reports": 3,
+        "pending_values": [
+          448,
+          542,
+          438
+        ],
+        "pending_max": 542,
+        "checkpoint_range": [
+          23441,
+          24637
+        ]
+      },
+      "WS-LNGUYEN-01.meridianhcs.local": {
+        "syslog_records": 253,
+        "queue_reports": 5,
+        "pending_values": [
+          643,
+          673,
+          1072,
+          1731,
+          1935
+        ],
+        "pending_max": 1935,
+        "checkpoint_range": [
+          48409,
+          52265
+        ]
+      },
+      "WS-OHADDAD-01.meridianhcs.local": {
+        "syslog_records": 194,
+        "queue_reports": 4,
+        "pending_values": [
+          955,
+          1128,
+          1623,
+          1583
+        ],
+        "pending_max": 1623,
+        "checkpoint_range": [
+          33976,
+          37396
+        ]
+      },
+      "FILE-LNX-01.meridianhcs.local": {
+        "syslog_records": 562,
+        "queue_reports": 4,
+        "pending_values": [
+          2206,
+          2055,
+          2343,
+          2805
+        ],
+        "pending_max": 2805,
+        "checkpoint_range": [
+          80061,
+          81226
+        ]
+      },
+      "APP-INT-01.meridianhcs.local": {
+        "syslog_records": 237,
+        "queue_reports": 5,
+        "pending_values": [
+          1869,
+          2449,
+          2167,
+          2059,
+          893
+        ],
+        "pending_max": 2449,
+        "checkpoint_range": [
+          18614,
+          20265
+        ]
+      }
+    },
+    "host_count": 11,
+    "queue_report_count": 39,
+    "host_max_pending": 3698,
+    "hosts_with_pending_over_1000": 7,
+    "total_visible_syslog_records": 3769
+  }
+}

@@ -4041,14 +4041,21 @@ class BaselineMixin:
                 # Fires twice per hour at fixed offsets
                 fire_minute_1 = jitter_offset_min % 30
                 fire_minute_2 = fire_minute_1 + 30
+                fire_minutes = (fire_minute_1, fire_minute_2)
                 fire_minute = fire_minute_1  # use first slot
+            elif frequency == "10min":
+                # Debian sysstat cron runs on ten-minute slots; keep one stable
+                # minute phase per host while retaining cron's minute alignment.
+                phase_minute = (int(sched.get("typical_minute", 0)) + jitter_offset_min) % 10
+                fire_minutes = tuple(phase_minute + 10 * slot for slot in range(6))
+                fire_minute = fire_minutes[0]
             else:
                 continue
 
             # Compute event timestamp
-            if frequency == "30min":
-                # Generate two events per hour
-                for fm in (fire_minute_1, fire_minute_2):
+            if frequency in {"30min", "10min"}:
+                # Generate each configured recurring slot in this hour.
+                for fm in fire_minutes:
                     slot_key = (
                         f"sched_slot:{system.hostname}:{service}:{current_hour.isoformat()}:{fm}"
                     )
@@ -4082,13 +4089,32 @@ class BaselineMixin:
         # a cron parent/child pair then has no adjacent room below that PID and
         # produces visibly reversing process IDs. Execute the planned task
         # anchors chronologically so lifecycle state follows occurrence time.
+        debian_sa1_shared_rng_uses = 0
         for ts, _service, sched in sorted(pending_occurrences, key=lambda item: item[:2]):
             pass_admission = getattr(self, "_baseline_pass_admits", None)
             if callable(pass_admission) and not pass_admission(
                 current_hour, start=ts, end=ts + timedelta(seconds=15.0)
             ):
                 continue
-            self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
+            event_rng = rng
+            if sched.get("service") == "debian-sa1":
+                # Preserve two legacy shared-stream invocations per hour; isolate added slots so
+                # the higher-frequency job cannot perturb unrelated baseline workflows.
+                if debian_sa1_shared_rng_uses >= 2:
+                    event_rng = random.Random(
+                        _stable_seed(
+                            f"scheduled_event:{system.hostname}:{sched['service']}:{ts.isoformat()}"
+                        )
+                    )
+                debian_sa1_shared_rng_uses += 1
+            self._emit_scheduled_event(
+                sched,
+                system,
+                ts,
+                event_rng,
+                sys_pids,
+                is_rhel_like,
+            )
 
     def _emit_scheduled_event(
         self,
@@ -11337,6 +11363,7 @@ class BaselineMixin:
                     break
 
         session_ua = ""
+        session_ua_is_generated_default = False
         selected_process = self.state_manager.get_process(system.hostname, persona_pid)
         if selected_process is not None:
             session_ua = self.activity_generator.browser_user_agent_for_process(
@@ -11353,6 +11380,7 @@ class BaselineMixin:
                 hostname=hostname,
                 domain_tags=tuple(domain_tags),
             )
+            session_ua_is_generated_default = bool(session_ua)
 
         BrowserSessionActionBundle(
             request=BrowserSessionRequest(
@@ -11372,6 +11400,7 @@ class BaselineMixin:
                 latest_request_time=latest_request_time,
                 transfer_variant_key=f"{system.ip}:{hostname}:{os_cat}:{base_ts.isoformat()}",
                 user_agent=session_ua,
+                user_agent_is_generated_default=session_ua_is_generated_default,
                 source="baseline_persona_browsing",
             ),
             executor=self.activity_generator,
@@ -14395,6 +14424,7 @@ class BaselineMixin:
                         require_browser_like_domain=False,
                         transfer_variant_key=f"{client_ip}:{chosen_ua}:{base_ts.isoformat()}",
                         user_agent=chosen_ua,
+                        user_agent_is_generated_default=True,
                         same_host_only=True,
                         page_load_budget=top_level_budget - top_level_emitted,
                         request_body_floor=200,

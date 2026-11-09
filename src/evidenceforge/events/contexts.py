@@ -760,6 +760,7 @@ class HttpContext:
     version: str = "1.1"
     user_agent: str = ""
     user_agent_known_absent: bool = False
+    user_agent_is_generated_default: bool = False
     request_body_len: int = 0
     request_content_type: str = ""
     request_entity: HttpRequestEntityContext | None = None

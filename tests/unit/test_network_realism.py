@@ -9,6 +9,7 @@
 
 import math
 import random
+import re
 from collections import Counter
 
 from evidenceforge.generation.actions.network_transaction_planner import (
@@ -351,6 +352,17 @@ class TestProxyUaOsMatch:
         windows_uas = " ".join(_proxy_ua_pool("workstation", "windows"))
         assert "Windows NT" in windows_uas
         assert "Chrome" in windows_uas
+
+    def test_windows_browser_versions_match_modeled_workstation_binaries(self):
+        windows_uas = _proxy_ua_pool("workstation", "windows")
+        browser_versions = {
+            (family, major)
+            for user_agent in windows_uas
+            for family, version in re.findall(r"\b(Chrome|Firefox|Edg)/(\d+)", user_agent)
+            for major in (version,)
+        }
+
+        assert browser_versions == {("Chrome", "120"), ("Firefox", "121"), ("Edg", "120")}
 
     def test_linux_pool_differs_from_windows(self):
         assert set(_proxy_ua_pool("workstation", "linux")) != set(

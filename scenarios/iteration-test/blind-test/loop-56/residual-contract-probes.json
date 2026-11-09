@@ -1,0 +1,20 @@
+{
+  "scope": "Carried issues rechecked on this fresh loop. TCP joins require unique five-tuples, SF, visible SYN/SYN-ACK and both FINs, and starts within one second. Capture may differ; native stream versus captured-byte semantics need separate ledgers.",
+  "proxy_fragment_requests": [],
+  "tcp_comparisons": [
+    {
+      "left": "zeek-core",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 2206,
+      "stream_difference_equals_capture_gap": 0,
+      "examples": []
+    },
+    {
+      "left": "zeek-db",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 282,
+      "stream_difference_equals_capture_gap": 0,
+      "examples": []
+    }
+  ]
+}

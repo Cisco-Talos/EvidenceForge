@@ -1,0 +1,14 @@
+{
+  "eforge_common_probes.py": 0,
+  "eforge_record_guardrail.py": 0,
+  "eforge_proxy_request_probe.py": 0,
+  "eforge_proxy_tls_probe.py": 0,
+  "eforge_file_locality_probe.py": 0,
+  "eforge_request_ua_probe.py": 0,
+  "eforge_sam_transition_probe.py": 0,
+  "eforge_sensitive_privileges_probe.py": 0,
+  "eforge_connect_probe.py": 0,
+  "eforge_syslog_transport_probe.py": 0,
+  "eforge_shell_handoff_probe.py": 0,
+  "eforge_http_gap_probe.py": 0
+}

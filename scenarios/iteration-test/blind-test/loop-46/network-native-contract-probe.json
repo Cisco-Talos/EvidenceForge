@@ -1,0 +1,148 @@
+{
+  "loop": 46,
+  "qualification": "ICMP native OTH per pinned Zeek8.0.5 Conn::conn_state. Conservative TCP check only distinct observed SYN/SYNACK, pure ACK and data packet branches; ignores FIN/RST/retransmission/gap flags. Sensor observations overlap; counts are not unique physical sessions.",
+  "totals": {
+    "conservative_history_packet_contradictions": 13,
+    "icmp_observations": 723,
+    "icmp_non_native_state": 723
+  },
+  "sensors": {
+    "zeek-db": {
+      "counts": {
+        "conservative_history_packet_contradictions": 2,
+        "icmp_observations": 18,
+        "icmp_non_native_state": 18
+      },
+      "examples": [
+        {
+          "line": 2,
+          "uid": "CQWbtKB9csDTuaq42P",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 7,
+          "missed_bytes": 3,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 175,
+          "uid": "CZFToLaFBiiQZfG8FA",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 5,
+          "missed_bytes": 2,
+          "sides": [
+            "orig"
+          ]
+        }
+      ]
+    },
+    "zeek-core": {
+      "counts": {
+        "icmp_observations": 401,
+        "icmp_non_native_state": 401,
+        "conservative_history_packet_contradictions": 3
+      },
+      "examples": [
+        {
+          "line": 583,
+          "uid": "CUa5XVnKjHhEAOdmfS",
+          "history": "ShADadrGg",
+          "orig_pkts": 2,
+          "resp_pkts": 8,
+          "missed_bytes": 99,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 2435,
+          "uid": "C4NDPem0M0CYh6kRHub",
+          "history": "ShADadFg",
+          "orig_pkts": 5,
+          "resp_pkts": 2,
+          "missed_bytes": 2,
+          "sides": [
+            "resp"
+          ]
+        },
+        {
+          "line": 10789,
+          "uid": "CczJ7YXLHcEVJLcr8ZZ",
+          "history": "ShADadFg",
+          "orig_pkts": 5,
+          "resp_pkts": 2,
+          "missed_bytes": 8,
+          "sides": [
+            "resp"
+          ]
+        }
+      ]
+    },
+    "zeek-dmz": {
+      "counts": {
+        "icmp_observations": 304,
+        "icmp_non_native_state": 304,
+        "conservative_history_packet_contradictions": 8
+      },
+      "examples": [
+        {
+          "line": 39,
+          "uid": "Ckd3jVzeRznbUlm7tI",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 7,
+          "missed_bytes": 1,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 123,
+          "uid": "Cr5oHwYh17jGMcFBPqX",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 15,
+          "missed_bytes": 1,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 1474,
+          "uid": "CGwH0xxswtAjrsrhvz",
+          "history": "ShADG",
+          "orig_pkts": 2,
+          "resp_pkts": 1,
+          "missed_bytes": 1,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 5405,
+          "uid": "CsPBLlydXrmXysm1E",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 4,
+          "missed_bytes": 3,
+          "sides": [
+            "orig"
+          ]
+        },
+        {
+          "line": 7656,
+          "uid": "CdhaZxVIVX8lBGTLHZ",
+          "history": "ShADadrG",
+          "orig_pkts": 2,
+          "resp_pkts": 4,
+          "missed_bytes": 2,
+          "sides": [
+            "orig"
+          ]
+        }
+      ]
+    }
+  }
+}

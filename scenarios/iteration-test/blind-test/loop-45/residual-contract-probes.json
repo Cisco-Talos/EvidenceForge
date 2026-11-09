@@ -1,0 +1,99 @@
+{
+  "scope": "Carried issues rechecked on this fresh loop. TCP joins require unique five-tuples, SF, visible SYN/SYN-ACK and both FINs, and starts within one second. Capture may differ; native stream versus captured-byte semantics need separate ledgers.",
+  "proxy_fragment_requests": [
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 1579,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:16:04:07 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 67306 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=764 wire_sc_bytes=67455 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-858b329b3c46b09e client_src_port=50465\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 1595,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:16:04:31 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 77093 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=665 wire_sc_bytes=77271 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-4aebb1188d37d224 client_src_port=61666\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2283,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.32 - MERIDIANHCS\\priya.patel [02/Nov/2026:16:46:45 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 41977 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=747 wire_sc_bytes=42188 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-1465a2240e455862 client_src_port=57308\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2316,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.32 - MERIDIANHCS\\priya.patel [02/Nov/2026:16:47:02 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 19575 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=549 wire_sc_bytes=19760 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-b26ddf1e090635cf client_src_port=50440\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2658,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:17:24:27 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 10712 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=585 wire_sc_bytes=10909 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-2a6dff15a308501e client_src_port=51060\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2681,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:17:25:07 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 62914 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=634 wire_sc_bytes=63163 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-9fd47ccd81deb1a2 client_src_port=59201\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2893,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:03 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 51300 \"https://outlook.office365.com/owa/\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=660 wire_sc_bytes=51378 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-d4f305c7ea2e45ca client_src_port=52543\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2901,
+      "target": "https://outlook.office365.com/owa/#/mail",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:22 +0000] \"GET https://outlook.office365.com/owa/#/mail HTTP/1.1\" 200 44866 \"https://outlook.office365.com/owa/#/calendar\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=690 wire_sc_bytes=45037 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-58dee47cfc94c91b client_src_port=52024\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2911,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:29 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 9079 \"https://outlook.office365.com/owa/#/mail\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=614 wire_sc_bytes=9202 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-6baaf4f9fb79250a client_src_port=56213\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3051,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:11 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 76129 \"https://outlook.office365.com/owa/\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=776 wire_sc_bytes=76200 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-43450cf80b458c16 client_src_port=57387\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3076,
+      "target": "https://outlook.office365.com/owa/#/mail/compose",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:30 +0000] \"GET https://outlook.office365.com/owa/#/mail/compose HTTP/1.1\" 200 50053 \"https://outlook.office365.com/owa/#/calendar\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=735 wire_sc_bytes=50230 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-375b01610be01323 client_src_port=60586\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3116,
+      "target": "https://outlook.office365.com/owa/#/mail",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:47 +0000] \"GET https://outlook.office365.com/owa/#/mail HTTP/1.1\" 200 51523 \"https://outlook.office365.com/owa/#/mail/compose\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=591 wire_sc_bytes=51649 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-682525c19b6d2069 client_src_port=60529\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3155,
+      "target": "https://outlook.office365.com/owa/#/mail/compose",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:12:08 +0000] \"GET https://outlook.office365.com/owa/#/mail/compose HTTP/1.1\" 200 33392 \"https://outlook.office365.com/owa/#/mail\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=714 wire_sc_bytes=33563 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-f9f316861d5ff85f client_src_port=56929\""
+    }
+  ],
+  "tcp_comparisons": [
+    {
+      "left": "zeek-core",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 2188,
+      "stream_difference_equals_capture_gap": 0,
+      "examples": []
+    },
+    {
+      "left": "zeek-db",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 223,
+      "stream_difference_equals_capture_gap": 0,
+      "examples": []
+    }
+  ]
+}

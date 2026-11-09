@@ -2886,7 +2886,8 @@ class TestValidateConfig:
         )
 
         assert debian_sa1["type"] == "cron"
-        assert debian_sa1["frequency"] == "30min"
+        assert debian_sa1["frequency"] == "10min"
+        assert debian_sa1["typical_minute"] == 5
         assert debian_sa1["cron_user"] == "sysstat"
         assert "debian-sa1" in debian_sa1["cron_commands"]["debian"]
 

@@ -62,6 +62,27 @@ def test_only_unspecified_header_uses_process_default(known_absent: bool, expect
     assert executor.browser_user_agent_for_process.call_count == int(not known_absent)
 
 
+def test_process_browser_identity_replaces_generated_http_default() -> None:
+    executor = SimpleNamespace(browser_user_agent_for_process=Mock(return_value="Chrome/120"))
+    planner = NetworkTransactionPlanner(executor)
+    event = _NetworkOccurrenceDraft(
+        timestamp=datetime(2026, 11, 2, tzinfo=UTC),
+        http=HttpContext(user_agent="Chrome/119", user_agent_is_generated_default=True),
+        network=SimpleNamespace(initiating_pid=42),
+    )
+
+    planner._bind_browser_user_agent_to_process(
+        event=event,
+        source_system=System(hostname="client", ip="10.0.0.1", os="Windows 11", type="workstation"),
+        hostname="example.test",
+        request_header_finalized=True,
+    )
+
+    assert event.http.user_agent == "Chrome/120"
+    assert not event.http.user_agent_is_generated_default
+    executor.browser_user_agent_for_process.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "image,family",
     [

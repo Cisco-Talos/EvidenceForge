@@ -1,0 +1,22 @@
+{
+  "baseline_loop": 49,
+  "totals": {
+    "non_icmp_rows_unchanged": 21425,
+    "icmp_rows_corrected": 723
+  },
+  "sensors": {
+    "zeek-db": {
+      "non_icmp_rows_unchanged": 415,
+      "icmp_rows_corrected": 18
+    },
+    "zeek-core": {
+      "non_icmp_rows_unchanged": 11913,
+      "icmp_rows_corrected": 401
+    },
+    "zeek-dmz": {
+      "non_icmp_rows_unchanged": 9097,
+      "icmp_rows_corrected": 304
+    }
+  },
+  "only_changed_fields": "ICMP conn_state and omitted synthetic history; all other fields unchanged"
+}

@@ -1,0 +1,56 @@
+{
+  "baseline_loop": 58,
+  "before": {
+    "counts": {
+      "rows": 409,
+      "rows_with_nonsensitive_rights": 273,
+      "empty_lists": 0
+    },
+    "examples": [
+      {
+        "host": "DC-02.meridianhcs.local",
+        "bad": [
+          "SeChangeNotifyPrivilege"
+        ],
+        "user": "LOCAL SERVICE"
+      },
+      {
+        "host": "DC-02.meridianhcs.local",
+        "bad": [
+          "SeChangeNotifyPrivilege"
+        ],
+        "user": "NETWORK SERVICE"
+      },
+      {
+        "host": "DC-02.meridianhcs.local",
+        "bad": [
+          "SeChangeNotifyPrivilege"
+        ],
+        "user": "NETWORK SERVICE"
+      },
+      {
+        "host": "DC-02.meridianhcs.local",
+        "bad": [
+          "SeChangeNotifyPrivilege"
+        ],
+        "user": "LOCAL SERVICE"
+      },
+      {
+        "host": "DC-02.meridianhcs.local",
+        "bad": [
+          "SeChangeNotifyPrivilege"
+        ],
+        "user": "NETWORK SERVICE"
+      }
+    ]
+  },
+  "after": {
+    "counts": {
+      "rows": 435,
+      "rows_with_nonsensitive_rights": 0,
+      "empty_lists": 0
+    },
+    "examples": []
+  },
+  "scope": "All native4672records; known nonsensitive token rights from Microsoft field-specific sensitive membership, modern session impersonation retained."
+}

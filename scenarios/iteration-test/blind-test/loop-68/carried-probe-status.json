@@ -1,0 +1,11 @@
+{
+  "proxy_request": 0,
+  "proxy_tls": 0,
+  "file_locality": 0,
+  "request_ua": 0,
+  "sam_transition": 0,
+  "sensitive_privileges": 0,
+  "connect": 0,
+  "syslog_transport": 0,
+  "shell_handoff": 0
+}

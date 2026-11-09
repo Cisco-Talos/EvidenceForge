@@ -1447,23 +1447,37 @@ class RdpSessionActionBundle:
         if logical_terminal_deadline <= ensure_utc(transport_close):
             raise StateError("Exact RDP transport must close before its logical deadline")
         session_start = ensure_utc(logon_time)
-        # Keep enough canonical headroom for independently delayed Security and
-        # Sysmon process-start observations to remain visible before 4624.
-        auth_time = session_start + timedelta(milliseconds=1_250)
         action_id = self._request.stable_id
-        user_manager_delay, desktop_shell_delay = (
-            self._timing_planner().windows_session_bootstrap_delays(
-                stable_id=action_id,
-                host=self._request.target_system.hostname,
-                lifecycle_id=action_id,
-                remote=True,
-            )
-        )
-        user_manager_time = auth_time + timedelta(seconds=user_manager_delay)
-        explorer_time = user_manager_time + timedelta(seconds=desktop_shell_delay)
-        if explorer_time >= transport_close:
-            raise StateError("Exact RDP transport closes before desktop bootstrap completes")
         batch_builder = state.begin_materialization_batch()
+        smss = next(
+            (
+                process
+                for process in state.get_processes_on_system(self._request.target_system.hostname)
+                if process.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold() == "smss.exe"
+                and process.username.casefold() == "system"
+                and ensure_utc(process.start_time) <= session_start
+            ),
+            None,
+        )
+        session_smss = None
+        if smss is not None:
+            smss_lead_ms = 1_500 + (_stable_seed(f"rdp-session-smss-lead:{action_id}") % 6_501)
+            session_smss_time = max(
+                session_start - timedelta(milliseconds=smss_lead_ms),
+                ensure_utc(self._request.time) + timedelta(seconds=5),
+            )
+            winlogon_time = max(
+                session_start,
+                session_smss_time + timedelta(milliseconds=500),
+            )
+            auth_time = max(
+                session_start + timedelta(milliseconds=1_250),
+                winlogon_time + timedelta(milliseconds=1_250),
+            )
+        else:
+            session_smss_time = session_start
+            winlogon_time = session_start
+            auth_time = session_start + timedelta(milliseconds=1_250)
         session_plan = batch_builder.plan_session(
             username=user.username,
             system=self._request.target_system.hostname,
@@ -1480,19 +1494,25 @@ class RdpSessionActionBundle:
             closure_owned_by_bundle=True,
             end_plan=effective_end_plan,
         )
-        smss = next(
-            (
-                process
-                for process in state.get_processes_on_system(self._request.target_system.hostname)
-                if process.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold() == "smss.exe"
-                and process.username.casefold() == "system"
-                and ensure_utc(process.start_time) <= session_start
-            ),
-            None,
-        )
+        if smss is not None:
+            session_smss = batch_builder.plan_process(
+                system=self._request.target_system.hostname,
+                parent_pid=smss.pid,
+                image=r"C:\Windows\System32\smss.exe",
+                command_line="smss.exe",
+                username="SYSTEM",
+                integrity_level="System",
+                os_category="windows",
+                logon_id="0x3e7",
+                lifecycle_group_id=stable_uuid("rdp-smss-lifecycle", action_id),
+                start_time=session_smss_time,
+                auth_session_id=session_plan.identity.session_id,
+                auth_logon_type=10,
+            )
+        session_smss_pid = session_smss.identity.pid if session_smss is not None else 4
         winlogon = batch_builder.plan_process(
             system=self._request.target_system.hostname,
-            parent_pid=smss.pid if smss is not None else 4,
+            parent_pid=session_smss_pid,
             image=r"C:\Windows\System32\winlogon.exe",
             command_line="winlogon.exe",
             username="SYSTEM",
@@ -1500,11 +1520,26 @@ class RdpSessionActionBundle:
             os_category="windows",
             logon_id="0x3e7",
             lifecycle_group_id=stable_uuid("rdp-winlogon-lifecycle", action_id),
-            parent_lifecycle_group_id=session_plan.identity.lifecycle_group_id,
-            start_time=session_start,
+            parent_lifecycle_group_id=(
+                session_smss.identity.lifecycle_group_id if session_smss is not None else ""
+            ),
+            start_time=winlogon_time,
             auth_session_id=session_plan.identity.session_id,
             auth_logon_type=10,
+            parent_plan=session_smss,
         )
+        user_manager_delay, desktop_shell_delay = (
+            self._timing_planner().windows_session_bootstrap_delays(
+                stable_id=action_id,
+                host=self._request.target_system.hostname,
+                lifecycle_id=action_id,
+                remote=True,
+            )
+        )
+        user_manager_time = auth_time + timedelta(seconds=user_manager_delay)
+        explorer_time = user_manager_time + timedelta(seconds=desktop_shell_delay)
+        if explorer_time >= transport_close:
+            raise StateError("Exact RDP transport closes before desktop bootstrap completes")
         userinit = batch_builder.plan_process(
             system=self._request.target_system.hostname,
             parent_pid=winlogon.identity.pid,
@@ -1561,6 +1596,7 @@ class RdpSessionActionBundle:
             winlogon_plan=winlogon,
             explorer_plan=explorer,
             process_tree_root_plan=winlogon,
+            session_manager_plan=session_smss,
         )
         batch = batch_builder.seal()
         source_binding = (
@@ -1598,21 +1634,34 @@ class RdpSessionActionBundle:
             source_identity=source_identity,
             source_session_identity=source_session_identity,
         )
-        dependent_occurrences = (
-            self._rdp_process_occurrence(winlogon, 1),
-            DeferredSessionDependentOccurrenceSpec(
-                occurrence_id=stable_uuid(
-                    "rdp-deferred-login-occurrence",
-                    session_plan.identity.object_id,
-                ),
-                event_type=EventKind.LOGON,
-                canonical_time=auth_time,
-                member_references=(session_plan.identity.object_id,),
-                publication_ordinal=2,
-            ),
-            self._rdp_process_occurrence(userinit, 3),
-            self._rdp_process_occurrence(explorer, 4),
+        dependent_occurrence_list = []
+        next_publication_ordinal = 1
+        if session_smss is not None:
+            dependent_occurrence_list.append(
+                self._rdp_process_occurrence(session_smss, next_publication_ordinal)
+            )
+            next_publication_ordinal += 1
+        dependent_occurrence_list.append(
+            self._rdp_process_occurrence(winlogon, next_publication_ordinal)
         )
+        next_publication_ordinal += 1
+        dependent_occurrence_list.extend(
+            (
+                DeferredSessionDependentOccurrenceSpec(
+                    occurrence_id=stable_uuid(
+                        "rdp-deferred-login-occurrence",
+                        session_plan.identity.object_id,
+                    ),
+                    event_type=EventKind.LOGON,
+                    canonical_time=auth_time,
+                    member_references=(session_plan.identity.object_id,),
+                    publication_ordinal=next_publication_ordinal,
+                ),
+                self._rdp_process_occurrence(userinit, next_publication_ordinal + 1),
+                self._rdp_process_occurrence(explorer, next_publication_ordinal + 2),
+            )
+        )
+        dependent_occurrences = tuple(dependent_occurrence_list)
         authority = DeferredSessionNetworkAuthority(
             kind=DeferredSessionKind.RDP,
             coordinator=DeferredSessionCompositionCoordinator(kind=DeferredSessionKind.RDP),
@@ -1648,7 +1697,12 @@ class RdpSessionActionBundle:
             authority=authority,
             identity_capture=lifecycle_continuation.identity_capture,
             session_plan=session_plan,
-            process_plans=(winlogon, userinit, explorer),
+            process_plans=(
+                *((session_smss,) if session_smss is not None else ()),
+                winlogon,
+                userinit,
+                explorer,
+            ),
             source_identity=source_identity,
             source_session_identity=source_session_identity,
             lifecycle_continuation=lifecycle_continuation,
@@ -2164,6 +2218,20 @@ class RdpSessionActionBundle:
             and continuation.prepared.source_system.hostname == identity.hostname
             else continuation.prepared.target_system
         )
+        running_process = self._executor.state_manager.get_process(
+            identity.hostname,
+            identity.pid,
+        )
+        is_session_manager = bool(
+            running_process is not None
+            and running_process.ecar_object_id == identity.object_id
+            and running_process.auth_session_id == session_identity.session_id
+            and running_process.auth_logon_type == 10
+            and identity.principal.casefold() == "system"
+            and identity.image.casefold().endswith("\\smss.exe")
+        )
+        if is_session_manager:
+            owning_session = session_identity
         event = self._terminal_process_event(
             identity=identity,
             terminate_time=terminate_time,

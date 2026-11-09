@@ -604,7 +604,6 @@ class _LinuxLogindAllocatorPatch:
     event_time: datetime
     session_id: int
     initial: int | None
-    epoch: datetime | None
     rng_state_after: object
 
 
@@ -1170,6 +1169,7 @@ class _SessionProcessMaterializationLinks:
     winlogon: int = -1
     explorer: int = -1
     process_tree_root: int = -1
+    session_manager: int = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1579,6 +1579,7 @@ class MaterializationBatchBuilder:
         winlogon_plan: ProcessMaterializationPlan | None = None,
         explorer_plan: ProcessMaterializationPlan | None = None,
         process_tree_root_plan: ProcessMaterializationPlan | None = None,
+        session_manager_plan: ProcessMaterializationPlan | None = None,
     ) -> None:
         """Bind exact planned process roles into the session's primitive commit."""
 
@@ -1592,6 +1593,7 @@ class MaterializationBatchBuilder:
             "winlogon": winlogon_plan,
             "explorer": explorer_plan,
             "process_tree_root": process_tree_root_plan,
+            "session_manager": session_manager_plan,
         }
         for role, process in values.items():
             if process is None:
@@ -5858,7 +5860,6 @@ class StateManager:
         self._macos_process_census: dict[str, MacosProcessCensus] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
-        self._linux_logind_session_epochs: dict[str, datetime] = {}
         self._linux_logind_session_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_logind_session_last_ids: dict[str, int] = {}
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
@@ -10882,89 +10883,76 @@ class StateManager:
         current_initial = self._linux_logind_session_initials.get(system)
         initial = current_initial if current_initial is not None else sampled_initial
         initial_patch = initial if current_initial is None else None
-        boot_epoch = self._system_boot_times.get(system)
-        current_epoch = self._linux_logind_session_epochs.get(system)
-        epoch = boot_epoch if boot_epoch is not None else current_epoch
-        epoch_patch: datetime | None = None
-        if epoch is None:
-            epoch = normalized_time
-            epoch_patch = normalized_time
-        elapsed_seconds = max(
-            0,
-            int((normalized_time - ensure_utc(epoch)).total_seconds()),
+        allocation_rng = random.Random(
+            _stable_seed(
+                f"linux_logind_session_increment:{system}:{normalized_time.isoformat()}:{len(self._linux_logind_session_used_ids.get(system, set()))}"
+            )
         )
-        elapsed_minutes = elapsed_seconds // 60
-        second_slot = normalized_time.second // 10
-        stride = 8 + (_stable_seed(f"logind_session_minute_stride:{system}") % 2)
-        minute_jitter = _stable_seed(f"logind_session_minute_jitter:{system}:{elapsed_minutes}") % 2
-        candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
+        # logind IDs advance when sessions are allocated, not as a function of
+        # elapsed wall-clock time. A small per-allocation gap represents other
+        # sessions that were not observed by this source collection.
+        # Irregular hidden allocation batches leave room for sessions that are
+        # planned later with an earlier timestamp.
+        increment = allocation_rng.randint(4, 10) * allocation_rng.randint(2, 8)
         used = self._linux_logind_session_used_ids.get(system, set())
         allocations = self._linux_logind_session_allocations.get(system)
         earlier_max = (
             allocations.max_value_at_or_before(normalized_time) if allocations is not None else None
         )
-        if earlier_max is not None and candidate <= earlier_max:
-            bump = 1 + (
-                _stable_seed(f"logind_session_lower_bound:{system}:{normalized_time}:{candidate}")
-                % 3
-            )
-            candidate = earlier_max + bump
         future_min = (
             allocations.min_value_after(normalized_time) if allocations is not None else None
         )
-        if future_min is not None:
-            lower = earlier_max if earlier_max is not None else 0
+        lower = earlier_max if earlier_max is not None else 0
+        candidate = (earlier_max if earlier_max is not None else initial) + increment
+        if future_min is not None and candidate >= future_min:
             upper = future_min
-
-            def available(value: int) -> bool:
-                return (
-                    lower < value < upper
-                    and value not in used
-                    and not allocations.matches_elapsed_delta(
-                        normalized_time, value, tolerance=0.0, integral_seconds=True
-                    )
-                )
-
-            # Split retained identity space to leave room on both temporal sides.
-            midpoint = (lower + upper) // 2
-            selected = next(
-                (
-                    value
+            if upper - lower <= 1:
+                # Planning can arrive out of event-time order after earlier
+                # allocations have consumed every integer in this interval.
+                # Preserve host uniqueness and successful generation; this rare
+                # fallback follows allocation order because no ordered ID remains.
+                candidate = max(used, default=lower) + increment
+            else:
+                midpoint = (lower + upper) // 2
+                candidate = midpoint
+                for _ in range(32):
+                    candidate = allocation_rng.randint(lower + 1, upper - 1)
+                    if candidate not in used:
+                        break
+                else:
+                    candidate = -1
                     for values in (
-                        range(max(lower + 1, midpoint), upper),
-                        range(lower + 1, midpoint),
-                    )
-                    for value in values
-                    if available(value)
-                ),
-                None,
-            )
-            if selected is None:
+                        range(midpoint + 1, upper),
+                        range(lower + 1, midpoint + 1),
+                    ):
+                        candidate = next((value for value in values if value not in used), -1)
+                        if candidate >= 0:
+                            break
+                if candidate < 0:
+                    candidate = max(used, default=lower) + increment
+        while candidate in used:
+            if future_min is None:
+                candidate += allocation_rng.randint(4, 10) * allocation_rng.randint(2, 8)
+                continue
+            upper = future_min
+            for _ in range(32):
+                candidate = allocation_rng.randint(lower + 1, upper - 1)
+                if candidate not in used:
+                    break
+            else:
+                candidate = next(
+                    (value for value in range(lower + 1, upper) if value not in used), -1
+                )
+            if candidate < 0:
                 raise StateError(
-                    "Linux logind identity interval exhausted between existing sessions "
+                    "Linux logind identity interval has no unused ID between existing sessions "
                     f"on {system}: lower={lower}, upper={upper}"
                 )
-            candidate = selected
-        salt = 0
-        while candidate in used or (
-            allocations is not None
-            and allocations.matches_elapsed_delta(
-                normalized_time,
-                candidate,
-                tolerance=0.0,
-                integral_seconds=True,
-            )
-        ):
-            candidate += 7 + (
-                _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
-            )
-            salt += 1
         return candidate, _LinuxLogindAllocatorPatch(
             system=system,
             event_time=normalized_time,
             session_id=candidate,
             initial=initial_patch,
-            epoch=epoch_patch,
             rng_state_after=preview_rng.getstate(),
         )
 
@@ -10979,8 +10967,6 @@ class StateManager:
 
         if patch.initial is not None:
             self._linux_logind_session_initials[patch.system] = patch.initial
-        if patch.epoch is not None:
-            self._linux_logind_session_epochs[patch.system] = patch.epoch
         used_ids = self._linux_logind_session_used_ids.get(patch.system)
         if used_ids is None:
             used_ids = used_ids_default if used_ids_default is not None else set()
@@ -14433,7 +14419,6 @@ class StateManager:
             if patch.linux_logind is not None:
                 logind = patch.linux_logind
                 capture_mapping(self._linux_logind_session_initials, logind.system)  # type: ignore[arg-type]
-                capture_mapping(self._linux_logind_session_epochs, logind.system)  # type: ignore[arg-type]
                 capture_mapping(self._linux_logind_session_last_ids, logind.system)  # type: ignore[arg-type]
                 capture_mapped_set(
                     self._linux_logind_session_used_ids,  # type: ignore[arg-type]
@@ -21167,6 +21152,7 @@ class StateManager:
             links.winlogon,
             links.explorer,
             links.process_tree_root,
+            links.session_manager,
         )
         linked_plans = {id(batch.processes[index]) for index in ordered_indexes if index >= 0}
         if linked_plans != {id(plan) for plan in target_plans}:

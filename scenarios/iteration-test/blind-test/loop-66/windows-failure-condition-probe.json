@@ -1,0 +1,43 @@
+{
+  "loop": 66,
+  "native_failure_conditions": [
+    {
+      "status": "0xc000006d",
+      "substatus": "0xc000006a",
+      "reason": "%%2313",
+      "count": 22
+    },
+    {
+      "status": "0xc000006d",
+      "substatus": "0xc0000072",
+      "reason": "%%2307",
+      "count": 7
+    }
+  ],
+  "generic_status_reason_mismatches": 7,
+  "examples": [
+    {
+      "host": "DC-02.meridianhcs.local",
+      "status": "0xc000006d",
+      "substatus": "0xc0000072",
+      "reason": "%%2307"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "status": "0xc000006d",
+      "substatus": "0xc0000072",
+      "reason": "%%2307"
+    },
+    {
+      "host": "MAIL-FIN-01.meridianhcs.local",
+      "status": "0xc000006d",
+      "substatus": "0xc0000072",
+      "reason": "%%2307"
+    }
+  ],
+  "normalized_failed_reason_counts": {
+    "bad_password": 46,
+    "account_disabled": 7
+  },
+  "scope": "Microsoft4625: native resource reason describes mainStatus, numeric SubStatus supplies specific account condition. No claim generic reason alone means bad password."
+}

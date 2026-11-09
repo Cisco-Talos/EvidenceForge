@@ -1,0 +1,907 @@
+{
+  "policy": "complete",
+  "totals": {
+    "expected_forks": 103,
+    "published_forks": 103,
+    "expected_execs": 121,
+    "published_execs": 121,
+    "expected_exits": 101,
+    "published_exits": 101,
+    "aggregate_births": 0
+  },
+  "hosts": [
+    {
+      "hostname": "MAC-MROSS-01",
+      "source_profile": "modeled-macos27-arm64-process-v1",
+      "observations": [
+        {
+          "phase": "exec",
+          "reason": "supported",
+          "status": "visible",
+          "count": 46
+        },
+        {
+          "phase": "exit",
+          "reason": "supported",
+          "status": "visible",
+          "count": 39
+        },
+        {
+          "phase": "fork",
+          "reason": "supported",
+          "status": "visible",
+          "count": 40
+        }
+      ],
+      "authored_actions": [
+        {
+          "storyline_cluster_id": "mac-1-admin-shell",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-browser",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 5
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 4
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-inventory-run-1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-inventory-run-2",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-inventory-run-3",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-logout",
+          "observations": [
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 8
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 7
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 6
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-2",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-3",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-4",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-5",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-6",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-1-terminal-task-7",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-chat",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-linux-admin",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-nonpty",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-pty",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 6
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 6
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-pty-checks",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-pty-close",
+          "observations": [
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        }
+      ],
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 40,
+        "expected_execs": 46,
+        "published_forks": 40,
+        "published_execs": 46,
+        "fork_identities_match": true,
+        "exec_identities_match": true,
+        "aggregate_births": 0,
+        "aggregate_examples": [],
+        "complete": true,
+        "expected_exits": 39,
+        "observed_exits": 39,
+        "known_exits": 39,
+        "published_exits": 39,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": true
+      }
+    },
+    {
+      "hostname": "MAC-MROSS-02",
+      "source_profile": "modeled-macos27-arm64-process-v1",
+      "observations": [
+        {
+          "phase": "exec",
+          "reason": "supported",
+          "status": "visible",
+          "count": 75
+        },
+        {
+          "phase": "exit",
+          "reason": "supported",
+          "status": "visible",
+          "count": 62
+        },
+        {
+          "phase": "fork",
+          "reason": "supported",
+          "status": "visible",
+          "count": 63
+        }
+      ],
+      "authored_actions": [
+        {
+          "storyline_cluster_id": "mac-2-admin-shell",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-browser",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 5
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 4
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-inventory-run-1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-inventory-run-2",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-inventory-run-3",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-logout",
+          "observations": [
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 19
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 9
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 7
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-2",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-3",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-4",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-5",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-6",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-2-terminal-task-7",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-document",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-mail",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-meeting",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 2
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-nonpty",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 6
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 6
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-nonpty-checks",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-nonpty-close",
+          "observations": [
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 3
+            }
+          ]
+        },
+        {
+          "storyline_cluster_id": "mac-ssh-pty",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 63,
+        "expected_execs": 75,
+        "published_forks": 63,
+        "published_execs": 75,
+        "fork_identities_match": true,
+        "exec_identities_match": true,
+        "aggregate_births": 0,
+        "aggregate_examples": [],
+        "complete": true,
+        "expected_exits": 62,
+        "observed_exits": 62,
+        "known_exits": 62,
+        "published_exits": 62,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": true
+      }
+    }
+  ]
+}

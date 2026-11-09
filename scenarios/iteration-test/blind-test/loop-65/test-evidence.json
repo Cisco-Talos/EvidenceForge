@@ -1,0 +1,20 @@
+{
+  "focused_suites_passed": [
+    330,
+    213
+  ],
+  "suites_overlap": true,
+  "new_directional_budget_cases": 2,
+  "canonical_partial_file_negative_control": "PASS",
+  "physical_parent_capture_identity_and_byte_offsets": "PASS",
+  "new_and_legacy_checkpoint_codec": "PASS; legacy missing basis remains unknown",
+  "initial_test_failures": "Two old body-length expectations corrected; canonical upload fixture fixed; integration exposed mutable parent accounting; immutable physical basis added; legacy field count corrected.",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 466,
+  "checkpoint_record": "open-connection-v2",
+  "additional_http_wire_checks_passed": 37,
+  "selected_slow_integration_passed": 2,
+  "source_identity_scope": "Canonical NetworkConnectionRequest identity encoder includes all allowlisted dataclass fields. Adding HttpContext capture facts changes intent hashes, so workload/RNG paths shift broadly; only2files remain identical. Fixed six inputs/seed remain verified. This is not a score-controlled reroll.",
+  "carried_probes": "All9PASS; separate HTTP diagnostic now0/0/0 and PID chronology0inversions."
+}

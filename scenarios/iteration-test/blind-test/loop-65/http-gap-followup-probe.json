@@ -1,0 +1,11 @@
+{
+  "loop": 65,
+  "counts": {
+    "gapped_depth0_http200_response_files": 32,
+    "file_gaps_exceed_transport_total": 0,
+    "body_len_equals_seen_below_total": 0,
+    "responder_file_gap_without_responder_tcp_gap": 0
+  },
+  "examples": [],
+  "qualification": "Diagnostic only, not universal TCP-loss assertion: file omissions, transformations, compression, incomplete transfer and analyzer policy need qualification. Tagged Zeek8.0.5 recognized body gaps contribute message length. These are source-local joins; no reroll or pass assertion."
+}

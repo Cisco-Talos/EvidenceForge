@@ -1,0 +1,74 @@
+{
+  "loop": 54,
+  "totals": {
+    "comparable": 2434,
+    "sender_locality_mismatch": 1417,
+    "mismatch_SSL": 1191,
+    "mismatch_HTTP": 226
+  },
+  "sensors": {
+    "zeek-db": {
+      "comparable": 18,
+      "sender_locality_mismatch": 0
+    },
+    "zeek-core": {
+      "comparable": 695,
+      "sender_locality_mismatch": 21,
+      "mismatch_SSL": 21
+    },
+    "zeek-dmz": {
+      "comparable": 1721,
+      "sender_locality_mismatch": 1396,
+      "mismatch_SSL": 1170,
+      "mismatch_HTTP": 226
+    }
+  },
+  "examples": [
+    {
+      "file": "zeek-core/files.json",
+      "line": 20,
+      "fuid": "FyrjEUKNNfAL95NIZ86",
+      "uid": "CyuDtqBwVpPYV3Xs0ae",
+      "is_orig": false,
+      "actual": true,
+      "expected": false
+    },
+    {
+      "file": "zeek-core/files.json",
+      "line": 88,
+      "fuid": "FqyO8HrsJzp6TLuqj4",
+      "uid": "CZiPaRbGk9o5PWXxIa",
+      "is_orig": false,
+      "actual": true,
+      "expected": false
+    },
+    {
+      "file": "zeek-core/files.json",
+      "line": 89,
+      "fuid": "FC62EKzGf73Lul0cLO",
+      "uid": "CZiPaRbGk9o5PWXxIa",
+      "is_orig": false,
+      "actual": true,
+      "expected": false
+    },
+    {
+      "file": "zeek-core/files.json",
+      "line": 172,
+      "fuid": "Fe7BnbOgwF85rdpXBM",
+      "uid": "CqcahZI7cyXgrQCsAP",
+      "is_orig": false,
+      "actual": true,
+      "expected": false
+    },
+    {
+      "file": "zeek-core/files.json",
+      "line": 208,
+      "fuid": "FOAdM2SYuthY0uLByZx",
+      "uid": "CJlgUFbGEwYkT9UD8",
+      "is_orig": false,
+      "actual": true,
+      "expected": false
+    }
+  ],
+  "qualification": "Single-connection native Files::Info compared to same sensor conn endpoint locality, selected by is_orig; no public/private-IP assumption."
+}

@@ -1,0 +1,30 @@
+{
+  "question": "Does the CitrixWorkspaceApp.exe transfer evidence prove installation/execution or expose a cross-source contradiction?",
+  "dataset": "fixed-seed output byte-identical to Loop 84, copied for fresh blind review",
+  "time_utc": "2026-11-02T15:53:26Z",
+  "evidence": [
+    {
+      "source": "zeek-dmz/http.json",
+      "uid": "CKMiKiF3XtYmOuQBMm",
+      "tuple": "10.10.2.11:53424 -> 10.10.3.20:8080",
+      "event": "GET http://downloads.cloud.com/workspace/windows/CitrixWorkspaceApp.exe, status 200, 124385593-byte response"
+    },
+    {
+      "source": "zeek-dmz/files.json",
+      "fuid": "FLeDOOhVA4PSu9OcpRj",
+      "uid": "CKMiKiF3XtYmOuQBMm",
+      "event": "HTTP file, application/x-msdownload, 124385593 seen/total bytes, zero missing/overflow, SHA-1 aac55068796d5f85059e311d17502eb626381c06"
+    },
+    {
+      "source": "zeek-dmz/conn.json",
+      "uid": "CKMiKiF3XtYmOuQBMm",
+      "event": "same client/proxy tuple; completed SF flow; 7.51-second duration; HTTP transaction matches file record"
+    },
+    {
+      "source": "DC-02 eCAR and Windows event/Sysmon records",
+      "event": "No exact source-port 53424 flow or Citrix-named process/file record was found in the inspected endpoint files. An unrelated DC-02 proxy flow uses source port 59055 at 15:55:13Z."
+    }
+  ],
+  "interpretation": "Network evidence proves a complete transfer to the proxy and a subsequent proxy-to-external transfer with matching file identity. No inspected endpoint evidence proves installation or execution. The lack of an endpoint companion by itself is not a contradiction without a required collection contract; the scenario does not claim Citrix was run.",
+  "decision": "No code/scenario change; retain transfer as a follow-up question, not a synthetic defect."
+}

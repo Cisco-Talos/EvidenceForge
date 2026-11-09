@@ -1,0 +1,142 @@
+{
+  "loop": 62,
+  "counts": {
+    "gapped_depth0_http200_response_files": 23,
+    "file_gaps_exceed_transport_total": 5,
+    "body_len_equals_seen_below_total": 18,
+    "responder_file_gap_without_responder_tcp_gap": 5
+  },
+  "examples": [
+    {
+      "sensor": "zeek-core",
+      "file_line": 58,
+      "http_line": 103,
+      "conn_line": 947,
+      "uid": "C6wUNZczX4ArB1TQ8V6",
+      "missing_file": 374,
+      "missing_conn": 0,
+      "history": "ShADadTtFf",
+      "seen": 137345,
+      "total": 137719,
+      "http_body": 137345
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 113,
+      "http_line": 213,
+      "conn_line": 1616,
+      "uid": "C0HaZxnBWSw7qVP2wd",
+      "missing_file": 55,
+      "missing_conn": 55,
+      "history": "ShADadFfg",
+      "seen": 18052,
+      "total": 18107,
+      "http_body": 18052
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 338,
+      "http_line": 853,
+      "conn_line": 6067,
+      "uid": "CcynEcD5QTOOvJzYDby",
+      "missing_file": 20,
+      "missing_conn": 21,
+      "history": "ShADadfFg",
+      "seen": 2207,
+      "total": 2227,
+      "http_body": 2207
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 390,
+      "http_line": 957,
+      "conn_line": 6574,
+      "uid": "Cc8R7tc7sNx3eBNArA",
+      "missing_file": 2166,
+      "missing_conn": 0,
+      "history": "ShADadFf",
+      "seen": 385100,
+      "total": 387266,
+      "http_body": 385100
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 467,
+      "http_line": 1153,
+      "conn_line": 7370,
+      "uid": "ChDKnIj2PF8CotW0xT",
+      "missing_file": 1284,
+      "missing_conn": 0,
+      "history": "ShADadFf",
+      "seen": 140325,
+      "total": 141609,
+      "http_body": 140325
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 578,
+      "http_line": 1439,
+      "conn_line": 8896,
+      "uid": "CjmTjUtDLPJST2Dfl",
+      "missing_file": 170,
+      "missing_conn": 171,
+      "history": "ShADadfFg",
+      "seen": 26600,
+      "total": 26770,
+      "http_body": 26600
+    },
+    {
+      "sensor": "zeek-core",
+      "file_line": 682,
+      "http_line": 1832,
+      "conn_line": 10994,
+      "uid": "CF0i3Ksobn8S0gcfDR",
+      "missing_file": 1693,
+      "missing_conn": 0,
+      "history": "ShADadfF",
+      "seen": 334719,
+      "total": 336412,
+      "http_body": 334719
+    },
+    {
+      "sensor": "zeek-dmz",
+      "file_line": 75,
+      "http_line": 77,
+      "conn_line": 254,
+      "uid": "CSu42B6Jypir7pFYWU",
+      "missing_file": 32768,
+      "missing_conn": 32768,
+      "history": "ShADadfFg",
+      "seen": 13392357,
+      "total": 13425125,
+      "http_body": 13392357
+    },
+    {
+      "sensor": "zeek-dmz",
+      "file_line": 199,
+      "http_line": 257,
+      "conn_line": 1164,
+      "uid": "CNzWw2GcWderW1W1qY",
+      "missing_file": 11,
+      "missing_conn": 11,
+      "history": "ShADadFfg",
+      "seen": 2378,
+      "total": 2389,
+      "http_body": 2378
+    },
+    {
+      "sensor": "zeek-dmz",
+      "file_line": 355,
+      "http_line": 487,
+      "conn_line": 1906,
+      "uid": "CiT8BhyFyf7VFLxBi",
+      "missing_file": 23,
+      "missing_conn": 24,
+      "history": "ShADadfFg",
+      "seen": 2264,
+      "total": 2287,
+      "http_body": 2264
+    }
+  ],
+  "qualification": "Diagnostic only, not universal TCP-loss assertion: file omissions, transformations, compression, incomplete transfer and analyzer policy need qualification. Tagged Zeek8.0.5 recognized body gaps contribute message length. These are source-local joins; no reroll or pass assertion."
+}

@@ -1,0 +1,25 @@
+{
+  "proxy_endpoint": "10.10.3.20:8080",
+  "proxy_host_observed_in_data": "PROXY-01.meridianhcs.local/proxy_access.log",
+  "hosts": {
+    "MAC-MROSS-01": {
+      "ecar_flow_records": 371,
+      "flows_to_proxy_endpoint": 288,
+      "other_top_destinations": [
+        ["10.10.2.11", "53", 21],
+        ["10.10.2.10", "53", 19],
+        ["10.10.2.40", "514", 15]
+      ]
+    },
+    "MAC-MROSS-02": {
+      "ecar_flow_records": 465,
+      "flows_to_proxy_endpoint": 372,
+      "other_top_destinations": [
+        ["10.10.2.11", "53", 21],
+        ["10.10.2.10", "53", 20],
+        ["10.10.1.10", "443", 10]
+      ]
+    }
+  },
+  "classification": "The high counts are client-to-proxy FLOW records and have a matching proxy source host/log; this is an explicit proxy collection path, not evidence of incorrect endpoint destinations by itself."
+}

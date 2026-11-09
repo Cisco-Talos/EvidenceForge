@@ -1,0 +1,14 @@
+{
+  "accepted_roles": [
+    "threat_clean",
+    "detection",
+    "network_clean",
+    "host_clean"
+  ],
+  "discarded_unscored_roles": [
+    "threat",
+    "network"
+  ],
+  "facilitator": "clean data-only supplied reports",
+  "scope": "self-reported; generic inherited operating instructions remain limitation"
+}

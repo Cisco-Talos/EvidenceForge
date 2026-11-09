@@ -1,0 +1,506 @@
+{
+  "baseline_loop": 47,
+  "before": {
+    "counts": {
+      "LOGIN": 66,
+      "LOGOUT": 59
+    },
+    "both_visible": 52,
+    "visible_login_without_visible_logout": 14
+  },
+  "after": {
+    "counts": {
+      "LOGIN": 66,
+      "LOGOUT": 59
+    },
+    "both_visible": 54,
+    "visible_login_without_visible_logout": 12
+  },
+  "changed_sessions": [
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "d7981d93-9b62-452e-9e12-1936b5e2ad43",
+      "before": {
+        "LOGOUT": {
+          "line": 70,
+          "timestamp_ms": 1793624962605,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "61142",
+            "logon_id": "0x13553a4f",
+            "session_id": "349655",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": null
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "object_id": "e22118ba-e392-4f22-93f3-2b57bb7a52d0",
+      "before": {
+        "LOGIN": {
+          "line": 44,
+          "timestamp_ms": 1793624902772,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "60974",
+            "outcome": "success",
+            "logon_id": "0xc0dfa95",
+            "session_id": "195951",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 43,
+          "timestamp_ms": 1793624902772,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "60974",
+            "outcome": "success",
+            "logon_id": "0xc0dfa95",
+            "session_id": "195951",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 149,
+          "timestamp_ms": 1793628032956,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "60974",
+            "logon_id": "0xc0dfa95",
+            "session_id": "195951",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "object_id": "d75eb95b-279f-459a-b7ab-03b3c738cb23",
+      "before": {
+        "LOGOUT": {
+          "line": 10,
+          "timestamp_ms": 1793624484660,
+          "properties": {
+            "src_ip": "10.10.1.31",
+            "src_port": "58848",
+            "logon_id": "0xc080a9f",
+            "session_id": "195570",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGOUT": {
+          "line": 9,
+          "timestamp_ms": 1793624484660,
+          "properties": {
+            "src_ip": "10.10.1.31",
+            "src_port": "58848",
+            "logon_id": "0xc080a9f",
+            "session_id": "195570",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "47bb69e4-43d9-444e-87fc-bad27776f3c6",
+      "before": {
+        "LOGIN": {
+          "line": 3568,
+          "timestamp_ms": 1793641658404,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "55617",
+            "outcome": "success",
+            "logon_id": "0x137dd43c",
+            "session_id": "352575",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 3789,
+          "timestamp_ms": 1793643989774,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "55617",
+            "logon_id": "0x137dd43c",
+            "session_id": "352575",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 3567,
+          "timestamp_ms": 1793641658404,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "55617",
+            "outcome": "success",
+            "logon_id": "0x137dd43c",
+            "session_id": "352575",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 3788,
+          "timestamp_ms": 1793643989774,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "55617",
+            "logon_id": "0x137dd43c",
+            "session_id": "352575",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "5cfda8f0-c0b7-4355-9d52-1898a89d7bc9",
+      "before": {
+        "LOGIN": {
+          "line": 686,
+          "timestamp_ms": 1793627500350,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "61389",
+            "outcome": "success",
+            "logon_id": "0x1360587f",
+            "session_id": "350451",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 821,
+          "timestamp_ms": 1793629053068,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "61389",
+            "logon_id": "0x1360587f",
+            "session_id": "350451",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 685,
+          "timestamp_ms": 1793627500350,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "61389",
+            "outcome": "success",
+            "logon_id": "0x1360587f",
+            "session_id": "350451",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 820,
+          "timestamp_ms": 1793629053068,
+          "properties": {
+            "src_ip": "10.10.1.35",
+            "src_port": "61389",
+            "logon_id": "0x1360587f",
+            "session_id": "350451",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "5534093d-11a1-44fb-8ac5-036686c26b19",
+      "before": {
+        "LOGIN": {
+          "line": 3068,
+          "timestamp_ms": 1793636820629,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "47073",
+            "outcome": "success",
+            "logon_id": "0x1373c245",
+            "session_id": "351852",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 3380,
+          "timestamp_ms": 1793640046629,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "47073",
+            "logon_id": "0x1373c245",
+            "session_id": "351852",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 3067,
+          "timestamp_ms": 1793636820629,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "47073",
+            "outcome": "success",
+            "logon_id": "0x1373c245",
+            "session_id": "351852",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 3379,
+          "timestamp_ms": 1793640046629,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "47073",
+            "logon_id": "0x1373c245",
+            "session_id": "351852",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "object_id": "2ba18051-f041-4a87-b514-fbfa926a0aac",
+      "before": {
+        "LOGOUT": {
+          "line": 6,
+          "timestamp_ms": 1793624474554,
+          "properties": {
+            "src_ip": "10.10.1.31",
+            "src_port": "52767",
+            "logon_id": "0xc06d9c1",
+            "session_id": "195244",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": null
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "beaaf43d-3446-4e61-8a73-d8d5275f8bbe",
+      "before": {
+        "LOGIN": {
+          "line": 915,
+          "timestamp_ms": 1793630394177,
+          "properties": {
+            "src_ip": "10.10.1.34",
+            "src_port": "57673",
+            "outcome": "success",
+            "logon_id": "0x13665f17",
+            "session_id": "350884",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 2665,
+          "timestamp_ms": 1793632588625,
+          "properties": {
+            "src_ip": "10.10.1.34",
+            "src_port": "57673",
+            "logon_id": "0x13665f17",
+            "session_id": "350884",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 914,
+          "timestamp_ms": 1793630394177,
+          "properties": {
+            "src_ip": "10.10.1.34",
+            "src_port": "57673",
+            "outcome": "success",
+            "logon_id": "0x13665f17",
+            "session_id": "350884",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 2664,
+          "timestamp_ms": 1793632588625,
+          "properties": {
+            "src_ip": "10.10.1.34",
+            "src_port": "57673",
+            "logon_id": "0x13665f17",
+            "session_id": "350884",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "69cf934d-4933-445b-a05f-af703409073e",
+      "before": {
+        "LOGIN": {
+          "line": 2542,
+          "timestamp_ms": 1793631642427,
+          "properties": {
+            "src_ip": "10.10.1.42",
+            "src_port": "61910",
+            "outcome": "success",
+            "logon_id": "0x1368f678",
+            "session_id": "351072",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 2898,
+          "timestamp_ms": 1793635225234,
+          "properties": {
+            "src_ip": "10.10.1.42",
+            "src_port": "61910",
+            "logon_id": "0x1368f678",
+            "session_id": "351072",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 2541,
+          "timestamp_ms": 1793631642427,
+          "properties": {
+            "src_ip": "10.10.1.42",
+            "src_port": "61910",
+            "outcome": "success",
+            "logon_id": "0x1368f678",
+            "session_id": "351072",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 2897,
+          "timestamp_ms": 1793635225234,
+          "properties": {
+            "src_ip": "10.10.1.42",
+            "src_port": "61910",
+            "logon_id": "0x1368f678",
+            "session_id": "351072",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "MAC-MROSS-02",
+      "object_id": "39502e16-8050-4eaa-99a0-25f8d5ed2185",
+      "before": {
+        "LOGIN": {
+          "line": 94,
+          "timestamp_ms": 1793629485375,
+          "properties": {
+            "src_ip": "10.10.1.41",
+            "src_port": "49252",
+            "outcome": "success",
+            "logon_id": "0x138a1ed4",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 94,
+          "timestamp_ms": 1793629485375,
+          "properties": {
+            "src_ip": "10.10.1.41",
+            "src_port": "49252",
+            "outcome": "success",
+            "logon_id": "0x138a1ed4",
+            "session_type": "ssh"
+          }
+        },
+        "LOGOUT": {
+          "line": 124,
+          "timestamp_ms": 1793630115438,
+          "properties": {
+            "src_ip": "10.10.1.41",
+            "src_port": "49252",
+            "logon_id": "0x138a1ed4",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "a0749eb2-43ff-403c-abc7-84546c4e9963",
+      "before": {
+        "LOGIN": {
+          "line": 3954,
+          "timestamp_ms": 1793645735997,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "56213",
+            "outcome": "success",
+            "logon_id": "0x13865737",
+            "session_id": "353187",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 3953,
+          "timestamp_ms": 1793645735997,
+          "properties": {
+            "src_ip": "10.10.1.21",
+            "src_port": "56213",
+            "outcome": "success",
+            "logon_id": "0x13865737",
+            "session_id": "353187",
+            "session_type": "ssh"
+          }
+        }
+      }
+    },
+    {
+      "host": "WEB-EXT-01",
+      "object_id": "6f3dd2ff-af3e-4466-9009-cdf76b8b8ef3",
+      "before": {
+        "LOGIN": {
+          "line": 3894,
+          "timestamp_ms": 1793644799416,
+          "properties": {
+            "src_ip": "10.10.1.22",
+            "src_port": "38578",
+            "outcome": "success",
+            "logon_id": "0x138463c4",
+            "session_id": "353045",
+            "session_type": "ssh"
+          }
+        }
+      },
+      "after": {
+        "LOGIN": {
+          "line": 3893,
+          "timestamp_ms": 1793644799416,
+          "properties": {
+            "src_ip": "10.10.1.22",
+            "src_port": "38578",
+            "outcome": "success",
+            "logon_id": "0x138463c4",
+            "session_id": "353045",
+            "session_type": "ssh"
+          }
+        }
+      }
+    }
+  ],
+  "target_gap_closed": true,
+  "qualification": "Counts describe visible endpoints only; absent post-window closure is not a defect. No forced visibility. Shared tuple key has identical source drop/delay in focused 3-platform tests."
+}

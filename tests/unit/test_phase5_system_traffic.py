@@ -1293,6 +1293,50 @@ def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
 
 
+def test_ten_minute_cron_schedule_uses_host_phased_minute_slots(linux_system):
+    """Ten-minute cron work keeps one minute-aligned phase throughout each hour."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    rng = random.Random(11)
+    initial_rng_state = rng.getstate()
+    sched = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "frequency": "10min",
+        "typical_hour": 0,
+        "typical_minute": 5,
+        "jitter_minutes": 2,
+        "distro": "debian",
+        "cron_user": "sysstat",
+        "cron_commands": {"debian": "debian-sa1 1 1"},
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [sched]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            rng,
+            {"cron": 1337},
+            False,
+            False,
+        )
+
+    fire_times = [call.args[2] for call in engine._emit_scheduled_event.call_args_list]
+    assert len(fire_times) == 6
+    assert [right - left for left, right in zip(fire_times, fire_times[1:], strict=False)] == [
+        timedelta(minutes=10)
+    ] * 5
+    assert all(fire_time.minute % 10 in {5, 6} for fire_time in fire_times)
+    assert all(fire_time.second == 0 and fire_time.microsecond == 0 for fire_time in fire_times)
+    assert rng.getstate() == initial_rng_state
+
+
 def test_systemd_timer_preserves_configured_slot_skipping(linux_system):
     """Removing cron gaps must not disable modeled skipping for systemd timers."""
     engine = type("FakeEngine", (object,), {})()

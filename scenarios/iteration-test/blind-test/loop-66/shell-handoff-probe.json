@@ -1,0 +1,66 @@
+{
+  "baseline_loop": 62,
+  "before": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "adjacent_same_parent_exit_fork": 24,
+      "exact_1000_microseconds": 2,
+      "short_gaps_under_50ms": [
+        1000,
+        1000,
+        1934
+      ],
+      "examples": [
+        {
+          "exit": "2026-11-02T13:12:19.869874000Z",
+          "fork": "2026-11-02T13:12:19.870874000Z",
+          "parent": 19009
+        },
+        {
+          "exit": "2026-11-02T13:12:20.421797000Z",
+          "fork": "2026-11-02T13:12:20.422797000Z",
+          "parent": 19009
+        }
+      ]
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "adjacent_same_parent_exit_fork": 15,
+      "exact_1000_microseconds": 1,
+      "short_gaps_under_50ms": [
+        1000,
+        7340
+      ],
+      "examples": [
+        {
+          "exit": "2026-11-02T13:07:41.159306000Z",
+          "fork": "2026-11-02T13:07:41.160306000Z",
+          "parent": 42160
+        }
+      ]
+    }
+  },
+  "after": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "adjacent_same_parent_exit_fork": 24,
+      "exact_1000_microseconds": 0,
+      "short_gaps_under_50ms": [
+        1636,
+        5621,
+        9358
+      ],
+      "examples": []
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "adjacent_same_parent_exit_fork": 17,
+      "exact_1000_microseconds": 0,
+      "short_gaps_under_50ms": [
+        1729,
+        4193,
+        8274,
+        9297,
+        15006
+      ],
+      "examples": []
+    }
+  },
+  "qualification": "Native adjacent EXIT->FORK records with exited child ppid equal to next fork actor pid. Measures canonical scheduling projection, not PID-version chronology or all terminal teardown."
+}

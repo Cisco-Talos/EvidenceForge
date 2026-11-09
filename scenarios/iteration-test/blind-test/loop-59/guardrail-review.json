@@ -1,0 +1,20 @@
+{
+  "status": "REVIEW",
+  "acceptance_passed": false,
+  "failed_criteria": [
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 72.77486910994764,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    }
+  ],
+  "investigation": "Unchanged thresholds and authored seed/coverage. Native Mac visibility/GT-time matching has verified false negatives; canonical Windows/source scheduling drift remains unresolved. Loop55 adapter repair had no benchmark output effect. Preserve failed acceptance independently from aggregate score and blind review.",
+  "decision": "Continue user-authorized assessment series with explicit REVIEW, never mark hard acceptance passed or optimize thresholds."
+}

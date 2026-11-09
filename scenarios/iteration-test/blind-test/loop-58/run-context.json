@@ -1,0 +1,23 @@
+{
+  "loop": 58,
+  "series": "Mac-inclusive iteration assessment",
+  "scenario": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "bundle": "/private/tmp/eforge-iteration-test-loop58-76asp4u9/bundle",
+  "status": "completed",
+  "authored_sha256": {
+    "scenario.yaml": "652627916df2fcdb0f0c3f00c1de1286ce97f33a1c95b649ea028cbe2e0c7eaa",
+    "environment.yaml": "0d303660bc5c069b2fbe0236520aa33025b7d15c6b4a132fd727c2feb33a0121",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002",
+    "ENVIRONMENT.md": "3bb4fd26d7e860d9c500a46eb84be91be2a843b2c0e754464cac8a5d50ed6e88",
+    "ORIGIN.json": "b39e065d47ea046521d429a1286fd4f49032c9c308084c74c23fac804f7b2460"
+  },
+  "validation.json_exit_code": 0,
+  "generation-console.txt_exit_code": 0,
+  "automated-eval.json_exit_code": 0,
+  "neutral_review_root": "/private/tmp/log-study-mlpr3vwu",
+  "records": 140141,
+  "files": 117,
+  "automated_eval": 95.50900880060621,
+  "acceptance_passed": false
+}

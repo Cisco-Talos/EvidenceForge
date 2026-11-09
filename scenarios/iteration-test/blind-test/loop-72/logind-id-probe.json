@@ -1,0 +1,66 @@
+{
+  "APP-INT-01.meridianhcs.local": {
+    "n": 8,
+    "slope_ids_per_minute": 8.971225576919556,
+    "r_squared": 0.9999428079601672,
+    "max_abs_residual": 14.571618483264416,
+    "first_id": 376420,
+    "last_id": 378886
+  },
+  "DB-PROD-01.meridianhcs.local": {
+    "n": 5,
+    "slope_ids_per_minute": 7.999531525278792,
+    "r_squared": 0.9999992938826748,
+    "max_abs_residual": 1.1193020215207525,
+    "first_id": 276698,
+    "last_id": 279196
+  },
+  "FILE-LNX-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 8.951814869209407,
+    "r_squared": 0.9674338060215916,
+    "max_abs_residual": 360.7600656309644,
+    "first_id": 116808,
+    "last_id": 119529
+  },
+  "LOG-MON-01.meridianhcs.local": {
+    "n": 8,
+    "slope_ids_per_minute": 9.346622936467353,
+    "r_squared": 0.9902921245095907,
+    "max_abs_residual": 150.320858522526,
+    "first_id": 39545,
+    "last_id": 42283
+  },
+  "MAIL-CLIN-01.meridianhcs.local": {
+    "n": 9,
+    "slope_ids_per_minute": 8.003324870008639,
+    "r_squared": 0.9999991658243306,
+    "max_abs_residual": 1.366399439263887,
+    "first_id": 195962,
+    "last_id": 198466
+  },
+  "MAIL-EDGE-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 9.058266976495776,
+    "r_squared": 0.999716394233463,
+    "max_abs_residual": 14.982863743585455,
+    "first_id": 274343,
+    "last_id": 275544
+  },
+  "PROXY-01.meridianhcs.local": {
+    "n": 6,
+    "slope_ids_per_minute": 8.070970962526117,
+    "r_squared": 0.998539328284004,
+    "max_abs_residual": 73.23748790826221,
+    "first_id": 265279,
+    "last_id": 267448
+  },
+  "WEB-EXT-01.meridianhcs.local": {
+    "n": 9,
+    "slope_ids_per_minute": 9.3074517089784,
+    "r_squared": 0.990741575667883,
+    "max_abs_residual": 227.10658424787994,
+    "first_id": 350452,
+    "last_id": 353125
+  }
+}

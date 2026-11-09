@@ -1394,6 +1394,20 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
     )
 
 
+def test_datagram_firewall_state_expiry_is_distinct_from_transport_close() -> None:
+    """Datagram state expires after idle time, using ASA's second-scale precision."""
+
+    event = _network_event(protocol="udp")
+    event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
+
+    observation = NetworkObservationPlanner(None).plan(event, {"cisco_asa"})[0]
+
+    assert observation.observed_close_time is not None
+    assert observation.firewall_teardown_time is not None
+    teardown_delay = observation.firewall_teardown_time - observation.observed_close_time
+    assert timedelta(seconds=1) <= teardown_delay <= timedelta(minutes=2)
+
+
 def test_firewall_teardown_after_export_window_is_marked_unobserved() -> None:
     """Perimeter lifecycle fan-out respects the half-open collection boundary."""
 

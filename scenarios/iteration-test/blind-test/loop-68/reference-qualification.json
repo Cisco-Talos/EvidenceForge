@@ -1,0 +1,7 @@
+{
+  "tag": "Zeekv8.0.5",
+  "protocol_source": "https://github.com/zeek/zeek/blob/v8.0.5/src/analyzer/protocol/mysql/mysql-protocol.pac",
+  "confirmation_source": "https://github.com/zeek/zeek/blob/v8.0.5/src/analyzer/protocol/mysql/mysql-analyzer.pac",
+  "qualification": "Protocol version starts unset, server initial handshake sets it, and a versioned client handshake response triggers analyzer confirmation. Thus a fresh fully observed zero-gap TCP exchange cannot confirm MySQL with a completely absent payload direction. Midstream/gapped cases remain qualified rather than forced failures.",
+  "coordinator_probe": "Includes client-only reset and server-only banner sibling; sensor observations are not independent flows."
+}

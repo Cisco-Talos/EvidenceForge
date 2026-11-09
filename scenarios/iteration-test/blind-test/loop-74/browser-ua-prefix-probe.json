@@ -1,0 +1,23 @@
+{
+  "windows_browser_http_requests_matched_to_sysmon_event3": 179,
+  "matched_process_ua_counts": [
+    {
+      "image": "chrome.exe",
+      "file_version": "120",
+      "ua_family": "Chrome",
+      "ua_major": "120",
+      "requests": 120
+    },
+    {
+      "image": "firefox.exe",
+      "file_version": "121",
+      "ua_family": "Firefox",
+      "ua_major": "121",
+      "requests": 59
+    }
+  ],
+  "all_major_mismatch_count": 0,
+  "generated_profile_mismatch_count": 0,
+  "mismatch_samples": [],
+  "zeek_http_sysmon_event3_exact_tuple_matches": 360
+}

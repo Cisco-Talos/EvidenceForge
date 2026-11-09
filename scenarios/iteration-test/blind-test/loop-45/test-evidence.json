@@ -1,0 +1,9 @@
+{
+  "focused_owner_protocol_checkpoint_tests": 372,
+  "asa_regression_tests": 133,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 444,
+  "behavior_digest": "8dbfb57f508a1ac736f7de2a2e6439febfe4ae68e7229bb029129e619b3f00d4",
+  "full_routine_suite": "Pre-push routine gate/reconciliation; not repeated per uncommitted loop"
+}

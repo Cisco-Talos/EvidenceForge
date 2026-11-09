@@ -1,0 +1,15 @@
+{
+  "focused_tests": {
+    "passed": 198,
+    "deselected_slow": 95,
+    "console": "/private/tmp/eforge-loop44-family-gate.txt"
+  },
+  "selected_slow_contract": {
+    "passed": 1,
+    "name": "test_firewall_teardown_processing_is_right_skewed_without_timeout_atom"
+  },
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 443,
+  "full_routine_suite": "Pre-push run and failed-module reconciliation; not repeated for loop44"
+}

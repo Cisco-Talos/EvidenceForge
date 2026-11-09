@@ -1,0 +1,213 @@
+{
+  "before_loop": 43,
+  "after_loop": 49,
+  "scope": "Selected native ES shell-fork fractions, root sw_vers inventory lifetimes, and Chrome helper starts; exact identities are PID plus process start time across exec versions",
+  "before": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "records": 126,
+      "repeated_shell_fraction_groups": 0,
+      "repeated_shell_fraction_members": 0,
+      "shell_fraction_groups": [],
+      "inventory": [
+        {
+          "pid": 44454,
+          "exec_line": 30,
+          "fork_line": 28,
+          "exit_line": 31,
+          "fork_to_exit_seconds": 0.567793,
+          "exec_to_exit_seconds": 0.558857
+        },
+        {
+          "pid": 59593,
+          "exec_line": 58,
+          "fork_line": 56,
+          "exit_line": 59,
+          "fork_to_exit_seconds": 0.461671,
+          "exec_to_exit_seconds": 0.456254
+        },
+        {
+          "pid": 73905,
+          "exec_line": 109,
+          "fork_line": 107,
+          "exit_line": 110,
+          "fork_to_exit_seconds": 0.568844,
+          "exec_to_exit_seconds": 0.558686
+        }
+      ],
+      "chrome_helper_forks": [
+        [
+          {
+            "line": 20,
+            "time": "2026-11-02T13:14:17.371287000Z"
+          },
+          {
+            "line": 22,
+            "time": "2026-11-02T13:14:18.513273000Z"
+          },
+          {
+            "line": 24,
+            "time": "2026-11-02T13:14:19.369173000Z"
+          }
+        ],
+        [
+          {
+            "line": 87,
+            "time": "2026-11-02T16:08:13.377859000Z"
+          }
+        ]
+      ]
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "records": 157,
+      "repeated_shell_fraction_groups": 0,
+      "repeated_shell_fraction_members": 0,
+      "shell_fraction_groups": [],
+      "inventory": [
+        {
+          "pid": 21876,
+          "exec_line": 33,
+          "fork_line": 31,
+          "exit_line": 34,
+          "fork_to_exit_seconds": 0.309048,
+          "exec_to_exit_seconds": 0.30079
+        },
+        {
+          "pid": 44131,
+          "exec_line": 93,
+          "fork_line": 91,
+          "exit_line": 94,
+          "fork_to_exit_seconds": 0.624703,
+          "exec_to_exit_seconds": 0.618038
+        },
+        {
+          "pid": 56512,
+          "exec_line": 134,
+          "fork_line": 132,
+          "exit_line": 135,
+          "fork_to_exit_seconds": 0.507711,
+          "exec_to_exit_seconds": 0.50102
+        }
+      ],
+      "chrome_helper_forks": [
+        [
+          {
+            "line": 25,
+            "time": "2026-11-02T13:27:13.470235000Z"
+          },
+          {
+            "line": 27,
+            "time": "2026-11-02T13:27:15.237898000Z"
+          },
+          {
+            "line": 29,
+            "time": "2026-11-02T13:27:16.445848000Z"
+          }
+        ]
+      ]
+    }
+  },
+  "after": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "records": 126,
+      "repeated_shell_fraction_groups": 0,
+      "repeated_shell_fraction_members": 0,
+      "shell_fraction_groups": [],
+      "inventory": [
+        {
+          "pid": 44454,
+          "exec_line": 30,
+          "fork_line": 28,
+          "exit_line": 31,
+          "fork_to_exit_seconds": 0.567793,
+          "exec_to_exit_seconds": 0.558857
+        },
+        {
+          "pid": 59593,
+          "exec_line": 58,
+          "fork_line": 56,
+          "exit_line": 59,
+          "fork_to_exit_seconds": 0.461671,
+          "exec_to_exit_seconds": 0.456254
+        },
+        {
+          "pid": 73905,
+          "exec_line": 109,
+          "fork_line": 107,
+          "exit_line": 110,
+          "fork_to_exit_seconds": 0.568844,
+          "exec_to_exit_seconds": 0.558686
+        }
+      ],
+      "chrome_helper_forks": [
+        [
+          {
+            "line": 20,
+            "time": "2026-11-02T13:14:17.371287000Z"
+          },
+          {
+            "line": 22,
+            "time": "2026-11-02T13:14:18.513273000Z"
+          },
+          {
+            "line": 24,
+            "time": "2026-11-02T13:14:19.369173000Z"
+          }
+        ],
+        [
+          {
+            "line": 87,
+            "time": "2026-11-02T16:08:13.377859000Z"
+          }
+        ]
+      ]
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "records": 157,
+      "repeated_shell_fraction_groups": 0,
+      "repeated_shell_fraction_members": 0,
+      "shell_fraction_groups": [],
+      "inventory": [
+        {
+          "pid": 21876,
+          "exec_line": 33,
+          "fork_line": 31,
+          "exit_line": 34,
+          "fork_to_exit_seconds": 0.309048,
+          "exec_to_exit_seconds": 0.30079
+        },
+        {
+          "pid": 44131,
+          "exec_line": 93,
+          "fork_line": 91,
+          "exit_line": 94,
+          "fork_to_exit_seconds": 0.624703,
+          "exec_to_exit_seconds": 0.618038
+        },
+        {
+          "pid": 56512,
+          "exec_line": 134,
+          "fork_line": 132,
+          "exit_line": 135,
+          "fork_to_exit_seconds": 0.507711,
+          "exec_to_exit_seconds": 0.50102
+        }
+      ],
+      "chrome_helper_forks": [
+        [
+          {
+            "line": 25,
+            "time": "2026-11-02T13:27:13.470235000Z"
+          },
+          {
+            "line": 27,
+            "time": "2026-11-02T13:27:15.237898000Z"
+          },
+          {
+            "line": 29,
+            "time": "2026-11-02T13:27:16.445848000Z"
+          }
+        ]
+      ]
+    }
+  }
+}

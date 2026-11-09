@@ -1181,8 +1181,9 @@ class SystemdScheduleEntry(BaseModel, extra="forbid", frozen=True):
     variant: str | None = None
     type: Literal["systemd_timer", "cron"]
     execution_scope: Literal["system", "user"] = "system"
-    frequency: Literal["daily", "weekly", "30min"]
+    frequency: Literal["daily", "weekly", "30min", "10min"]
     typical_hour: int
+    typical_minute: int | None = Field(default=None, ge=0, le=59)
     jitter_minutes: int
     distro: str
     # Optional fields for systemd_timer type

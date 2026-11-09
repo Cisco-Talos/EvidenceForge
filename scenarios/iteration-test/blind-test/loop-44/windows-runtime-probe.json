@@ -1,0 +1,97 @@
+{
+  "loop": 44,
+  "matched_process_lifetimes": 733,
+  "minimum_seconds": 3.004,
+  "below_three_seconds": 0,
+  "lifetimes_in_3_to_3_25_second_bin": 26,
+  "hosts": {
+    "DC-02.meridianhcs.local": {
+      "matched_process_lifetimes": 128,
+      "minimum_seconds": 3.091,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 4
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "matched_process_lifetimes": 45,
+      "minimum_seconds": 3.079,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 2
+    },
+    "DC-01.meridianhcs.local": {
+      "matched_process_lifetimes": 134,
+      "minimum_seconds": 3.097,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 2
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "matched_process_lifetimes": 41,
+      "minimum_seconds": 3.004,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 3
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "matched_process_lifetimes": 72,
+      "minimum_seconds": 3.095,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 3
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "matched_process_lifetimes": 75,
+      "minimum_seconds": 3.061,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 3
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "matched_process_lifetimes": 107,
+      "minimum_seconds": 3.073,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 2
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "matched_process_lifetimes": 61,
+      "minimum_seconds": 3.103,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 4
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "matched_process_lifetimes": 38,
+      "minimum_seconds": 3.104,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 2
+    },
+    "WS-EBROOKS-01.meridianhcs.local": {
+      "matched_process_lifetimes": 32,
+      "minimum_seconds": 3.153,
+      "below_three_seconds": 0,
+      "lifetimes_in_3_to_3_25_second_bin": 1
+    }
+  },
+  "conhost_parents": [
+    {
+      "parent": "C:\\Windows\\System32\\csrss.exe",
+      "version": "10.0.20348.1",
+      "count": 61
+    },
+    {
+      "parent": "C:\\Windows\\System32\\csrss.exe",
+      "version": "10.0.22621.1",
+      "count": 9
+    },
+    {
+      "parent": "C:\\Windows\\System32\\csrss.exe",
+      "version": "10.0.19041.1",
+      "count": 20
+    },
+    {
+      "parent": "C:\\Windows\\System32\\csrss.exe",
+      "version": "10.0.17763.1",
+      "count": 15
+    },
+    {
+      "parent": "C:\\Windows\\System32\\svchost.exe",
+      "version": "10.0.22621.1",
+      "count": 1
+    }
+  ],
+  "qualification": "Observed native Event1/Event5 pairs only; bounded-window missing endpoints excluded. Distribution evidence, not proof any single lifetime is impossible."
+}

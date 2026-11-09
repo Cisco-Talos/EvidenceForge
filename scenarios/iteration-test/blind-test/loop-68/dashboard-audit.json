@@ -1,0 +1,32 @@
+{
+  "xml_valid": true,
+  "loops": [
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68
+  ],
+  "rolling49": 53.45,
+  "rolling68": 44.95,
+  "previous_dashboards_unchanged": {
+    "assessment-effectiveness-dashboard-mac-series-last-20-loops.svg": "025f608cd14ed5a2d8049925cec45e0c3e6560702d9b4065b2beb65073de36bc",
+    "assessment-effectiveness-dashboard-mac-loops44-63.svg": "51e4974353f5ffda07e69d84d227ace04a8bc2f2641798b08de4f3326d288a91"
+  },
+  "source_boundary": "Mac1\u201342 from iteration-test-macos; canonical43\u201368. Original Windows-only series excluded. Standalone initial scores only."
+}

@@ -1,0 +1,11 @@
+{
+  "loop": 67,
+  "counts": {
+    "matched_browser_flows": 802,
+    "browser_family_mismatches": 0,
+    "matched_zoom_flows": 44,
+    "zoom_competing_browser_headers": 44
+  },
+  "examples": [],
+  "qualification": "Exact four-tuple and nearest HTTP within10seconds, sensor repeats deduplicated per endpoint flow. Browser user-agent override/intermediary alternatives remain possible; Zoom is a separate application-planning lead, not an impossible browser-family claim."
+}

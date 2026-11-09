@@ -1767,9 +1767,9 @@ class DeferredSessionNetworkAuthority:
             ):
                 raise ValueError("ACTIVE deferred RDP dependents changed exact semantics")
             return specs
-        if session is None or len(processes) != 3:
+        if session is None or len(processes) not in (3, 4):
             raise ValueError(
-                "Initial deferred RDP source cohort requires one session and three processes"
+                "Initial deferred RDP cohort requires one session and three or four processes"
             )
         state_members = (session, *processes)
         if len(specs) != len(state_members):
@@ -1800,8 +1800,9 @@ class DeferredSessionNetworkAuthority:
             member = members_by_object_id[spec.member_references[0]]
             identity = member.identity
             if member is session:
+                expected_logon_ordinal = 3 if len(processes) == 4 else 2
                 if (
-                    spec.publication_ordinal != 2
+                    spec.publication_ordinal != expected_logon_ordinal
                     or spec.event_type is not EventKind.LOGON
                     or spec.canonical_time != ensure_utc(self.bound_at)
                     or spec.occurrence_id

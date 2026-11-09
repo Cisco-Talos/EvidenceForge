@@ -1,0 +1,9 @@
+{
+  "combined_focused": "221 passed,94 deselected (proxy/channel/browser/HTTP/TLS/config); two additional reuse handoff cases added then150 related tests passed",
+  "checkpoint": "3 proxy checkpoint tests passed",
+  "new_cases": "13 fragmentation/aggregate/profile/type/scope cases plus2 plaintext-vs-inspected reused reservation tests",
+  "existing_contract_updates": "Upload and request-local tests now check precise TLS expansion/handshake bounds and complete manager/network byte equality; old plaintext=TCP assumptions removed.",
+  "config_validation": "101 files clean including new handshake profile ranges; negative validator rejects inverted range",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS"
+}

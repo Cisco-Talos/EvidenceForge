@@ -1,0 +1,20 @@
+{
+  "baseline_loop": 46,
+  "before": {
+    "proxy_requests": 3524,
+    "proxy_target_fragments": 13,
+    "proxy_referrer_fragments": 49,
+    "zeek_http_rows": 4610,
+    "zeek_uri_fragments": 0,
+    "zeek_referrer_fragments": 0
+  },
+  "after": {
+    "proxy_requests": 3524,
+    "proxy_target_fragments": 0,
+    "proxy_referrer_fragments": 0,
+    "zeek_http_rows": 4610,
+    "zeek_uri_fragments": 0,
+    "zeek_referrer_fragments": 0
+  },
+  "qualification": "All rendered proxy request lines and Zeek HTTP URI/Referer fields. Unit cases separately preserve encoded%23, query spelling, CONNECT/OPTIONS forms and higher-level navigation intent."
+}

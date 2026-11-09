@@ -49,7 +49,6 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
         "_linux_logind_session_allocations",
         "_linux_logind_session_block_offsets",
         "_linux_logind_session_counters",
-        "_linux_logind_session_epochs",
         "_linux_logind_session_initials",
         "_linux_logind_session_last_ids",
         "_linux_pid_allocations",
