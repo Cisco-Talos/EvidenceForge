@@ -1,0 +1,49 @@
+{
+  "score": 96.29771285460949,
+  "status": "PASS",
+  "records": 138347,
+  "pillars": {
+    "parseability": 100.0,
+    "plausibility": 94.60810694769535,
+    "causality": 96.83841943190613,
+    "timing": 92.18040629854556
+  },
+  "subscores_at_or_below_90": [
+    {
+      "pillar": "Plausibility",
+      "name": "Distribution Fit",
+      "score": 78.79061453994531,
+      "details": "ecar.object: 69; ecar.action: 60; web_access.method: 91; windows_event_security.EventID: 48; zeek_conn.proto: 98; zeek_conn.conn_state: 86; zeek_dns.qtype_name: 92; zeek_dns.rcode_name: 99; zeek_http.method: 39; zeek_http.status_code: 85; zeek_ssl.version: 87; zeek_ssl.established: 92"
+    },
+    {
+      "pillar": "Plausibility",
+      "name": "Anomaly Rate",
+      "score": 77.99999999999999,
+      "details": "39/5000 events anomalous (0.8%), target 1-5%"
+    },
+    {
+      "pillar": "Causality",
+      "name": "Pivot Linkability",
+      "score": 87.04663212435233,
+      "details": "168/193 inferred expected-visible narrative edges retain a shared rendered pivot; 1 isolated events, 7 contract-exempt"
+    },
+    {
+      "pillar": "Timing",
+      "name": "Attack Chain Timing",
+      "score": 84.90566037735849,
+      "details": "90/106 storyline transitions within bounds"
+    },
+    {
+      "pillar": "Timing",
+      "name": "System Process Regularity",
+      "score": 77.05620351416545,
+      "details": "Interval CV: 1.229 (10 service groups, 2523 events)"
+    }
+  ],
+  "notes": [
+    "Diagnostic policy is partial; this PASS does not close complete Mac coverage.",
+    "Attack-chain neighbor/pivot heuristics span independent benign Mac tasks; their failures are not automatically authenticity defects.",
+    "No criteria, weights, thresholds or baseline settings were changed to improve this score.",
+    "Original iteration-test history is a different workload/epoch and is not a score trend comparison."
+  ]
+}

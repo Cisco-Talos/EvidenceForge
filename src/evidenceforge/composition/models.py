@@ -182,7 +182,8 @@ def _validate_native_executable(command: str, os_name: str, field_name: str) -> 
         raise ValueError(f"{field_name} must use an absolute, ./, or bare POSIX executable")
     basename = PurePosixPath(executable).name
     if PurePosixPath(executable).suffix.lower() in {".bat", ".cmd", ".com", ".exe"}:
-        raise ValueError(f"{field_name} must not name a Windows executable on Linux")
+        label = "Linux" if os_name == "linux" else "macOS"
+        raise ValueError(f"{field_name} must not name a Windows executable on {label}")
     return basename
 
 
@@ -571,7 +572,7 @@ class CustomProcess(BaseModel):
 
     id: CatalogId
     display_name: str = Field(min_length=1)
-    platforms: dict[Literal["windows", "linux"], ProcessPlatform] = Field(min_length=1)
+    platforms: dict[Literal["windows", "linux", "macos"], ProcessPlatform] = Field(min_length=1)
     categories: list[Literal["user_app", "browser", "office", "code", "build", "query"]] = Field(
         min_length=1
     )
@@ -625,31 +626,36 @@ class CustomProcess(BaseModel):
                     )
             for index, command in enumerate(windows.children):
                 _validate_native_executable(command, "windows", f"windows children[{index}]")
-        linux = self.platforms.get("linux")
-        if linux is not None:
-            linux_path = PurePosixPath(linux.image_path)
+        for os_name in ("linux", "macos"):
+            platform = self.platforms.get(os_name)
+            if platform is None:
+                continue
+            image_path = PurePosixPath(platform.image_path)
             if (
-                not linux.image_path.startswith("/")
-                or "\\" in linux.image_path
-                or ".." in linux_path.parts
-                or linux_path.suffix.lower() in {".bat", ".cmd", ".com", ".exe"}
+                not platform.image_path.startswith("/")
+                or "\\" in platform.image_path
+                or ".." in image_path.parts
+                or image_path.suffix.lower() in {".bat", ".cmd", ".com", ".exe"}
             ):
-                raise ValueError("linux image_path must be an absolute POSIX path")
-            if linux.pe_metadata is not None or linux.loaded_modules:
-                raise ValueError("Linux process platforms cannot define Windows PE/module metadata")
-            image_basename = linux_path.name
-            for index, command in enumerate(linux.command_templates):
+                raise ValueError(f"{os_name} image_path must be an absolute POSIX path")
+            if platform.pe_metadata is not None or platform.loaded_modules:
+                label = "Linux" if os_name == "linux" else "macOS"
+                raise ValueError(
+                    f"{label} process platforms cannot define Windows PE/module metadata"
+                )
+            image_basename = image_path.name
+            for index, command in enumerate(platform.command_templates):
                 command_basename = _validate_native_executable(
                     command,
-                    "linux",
-                    f"linux command_templates[{index}]",
+                    os_name,
+                    f"{os_name} command_templates[{index}]",
                 )
                 if command_basename != image_basename:
                     raise ValueError(
-                        "linux command_templates must launch the declared image_path executable"
+                        f"{os_name} command_templates must launch the declared image_path executable"
                     )
-            for index, command in enumerate(linux.children):
-                _validate_native_executable(command, "linux", f"linux children[{index}]")
+            for index, command in enumerate(platform.children):
+                _validate_native_executable(command, os_name, f"{os_name} children[{index}]")
         return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -861,7 +867,7 @@ class TrafficConnection(BaseModel):
     proto: Literal["tcp", "udp"] = "tcp"
     service: str | None = None
     weight: int = Field(default=1, ge=1)
-    os: Literal["windows", "linux"] | None = None
+    os: Literal["windows", "linux", "macos"] | None = None
     emit_dns: bool = False
     dns_tags: list[CatalogReference] = Field(default_factory=list)
 

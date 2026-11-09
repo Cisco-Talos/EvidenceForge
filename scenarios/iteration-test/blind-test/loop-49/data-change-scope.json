@@ -1,0 +1,18 @@
+{
+  "compared_prior_loop": 48,
+  "before_files": 117,
+  "after_files": 117,
+  "changed_data_files": [
+    "fw-perimeter/cisco_asa.log",
+    "zeek-core/conn.json",
+    "zeek-core/files.json",
+    "zeek-core/http.json",
+    "zeek-db/conn.json",
+    "zeek-dmz/conn.json",
+    "zeek-dmz/files.json",
+    "zeek-dmz/http.json"
+  ],
+  "unchanged_data_files": 109,
+  "added_files": [],
+  "removed_files": []
+}

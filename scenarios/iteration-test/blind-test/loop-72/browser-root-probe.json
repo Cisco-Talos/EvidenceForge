@@ -1,0 +1,261 @@
+{
+  "loop71": {
+    "macos": {
+      "MAC-MROSS-01.meridianhcs.local": {
+        "main_exec_roots": 1,
+        "roots": [
+          {
+            "time": "2026-11-02T13:14:10.167169000Z",
+            "pid": 42876,
+            "pidversion": 27,
+            "uid": 501,
+            "asid": 100001,
+            "args": [
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ],
+            "visible_exit": true,
+            "exit_time": "2026-11-02T18:54:59.632963000Z"
+          }
+        ]
+      },
+      "MAC-MROSS-02.meridianhcs.local": {
+        "main_exec_roots": 1,
+        "roots": [
+          {
+            "time": "2026-11-02T13:26:58.996583000Z",
+            "pid": 20386,
+            "pidversion": 32,
+            "uid": 501,
+            "asid": 100001,
+            "args": [
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ],
+            "visible_exit": true,
+            "exit_time": "2026-11-02T18:56:59.656779000Z"
+          }
+        ]
+      }
+    },
+    "windows": {
+      "DC-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "DC-02.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "FILE-SRV-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "MAIL-FIN-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-AJOHNSON-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "6500",
+            "user": "MERIDIANHCS\\aisha.johnson",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://jira.meridianhcs.local/browse/PROJ-6024",
+            "start": "2026-11-02T17:40:23.910205+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\aisha.johnson": 1
+        }
+      },
+      "WS-DRAMIREZ-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "6648",
+            "user": "MERIDIANHCS\\diego.ramirez",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument http://webex.com/",
+            "start": "2026-11-02T14:14:05.417965+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\diego.ramirez": 1
+        }
+      },
+      "WS-EBROOKS-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-MCHEN-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-PPATEL-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "5756",
+            "user": "MERIDIANHCS\\priya.patel",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://wiki.meridianhcs.local/display/ENG/Architecture",
+            "start": "2026-11-02T13:19:51.783026+00:00",
+            "end": "2026-11-02T14:33:26.395754+00:00"
+          },
+          {
+            "pid": "6452",
+            "user": "MERIDIANHCS\\priya.patel",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument http://WEB-EXT-01/blog",
+            "start": "2026-11-02T15:41:46.217830+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\priya.patel": 1
+        }
+      },
+      "WS-SMARTINEZ-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "7036",
+            "user": "MERIDIANHCS\\sophia.martinez",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://drive.google.com/drive/my-drive",
+            "start": "2026-11-02T14:48:49.915868+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\sophia.martinez": 1
+        }
+      }
+    }
+  },
+  "loop72": {
+    "macos": {
+      "MAC-MROSS-01.meridianhcs.local": {
+        "main_exec_roots": 1,
+        "roots": [
+          {
+            "time": "2026-11-02T13:14:10.167169000Z",
+            "pid": 42876,
+            "pidversion": 27,
+            "uid": 501,
+            "asid": 100001,
+            "args": [
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ],
+            "visible_exit": true,
+            "exit_time": "2026-11-02T18:54:59.632963000Z"
+          }
+        ]
+      },
+      "MAC-MROSS-02.meridianhcs.local": {
+        "main_exec_roots": 1,
+        "roots": [
+          {
+            "time": "2026-11-02T13:26:58.996583000Z",
+            "pid": 20386,
+            "pidversion": 32,
+            "uid": 501,
+            "asid": 100001,
+            "args": [
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ],
+            "visible_exit": true,
+            "exit_time": "2026-11-02T18:56:59.656779000Z"
+          }
+        ]
+      }
+    },
+    "windows": {
+      "DC-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "DC-02.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "FILE-SRV-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "MAIL-FIN-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-AJOHNSON-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "6500",
+            "user": "MERIDIANHCS\\aisha.johnson",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://jira.meridianhcs.local/browse/PROJ-6024",
+            "start": "2026-11-02T17:40:23.910205+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\aisha.johnson": 1
+        }
+      },
+      "WS-DRAMIREZ-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "6648",
+            "user": "MERIDIANHCS\\diego.ramirez",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument http://webex.com/",
+            "start": "2026-11-02T14:14:05.417965+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\diego.ramirez": 1
+        }
+      },
+      "WS-EBROOKS-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-MCHEN-01.meridianhcs.local": {
+        "chrome_processes": [],
+        "maximum_concurrent_roots_by_user": {}
+      },
+      "WS-PPATEL-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "5756",
+            "user": "MERIDIANHCS\\priya.patel",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://wiki.meridianhcs.local/display/ENG/Architecture",
+            "start": "2026-11-02T13:19:51.783026+00:00",
+            "end": "2026-11-02T14:33:26.395754+00:00"
+          },
+          {
+            "pid": "6452",
+            "user": "MERIDIANHCS\\priya.patel",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument http://WEB-EXT-01/blog",
+            "start": "2026-11-02T15:41:46.217830+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\priya.patel": 1
+        }
+      },
+      "WS-SMARTINEZ-01.meridianhcs.local": {
+        "chrome_processes": [
+          {
+            "pid": "7036",
+            "user": "MERIDIANHCS\\sophia.martinez",
+            "command_line": "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --single-argument https://drive.google.com/drive/my-drive",
+            "start": "2026-11-02T14:48:49.915868+00:00",
+            "end": null
+          }
+        ],
+        "maximum_concurrent_roots_by_user": {
+          "MERIDIANHCS\\sophia.martinez": 1
+        }
+      }
+    }
+  },
+  "neutral_copy": {
+    "source_file_count": 115,
+    "copy_file_count": 115,
+    "byte_identical": true
+  }
+}

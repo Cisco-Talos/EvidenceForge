@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_execution_service import (
         ProcessExecutionService,
         ProcessTerminationService,
+        RetainedFinderLaunch,
     )
     from evidenceforge.generation.actions.process_support.actors import ProcessActorResolver
     from evidenceforge.generation.actions.process_support.capabilities import (
@@ -76,8 +77,10 @@ if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_support.scheduling import ProcessLaunchScheduler
     from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
     from evidenceforge.generation.actions.process_support.system import SystemProcessService
+    from evidenceforge.generation.macos_filesystem_workload import MacosFilesystemBatch
 
 import evidenceforge.events.dispatcher as dispatcher_types
+from evidenceforge.config.schemas import MacosTerminalStartupPolicy
 from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
@@ -133,6 +136,7 @@ from evidenceforge.events.dispatcher import (
 from evidenceforge.events.identity import (
     EntityIdentity,
     EventIdentityPlan,
+    PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
 )
@@ -141,12 +145,15 @@ from evidenceforge.events.lifecycle import (
     LifecycleEntityRef,
     SessionEndPlan,
 )
+from evidenceforge.events.macos_exec_script import MacosExecScript, MacosShebangExecutionIntent
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkEndpointObservationPlan,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -264,6 +271,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedProcessEffectActor,
     PreparedProcessEndpointEffectPlan,
 )
+from evidenceforge.generation.actions.macos_terminal import MacosTerminalStartup
 from evidenceforge.generation.actions.network_connection import (
     DeferredSessionNetworkAuthority,
 )
@@ -271,8 +279,12 @@ from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionReuseIntent,
     ProcessLifetimePlan,
 )
-from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
+from evidenceforge.generation.actions.scanner_probe import (
+    NmapCommandProbePlanningProfile,
+    nmap_probe_application_semantics,
+)
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
+from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
@@ -320,6 +332,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     min_unlock_gap_seconds,
     remote_auth_transport_max_duration_seconds,
+    special_privilege_profile,
     special_privileges_config,
 )
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
@@ -328,10 +341,15 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
+    UserApplicationAssignment,
 )
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.http_channels import HttpApplicationChannelManager
-from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
+from evidenceforge.generation.identity import (
+    IdentityDirectory,
+    MacAccount,
+    default_linux_uid_for_user,
+)
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
@@ -339,6 +357,7 @@ from evidenceforge.generation.lifecycle_authority import (
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.network_observation import PersistentSmbTrafficRebindAuthority
 from evidenceforge.generation.network_runtime import (
     NetworkPointBatchToken,
@@ -677,6 +696,11 @@ from .process_helpers import (
 )
 from .process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
+)
+from .process_helpers import (
+    _macos_process_uses_shell,
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
 )
 from .process_helpers import (
     _process_termination_delay_after_activity_seconds as _process_termination_delay_after_activity_seconds,
@@ -1746,33 +1770,28 @@ _TLS13_CIPHER_DIST = (
 _TLS13_CIPHER_VALUES = tuple(c[0] for c in _TLS13_CIPHER_DIST)
 _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 
-# SSL history patterns (weighted).  Zeek's ssl_history values are handshake
-# message-type codes, not conn.log-style originator/responder direction flags;
-# established TLS rows should include "S" for the ServerHello.
-_SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
-    ("CSXKNGIFIFD", 34),  # ECDHE full handshake plus encrypted app data
-    ("CSXNGIFIFD", 18),  # RSA/static-key full handshake
-    ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
-    ("CSXKNGIFIFL", 10),  # established then alert/close
+
+def _ssl_history_entries(profile: str) -> tuple[tuple[str, int], ...]:
+    """Read passive TLS histories without inventing decrypted messages."""
+    from evidenceforge.config.schemas import SslHistoryEntry
+    from evidenceforge.generation.activity.network_params import load_network_params
+
+    return tuple(
+        (entry.history, entry.weight)
+        for row in load_network_params()["ssl_histories"][profile]
+        for entry in (SslHistoryEntry.model_validate(row),)
+    )
+
+
+# Compatibility exports for callers inspecting the built-in vocabulary.
+_SSL_HISTORY_SUCCESS = tuple(
+    entry
+    for name in ("tls12_full", "tls12_resumed", "tls13_full", "tls13_resumed")
+    for entry in _ssl_history_entries(name)
 )
-_SSL_HISTORY_TLS12_RESUMED = (("CSIFIFD", 20),)  # abbreviated session, no cert/key exchange
-_SSL_HISTORY_TLS13_FULL_HANDSHAKE = (
-    ("CSD", 36),  # ClientHello, ServerHello, then encrypted records
-    ("CSDD", 26),  # multiple encrypted application-data records
-    ("CSDDD", 12),  # longer post-handshake encrypted exchange
-)
-_SSL_HISTORY_TLS13_RESUMED = (("CSD", 26),)  # PSK identity is visible; later messages are encrypted
-_SSL_HISTORY_TLS12_SUCCESS = _SSL_HISTORY_TLS12_FULL_HANDSHAKE + _SSL_HISTORY_TLS12_RESUMED
-_SSL_HISTORY_TLS13_SUCCESS = _SSL_HISTORY_TLS13_FULL_HANDSHAKE + _SSL_HISTORY_TLS13_RESUMED
-_SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
 _SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
 _SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
-
-_SSL_HISTORY_FAILURE = (
-    ("C", 45),  # client hello only, no visible server response
-    ("CS", 30),  # server hello seen, handshake did not complete
-    ("CSL", 25),  # server alert during handshake
-)
+_SSL_HISTORY_FAILURE = _ssl_history_entries("failure")
 _SSL_HIST_FAILURE_VALUES = tuple(h[0] for h in _SSL_HISTORY_FAILURE)
 _SSL_HIST_FAILURE_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_FAILURE)
 
@@ -1803,28 +1822,15 @@ def _choose_ssl_history_from_roll(
     resumed: bool,
 ) -> str:
     """Map a pre-drawn random roll onto a Zeek ssl_history value."""
-    if not established:
-        return _weighted_choice_from_roll(
-            _SSL_HIST_FAILURE_VALUES,
-            _SSL_HIST_FAILURE_WEIGHTS,
-            roll,
-        )
-
-    if tls_version == "TLSv13":
-        if resumed:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_RESUMED)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_RESUMED)
-        else:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
-    elif resumed:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_RESUMED)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_RESUMED)
-    else:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
-
-    return _weighted_choice_from_roll(values, weights, roll)
+    profile = (
+        ("tls13_" if tls_version == "TLSv13" else "tls12_") + ("resumed" if resumed else "full")
+        if established
+        else "failure"
+    )
+    entries = _ssl_history_entries(profile)
+    return _weighted_choice_from_roll(
+        tuple(history for history, _ in entries), tuple(weight for _, weight in entries), roll
+    )
 
 
 def _weighted_choice_from_roll(
@@ -2512,6 +2518,11 @@ def _linux_command_process_from_stage(
     command_line = _shell_display_join(parts[index:], executable)
     if parts[index].startswith("/"):
         return parts[index], command_line
+    from evidenceforge.generation.activity.system_processes import get_system_binary_path
+
+    configured_system_path = get_system_binary_path(parts[index], username=username)
+    if configured_system_path is not None:
+        return configured_system_path, command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
         return mapped, command_line
@@ -3304,6 +3315,14 @@ class _FrozenActivityTimingDelta:
         )
 
 
+@dataclass(slots=True)
+class _RetainedMacosTerminalStartup:
+    startup: MacosTerminalStartup
+    policy: MacosTerminalStartupPolicy
+    timing: tuple[_FrozenActivityTimingDelta, ...]
+    published_timing: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class _NmapProbeAnchorPlan:
     """One scanner anchor plus its deferred timing-audit operation."""
@@ -3581,6 +3600,7 @@ class ActivityGenerator:
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
         rdp_session_manager: RdpReconnectStateManager | None = None,
         public_identity_registry: PublicIdentityRegistry | None = None,
+        macos_execution_metadata: MacosExecutionMetadataProducer | None = None,
     ):
         """Initialize activity generator.
 
@@ -3714,6 +3734,9 @@ class ActivityGenerator:
                 )
         self.dispatcher = dispatcher
         self._runtime_content_manager = runtime_content_manager
+        self._macos_finder_startups: dict[str, RetainedFinderLaunch] = {}
+        self._macos_filesystem_workflows: dict[str, MacosFilesystemBatch] = {}
+        self._macos_terminal_startups: dict[str, _RetainedMacosTerminalStartup] = {}
         if dispatcher is not None:
             bind_execution_effect_audit = getattr(
                 dispatcher,
@@ -3756,6 +3779,7 @@ class ActivityGenerator:
         self._next_sid_reservation_id = 1
         self._sid_reservation_high_water = 0
         self.identity_directory = identity_directory
+        self.macos_execution_metadata = macos_execution_metadata
 
         # IP→System lookup for HostContext resolution on connection events
         self._ip_to_system: dict[str, Any] = {}
@@ -4420,8 +4444,9 @@ class ActivityGenerator:
             self.state_manager.update_session_activity_time(running.logon_id, close_time)
         if (
             running is not None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(
+            and _get_os_category(system.os) in {"linux", "macos"}
+            and _posix_shell_process_reserves_foreground(
+                _get_os_category(system.os),
                 running.image,
                 running.command_line,
             )
@@ -4605,6 +4630,11 @@ class ActivityGenerator:
                 process_name=running.image or process_name,
                 logon_id=running.logon_id or logon_id,
                 session_end_plan=session.end_plan if session is not None else None,
+                **(
+                    {"macos_command_completed": True}
+                    if _get_os_category(system.os) == "macos"
+                    else {}
+                ),
             )
 
     def _defer_ssh_session_close(
@@ -5029,6 +5059,20 @@ class ActivityGenerator:
             )
             if winlogon is not None and all(item.pid != winlogon.pid for item in processes):
                 processes.append(winlogon)
+            if winlogon is not None:
+                session_smss = self.state_manager.get_process(
+                    identity.hostname,
+                    winlogon.parent_pid,
+                )
+                boot_smss_pid = self._get_windows_boot_smss_pid(identity.hostname)
+                if (
+                    session_smss is not None
+                    and session_smss.pid != boot_smss_pid
+                    and session_smss.parent_pid == boot_smss_pid
+                    and session_smss.image.casefold().endswith("\\smss.exe")
+                    and all(item.pid != session_smss.pid for item in processes)
+                ):
+                    processes.append(session_smss)
         by_pid = {process.pid: process for process in processes}
 
         def process_depth(pid: int) -> int:
@@ -5565,13 +5609,14 @@ class ActivityGenerator:
         """Execute one authenticated terminal continuation outside owner locks."""
 
         continuation = self._installed_exact_ssh_close_continuation(continuation)
+        continuation.prepared.drain_receiver_startup(self)
         state = continuation.materialize_state()
         bundle = continuation.materialize_bundle(self)
         bundle._terminate_source_ssh_client_process(
             state,
             continuation=continuation,
         )
-        bundle._dispatch_linux_session_close_lifecycle(
+        bundle._dispatch_session_close_lifecycle(
             state,
             continuation.materialize_event(state),
             continuation.plan.auth_state,
@@ -5621,7 +5666,8 @@ class ActivityGenerator:
             )
         for item in pending:
             if type(item) is _SshCloseContinuation:
-                if item.close_time > window_end:
+                item.prepared.drain_receiver_startup(self)
+                if item.plan.authoritative_end_plan is not None or item.close_time > window_end:
                     continue
                 self._finalize_exact_ssh_close_continuation(item)
                 continue
@@ -5631,7 +5677,7 @@ class ActivityGenerator:
                     continue
                 if state.logon_id and self.state_manager.get_session(state.logon_id) is not None:
                     bundle._terminate_source_ssh_client_process(state)
-                    bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                    bundle._dispatch_session_close_lifecycle(state, event, auth_state)
             with self._ssh_close_journal_lock:
                 for index, existing in enumerate(self._pending_ssh_session_closures):
                     if existing is item:
@@ -5668,6 +5714,56 @@ class ActivityGenerator:
                 f"manager={census.manager_pending}"
             )
 
+    def _bounded_process_duration(
+        self,
+        *,
+        system: System,
+        start_time: datetime,
+        pid: int,
+        process_name: str,
+        lifetime: tuple[float, float],
+        rng: random.Random,
+    ) -> timedelta:
+        """Sample one canonical bounded runtime across terminal and teardown paths."""
+        if _get_os_category(system.os) == "macos":
+            from evidenceforge.config.schemas import ShortCommandTiming
+            from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+            profile = get_parent_config("macos", process_name.rsplit("/", 1)[-1])
+            timing_data = profile.get("short_timing")
+        else:
+            timing_data = None
+        if timing_data is not None:
+            timing = ShortCommandTiming.model_validate(timing_data)
+            duration = self.timing_runtime.sampler.sample_timedelta(
+                TruncatedLognormalDistribution(
+                    minimum=lifetime[0] * 1_000_000,
+                    median=min(lifetime[1], max(lifetime[0], timing.median)) * 1_000_000,
+                    maximum=lifetime[1] * 1_000_000,
+                    sigma=timing.sigma,
+                ),
+                relationship_key="activity.process.macos_foreground_lifetime",
+                scope=TimingScope(
+                    stable_id=f"foreground:{system.hostname}:{pid}:{start_time.isoformat()}",
+                    host=system.hostname,
+                    source="endpoint_process",
+                    lifecycle_id=f"{system.hostname}:{pid}:{start_time.isoformat()}",
+                ),
+                sample_key="terminal_command_close",
+            )
+        else:
+            duration = self._sample_activity_gap(
+                relationship_key="activity.process.foreground_lifetime",
+                stable_id=f"foreground:{system.hostname}:{pid}:{start_time.isoformat()}",
+                host=system.hostname,
+                source="endpoint_process",
+                lifecycle_id=f"{system.hostname}:{pid}:{start_time.isoformat()}",
+                minimum_ms=lifetime[0] * 1000,
+                maximum_ms=lifetime[1] * 1000,
+                timing_runtime=self._activity_timing_runtime(None),
+            )
+        return duration
+
     def _generate_bounded_foreground_process_termination(
         self,
         *,
@@ -5679,9 +5775,19 @@ class ActivityGenerator:
         logon_id: str,
         lifetime: tuple[float, float],
         rng: random.Random,
+        completion_outcome: PosixProcessExit | None = None,
     ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
-        termination_time = start_time + timedelta(seconds=rng.uniform(*lifetime))
+        termination_time = self.foreground_process_termination_time(system.hostname, pid)
+        if termination_time is None:
+            termination_time = start_time + self._bounded_process_duration(
+                system=system,
+                start_time=start_time,
+                pid=pid,
+                process_name=process_name,
+                lifetime=lifetime,
+                rng=rng,
+            )
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
         session = self.state_manager.get_session(logon_id)
         lifecycle_deadlines = [
@@ -5710,10 +5816,17 @@ class ActivityGenerator:
                 # would cross the session deadline.
                 return deadline
             termination_time = min(termination_time, latest_termination)
-        resolved_termination_time = self.resolve_process_lifecycle_close_candidate(
-            system.hostname,
-            pid,
-            termination_time,
+        macos_completed = _get_os_category(system.os) == "macos" and (
+            latest_termination is None or termination_time < latest_termination
+        )
+        resolved_termination_time = (
+            self._process_foreground().plan_macos_command_completion(
+                system=system, pid=pid, preferred_at=termination_time, latest_at=latest_termination
+            )
+            if macos_completed
+            else self.resolve_process_lifecycle_close_candidate(
+                system.hostname, pid, termination_time
+            )
         )
         lifecycle_deadline = min(lifecycle_deadlines) if lifecycle_deadlines else None
         resolved_precedes_deadline = (
@@ -5750,6 +5863,18 @@ class ActivityGenerator:
                 process_name=process_name,
                 logon_id=logon_id,
                 session_end_plan=session_end_plan,
+                **(
+                    {
+                        "exit_outcome": completion_outcome,
+                        "expected_process": self.state_manager.get_process_identity(
+                            system.hostname, pid
+                        ),
+                    }
+                    if macos_completed and completion_outcome is not None
+                    else {"macos_command_completed": True}
+                    if macos_completed
+                    else {}
+                ),
             )
         return tracked_termination_time
 
@@ -5938,6 +6063,37 @@ class ActivityGenerator:
                 if serialized_time + margin >= deadline and authored_candidate + margin < deadline:
                     return authored_candidate
         return serialized_time
+
+    def reserve_macos_foreground_process_start(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        command_line: str,
+    ) -> datetime | None:
+        """Reserve an authored Mac command through the shared foreground owner."""
+        if _get_os_category(system.os) != "macos":
+            return requested_time
+        reserved = self._process_foreground().reserve_authored_macos_shell_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=ensure_utc(requested_time),
+            command_line=command_line,
+        )
+        if reserved is None:
+            return None
+        if not self._is_within_scenario_window(reserved):
+            return None
+        session = self.state_manager.get_session(logon_id)
+        deadline = _session_activity_end_time(session) if session is not None else None
+        if deadline is not None and reserved >= ensure_utc(deadline):
+            return None
+        return reserved
 
     def _linux_ssh_process_shell_ready_time(
         self,
@@ -6677,6 +6833,25 @@ class ActivityGenerator:
         if not candidates:
             return None
         return max(candidates, key=lambda session: ensure_utc(session.start_time))
+
+    def _active_user_local_macos_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the active local GUI session without reusing remote/service sessions."""
+        if _get_os_category(system.os) != "macos":
+            return None
+        candidates = [
+            session
+            for session in self.state_manager.get_active_sessions_for_user_at(user.username, time)
+            if session.system == system.hostname
+            and session.session_kind == "interactive"
+            and session.logon_type == 2
+            and _session_active_for_activity(session, time)
+        ]
+        return max(candidates, key=lambda session: ensure_utc(session.start_time), default=None)
 
     def _active_user_linux_process_session(
         self,
@@ -8046,7 +8221,7 @@ class ActivityGenerator:
         lifetime = (
             _windows_foreground_lifetime(image, command_line)
             if os_category == "windows"
-            else _linux_foreground_lifetime(image, command_line)
+            else _posix_foreground_lifetime(os_category, image, command_line)
         )
         if lifetime is None:
             return
@@ -8055,7 +8230,14 @@ class ActivityGenerator:
             ensure_utc(time),
             ensure_utc(running.start_time) if running is not None else ensure_utc(time),
         )
-        termination_time = process_anchor + timedelta(seconds=rng.uniform(*lifetime))
+        termination_time = process_anchor + self._bounded_process_duration(
+            system=source_system,
+            start_time=process_anchor,
+            pid=pid,
+            process_name=image,
+            lifetime=lifetime,
+            rng=rng,
+        )
         self._remember_foreground_process_finalizer(
             system=source_system,
             user=User(username=username, full_name=username, email=f"{username}@example.local"),
@@ -8340,6 +8522,7 @@ class ActivityGenerator:
         access_mode = {
             "windows_native": "explorer",
             "cifs_mount": "mounted",
+            "macos_mount": "mounted",
             "smbclient": "direct",
         }.get(client_access)
         if os_category == "linux" and access_mode is None:
@@ -8388,8 +8571,8 @@ class ActivityGenerator:
                 actor_pid=process.pid,
                 actor_image=process.image,
                 actor_command_line=process.command_line,
-                transport_pid=process.pid,
-                transport_image=process.image,
+                transport_pid=-1 if os_category == "macos" else process.pid,
+                transport_image="" if os_category == "macos" else process.image,
                 access_mode=profile.access_mode,
                 path_style=profile.path_style,
                 terminate_after_operation=False,
@@ -8476,7 +8659,11 @@ class ActivityGenerator:
             lifetime = (
                 _windows_foreground_lifetime(actor_image, actor_command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(actor_image, actor_command_line)
+                else (
+                    _linux_foreground_lifetime(actor_image, actor_command_line)
+                    if os_category == "linux"
+                    else None
+                )
             )
             if lifetime is not None:
                 lifetime_rng = random.Random(
@@ -8491,7 +8678,15 @@ class ActivityGenerator:
                     pid=actor_pid,
                     process_name=actor_image,
                     logon_id=(running.logon_id if running is not None else ""),
-                    termination_time=time + timedelta(seconds=lifetime_rng.uniform(*lifetime)),
+                    termination_time=time
+                    + self._bounded_process_duration(
+                        system=client_system,
+                        start_time=time,
+                        pid=actor_pid,
+                        process_name=actor_image,
+                        lifetime=lifetime,
+                        rng=lifetime_rng,
+                    ),
                 )
 
         transport_pid = actor_pid if profile.transport_attribution == "process" else -1
@@ -8596,6 +8791,22 @@ class ActivityGenerator:
             return -1, None
         image, command_line = spec
 
+        from evidenceforge.generation.activity.browser_instances import browser_main_intent
+
+        browser_owner = browser_main_intent(image, command_line)
+        if browser_owner:
+            browser_pid = self._existing_user_browser_pid(
+                system=source_system,
+                username=user.username,
+                logon_id=session.logon_id,
+                process_name=image,
+                command_line=command_line,
+                time=time,
+                source_visible_by=source_visible_by,
+            )
+            if browser_pid is not None:
+                return (browser_pid, image) if browser_pid > 0 else (-1, None)
+
         image_lower = image.lower()
         image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
         resident_resource_owner = image_exe == "gvfsd-smb-browse"
@@ -8606,7 +8817,8 @@ class ActivityGenerator:
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
-            if proc.username == user.username
+            if not browser_owner
+            and proc.username == user.username
             and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and (not require_exact_command or proc.command_line == command_line)
@@ -8678,7 +8890,11 @@ class ActivityGenerator:
             process_lifetime = (
                 _windows_foreground_lifetime(image, command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(image, command_line)
+                else (
+                    _linux_foreground_lifetime(image, command_line)
+                    if os_category == "linux"
+                    else None
+                )
             )
             if process_lifetime is None:
                 lead_seconds = self._activity_timing_planner.triangular_seconds(
@@ -9083,7 +9299,7 @@ class ActivityGenerator:
             lifetime = (
                 _windows_foreground_lifetime(process.image, process.command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(process.image, process.command_line)
+                else _posix_foreground_lifetime(os_category, process.image, process.command_line)
             )
             if lifetime is not None:
                 return True
@@ -9270,6 +9486,44 @@ class ActivityGenerator:
             return f"{assigned_user}@{ad_domain}"
         return assigned_user
 
+    def browser_user_agent_for_process(
+        self,
+        source_system: System,
+        pid: int,
+        *,
+        hostname: str = "",
+        domain_tags: list[str] | None = None,
+    ) -> str:
+        """Select browser identity from the exact loaded executable version."""
+        if self.state_manager.get_process(source_system.hostname, pid) is None:
+            return ""
+        identity = self.state_manager.get_process_identity(source_system.hostname, pid)
+        if identity is None:
+            return ""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            _browser_family_for_process,
+            stable_browser_user_agent_for_process,
+        )
+
+        if not _browser_family_for_process(identity.image):
+            return ""
+        version = ""
+        if identity.executable_version is not None:
+            binary = self.dispatcher.resolve_loaded_process_binary_identity(identity)
+            metadata = getattr(binary, "pe_version_info", None)
+            if metadata is not None:
+                version = metadata.file_version
+            else:
+                version = getattr(getattr(binary, "key", None), "version", "")
+        return stable_browser_user_agent_for_process(
+            source_system,
+            identity.image,
+            identity.object_id,
+            hostname=hostname,
+            domain_tags=domain_tags,
+            release_version=version,
+        )
+
     def _proxy_user_agent_for_context(
         self,
         rng: random.Random,
@@ -9390,6 +9644,7 @@ class ActivityGenerator:
         http: Optional["HttpContext"] = None,
         explicit_mode: bool = False,
         time: datetime | None = None,
+        client_user_agent: str | None = None,
     ) -> ProxyContext:
         """Build a proxy access context from the logical origin request."""
         rng = _get_rng()
@@ -9473,8 +9728,12 @@ class ActivityGenerator:
             and not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        if http is not None and getattr(http, "user_agent_known_absent", False):
-            user_agent = ""
+        if client_user_agent is not None:
+            # Canonical browser ownership is resolved before header byte budgets
+            # and channel affinity. Domain defaults cannot change that identity.
+            user_agent = client_user_agent
+        elif http is not None and (http.user_agent or http.user_agent_known_absent):
+            user_agent = http.user_agent
         else:
             user_agent = self._proxy_user_agent_for_context(
                 rng,
@@ -10313,7 +10572,7 @@ class ActivityGenerator:
         process_lifetime = (
             _windows_foreground_lifetime(image, command_line)
             if os_category == "windows"
-            else _linux_foreground_lifetime(image, command_line)
+            else _posix_foreground_lifetime(os_category, image, command_line)
         )
         if process_lifetime is not None:
             lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
@@ -11297,8 +11556,8 @@ class ActivityGenerator:
         )
 
         event.ssl = SslContext(
-            version=tls_version,
-            cipher=cipher if ssl_established else "",
+            version=tls_version if "s" in ssl_hist else "",
+            cipher=cipher if "s" in ssl_hist else "",
             server_name=server_name,
             resumed=resumed,
             established=ssl_established,
@@ -11306,7 +11565,7 @@ class ActivityGenerator:
         )
         if not ssl_established:
             orig_bytes = rng.randint(90, 260)
-            resp_bytes = rng.randint(40, 180) if rng.random() < 0.55 else 0
+            resp_bytes = rng.randint(40, 180) if any(c.islower() for c in ssl_hist) else 0
             history = "ShADd" if resp_bytes else "ShAD"
             orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
                 orig_bytes,
@@ -11314,8 +11573,18 @@ class ActivityGenerator:
                 history,
                 rng,
             )
-            orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, orig_pkts, rng)
-            resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, resp_pkts, rng)
+            orig_ip_bytes = _tcp_ip_byte_count(
+                orig_bytes,
+                orig_pkts,
+                rng,
+                retransmitted="T" in (history or ""),
+            )
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                rng,
+                retransmitted="t" in (history or ""),
+            )
             duration = (
                 (timing_runtime or self.timing_runtime)
                 .sampler.sample_timedelta(
@@ -11476,19 +11745,50 @@ class ActivityGenerator:
 
         from evidenceforge.generation.activity.tls_realism import (
             certificate_analyzer_delay_ms,
-            certificate_file_size,
+            tls_server_payload_budget,
         )
 
+        if event.ssl is None:
+            return False
         changed = False
-        cert_bytes = sum(certificate_file_size(cert) for cert in event.x509_chain)
-        min_resp_bytes = cert_bytes + 280
+        min_resp_bytes = tls_server_payload_budget(
+            zeek_uid=net.zeek_uid,
+            ssl=event.ssl,
+            chain=event.x509_chain,
+            service=net.service or "",
+            application_bytes=event.http.response_body_len if event.http is not None else 0,
+        )
         resp_bytes = net.resp_bytes or 0
+        orig_pkts = net.orig_pkts
+        orig_ip_bytes = net.orig_ip_bytes or 0
         resp_pkts = net.resp_pkts
         resp_ip_bytes = net.resp_ip_bytes or 0
         if resp_bytes < min_resp_bytes:
             resp_bytes = min_resp_bytes
-            resp_pkts = max(resp_pkts, max(1, (resp_bytes // 1460) + 1))
-            resp_ip_bytes = max(resp_ip_bytes, resp_bytes + (resp_pkts * 40))
+            wire_rng = random.Random(
+                _stable_seed(f"tls-wire-accounting:{net.zeek_uid}:{resp_bytes}")
+            )
+            required_orig, required_resp = _tcp_packet_counts_from_payload_and_history(
+                net.orig_bytes,
+                resp_bytes,
+                net.history,
+                wire_rng,
+            )
+            if orig_pkts < required_orig:
+                orig_pkts = required_orig
+                orig_ip_bytes = _tcp_ip_byte_count(
+                    net.orig_bytes,
+                    orig_pkts,
+                    wire_rng,
+                    retransmitted="T" in (net.history or ""),
+                )
+            resp_pkts = max(resp_pkts, required_resp)
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                wire_rng,
+                retransmitted="t" in (net.history or ""),
+            )
             changed = True
 
         max_cert_delay = max(
@@ -11502,9 +11802,7 @@ class ActivityGenerator:
             for idx, cert in enumerate(event.x509_chain)
         )
         min_duration = (max_cert_delay / 1000.0) + 0.005
-        # Reserve room for files.log and x509.log chain rows before the conn
-        # emitter applies its own source-native TLS duration floor.
-        min_duration = max(min_duration, 1.05 + (0.075 * len(event.x509_chain)))
+        # The sampled analyzer readiness owns the required close, not chain count.
         duration = net.duration
         if duration is None or duration < min_duration:
             duration = min_duration
@@ -11526,13 +11824,15 @@ class ActivityGenerator:
                 closed_at=closed_at,
                 phase_times=phase_times,
                 traffic=NetworkTrafficLedger(
-                    orig=net.traffic.orig,
+                    orig=DirectionalTrafficLedger(net.orig_bytes or 0, orig_pkts, orig_ip_bytes),
                     resp=DirectionalTrafficLedger(resp_bytes, resp_pkts, resp_ip_bytes),
                     missed_orig_bytes=net.traffic.missed_orig_bytes,
                     missed_resp_bytes=net.traffic.missed_resp_bytes,
                 ),
             )
         else:
+            net.orig_pkts = orig_pkts
+            net.orig_ip_bytes = orig_ip_bytes
             net.resp_bytes = resp_bytes
             net.resp_pkts = resp_pkts
             net.resp_ip_bytes = resp_ip_bytes
@@ -11720,6 +12020,8 @@ class ActivityGenerator:
         effective_uid: int | None = None,
         effective_gid: int | None = None,
         source: str = "activity_generator",
+        *,
+        allow_local_session_reuse: bool = True,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -11735,6 +12037,8 @@ class ActivityGenerator:
             source_ip: Source IP address for remote logons. Local logons render with no
                 source address in Windows Security, but still use the host IP for DC-side
                 authentication evidence when applicable.
+            allow_local_session_reuse: Whether an implicit local request may reuse its
+                existing session. Explicit authored Mac logins request a new occurrence.
 
         Returns:
             LogonID (hex string format, e.g., "0x3e7")
@@ -11764,11 +12068,78 @@ class ActivityGenerator:
             effective_uid=effective_uid,
             effective_gid=effective_gid,
             source=source,
+            allow_local_session_reuse=allow_local_session_reuse,
         )
         return LogonActionBundle(self, request).execute()
 
+    def _emit_macos_workspace_request(self, system: System, logon_id: str, time: datetime) -> None:
+        """Publish a distinct GUI request stage without asserting desktop completion."""
+        from evidenceforge.generation.macos_logging import prepare_workspace_request
+
+        session = self.state_manager.get_session_identity(logon_id)
+        if session is None:
+            raise StateError("Mac workspace request lost its canonical session")
+        gap = self._freeze_profile_activity_gap(
+            "macos.workspace_request",
+            stable_id=f"mac-workspace:{session.object_id}",
+            host=system.hostname,
+            source="macos_workspace",
+            lifecycle_id=session.lifecycle_group_id,
+        )
+        requested_at = ensure_utc(time) + gap.value
+        if self.state_manager.get_session_at(logon_id, requested_at) is None:
+            return
+        workspace = prepare_workspace_request(
+            self.state_manager,
+            self.dispatcher.deployment_registry,
+            session=session,
+            writer_pid=self._get_system_pid(system.hostname, "loginwindow", 0),
+            requested_at=requested_at,
+            os_name=system.os,
+        )
+        if workspace.native is None and "macos_unified_log" in self.dispatcher.emitters:
+            logger.warning(
+                "Native Unified Log workspace observation unavailable for %s: %s",
+                system.hostname,
+                workspace.unavailable_reason,
+            )
+        self.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
+                timestamp=requested_at,
+                event_type="macos_workspace_request",
+                src_host=self._build_host_context(system),
+                macos_workspace=workspace,
+                identity_plan=EventIdentityPlan(
+                    subject=session, actor=workspace.writer, session=session
+                ),
+                lifecycle=ActionLifecycleContext(
+                    group_id=session.lifecycle_group_id,
+                    canonical_start=session.started_at,
+                    phase="dependent",
+                    parent_group_id=session.parent_lifecycle_group_id or None,
+                ),
+            )
+        )
+        gap.publish()
+
     def _execute_logon_bundle(self, request: LogonRequest) -> str:
         """Expand a successful logon bundle through the compatibility adapter."""
+        account: MacAccount | None = None
+        if _get_os_category(request.system.os) == "macos" and self.identity_directory is not None:
+            account = self.identity_directory.macos_account(
+                request.user.username, request.system.hostname
+            )
+            if account is not None:
+                request = replace(
+                    request,
+                    effective_uid=request.effective_uid
+                    if request.effective_uid is not None
+                    else account.uid,
+                    effective_gid=request.effective_gid
+                    if request.effective_gid is not None
+                    else account.gid,
+                    account_scope=request.account_scope or account.scope,
+                )
         user = request.user
         system = request.system
         time = request.time
@@ -11880,7 +12251,12 @@ class ActivityGenerator:
                 session_end_plan=request.session_end_plan,
             )
             return rendered_logon_id
-        if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
+        if (
+            request.allow_local_session_reuse
+            and logon_id is None
+            and os_cat == "windows"
+            and logon_type in (2, 11)
+        ):
             existing_interactive = self._active_user_workstation_windows_session(
                 user,
                 system,
@@ -11899,6 +12275,24 @@ class ActivityGenerator:
                     existing_interactive.last_activity_time = time
                     return existing_interactive.logon_id
 
+        if (
+            request.allow_local_session_reuse
+            and logon_id is None
+            and os_cat == "macos"
+            and logon_type == 2
+            and source_ip in (None, "", "-", system.ip)
+        ):
+            existing_local = self._active_user_local_macos_session(user, system, time)
+            if existing_local is not None and (
+                request.reuse_required_at is None
+                or self.state_manager.get_session_at(
+                    existing_local.logon_id, request.reuse_required_at
+                )
+                is not None
+            ):
+                existing_local.last_activity_time = time
+                return existing_local.logon_id
+
         windows_remote_auth_port: int | None = None
         if os_cat == "windows" and logon_type == 10:
             windows_remote_auth_port = 3389
@@ -11910,7 +12304,8 @@ class ActivityGenerator:
         if windows_remote_auth_port is not None and not 1 <= windows_remote_auth_port <= 65535:
             raise ValueError("remote_auth_destination_port must be between 1 and 65535")
         if (
-            logon_id is None
+            request.allow_local_session_reuse
+            and logon_id is None
             and os_cat == "linux"
             and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
             and source_ip in (None, "", "-", system.ip)
@@ -12046,7 +12441,16 @@ class ActivityGenerator:
             return logon_id
 
         # Select auth package (semantic data, not format-specific)
-        auth_pkg = self._select_auth_package(logon_type)
+        auth_pkg = (
+            {
+                "AuthenticationPackageName": "local",
+                "LogonProcessName": "loginwindow",
+                "LmPackageName": "-",
+                "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            }
+            if os_cat == "macos"
+            else self._select_auth_package(logon_type)
+        )
         if request.auth_protocol == "kerberos":
             auth_pkg = {
                 **auth_pkg,
@@ -12080,7 +12484,56 @@ class ActivityGenerator:
             and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
             and session_kind not in _LINUX_REMOTE_SESSION_KINDS
         )
-        if logon_id is None:
+        local_macos_session = (
+            os_cat == "macos" and logon_type == 2 and session_kind == "interactive"
+        )
+        gui_audit_origin = (
+            local_macos_session
+            and self.macos_execution_metadata is not None
+            and self.macos_execution_metadata.profile.gui_audit_origin
+            == "authenticated_local_account"
+            and account is not None
+            and account.uid > 0
+            and request.effective_uid == account.uid
+            and request.effective_gid == account.gid
+            and resolved_auth_protocol in {"", "local"}
+        )
+        if gui_audit_origin:
+            resolved_auth_protocol = "local"
+        if (
+            gui_audit_origin
+            and account is not None
+            and (logon_id is None or self.state_manager.get_session(logon_id) is None)
+        ):
+            # Allocate GUI authentication and its independent audit namespace
+            # together, before any workspace or terminal process is published.
+            batch = self.state_manager.begin_materialization_batch()
+            planned = batch.plan_session(
+                username=user.username,
+                system=system.hostname,
+                logon_type=logon_type,
+                source_ip=auth_source_ip,
+                source_port=0,
+                session_kind=session_kind,
+                logon_guid_required=requires_logon_guid,
+                lifecycle_group_id=lifecycle_group_id,
+                auth_protocol=resolved_auth_protocol,
+                account_scope=request.account_scope,
+                auth_session_ref=request.auth_session_ref,
+                effective_uid=request.effective_uid,
+                effective_gid=request.effective_gid,
+                session_id=0,
+                logon_id=logon_id,
+                start_time=time,
+            )
+            planned = batch.enrich_macos_audit_session(
+                planned, audit_uid=account.uid, authenticated_at=time
+            )
+            with self.state_manager.prepared_materialization_batch(batch.seal()) as prepared:
+                prepared.apply_provisional()
+                prepared.finalize_no_fail()
+            logon_id = planned.identity.logon_id
+        elif logon_id is None:
             logon_id = self.state_manager.create_session(
                 username=user.username,
                 system=system.hostname,
@@ -12096,7 +12549,7 @@ class ActivityGenerator:
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
                 effective_gid=request.effective_gid,
-                session_id=0 if local_linux_session else None,
+                session_id=0 if local_linux_session or local_macos_session else None,
             )
         else:
             existing_session = self.state_manager.get_session(logon_id)
@@ -12118,7 +12571,7 @@ class ActivityGenerator:
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
                     effective_gid=request.effective_gid,
-                    session_id=0 if local_linux_session else None,
+                    session_id=0 if local_linux_session or local_macos_session else None,
                 )
             else:
                 self.state_manager.update_session_metadata(
@@ -12149,8 +12602,10 @@ class ActivityGenerator:
 
         session_for_login = self.state_manager.get_session(logon_id)
         if (
-            os_cat == "linux"
-            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            (
+                (os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES)
+                or local_macos_session
+            )
             and session_for_login is not None
             and session_for_login.login_occurrence_emitted
         ):
@@ -12164,13 +12619,23 @@ class ActivityGenerator:
         )
         session_for_guid = self.state_manager.get_session(logon_id)
         session_id = session_for_guid.session_id if session_for_guid is not None else 0
-        elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
-        emit_special_privileges = elevated and self._claim_privileged_auth_occurrence(
-            request.stable_id
+        elevated = (
+            user.username == "root"
+            if os_cat == "macos"
+            else self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
+        )
+        emit_special_privileges = (
+            os_cat != "macos"
+            and elevated
+            and self._claim_privileged_auth_occurrence(request.stable_id)
         )
         privilege_list = (
-            self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
+            self._select_special_privileges(user, logon_type, system.hostname)
+            if elevated and os_cat != "macos"
+            else ""
         )
+
+        emit_special_privileges = emit_special_privileges and bool(privilege_list)
 
         if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
             self._emit_linux_local_logon_syslog(user, system, time, logon_id)
@@ -12205,6 +12670,12 @@ class ActivityGenerator:
                                 )
                                 % 1801
                             )
+                        )
+                        parent_for_chain = self._create_windows_session_smss(
+                            system=system,
+                            session=session_for_caller,
+                            boot_smss_pid=parent_for_chain,
+                            winlogon_start=caller_start,
                         )
                         self.state_manager.set_current_time(caller_start)
                         logon_caller_pid = self.state_manager.create_process(
@@ -12258,7 +12729,7 @@ class ActivityGenerator:
             dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
-                user_sid=self._get_sid(user.username),
+                user_sid="" if os_cat == "macos" else self._get_sid(user.username),
                 logon_id=logon_id,
                 session_id=session_id,
                 logon_type=logon_type,
@@ -12275,7 +12746,11 @@ class ActivityGenerator:
                 subject_domain=subject["domain"],
                 subject_logon_id=subject["logon_id"],
                 privilege_list=privilege_list,
-                reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
+                reporting_pid=(
+                    self._get_system_pid(system.hostname, "loginwindow", 0)
+                    if os_cat == "macos"
+                    else self._get_system_pid(system.hostname, "lsass", 0x2E0)
+                ),
                 process_pid=logon_caller_pid,
                 process_name=logon_caller_process,
                 session_kind=session_kind,
@@ -12435,7 +12910,11 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
-        if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
+        if local_macos_session and system.type == "workstation":
+            self._emit_macos_workspace_request(system, logon_id, time)
+        if (
+            os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+        ) or local_macos_session:
             session_for_login = self.state_manager.get_session(logon_id)
             if session_for_login is not None:
                 session_for_login.login_occurrence_emitted = True
@@ -12479,6 +12958,12 @@ class ActivityGenerator:
                     if parent_for_chain is not None and not session.windows_shell_bootstrapped:
                         winlogon_pid = session.session_winlogon_pid
                         if winlogon_pid is None:
+                            parent_for_chain = self._create_windows_session_smss(
+                                system=system,
+                                session=session,
+                                boot_smss_pid=parent_for_chain,
+                                winlogon_start=time,
+                            )
                             winlogon_pid = self.state_manager.create_process(
                                 system.hostname,
                                 parent_for_chain,
@@ -12976,7 +13461,7 @@ class ActivityGenerator:
                     payload_bytes=1,
                 ),
             )
-        if os_category == "linux" and source_ip not in {"", "-", request.system.ip}:
+        if os_category == "linux" and auth_source_ip not in {"", "-"}:
             canonical_transport_close = time + _FAILED_LINUX_SSH_CLOSE_HEADROOM
             headroom = max(
                 headroom,
@@ -13167,23 +13652,25 @@ class ActivityGenerator:
         known_account = self._is_known_failed_logon_account(effective_username, user)
         failed_profile = self._failed_logon_profile(logon_type, system, source_ip, rng)
         validation_path = self._failed_logon_validation_path(logon_type, failed_profile, rng)
-        if self._is_disabled_failed_logon_account(effective_username, user):
-            substatus = "0xc0000072"  # Account disabled
-            user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2307"
-        elif not known_account:
-            substatus = "0xc0000064"  # User not found: NULL SID
-            user_sid = "S-1-0-0"
-            failure_reason = "%%2313"
-        else:
-            substatus = "0xc000006a"  # Wrong password
-            user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2313"
+        from evidenceforge.events.logon_failure import WindowsLogonFailure
 
-        remote_linux_source = (
-            _get_os_category(system.os) == "linux"
-            and auth_source_ip not in (None, "-")
-            and auth_source_ip != system.ip
+        condition = WindowsLogonFailure.for_account_state(
+            known=known_account,
+            disabled=self._is_disabled_failed_logon_account(effective_username, user),
+        )
+        substatus = condition.substatus
+        failure_reason = condition.resource_reason
+        if condition.substatus == "0xc0000072":
+            user_sid = self._get_sid(effective_username)
+        elif not known_account:
+            user_sid = "S-1-0-0"
+        else:
+            user_sid = self._get_sid(effective_username)
+
+        remote_linux_source = _get_os_category(system.os) == "linux" and auth_source_ip not in (
+            None,
+            "",
+            "-",
         )
         is_windows_remote_auth = (
             _get_os_category(system.os) == "windows"
@@ -13252,12 +13739,14 @@ class ActivityGenerator:
                 logon_type=logon_type,
                 result="failure",
                 failure_reason=failure_reason,
-                failure_status="0xc000006d",
+                failure_status=condition.status,
                 failure_substatus=substatus,
                 source_ip=(
                     source_ip if remote_linux_source and source_ip is not None else auth_source_ip
                 ),
                 source_port=linux_ssh_source_port or failed_profile["source_port"],
+                auth_protocol="ssh" if remote_linux_source else "",
+                session_kind="ssh" if remote_linux_source else "",
                 auth_package=failed_profile["auth_package"],
                 logon_process=failed_profile["logon_process"],
                 lm_package=failed_profile["lm_package"],
@@ -13420,6 +13909,8 @@ class ActivityGenerator:
         source_system: System | None = None,
     ) -> dict[str, str]:
         """Return source-native Windows 4624 subject fields for successful logons."""
+        if _get_os_category(system.os) == "macos":
+            return {"sid": "", "username": "root", "domain": "", "logon_id": ""}
         system_subject = self._account_subject_fields("SYSTEM", system, logon_id="0x3e7")
         if _get_os_category(system.os) != "windows":
             return system_subject
@@ -15325,6 +15816,7 @@ class ActivityGenerator:
         """Freeze and validate generic session process closes without mutation."""
 
         authoritative = authoritative_end_plan is not None
+        os_category = _get_os_category(system.os)
         termination_gaps_ms = (
             []
             if authoritative
@@ -15341,10 +15833,21 @@ class ActivityGenerator:
                 for process in processes
             ]
         )
+        macos_close_offsets: tuple[timedelta, ...] | None = None
         if authoritative:
-            termination_span = timedelta(
-                milliseconds=min(3000, max(250, 100 * (len(processes) + 1)))
-            )
+            if os_category == "macos":
+                termination_span, macos_close_offsets = (
+                    self._macos_authoritative_process_termination_schedule(
+                        session_logon_id=session.logon_id,
+                        host=session.system,
+                        lifecycle_id=session.lifecycle_group_id or session.logon_id,
+                        process_ids=tuple(process.pid for process in processes),
+                    )
+                )
+            else:
+                termination_span = timedelta(
+                    milliseconds=min(3000, max(250, 100 * (len(processes) + 1)))
+                )
         else:
             final_margin_ms = 1000 if uses_ssh_transport_close_margin else 150
             termination_span = timedelta(
@@ -15367,7 +15870,6 @@ class ActivityGenerator:
         latest_planned_child_close: dict[str, datetime] = {}
         plans: list[_GenericLogoffProcessClosePlan] = []
         cumulative_gap_ms = 0
-        os_category = _get_os_category(system.os)
         deadline = (
             ensure_utc(authoritative_end_plan.canonical_end)
             if authoritative_end_plan is not None
@@ -15387,13 +15889,17 @@ class ActivityGenerator:
                 or lifecycle_process.identity.hostname != identity.hostname
                 or lifecycle_process.identity.pid != identity.pid
                 or lifecycle_process.identity.started_at != identity.started_at
-                or lifecycle_process.identity.image != identity.image
+                or lifecycle_process.current_view.image != identity.image
+                or lifecycle_process.current_view.execution_ordinal != identity.execution_ordinal
             ):
                 raise StateError("Generic logoff process lifecycle prestate drifted")
 
             if authoritative:
-                slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
-                terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
+                if macos_close_offsets is not None:
+                    terminate_at = termination_start + macos_close_offsets[ordinal]
+                else:
+                    slot_ms = termination_span.total_seconds() * 1000 / max(1, len(processes) + 1)
+                    terminate_at = termination_start + timedelta(milliseconds=slot_ms * ordinal)
             else:
                 terminate_at = termination_start + timedelta(milliseconds=cumulative_gap_ms)
                 cumulative_gap_ms += termination_gaps_ms[ordinal]
@@ -15410,7 +15916,7 @@ class ActivityGenerator:
                 )
                 else _windows_foreground_lifetime(identity.image, identity.command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(identity.image, identity.command_line)
+                else _posix_foreground_lifetime(os_category, identity.image, identity.command_line)
             )
             if process_lifetime is not None:
                 lifetime_rng = random.Random(
@@ -15420,8 +15926,13 @@ class ActivityGenerator:
                         f"{identity.command_line}"
                     )
                 )
-                bounded_termination_time = identity.started_at + timedelta(
-                    seconds=lifetime_rng.uniform(*process_lifetime)
+                bounded_termination_time = identity.started_at + self._bounded_process_duration(
+                    system=system,
+                    start_time=identity.started_at,
+                    pid=identity.pid,
+                    process_name=identity.image,
+                    lifetime=process_lifetime,
+                    rng=lifetime_rng,
                 )
                 connection_hold = self._process_connection_hold_until.get(
                     self._process_instance_key(
@@ -15692,6 +16203,74 @@ class ActivityGenerator:
             )
         return tuple(plans), projected_session_frontier
 
+    def _macos_authoritative_process_termination_schedule(
+        self,
+        *,
+        session_logon_id: str,
+        host: str,
+        lifecycle_id: str,
+        process_ids: tuple[int, ...],
+    ) -> tuple[timedelta, tuple[timedelta, ...]]:
+        """Plan deterministic, process-scoped close gaps before an exact session end."""
+
+        if (
+            type(session_logon_id) is not str
+            or not session_logon_id
+            or type(host) is not str
+            or not host
+            or type(lifecycle_id) is not str
+            or not lifecycle_id
+            or type(process_ids) is not tuple
+            or any(type(pid) is not int or pid <= 0 for pid in process_ids)
+        ):
+            raise StateError(
+                "Mac authoritative process-close planning requires an exact session process set"
+            )
+
+        if not process_ids:
+            return timedelta(0), ()
+
+        relationship_key = "macos.authoritative_process_termination_gap"
+        window = _activity_get_timing_window(
+            relationship_key,
+            default_min_ms=40,
+            default_max_ms=350,
+            default_position="before",
+        )
+        first_close_offset = self._sample_activity_gap(
+            relationship_key=relationship_key,
+            stable_id=f"{session_logon_id}:initial-close-margin",
+            minimum_ms=window.min_ms,
+            maximum_ms=window.max_ms,
+            host=host,
+            source="macos_session_termination",
+            lifecycle_id=lifecycle_id,
+            ordinal=0,
+            sample_key="initial_close_margin",
+            mode_fraction=0.35,
+        )
+        process_gaps = tuple(
+            self._sample_activity_gap(
+                relationship_key=relationship_key,
+                stable_id=f"{session_logon_id}:{pid}",
+                minimum_ms=window.min_ms,
+                maximum_ms=window.max_ms,
+                host=host,
+                source="macos_session_termination",
+                lifecycle_id=lifecycle_id,
+                ordinal=ordinal,
+                sample_key="process_close_gap",
+                mode_fraction=0.35,
+            )
+            for ordinal, pid in enumerate(process_ids)
+        )
+        offsets: list[timedelta] = []
+        elapsed = first_close_offset
+        for gap in process_gaps:
+            offsets.append(elapsed)
+            elapsed += gap
+        return elapsed, tuple(offsets)
+
     def _execute_bundle_owned_rdp_logoff(
         self,
         request: LogoffRequest,
@@ -15749,8 +16328,47 @@ class ActivityGenerator:
             raise StateError("Bundle-owned RDP logoff returned before exact session closure")
         return True
 
+    def _execute_exact_ssh_authored_logoff(self, request: LogoffRequest) -> bool:
+        """Consume one matching authored close through its retained SSH owner."""
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        with self._ssh_close_journal_lock:
+            matches = tuple(
+                item
+                for item in self._pending_ssh_session_closures
+                if type(item) is _SshCloseContinuation and item.plan.logon_id == request.logon_id
+            )
+        if not matches:
+            return False
+        if len(matches) != 1:
+            raise StateError("Exact SSH authored close has ambiguous continuation ownership")
+        continuation = matches[0]
+        plan = continuation.plan
+        if (
+            plan.authoritative_end_plan is None
+            or request.session_end_plan != plan.authoritative_end_plan
+            or not request.from_storyline
+            or ensure_utc(request.time) != plan.session_close_time
+            or request.user.username != plan.username
+            or request.system.hostname != plan.target_host.hostname
+            or request.system.ip != plan.target_host.ip
+        ):
+            raise StateError("SSH logoff differs from its exact authored close owner")
+        session = self.state_manager.get_session(request.logon_id)
+        if session is not None and (
+            session.end_plan != plan.authoritative_end_plan
+            or session.ecar_object_id != plan.session_object_id
+            or session.system != plan.target_host.hostname
+            or session.username != plan.username
+        ):
+            raise StateError("Exact SSH authored close lost its live session end owner")
+        self._finalize_exact_ssh_close_continuation(continuation)
+        return True
+
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
+        if self._execute_exact_ssh_authored_logoff(request):
+            return
         pending_linux_sudo = self._claim_pending_linux_sudo_logoff(request)
         if pending_linux_sudo is not None:
             try:
@@ -15988,6 +16606,20 @@ class ActivityGenerator:
                     process.pid != session_winlogon.pid for process in session_processes
                 ):
                     session_processes.append(session_winlogon)
+                if session_winlogon is not None:
+                    session_smss = self.state_manager.get_process(
+                        session.system,
+                        session_winlogon.parent_pid,
+                    )
+                    boot_smss_pid = self._get_windows_boot_smss_pid(session.system)
+                    if (
+                        session_smss is not None
+                        and session_smss.pid != boot_smss_pid
+                        and session_smss.parent_pid == boot_smss_pid
+                        and session_smss.image.casefold().endswith("\\smss.exe")
+                        and all(process.pid != session_smss.pid for process in session_processes)
+                    ):
+                        session_processes.append(session_smss)
             deferred_ssh_transport_process = (
                 next(
                     (
@@ -16100,6 +16732,14 @@ class ActivityGenerator:
             )
             try:
                 for process_close in generic_process_closes:
+                    outcome = (
+                        self.macos_execution_metadata.ordinary_close(
+                            process_close.identity, process_close.end_time, owner="session"
+                        )
+                        if _get_os_category(system.os) == "macos"
+                        and self.macos_execution_metadata is not None
+                        else None
+                    )
                     self.generate_process_termination(
                         user=user,
                         system=system,
@@ -16109,6 +16749,11 @@ class ActivityGenerator:
                         logon_id=logon_id,
                         from_storyline=from_storyline,
                         session_end_plan=authoritative_end_plan,
+                        **(
+                            {"exit_outcome": outcome, "expected_process": process_close.identity}
+                            if outcome is not None
+                            else {}
+                        ),
                     )
                     lifecycle_process = self._lifecycle_authority.registry.get_process(
                         process_close.identity.object_id
@@ -16645,6 +17290,14 @@ class ActivityGenerator:
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
+        preserve_requested_time: bool = False,
+        new_posix_session: bool = False,
+        arguments: tuple[str, ...] | None = None,
+        exec_script: MacosExecScript | None = None,
+        macos_launch_kind: Literal["user", "system", "finder"] | None = None,
+        macos_terminal: Literal["allocate", "absent"] | None = None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
+        macos_responsibility: ProcessResponsibility | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -16652,9 +17305,9 @@ class ActivityGenerator:
         to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
         probabilistic EDR file/module/registry events.
 
-        When ensure_file_event=True, always emits at least one FILE/CREATE for
-        the process image (useful for storyline processes where FILE visibility
-        is important for hunting).
+        When ensure_file_event=True, legacy Windows/Linux payload paths may
+        receive FILE/CREATE evidence. Mac execution alone establishes no file
+        write; command-owned and explicitly authored artifact effects own it.
 
         Args:
             user: User creating the process
@@ -16666,6 +17319,13 @@ class ActivityGenerator:
             parent_pid: Parent process PID (default 4 = System)
             require_exact_parent: Reject the execution if ``parent_pid`` is not the exact
                 live parent instead of applying generic parent-repair heuristics.
+            new_posix_session: Model an explicit session-creating POSIX launch.
+            arguments: Exact argv for a fresh Mac launch; never inferred from display text.
+            exec_script: Explicit shebang file or known absence; never inferred from argv.
+            macos_launch_kind: Explicit clean user/system metadata, or bounded Finder
+                parent/audit/self-responsibility without inferred exec-time metadata.
+            macos_responsibility: Explicit canonical launch-owner fact for the modeled
+                terminal chain; unknown is preserved when no owner was established.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -16679,8 +17339,75 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
-        if _get_os_category(system.os) == "linux" and _linux_shell_process_reserves_foreground(
-            process_name, command_line
+        provider = self.macos_execution_metadata if _get_os_category(system.os) == "macos" else None
+        if (
+            provider is not None
+            and provider.profile.terminal_startups
+            and macos_launch_kind is None
+            and not require_exact_parent
+            and parent_pid in {0, 4}
+            and logon_id
+        ):
+            from evidenceforge.generation.activity.process_helpers import _macos_process_uses_shell
+
+            owner = self.state_manager.get_session_at(logon_id, time)
+            if (
+                owner is not None
+                and owner.session_kind == "interactive"
+                and owner.username == user.username
+                and _macos_process_uses_shell(process_name)
+            ):
+                # Materialize dependencies before optional effects freeze their
+                # actor/time. A prepared actor cannot move after a late bootstrap.
+                shell_pid = self.ensure_macos_session_shell(
+                    user,
+                    system,
+                    logon_id,
+                    time,
+                    allow_deferred_start=source_visible_by is None,
+                )
+                if shell_pid is None:
+                    return 0
+                shell = self.state_manager.get_process_identity(system.hostname, shell_pid)
+                if shell is None:
+                    raise StateError("Mac command lost its completed native terminal shell")
+                parent_pid = shell_pid
+                if ensure_utc(time) <= shell.execution_started_at:
+                    time = shell.execution_started_at + timedelta(milliseconds=50)
+        launch_support = None
+        if provider is not None and ".app/Contents/MacOS/" in process_name:
+            from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
+
+            registry = self.dispatcher.deployment_registry if self.dispatcher is not None else None
+            if registry is not None:
+                launch_support = resolve_macos_launch_support(
+                    registry, provider.profile, system.hostname, user.username, process_name
+                )
+        finder_session = (
+            self.state_manager.get_session_at(logon_id, time)
+            if launch_support is not None and launch_support.mechanism == "finder"
+            else None
+        )
+        if (
+            macos_launch_kind is None
+            and not require_exact_parent
+            and launch_support is not None
+            and launch_support.mechanism == "finder"
+            and finder_session is not None
+            and finder_session.session_kind == "interactive"
+            and finder_session.logon_type == 2
+        ):
+            parent_pid = 1
+            require_exact_parent = True
+            arguments = catalog_direct_exec_arguments(process_name, command_line)
+            command_line = shlex.join(arguments)
+            macos_launch_kind = "finder"
+            allow_browser_launch_spacing = False
+        if _get_os_category(system.os) in {
+            "linux",
+            "macos",
+        } and _posix_shell_process_reserves_foreground(
+            _get_os_category(system.os), process_name, command_line
         ):
             ready_at = self._unbounded_foreground_shell_ready_at(
                 system=system,
@@ -16701,6 +17428,14 @@ class ActivityGenerator:
             command_line=command_line,
             parent_pid=parent_pid,
             require_exact_parent=require_exact_parent,
+            preserve_requested_time=preserve_requested_time,
+            new_posix_session=new_posix_session,
+            arguments=arguments,
+            exec_script=exec_script,
+            macos_launch_kind=macos_launch_kind,
+            macos_terminal=macos_terminal,
+            macos_standard_io=macos_standard_io,
+            macos_responsibility=macos_responsibility,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -16714,6 +17449,48 @@ class ActivityGenerator:
         if bounded_request is None:
             return 0
         return ProcessExecutionActionBundle(self, bounded_request).execute()
+
+    def generate_macos_shebang_process(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        *,
+        parent_pid: int,
+        intent: MacosShebangExecutionIntent,
+        launch_kind: Literal["user", "system"] = "user",
+    ) -> int:
+        """Produce exact script argv/linkage through the ordinary retained process action."""
+        if (
+            type(intent) is not MacosShebangExecutionIntent
+            or _get_os_category(system.os) != "macos"
+        ):
+            raise StateError("Shebang execution requires an exact modeled Mac intent")
+        intent.__post_init__()
+        registry = self.dispatcher.local_artifact_registry
+        record = (
+            registry.resolve_version(intent.script.artifact_version_id)
+            if registry is not None
+            else None
+        )
+        if record is None or MacosExecScript.from_runtime_record(record) != intent.script:
+            raise StateError("Shebang execution lost its exact retained file version")
+        return self.generate_process(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+            process_name=intent.interpreter,
+            command_line=intent.command_line,
+            parent_pid=parent_pid,
+            require_exact_parent=True,
+            arguments=intent.arguments,
+            exec_script=intent.script,
+            macos_launch_kind=launch_kind,
+            macos_standard_io="inherit",
+            suppress_command_file_effect=True,
+        )
 
     def _preflight_bounded_process_source_deadline(
         self,
@@ -17290,6 +18067,17 @@ class ActivityGenerator:
                 duration = rng.uniform(1.5, 6.0)
                 orig_bytes = rng.randint(0, 64)
                 resp_bytes = 0
+            conn_state, service, duration, orig_bytes, resp_bytes = (
+                nmap_probe_application_semantics(
+                    conn_state,
+                    service,
+                    duration,
+                    orig_bytes,
+                    resp_bytes,
+                    application_probe=plan.application_probe,
+                    server_first_services=frozenset(planning_profile.server_first_services),
+                )
+            )
             self.generate_connection(
                 src_ip=system.ip,
                 dst_ip=target.ip,
@@ -18176,7 +18964,7 @@ class ActivityGenerator:
             termination_time=termination_time,
         )
 
-    def _emit_generic_ssh_preauth_failure_syslog(
+    def _emit_generic_ssh_preauth_syslog(
         self,
         *,
         target_system: System,
@@ -18188,7 +18976,7 @@ class ActivityGenerator:
         attempted_username: str | None,
         duration: float | None,
     ) -> None:
-        """Emit source-native sshd auth companions for generic preauth transport."""
+        """Observe preauth transport without inventing unrequested authentication."""
         if target_host is None or not source_ip or source_ip == "-" or source_port <= 0:
             return
 
@@ -18262,27 +19050,15 @@ class ActivityGenerator:
                 )
                 close_subject = f"invalid user {attempted_username}"
         else:
-            rows.extend(
-                [
-                    (
-                        invalid_delta_ms + process_floor_shift_ms,
-                        5,
-                        f"Invalid user unknown from {source_ip} port {source_port}",
-                    ),
-                    (
-                        failed_delta_ms + process_floor_shift_ms,
-                        4,
-                        f"Failed password for invalid user unknown "
-                        f"from {source_ip} port {source_port} ssh2",
-                    ),
-                ]
-            )
-            close_subject = "invalid user unknown"
+            # A listener inferred from TCP/22 does not establish userauth.
+            close_subject = ""
+            close_delta_ms = max(connection_delta_ms + 1, int((duration or 0.0) * 1000) + 20)
+        close_prefix = f"{close_subject} " if close_subject else ""
         rows.append(
             (
                 close_delta_ms + process_floor_shift_ms,
                 6,
-                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+                f"Connection closed by {close_prefix}{source_ip} port {source_port} [preauth]",
             )
         )
         for delta_ms, severity, message in rows:
@@ -18450,9 +19226,21 @@ class ActivityGenerator:
         process_image: str,
         source_port: int,
         required_until: datetime | None = None,
+        pty: bool = False,
     ) -> tuple[int, str] | None:
         """Materialize the source-side SSH client before opening its transport."""
 
+        if _get_os_category(source_system.os) == "macos":
+            return self._ensure_macos_ssh_client_process(
+                user=user,
+                source_system=source_system,
+                target_system=target_system,
+                time=time,
+                process_image=process_image,
+                source_port=source_port,
+                required_until=required_until,
+                pty=pty,
+            )
         if _get_os_category(source_system.os) == "linux":
             return self.ensure_linux_ssh_client_process(
                 user=user,
@@ -18486,6 +19274,119 @@ class ActivityGenerator:
             )
         return pid, image
 
+    def _ensure_macos_ssh_client_process(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        target_system: System,
+        time: datetime,
+        process_image: str,
+        source_port: int,
+        required_until: datetime | None = None,
+        pty: bool = False,
+    ) -> tuple[int, str] | None:
+        """Bind an interactive Mac client to the shared SSH transport owner.
+
+        A source session must already exist. Resolve the frozen native catalog
+        before materializing its terminal chain; never replace an explicit SCP
+        or foreign executable with a fabricated SSH command.
+        """
+        from evidenceforge.generation.activity.application_catalog import application_descriptor
+
+        requested_time = ensure_utc(time)
+        session = self._active_user_local_macos_session(user, source_system, requested_time)
+        if session is None or (
+            required_until is not None
+            and not _session_active_for_activity(session, required_until, margin_seconds=1.5)
+        ):
+            return None
+        registry = self.dispatcher.deployment_registry
+        if registry is not None:
+            compiled = registry.application_descriptor("macos-ssh", "macos")
+            if compiled is None:
+                return None
+            image, templates = compiled.image_path, compiled.command_templates
+        else:
+            descriptor = application_descriptor("macos-ssh")
+            if descriptor is None or "macos" not in descriptor["platforms"]:
+                return None
+            platform = descriptor["platforms"]["macos"]
+            image, templates = platform["image_path"], platform["command_templates"]
+        if process_image and process_image != image:
+            return None
+        template = next((item for item in templates if "{ssh_target}" in item), None)
+        if template is None:
+            return None
+        target = self._build_host_context(target_system).fqdn or target_system.hostname
+        # This catalog role launches SSH directly. Preserve a combined user@host
+        # operand as one literal argv entry before rendering its history display.
+        command = (
+            template.replace("{username}@{ssh_target}", shlex.quote(f"{user.username}@{target}"))
+            .replace("{username}", shlex.quote(user.username))
+            .replace("{ssh_target}", shlex.quote(target))
+        )
+        arguments = catalog_direct_exec_arguments(image, command)
+        if pty:
+            arguments = (arguments[0], "-tt", *arguments[1:])
+        command = shlex.join(arguments)
+        gap = self._freeze_profile_activity_gap(
+            "macos.ssh_client_before_transport",
+            stable_id=(
+                f"mac-ssh:{source_system.hostname}:{user.username}:{target_system.hostname}:"
+                f"{source_port}:{requested_time.isoformat()}"
+            ),
+            host=source_system.hostname,
+            source="macos_ssh",
+            lifecycle_id=session.lifecycle_group_id,
+        )
+        process_time = requested_time - gap.value
+        if not _session_active_for_activity(session, process_time, margin_seconds=1.5) or (
+            self._process_create_source_bound(system=source_system, canonical_time=process_time)
+            > requested_time
+        ):
+            return None
+        parent_pid = self.ensure_macos_session_shell(
+            user, source_system, session.logon_id, process_time
+        )
+        if parent_pid is None:
+            return None
+        pid = self.generate_process(
+            user=user,
+            system=source_system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            source_visible_by=requested_time,
+            require_exact_parent=True,
+            arguments=arguments,
+        )
+        if pid <= 0:
+            return None
+        gap.publish()
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        if running is None:
+            raise StateError("Mac SSH client materialization lost its canonical process")
+        self._process_parents()._record_user_process(source_system, user, pid, image)
+        self.emit_macos_shell_history(
+            user,
+            source_system,
+            running.start_time,
+            command,
+            logon_id=session.logon_id,
+            shell_pid=parent_pid,
+        )
+        if required_until is not None:
+            self._remember_process_connection_hold(
+                system=source_system, pid=pid, close_time=required_until
+            )
+        self.state_manager.update_process_activity_time(source_system.hostname, pid, requested_time)
+        self.state_manager.set_current_time(requested_time)
+        return pid, image
+
     def has_implicit_ssh_client_owner(
         self,
         *,
@@ -18497,6 +19398,12 @@ class ActivityGenerator:
         """Return allocation-free eligibility for an implicit SSH client actor."""
 
         os_category = _get_os_category(source_system.os)
+        if os_category == "macos":
+            session = self._active_user_local_macos_session(user, source_system, time)
+            return session is not None and (
+                required_until is None
+                or _session_active_for_activity(session, required_until, margin_seconds=1.5)
+            )
         if os_category == "linux":
             return (
                 self._active_source_linux_session(
@@ -18785,6 +19692,10 @@ class ActivityGenerator:
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
+        macos_command_completed: bool = False,
     ) -> None:
         """Generate process termination event across all applicable log formats.
 
@@ -18798,6 +19709,9 @@ class ActivityGenerator:
             pid: PID of the terminated process
             process_name: Full path of the terminated process
             logon_id: LogonID of the owning session
+            exit_outcome: Explicit completed Mac result, requiring expected_process
+            expected_process: Exact live execution for a supplied completed result
+            macos_command_completed: Natural bounded command completion, not session teardown
         """
         request = ProcessTerminationRequest(
             user=user,
@@ -18808,6 +19722,9 @@ class ActivityGenerator:
             logon_id=logon_id,
             from_storyline=from_storyline,
             session_end_plan=session_end_plan,
+            exit_outcome=exit_outcome,
+            expected_process=expected_process,
+            macos_command_completed=macos_command_completed,
         )
         ProcessTerminationActionBundle(self, request).execute()
 
@@ -19949,6 +20866,7 @@ class ActivityGenerator:
             protocol,
             request.user_agent,
             rng,
+            username=request.user.username,
         )
         process_pid, resolved_process_image = self._ensure_email_client_process(
             user=request.user,
@@ -20072,16 +20990,53 @@ class ActivityGenerator:
         token = "".join(reversed(chars)).rjust(10, "A")
         return token[-11:]
 
+    def _macos_email_assignment(
+        self,
+        system: "System",
+        protocol: str,
+        user_agent: str,
+        *,
+        username: str | None = None,
+    ) -> UserApplicationAssignment | None:
+        """Select through the existing compiled user/deployment ownership contract."""
+        registry = getattr(self.dispatcher, "deployment_registry", None)
+        principal = username or system.assigned_user
+        if registry is None or not principal:
+            return None
+        profile = registry.user_profile_for(system.hostname, principal, "macos")
+        if profile is None:
+            return None
+        if protocol == "owa":
+            return registry.preferred_browser_assignment(profile.profile_id)
+        mailer = self._email_mailer_profile("", user_agent)
+        if mailer not in {"outlook", "thunderbird"}:
+            return None
+        return registry.select_user_application_assignment_for_applications(
+            profile.profile_id, (mailer,), unit_interval=0.0
+        )
+
     def _email_access_process_image(
         self,
         system: "System",
         protocol: str,
         user_agent: str,
         rng: random.Random,
-    ) -> str:
-        """Return lightweight client process attribution for mailbox reads."""
+        *,
+        username: str | None = None,
+    ) -> str | None:
+        """Return an eligible installed Mac client, or existing legacy attribution."""
         os_category = _get_os_category(system.os)
         ua = user_agent.lower()
+        if os_category == "macos":
+            assignment = self._macos_email_assignment(
+                system, protocol, user_agent, username=username
+            )
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            return (
+                registry.application_executable_for_assignment(assignment)
+                if assignment is not None and registry is not None
+                else None
+            )
         if protocol == "owa":
             if os_category == "windows":
                 return rng.choice(
@@ -20103,12 +21058,20 @@ class ActivityGenerator:
 
     def _email_access_process_command_line(
         self,
-        image: str,
+        image: str | None,
         *,
         protocol: str,
         server_hostname: str,
     ) -> str:
         """Return a source-plausible command line for mailbox access ownership."""
+        if image is None:
+            return ""
+        if ".app/Contents/MacOS/" in image:
+            # The installed image is authoritative; no shell parses its spaced path.
+            arguments = [image]
+            if protocol == "owa":
+                arguments.append(f"https://{server_hostname}/owa/")
+            return shlex.join(arguments)
         exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if exe_name in {"chrome.exe", "msedge.exe", "firefox", "firefox.exe", "chromium"}:
             scheme = "https"
@@ -20130,10 +21093,12 @@ class ActivityGenerator:
         user: "User",
         system: "System",
         time: datetime,
-        image: str,
+        image: str | None,
         command_line: str,
     ) -> tuple[int, str | None]:
         """Create or reuse a user mail client process for endpoint flow attribution."""
+        if image is None:
+            return -1, None
         os_category = _get_os_category(system.os)
         sessions = [
             session
@@ -20154,6 +21119,17 @@ class ActivityGenerator:
         image_lower = image.lower()
         image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
         resident_mail_client = image_exe in {"outlook.exe", "thunderbird", "thunderbird.exe"}
+        if os_category == "macos":
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            assignment = self._macos_email_assignment(system, "smtp", image, username=user.username)
+            descriptor = (
+                registry.application_descriptor_for_assignment(assignment)
+                if assignment is not None
+                and registry is not None
+                and registry.application_executable_for_assignment(assignment) == image
+                else None
+            )
+            resident_mail_client = descriptor is not None and descriptor.singleton_per_session
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
@@ -20284,7 +21260,9 @@ class ActivityGenerator:
             return -1, None
         if hop.get("submission"):
             self._ensure_email_submission_session(actor=actor, system=src_system, time=time)
-            image = self._email_access_process_image(src_system, "smtp", user_agent, _get_rng())
+            image = self._email_access_process_image(
+                src_system, "smtp", user_agent, _get_rng(), username=actor.username
+            )
             command_line = self._email_access_process_command_line(
                 image,
                 protocol="smtp",
@@ -20747,7 +21725,9 @@ class ActivityGenerator:
             corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
         )
         raw_user_agent = (
-            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
+            spec.user_agent
+            or corpus_user_agent
+            or self._email_user_agent(request.system, rng, username=request.actor.username)
         )
         user_agent = self._email_effective_user_agent(
             sender,
@@ -21562,7 +22542,9 @@ class ActivityGenerator:
         ]
         return body.rstrip() + "\n\n" + "\n".join(footer_lines) + "\n"
 
-    def _email_user_agent(self, system: "System", rng: random.Random) -> str:
+    def _email_user_agent(
+        self, system: "System", rng: random.Random, *, username: str | None = None
+    ) -> str:
         os_category = _get_os_category(system.os)
         client_rng = random.Random(
             _stable_seed(
@@ -21570,6 +22552,22 @@ class ActivityGenerator:
                 f"{system.hostname}:{getattr(system, 'assigned_user', '')}:{os_category}"
             )
         )
+        if os_category == "macos":
+            assignment = self._macos_email_assignment(system, "smtp", "", username=username)
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            image = (
+                registry.application_executable_for_assignment(assignment)
+                if assignment is not None and registry is not None
+                else None
+            )
+            release = (
+                registry.resolve_binary(system.hostname, image, "macos")
+                if image is not None
+                else None
+            )
+            return (
+                f"{release.key.artifact_name} {release.key.version}" if release is not None else ""
+            )
         if os_category == "windows":
             return client_rng.choice(
                 [
@@ -21647,7 +22645,7 @@ class ActivityGenerator:
         if "external_mail_server" in (src_system.roles or []):
             return False
         os_category = _get_os_category(src_system.os)
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return False
         agent = user_agent.lower()
         if any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):
@@ -23606,7 +24604,11 @@ class ActivityGenerator:
             protocol,
             email_ctx.user_agent,
             access_rng,
+            username=user.username,
         )
+        # Native Mac mail caches require a separately supported application storage contract.
+        if _get_os_category(system.os) == "macos":
+            return
         command_line = self._email_access_process_command_line(
             process_image,
             protocol=protocol,
@@ -23711,7 +24713,8 @@ class ActivityGenerator:
         """Return a plausible sender-side attachment source path."""
         if _get_os_category(system.os) == "windows":
             return rf"{self._user_profile_directory(user.username)}\Documents\{filename}"
-        return f"/home/{user.username}/Documents/{filename}"
+        home = "/Users" if _get_os_category(system.os) == "macos" else "/home"
+        return f"{home}/{user.username}/Documents/{filename}"
 
     def _email_message_cache_path(
         self,
@@ -24177,6 +25180,7 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
+        pty: bool = False,
     ) -> str:
         """Generate an SSH session through the SSH action-bundle adapter.
 
@@ -24213,6 +25217,7 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,
+            pty=pty,
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
 
@@ -24241,6 +25246,7 @@ class ActivityGenerator:
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
+        pty: bool = False,
     ) -> tuple[str, str]:
         """Execute the canonical SSH bundle and return transport and session IDs."""
 
@@ -24268,6 +25274,7 @@ class ActivityGenerator:
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,
+            pty=pty,
         )
         return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
 
@@ -24305,6 +25312,8 @@ class ActivityGenerator:
         source_visible_by: datetime | None = None,
     ) -> int | None:
         """Create visible per-session sshd and login shell process state for SSH."""
+        if _get_os_category(target_system.os) == "macos":
+            raise StateError("Linux SSH shell bootstrap cannot own a macOS receiver session")
         session = self.state_manager.get_session(logon_id)
         if session is None or session.system != target_system.hostname:
             return None
@@ -24686,6 +25695,381 @@ class ActivityGenerator:
             terminal_time = ensure_utc(terminal_proc.start_time)
         return terminal_pid, terminal_time
 
+    def ensure_macos_session_shell(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        activity_time: datetime,
+        *,
+        allow_deferred_start: bool = False,
+        terminal_application_id: str | None = None,
+    ) -> int | None:
+        """Materialize a catalog-backed local terminal chain in its existing GUI session.
+
+        Timing is a modeled readiness budget, not measured terminal startup latency.
+        Each stage uses the canonical process bundle and existing session close owner.
+        """
+        from evidenceforge.generation.activity.application_catalog import application_descriptor
+
+        if _get_os_category(target_system.os) != "macos":
+            return None
+        session = self.state_manager.get_session_at(logon_id, activity_time)
+        if (
+            session is None
+            or session.system != target_system.hostname
+            or session.username != user.username
+            or session.session_kind != "interactive"
+            or not _session_active_for_activity(session, activity_time, margin_seconds=1.5)
+        ):
+            return None
+
+        def shell_ready_or_deferred(shell: RunningProcess | None) -> bool:
+            if shell is None or shell.logon_id != logon_id:
+                return False
+            if (
+                allow_deferred_start
+                and shell.end_time is None
+                and shell.execution_ordinal > 0
+                and shell.image in {"/bin/zsh", "/bin/bash"}
+            ):
+                execution = self.state_manager.get_process_identity(
+                    target_system.hostname, shell.pid
+                )
+                if execution is not None and execution.execution_started_at > ensure_utc(
+                    activity_time
+                ):
+                    return True
+            return self._is_pid_active_at(
+                target_system, shell.pid, activity_time
+            ) and self._process_source_bound_visible_by(
+                system=target_system, pid=shell.pid, deadline=activity_time
+            )
+
+        if session.session_shell_pid is not None and terminal_application_id is None:
+            shell = self.state_manager.get_process(
+                target_system.hostname, session.session_shell_pid
+            )
+            if shell_ready_or_deferred(shell):
+                assert shell is not None
+                return shell.pid
+            # A reserved initial shell can be unavailable at an earlier canonical
+            # or source-visible instant. It does not authorize a second window.
+            return None
+        registry = self.dispatcher.deployment_registry
+        if terminal_application_id is None and session.process_tree_root is None:
+            # Eligibility is frozen with the deployment, like other baseline apps.
+            # Stable first choice keeps Apple Terminal as the default when both
+            # terminals are assigned; an iTerm2-only assignment selects iTerm2.
+            profile = (
+                registry.user_profile_for(target_system.hostname, user.username, "macos")
+                if registry is not None
+                else None
+            )
+            assignment = (
+                registry.select_user_application_assignment_for_category(
+                    profile.profile_id, "macos_terminal", unit_interval=0.0
+                )
+                if profile is not None
+                else None
+            )
+            if assignment is not None:
+                terminal_application_id = assignment.application_id
+        terminal_id = terminal_application_id or "macos-terminal"
+        if registry is not None:
+            terminal_descriptor = registry.application_descriptor(terminal_id, "macos")
+            terminal_image = (
+                terminal_descriptor.image_path if terminal_descriptor is not None else None
+            )
+            terminal_categories = (
+                terminal_descriptor.categories if terminal_descriptor is not None else ()
+            )
+        else:
+            terminal_descriptor = application_descriptor(terminal_id)
+            terminal_platform = (
+                terminal_descriptor.get("platforms", {}).get("macos")
+                if terminal_descriptor is not None
+                else None
+            )
+            terminal_image = terminal_platform["image_path"] if terminal_platform else None
+            terminal_categories = (
+                terminal_descriptor["categories"] if terminal_descriptor is not None else ()
+            )
+        if terminal_image is None or "macos_terminal" not in terminal_categories:
+            raise StateError(f"Mac terminal requires a macos_terminal catalog entry: {terminal_id}")
+        if session.session_shell_pid is not None:
+            shell = self.state_manager.get_process(
+                target_system.hostname, session.session_shell_pid
+            )
+            if shell_ready_or_deferred(shell):
+                assert shell is not None
+                root = (
+                    self.state_manager.get_process(
+                        target_system.hostname, session.process_tree_root
+                    )
+                    if session.process_tree_root is not None
+                    else None
+                )
+                return (
+                    shell.pid
+                    if terminal_application_id is None
+                    or (root is not None and root.image == terminal_image)
+                    else None
+                )
+            return None
+
+        provider = self.macos_execution_metadata
+        policy = (
+            next(
+                (p for p in provider.profile.terminal_startups if p.application_id == terminal_id),
+                None,
+            )
+            if provider is not None
+            else None
+        )
+        if policy is not None:
+            return self._ensure_native_macos_terminal(
+                user,
+                target_system,
+                session,
+                policy,
+                activity_time,
+                allow_deferred_start=allow_deferred_start,
+            )
+
+        launches: list[tuple[str, str, tuple[str, ...]]] = []
+        for application_id in (terminal_id, "macos-login", "macos-zsh"):
+            if registry is not None:
+                compiled = registry.application_descriptor(application_id, "macos")
+                if compiled is None:
+                    raise StateError(f"Mac terminal requires compiled entry {application_id}")
+                image = compiled.image_path
+                command = compiled.command_templates[0]
+            else:
+                descriptor = application_descriptor(application_id)
+                if descriptor is None or "macos" not in descriptor["platforms"]:
+                    raise StateError(f"Mac terminal requires catalog entry {application_id}")
+                platform = descriptor["platforms"]["macos"]
+                image = platform["image_path"]
+                command = platform["command_templates"][0]
+            # These session roles execute literal catalog argv, without a command shell.
+            if application_id == "macos-zsh":
+                arguments = ("-zsh",)
+                command = shlex.join(arguments)
+            else:
+                command = command.replace("{username}", shlex.quote(user.username))
+                arguments = catalog_direct_exec_arguments(image, command)
+                command = shlex.join(arguments)
+            launches.append((image, command, arguments))
+
+        gap = self._freeze_profile_activity_gap(
+            "macos.terminal_stage_ready",
+            stable_id=f"mac-terminal:{target_system.hostname}:{logon_id}",
+            host=target_system.hostname,
+            source="macos_terminal",
+            lifecycle_id=session.lifecycle_group_id,
+            sample_key="stage_gap",
+        )
+        start = ensure_utc(activity_time) - gap.value * 3
+        if start <= ensure_utc(session.start_time):
+            if not allow_deferred_start:
+                return None
+            start = ensure_utc(session.start_time) + timedelta(milliseconds=1)
+        parent_pid = 1
+        terminal_pid: int | None = None
+        provider = self.macos_execution_metadata
+        owns_terminal_chain = (
+            provider is not None
+            and provider.profile.terminal_responsibility == "terminal_application"
+        )
+        terminal_processes = [
+            process
+            for process in self.state_manager.get_processes_for_session(logon_id)
+            if process.image == launches[0][0] and process.username == user.username
+        ]
+        existing_terminal = next(
+            (
+                process
+                for process in terminal_processes
+                if self._is_pid_active_at(target_system, process.pid, start)
+                and self._process_source_bound_visible_by(
+                    system=target_system, pid=process.pid, deadline=start + gap.value
+                )
+            ),
+            None,
+        )
+        if terminal_processes and existing_terminal is None:
+            return None
+        for index, (image, command, arguments) in enumerate(launches):
+            if index == 0 and existing_terminal is not None:
+                terminal_pid = parent_pid = existing_terminal.pid
+                continue
+            responsibility: ProcessResponsibility | None = None
+            if owns_terminal_chain:
+                if index == 0:
+                    responsibility = ProcessResponsibility(None)
+                elif terminal_pid is not None:
+                    terminal_identity = self.state_manager.get_process_identity(
+                        target_system.hostname, terminal_pid
+                    )
+                    if (
+                        terminal_identity is not None
+                        and terminal_identity.principal == user.username
+                        and terminal_identity.logon_id == logon_id
+                        and terminal_identity.responsibility == ProcessResponsibility(None)
+                    ):
+                        responsibility = ProcessResponsibility(
+                            ResponsibleProcessReference(
+                                terminal_identity.hostname,
+                                terminal_identity.object_id,
+                                terminal_identity.pid,
+                                terminal_identity.started_at,
+                            )
+                        )
+            pid = self.generate_process(
+                user=user,
+                system=target_system,
+                time=start + gap.value * index,
+                logon_id=logon_id,
+                process_name=image,
+                command_line=command,
+                parent_pid=parent_pid,
+                suppress_command_file_effect=True,
+                lifecycle_group_id=session.lifecycle_group_id,
+                source_visible_by=start + gap.value * (index + 1),
+                require_exact_parent=True,
+                new_posix_session=index == 1,
+                arguments=arguments,
+                macos_launch_kind="user",
+                macos_terminal="allocate" if index == 1 else None,
+                macos_standard_io="terminal" if index == 1 else "null" if index == 0 else "inherit",
+                macos_responsibility=responsibility,
+            )
+            if pid <= 0:
+                return None
+            if terminal_pid is None:
+                terminal_pid = pid
+            parent_pid = pid
+        gap.publish()
+        session.process_tree_root = terminal_pid
+        session.session_shell_pid = parent_pid
+        return parent_pid
+
+    def _ensure_native_macos_terminal(
+        self,
+        user: User,
+        system: System,
+        session: ActiveSession,
+        policy: MacosTerminalStartupPolicy,
+        activity_time: datetime,
+        *,
+        allow_deferred_start: bool,
+    ) -> int | None:
+        """Complete retained native startup before exposing the session's initial shell."""
+        key = session.logon_id
+        retained = self._macos_terminal_startups.get(key)
+        if retained is not None and retained.policy != policy:
+            raise StateError("Finish the pending Mac terminal startup before selecting another app")
+        if retained is None:
+            if len(self._macos_terminal_startups) >= 128:
+                raise StateError("Finish pending Mac terminal startups before admitting another")
+            registry, provider = self.dispatcher.deployment_registry, self.macos_execution_metadata
+            if registry is None or provider is None:
+                raise StateError(
+                    "Native terminal startup requires its compiled deployment and metadata owners"
+                )
+            app = registry.application_descriptor(policy.application_id, "macos")
+            if app is None:
+                raise StateError("Native terminal startup requires its exact compiled app")
+            if any(
+                p.image == app.image_path for p in self.state_manager.get_processes_for_session(key)
+            ):
+                raise StateError(
+                    "Native terminal startup currently requires a fresh app; existing-app window or server reuse needs its own qualified plan"
+                )
+            stable_id = (
+                f"mac-terminal:{system.hostname}:{key}:{ensure_utc(activity_time).isoformat()}"
+            )
+            ready = self._freeze_profile_activity_gap(
+                "macos.terminal_stage_ready",
+                stable_id=stable_id,
+                host=system.hostname,
+                source="macos_terminal",
+                lifecycle_id=session.lifecycle_group_id,
+                sample_key="stage_gap",
+            )
+            deltas = tuple(
+                self._freeze_profile_activity_gap(
+                    "macos.terminal_native_transition",
+                    stable_id=stable_id,
+                    host=system.hostname,
+                    source="macos_terminal",
+                    lifecycle_id=session.lifecycle_group_id,
+                    ordinal=i,
+                    sample_key="native_phase",
+                )
+                for i in range(3 + len(MacosTerminalStartup.stages(policy)))
+            )
+            if any(delta.value <= timedelta(0) for delta in deltas):
+                raise StateError(
+                    "Native terminal startup requires positive configured transition timing"
+                )
+            duration = sum((delta.value for delta in deltas), timedelta(0))
+            start = ensure_utc(activity_time) - ready.value - duration
+            if start <= ensure_utc(session.start_time):
+                if not allow_deferred_start:
+                    return None
+                start = ensure_utc(session.start_time) + timedelta(milliseconds=1)
+            times = [start]
+            for delta in deltas:
+                times.append(times[-1] + delta.value)
+            owner = self.state_manager.get_session_identity(key)
+            if owner is None:
+                raise StateError("Native terminal startup lost its authenticated GUI session")
+            suffix = tuple(
+                _stable_seed(f"{stable_id}:service:{part}") % 10**9 for part in ("first", "second")
+            )
+            startup = MacosTerminalStartup(
+                state=self.state_manager,
+                dispatcher=self.dispatcher,
+                metadata=provider,
+                registry=registry,
+                host=self._build_host_context(system),
+                session=owner,
+                policy=policy,
+                service_label=f"application.{policy.bundle_identifier}.{suffix[0]}.{suffix[1]}",
+                times=tuple(times),
+            )
+            retained = _RetainedMacosTerminalStartup(startup, policy, (ready, *deltas))
+            self._macos_terminal_startups[key] = retained
+        while not retained.startup.complete:
+            retained.startup.advance()
+        shell, app = retained.startup.process, retained.startup.application
+        assert shell is not None and app is not None
+        while retained.published_timing < len(retained.timing):
+            retained.timing[retained.published_timing].publish()
+            retained.published_timing += 1
+        session.process_tree_root, session.session_shell_pid = app.pid, shell.pid
+        del self._macos_terminal_startups[key]
+        return shell.pid
+
+    @staticmethod
+    def _linux_shell_start_with_visibility_floor(
+        *,
+        candidate: datetime,
+        activity_time: datetime,
+        readiness_gap: timedelta,
+        logon_time: datetime | None,
+        window_floor: datetime | None,
+    ) -> datetime | None:
+        """Reject a replacement that cannot become ready after its visible floor."""
+        latest = activity_time - readiness_gap
+        if window_floor is not None and latest < window_floor:
+            return None
+        if candidate > latest and (logon_time is None or latest > logon_time):
+            return latest
+        return candidate
+
     def ensure_linux_session_shell(
         self,
         user: User,
@@ -24760,12 +26144,14 @@ class ActivityGenerator:
             f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
         )
         bash_time = logon_time + timedelta(milliseconds=180 + (shell_seed % 1200))
+        visible_floor: datetime | None = None
         if (
             scenario_start is not None
             and activity_time >= scenario_start
             and bash_time < scenario_start
         ):
             scenario_floor = scenario_start + timedelta(milliseconds=400 + (shell_seed % 2500))
+            visible_floor = scenario_floor
             pre_command_gap = timedelta(seconds=4 + (shell_seed % 75))
             bash_time = max(scenario_floor, activity_time - pre_command_gap)
         session_root = (
@@ -24785,9 +26171,16 @@ class ActivityGenerator:
         ):
             bash_time = ensure_utc(session_root.start_time) + timedelta(milliseconds=120)
         readiness_gap = timedelta(milliseconds=2200 + (shell_seed % 5200))
-        latest_bash_time = activity_time - readiness_gap
-        if bash_time > latest_bash_time and latest_bash_time > logon_time:
-            bash_time = latest_bash_time
+        resolved_start = self._linux_shell_start_with_visibility_floor(
+            candidate=bash_time,
+            activity_time=activity_time,
+            readiness_gap=readiness_gap,
+            logon_time=logon_time,
+            window_floor=visible_floor,
+        )
+        if resolved_start is None:
+            return None
+        bash_time = resolved_start
 
         if source_visible_by is not None:
             source_bound = self._linux_local_session_shell_source_bound(
@@ -25069,17 +26462,26 @@ class ActivityGenerator:
         scenario_start = getattr(self, "_scenario_start_time", None)
         if scenario_start is not None:
             scenario_start = ensure_utc(scenario_start)
+        visible_floor: datetime | None = None
         if (
             scenario_start is not None
             and activity_time >= scenario_start
             and shell_time < scenario_start
         ):
             scenario_floor = scenario_start + timedelta(milliseconds=350 + (shell_seed % 2200))
+            visible_floor = scenario_floor
             pre_command_gap = timedelta(seconds=3 + (shell_seed % 60))
             shell_time = max(scenario_floor, activity_time - pre_command_gap)
-        latest_shell_time = activity_time - readiness_gap
-        if shell_time > latest_shell_time and (base_time is None or latest_shell_time > base_time):
-            shell_time = latest_shell_time
+        resolved_start = self._linux_shell_start_with_visibility_floor(
+            candidate=shell_time,
+            activity_time=activity_time,
+            readiness_gap=readiness_gap,
+            logon_time=base_time,
+            window_floor=visible_floor,
+        )
+        if resolved_start is None:
+            return None
+        shell_time = resolved_start
 
         shell_pid = self.generate_process(
             user=user,
@@ -25296,14 +26698,90 @@ class ActivityGenerator:
         )
         return f"bash-history:{seed:016x}"
 
+    def emit_macos_shell_history(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+        *,
+        logon_id: str,
+        shell_pid: int,
+    ) -> bool:
+        """Record an explicit interactive submission against its live shell owner.
+
+        A child process alone is insufficient evidence of interactive history. The
+        caller must own the submitted command and identify its interactive shell.
+        """
+        from evidenceforge.events.contexts import ShellContext
+
+        if _get_os_category(system.os) != "macos":
+            return False
+        session = self.state_manager.get_session_at(logon_id, time)
+        shell = self.state_manager.get_process(system.hostname, shell_pid)
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.username != user.username
+            or session.session_kind not in {"interactive", "ssh"}
+            or shell is None
+            or shell.logon_id != logon_id
+            or shell.username != user.username
+            or shell.image not in {"/bin/zsh", "/bin/bash"}
+            or not self._is_pid_active_at(system, shell_pid, time)
+        ):
+            return False
+        from evidenceforge.generation.macos_shell_history import interactive_history_shell
+
+        identity = self.state_manager.get_process_identity(system.hostname, shell_pid)
+        if identity is None:
+            return False
+        descriptors = self.state_manager.process_descriptors_at(identity, event_time=time)
+        stdin = (
+            next((item for item in descriptors.bindings if item.fd == 0), None)
+            if descriptors is not None
+            else None
+        )
+        if not interactive_history_shell(
+            shell.image,
+            identity.arguments,
+            stdin_is_terminal=stdin.is_terminal if stdin is not None else None,
+        ):
+            return False
+        kind = "zsh_command" if shell.image == "/bin/zsh" else "bash_command"
+        event = OccurrenceBuilder(
+            timestamp=time,
+            event_type=kind,
+            src_host=self._build_host_context(system),
+            auth=AuthContext(username=user.username, logon_id=logon_id),
+            shell=ShellContext(command=command),
+            identity_plan=EventIdentityPlan(
+                actor=self.state_manager.get_process_identity(system.hostname, shell_pid),
+                session=self.state_manager.get_session_identity(logon_id),
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=session.lifecycle_group_id,
+                canonical_start=session.start_time,
+                phase="dependent",
+            ),
+        )
+        self.dispatcher.dispatch_builder(event)
+        return True
+
     def _emit_bash_command_event(
         self,
         user: User,
         system: System,
         time: datetime,
         command: str,
+        *,
+        logon_id: str | None = None,
     ) -> None:
-        """Dispatch a bash-history event at an already scheduled command time."""
+        """Dispatch a Linux bash-history event at an already scheduled command time."""
+        if _get_os_category(system.os) == "macos":
+            # Mac callers must bind an explicitly interactive Bash owner through
+            # emit_macos_shell_history; Linux command-pool inference is ineligible.
+            return
         if is_noninteractive_bash_user(user.username):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
@@ -25318,7 +26796,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="bash_command",
             src_host=self._build_host_context(system),
-            auth=AuthContext(username=user.username),
+            auth=AuthContext(username=user.username, logon_id=logon_id),
             shell=ShellContext(command=command),
         )
 
@@ -25565,6 +27043,8 @@ class ActivityGenerator:
         system: System,
         requested_time: datetime,
         command: str,
+        *,
+        reserve_command_dwell: bool = True,
     ) -> datetime | None:
         """Preserve foreground command dwell time for one user's shell history."""
         requested_time = self._align_linux_bash_after_session_ready(
@@ -25621,6 +27101,16 @@ class ActivityGenerator:
         if scheduled_time is None:
             return None
         self._commit_bash_history_second_no_fail(second_reservation)
+        if not reserve_command_dwell:
+            # The caller's process bundle owns completion and subsequent think
+            # time. History submission must not independently reserve its runtime.
+            owner = self._active_user_linux_process_session(user, system, scheduled_time)
+            key = (system.hostname, user.username, owner.logon_id if owner is not None else "")
+            self._bash_history_command_counts[key] = (
+                self._bash_history_command_counts.get(key, 0) + 1
+            )
+            self._remember_linux_bash_session_activity(user, system, scheduled_time, scheduled_time)
+            return scheduled_time
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -27149,12 +28639,14 @@ class ActivityGenerator:
         time: datetime,
         pid: int,
         rng: random.Random,
-    ) -> None:
+    ) -> PosixProcessExit | None:
         """Emit network connections correlated with a process creation.
 
         When a baseline process is one that normally generates network
         traffic (browsers, Office apps, dev tools, DB clients), emit
         a corresponding connection shortly after process creation.
+        A declared Mac query connection failure supplies its canonical terminal
+        result to the bounded completion owner, independently of rendered logs.
         """
         # Extract executable basename
         exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
@@ -27175,6 +28667,9 @@ class ActivityGenerator:
             _extract_ssh_attempted_username(command_line) if service == "ssh" else None
         )
         command_http_url = _extract_http_url_from_command(command_line)
+
+        if not conn_info.get("ambient", True) and not command_target and not command_http_url:
+            return
 
         # Only emit ~60% of ambient app launches. Commands that name a concrete
         # remote endpoint should leave a matching socket attempt every time.
@@ -27335,6 +28830,17 @@ class ActivityGenerator:
             conn_state=failure_conn_state,
             ssh_attempted_username=ssh_attempted_username,
         )
+        if (
+            failure_conn_state is not None
+            and _get_os_category(system.os) == "macos"
+            and self.macos_execution_metadata is not None
+        ):
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is not None:
+                return self.macos_execution_metadata.command_completion(
+                    process, conn_time, connection_failed=True
+                )
+        return None
 
     def _baseline_type3_source_ip(
         self,
@@ -27417,6 +28923,157 @@ class ActivityGenerator:
         )
         return int(sampled + 0.5)
 
+    def _generate_macos_application_children(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+        assignment: UserApplicationAssignment,
+        rng: random.Random,
+    ) -> tuple[int, ...]:
+        """Launch profiled installed helpers through the ordinary process owner.
+
+        Counts and delays are modeled spawn-rule values. Helpers share the live
+        GUI session's close owner; this does not model browser IPC or networking.
+        """
+        from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+        registry = getattr(self.dispatcher, "deployment_registry", None)
+        if registry is None or _get_os_category(system.os) != "macos":
+            return ()
+        descriptor = registry.application_descriptor_for_assignment(assignment)
+        if descriptor is None or not descriptor.child_commands:
+            return ()
+        parent = self.state_manager.get_process(system.hostname, parent_pid)
+        session = self._active_user_local_macos_session(user, system, time)
+        if (
+            parent is None
+            or session is None
+            or session.logon_id != logon_id
+            or parent.logon_id != logon_id
+            or parent.username != user.username
+            or assignment.hostname.casefold() != system.hostname.casefold()
+            or assignment.principal != user.username
+            or parent.image != registry.application_executable_for_assignment(assignment)
+        ):
+            return ()
+        profile = get_parent_config("macos", descriptor.executable)
+        allowed = set(profile.get("children", ()))
+        eligible = [
+            index
+            for index, (image, _command) in enumerate(descriptor.child_commands)
+            if image.rsplit("/", 1)[-1] in allowed
+        ]
+        if not eligible:
+            return ()
+        # Reopening an existing browser may request another renderer, but its
+        # resident GPU/network roles still belong to that same exact parent.
+        # Consult canonical children rather than inventing a new startup tree.
+        resident_children = [
+            self.state_manager.get_process_identity_at(system.hostname, child.pid, time)
+            for child in self.state_manager.get_processes_for_session(logon_id, system.hostname)
+            if child.parent_pid == parent_pid and child.start_time <= ensure_utc(time)
+        ]
+
+        def missing_resident_role(index: int) -> bool:
+            image, command = descriptor.child_commands[index]
+            roles = tuple(
+                token
+                for token in shlex.split(command)
+                if token.startswith(("--type=", "--utility-sub-type="))
+            )
+            if not roles or "--type=renderer" in roles:
+                return True
+            return not any(
+                child is not None
+                and child.image == image
+                and child.parentage is not None
+                and child.parentage.original is not None
+                and child.parentage.original.object_id == parent.ecar_object_id
+                and child.arguments is not None
+                and all(role in child.arguments for role in roles)
+                for child in resident_children
+            )
+
+        eligible = [index for index in eligible if missing_resident_role(index)]
+        if not eligible:
+            return ()
+        maximum = profile.get("max_children", len(eligible))
+        maximum = len(eligible) if maximum is None else maximum
+        delay = profile.get("spawn_delay") or [0.5, 3.0]
+        if (
+            type(maximum) is not int
+            or maximum < 1
+            or len(delay) != 2
+            or any(not math.isfinite(value) for value in delay)
+            or not 0 <= delay[0] <= delay[1]
+        ):
+            raise StateError("Mac application helper spawn rule requires positive count and delays")
+        floor = max(
+            ensure_utc(time),
+            ensure_utc(parent.start_time),
+            self.process_source_create_bound(system, parent_pid) or ensure_utc(time),
+        )
+        selected = rng.sample(eligible, rng.randint(1, min(maximum, len(eligible))))
+        starts = sorted(
+            (
+                floor
+                + self._sample_activity_gap(
+                    relationship_key="macos.application.helper_start",
+                    stable_id=f"{parent.ecar_object_id}:{time.isoformat()}",
+                    host=system.hostname,
+                    lifecycle_id=parent.ecar_object_id,
+                    ordinal=index,
+                    minimum_ms=delay[0] * 1000,
+                    maximum_ms=delay[1] * 1000,
+                ),
+                index,
+            )
+            for index in selected
+        )
+        launches: list[tuple[datetime, str, str, tuple[str, ...]]] = []
+        for child_time, index in starts:
+            visible_bound = (
+                child_time
+                + self._source_timing_planner.process_create_positive_headroom(child_time, "macos")
+            )
+            if not _session_active_for_activity(
+                session, visible_bound
+            ) or not self._is_within_scenario_window(visible_bound):
+                continue
+            materialized = registry.materialize_application_child_command(
+                rng, assignment, child_index=index, username=user.username
+            )
+            if materialized is None:
+                continue
+            image, command = materialized
+            command = self._parameterize_command_for_system(
+                rng, command, username=user.username, system=system
+            )
+            arguments = catalog_direct_exec_arguments(image, command)
+            launches.append((child_time, image, shlex.join(arguments), arguments))
+        created: list[int] = []
+        for child_time, image, command, arguments in launches:
+            pid = self.generate_process(
+                user,
+                system,
+                child_time,
+                logon_id,
+                image,
+                command,
+                parent_pid=parent_pid,
+                require_exact_parent=True,
+                allow_existing_browser_reuse=False,
+                allow_browser_launch_spacing=False,
+                arguments=arguments,
+            )
+            if pid > 0:
+                created.append(pid)
+        return tuple(created)
+
     def execute_baseline_activity(
         self, user: User, system: System, time: datetime, activity_type: str
     ) -> None:
@@ -27443,7 +29100,7 @@ class ActivityGenerator:
                 "svc"
             )
 
-            if os_category == "linux":
+            if os_category in {"linux", "macos"}:
                 # SSH is a modeled remote-session bundle on Linux. Generic
                 # baseline logon activity should not create successful
                 # non-SSH "remote" endpoint sessions.
@@ -27467,10 +29124,10 @@ class ActivityGenerator:
                 and not is_service_account
                 and sys_type not in ("server", "domain_controller")
             ):
-                active_interactive = self._active_user_workstation_windows_session(
-                    user,
-                    system,
-                    time,
+                active_interactive = (
+                    self._active_user_local_macos_session(user, system, time)
+                    if os_category == "macos"
+                    else self._active_user_workstation_windows_session(user, system, time)
                 )
             if active_interactive is not None and logon_type in (2, 7, 11):
                 # A baseline "logon" activity while the same user's console
@@ -27659,6 +29316,8 @@ class ActivityGenerator:
                 )
             elif os_category == "linux":
                 active_session = self._active_user_linux_process_session(user, system, time)
+            elif os_category == "macos":
+                active_session = self._active_user_local_macos_session(user, system, time)
             else:
                 active_session = None
 
@@ -27684,6 +29343,13 @@ class ActivityGenerator:
                     # the process to maintain causal ordering
                     if os_category == "linux":
                         logon_time = time - timedelta(seconds=_get_rng().uniform(7.0, 15.0))
+                    elif os_category == "macos":
+                        logon_time = time - self._sample_profile_activity_gap(
+                            "macos.baseline.session_lead",
+                            stable_id=f"{system.hostname}:{user.username}:{time.isoformat()}",
+                            host=system.hostname,
+                            source="baseline",
+                        )
                     else:
                         logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
                     logon_id = self.generate_logon(user, system, logon_time)
@@ -27793,6 +29459,27 @@ class ActivityGenerator:
                 if result:
                     process_name, command_line = result
 
+                    if (
+                        os_category == "macos"
+                        and deployment_registry is not None
+                        and selected_assignment is not None
+                        and "macos_terminal" in selected_assignment.eligible_categories
+                        and self.macos_execution_metadata is not None
+                        and self.macos_execution_metadata.profile.terminal_startups
+                    ):
+                        # Opening/using the selected terminal owns its login and
+                        # initial shell. Do not create an aggregate app first:
+                        # later commands would mistake it for an unsupported
+                        # new window in an already running unqualified app.
+                        self.ensure_macos_session_shell(
+                            user,
+                            system,
+                            logon_id,
+                            time,
+                            terminal_application_id=selected_assignment.application_id,
+                        )
+                        return
+
                     singleton_key: tuple[str, str, str, str] | None = None
                     if singleton_per_session:
                         normalized_image = process_name.replace("/", "\\").lower()
@@ -27839,7 +29526,7 @@ class ActivityGenerator:
                     if os_category == "linux":
                         shell_command_line = _background_linux_shell_command_if_needed(command_line)
                         process_time = self._schedule_bash_history_time(
-                            user, system, time, shell_command_line
+                            user, system, time, shell_command_line, reserve_command_dwell=False
                         )
                         if process_time is None or not self._is_within_scenario_window(
                             process_time
@@ -27861,6 +29548,12 @@ class ActivityGenerator:
                             username=user.username,
                         )
                         process_name, command_line = source_process_groups[0][0]
+                    if os_category == "macos" and _macos_process_uses_shell(process_name):
+                        if (
+                            self.ensure_macos_session_shell(user, system, logon_id, process_time)
+                            is None
+                        ):
+                            return
                     parent_pid = self._process_parents()._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -27928,6 +29621,29 @@ class ActivityGenerator:
                                 parent_pid=parent_pid,
                                 concurrency_group_id=concurrency_group_id,
                             )
+                            if os_category == "macos":
+                                running = self.state_manager.get_process(
+                                    system.hostname, source_pid
+                                )
+                                if running is None:
+                                    continue
+                                identity = self.state_manager.get_process_identity_at(
+                                    system.hostname, source_pid, source_process_time
+                                ) or self.state_manager.get_process_identity(
+                                    system.hostname, source_pid
+                                )
+                                if identity is None:
+                                    continue
+                                source_process_time = max(
+                                    source_process_time, identity.execution_started_at
+                                )
+                                session = self.state_manager.get_session_at(
+                                    logon_id, source_process_time
+                                )
+                                if not _session_active_for_activity(
+                                    session, source_process_time
+                                ) or not self._is_within_scenario_window(source_process_time):
+                                    continue
                             if pid < 0:
                                 pid = source_pid
                                 process_name = source_process_name
@@ -27944,24 +29660,21 @@ class ActivityGenerator:
                             self._process_parents()._record_user_process(
                                 system, user, source_pid, source_process_name
                             )
-                            if os_category == "linux":
-                                lifetime = _linux_foreground_lifetime(
-                                    source_process_name, source_command_line
-                                )
-                                if lifetime is not None:
-                                    self._remember_foreground_shell_available(
-                                        system=system,
-                                        username=user.username,
-                                        logon_id=logon_id,
-                                        parent_pid=parent_pid,
-                                        termination_time=source_process_time
-                                        + timedelta(seconds=lifetime[1]),
-                                        seed_text=source_command_line,
-                                        concurrency_group_id=concurrency_group_id,
-                                    )
+                            # The process bundle already reserves its sampled canonical
+                            # completion. A second reservation at the lifetime upper bound
+                            # would serialize every editor on the same maximum-length slot.
                         requested_group_time = group_process_time
                     if not created_processes:
                         return
+                    if os_category == "macos":
+                        self.emit_macos_shell_history(
+                            user,
+                            system,
+                            process_time,
+                            shell_command_line,
+                            logon_id=logon_id,
+                            shell_pid=parent_pid,
+                        )
                     if active_session:
                         active_session.last_activity_time = process_time
                     effect_process_name, effect_command_line = self._process_effect_context(
@@ -27980,7 +29693,22 @@ class ActivityGenerator:
                     )
 
                     # Spawn child/utility processes for apps that have them
-                    if activity_type == "process_user_apps" and deployment_registry is None:
+                    if (
+                        activity_type == "process_user_apps"
+                        and os_category == "macos"
+                        and deployment_registry is not None
+                        and selected_assignment is not None
+                    ):
+                        self._generate_macos_application_children(
+                            user=user,
+                            system=system,
+                            time=process_time,
+                            logon_id=logon_id,
+                            parent_pid=pid,
+                            assignment=selected_assignment,
+                            rng=rng,
+                        )
+                    elif activity_type == "process_user_apps" and deployment_registry is None:
                         from evidenceforge.generation.activity.application_catalog import (
                             get_child_processes,
                             parameterize_scoped_command,
@@ -28016,7 +29744,7 @@ class ActivityGenerator:
 
                     # Emit correlated network connection for network-active apps
                     # (tight PID+timestamp coupling alongside profile-driven volume)
-                    self._emit_process_network_correlation(
+                    network_command_outcome = self._emit_process_network_correlation(
                         system,
                         network_process_name,
                         network_command_line,
@@ -28101,9 +29829,38 @@ class ActivityGenerator:
                                 username=user.username,
                                 logon_id=logon_id,
                                 parent_pid=parent_pid,
-                                termination_time=termination_time,
+                                termination_time=termination_time
+                                + self._process_activity_timing().sample_profile_gap(
+                                    "baseline.foreground_think",
+                                    stable_id=f"baseline-task:{system.hostname}:{logon_id}:{source_process_time.isoformat()}:{source_command_line}",
+                                    host=system.hostname,
+                                    source="baseline",
+                                    lifecycle_id=logon_id,
+                                ),
                                 seed_text=source_command_line,
                                 concurrency_group_id=process_group_id,
+                            )
+
+                    elif os_category == "macos":
+                        lifetime = _posix_foreground_lifetime(
+                            "macos", effect_process_name, effect_command_line
+                        )
+                        if lifetime is not None:
+                            running_proc = self.state_manager.get_process(system.hostname, pid)
+                            self._generate_bounded_foreground_process_termination(
+                                user=user,
+                                system=system,
+                                start_time=(
+                                    running_proc.start_time
+                                    if running_proc is not None
+                                    else process_time
+                                ),
+                                pid=pid,
+                                process_name=effect_process_name,
+                                logon_id=logon_id,
+                                lifetime=lifetime,
+                                rng=rng,
+                                completion_outcome=network_command_outcome,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
@@ -28987,6 +30744,7 @@ class ActivityGenerator:
             source_ip="-",
             source_port=0,
             session_kind="new_credentials",
+            session_id=caller_session.session_id,
             logon_guid_required=True,
             lifecycle_group_id=lifecycle_id,
             parent_lifecycle_group_id=caller_session.lifecycle_group_id,
@@ -30850,9 +32608,21 @@ class ActivityGenerator:
         command_xml = xml_escape(command)
         arguments_xml = xml_escape(arguments)
         arguments_line = f"\n      <Arguments>{arguments_xml}</Arguments>" if arguments else ""
-        logon_type = "ServiceAccount" if author.upper().startswith("NT AUTHORITY\\") else "Password"
+        # TASK_LOGON_SERVICE_ACCOUNT is an API enum, not an XML logonType.
+        # Reserved machine accounts identify their context through UserId alone.
+        machine_account = author.upper() in {
+            "NT AUTHORITY\\SYSTEM",
+            "NT AUTHORITY\\LOCAL SERVICE",
+            "NT AUTHORITY\\NETWORK SERVICE",
+            "S-1-5-18",
+            "S-1-5-19",
+            "S-1-5-20",
+        }
+        logon_type_xml = "" if machine_account else "      <LogonType>Password</LogonType>\n"
         run_level = (
-            "HighestAvailable" if author.upper() == "NT AUTHORITY\\SYSTEM" else "LeastPrivilege"
+            "HighestAvailable"
+            if author.upper() in {"NT AUTHORITY\\SYSTEM", "S-1-5-18"}
+            else "LeastPrivilege"
         )
         trigger_xml = ActivityGenerator._scheduled_task_trigger_xml(start_boundary, schedule or {})
         return (
@@ -30867,7 +32637,7 @@ class ActivityGenerator:
             "  <Principals>\n"
             '    <Principal id="Author">\n'
             f"      <UserId>{xml_escape(author)}</UserId>\n"
-            f"      <LogonType>{logon_type}</LogonType>\n"
+            f"{logon_type_xml}"
             f"      <RunLevel>{run_level}</RunLevel>\n"
             "    </Principal>\n"
             "  </Principals>\n"
@@ -30896,7 +32666,7 @@ class ActivityGenerator:
         """Return a source-native Task Scheduler principal for local and domain users."""
         normalized = username.strip()
         upper = normalized.upper()
-        if "\\" in normalized:
+        if "\\" in normalized or "@" in normalized or upper.startswith("S-1-"):
             return normalized
         if upper in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"}:
             return f"NT AUTHORITY\\{upper}"
@@ -31643,8 +33413,8 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
                 sam_account_name=target_username,
-                old_uac_value=old_uac_value or "0x0",
-                new_uac_value=new_uac_value or "0x15",
+                old_uac_value=old_uac_value or "-",
+                new_uac_value=new_uac_value or "-",
                 user_account_control=user_account_control or "-",
                 password_last_set=password_last_set,
                 primary_group_id=primary_group_id or "513",
@@ -31744,7 +33514,7 @@ class ActivityGenerator:
             conn_id="",
             duration=dhcp_duration,
             conn_state="SF",
-            history="DdDd" if "DISCOVER" in msg_types else "Dd",
+            history="Dd",
             traffic=NetworkTrafficLedger(
                 orig=DirectionalTrafficLedger(orig_bytes, orig_pkts, orig_ip_bytes),
                 resp=DirectionalTrafficLedger(resp_bytes, resp_pkts, resp_ip_bytes),
@@ -32067,6 +33837,7 @@ class ActivityGenerator:
 
         LinuxSudoSessionActionBundle(
             executor=self,
+            timing_runtime=self.timing_runtime,
             request=LinuxSudoSessionRequest(
                 system=system,
                 time=time,
@@ -33745,8 +35516,12 @@ class ActivityGenerator:
                         logon_type=2,
                         source_ip=None,
                         emit_network_evidence=False,
-                        reuse_required_at=child_time,
+                        reuse_required_at=reserve_until,
                         lifecycle_group_id=lifecycle_group_id,
+                        # The sudo owner already rejected every live session for
+                        # this TTY and full command interval. Do not let generic
+                        # bootstrap reuse one with weaker start-only coverage.
+                        allow_local_session_reuse=False,
                     )
                     session = self.state_manager.get_session(logon_id)
                 if session is None:
@@ -33966,18 +35741,42 @@ class ActivityGenerator:
         target_fqdn: str | None = None
         effective_scheme: str | None = None
         if surface == "shell_history":
-            # bash history dwell/session scheduling can shift the visible time;
-            # use the actual emitted time so ground truth matches the log line.
-            # This surface is the bash-history-FILE exposure (the credential left in
-            # history); v1 does not also emit correlated process/network telemetry
-            # for the carrier — use process_command_line for the EDR-correlated form.
-            result_time = self.generate_bash_command(
-                user=user,
-                system=system,
-                time=time,
-                activity_type_or_command=render.command,
-                emit_process_telemetry=False,
-            )
+            # Linux dwell scheduling can shift the visible time; Mac zsh uses
+            # explicit submission at this instant. Neither history carrier implies
+            # command success, child-process execution or network effects.
+            if os_category == "macos":
+                from evidenceforge.config.shell_history_policy import validate_zsh_history_command
+
+                command = validate_zsh_history_command(render.command)
+                shell_pid = (
+                    self.ensure_macos_session_shell(user, system, logon_id, time)
+                    if logon_id
+                    else None
+                )
+                shell = (
+                    self.state_manager.get_process(system.hostname, shell_pid)
+                    if shell_pid is not None
+                    else None
+                )
+                # This authored profile owns zsh explicitly. Output selection must
+                # not switch the modeled shell to Bash or manufacture a submission.
+                result_time = (
+                    time
+                    if shell is not None
+                    and shell.image == "/bin/zsh"
+                    and self.emit_macos_shell_history(
+                        user, system, time, command, logon_id=logon_id, shell_pid=shell_pid
+                    )
+                    else None
+                )
+            else:
+                result_time = self.generate_bash_command(
+                    user=user,
+                    system=system,
+                    time=time,
+                    activity_type_or_command=render.command,
+                    emit_process_telemetry=False,
+                )
             if result_time is None:
                 # The bash command was suppressed (dwell-shifted past the scenario
                 # window, or a non-interactive user) — nothing landed on disk, so
@@ -34073,6 +35872,7 @@ class ActivityGenerator:
                         "user_agent_pool_by_os": {
                             "windows": "browser_windows",
                             "linux": "browser_linux",
+                            "macos": "browser_macos",
                         },
                     },
                     source_os=_get_os_category(system.os),
@@ -34318,6 +36118,7 @@ class ActivityGenerator:
                         "user_agent_pool_by_os": {
                             "windows": "browser_windows",
                             "linux": "browser_linux",
+                            "macos": "browser_macos",
                         },
                     },
                     source_os=_get_os_category(system.os),
@@ -34858,32 +36659,40 @@ class ActivityGenerator:
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
             }
 
-    def _select_special_privileges(
-        self,
-        user: User,
-        logon_type: int,
-        hostname: str,
-    ) -> str:
-        """Return a source-native 4672 privilege list for this elevated session."""
+    def _select_special_privileges(self, user: User, logon_type: int, hostname: str) -> str:
+        """Return only sensitive privileges actually assigned to this profile."""
         profile_name = self._special_privilege_profile_name(user, logon_type, hostname)
-        if profile_name == "service_account":
-            profile_name = "service_account"
-        elif profile_name in {"system_account", "machine_account"}:
-            profile_name = "domain_admin"
+        if profile_name in {"system_account", "machine_account"}:
+            profile_name = "system_account"
         elif profile_name == "regular_user":
             profile_name = "uac_elevated_user"
-
-        profiles = special_privileges_config().get("profiles", {})
-        profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
-        privileges = profile.get("privileges") if isinstance(profile, dict) else None
-        if not isinstance(privileges, list) or not privileges:
-            privileges = ["SeChangeNotifyPrivilege"]
-        return "\n\t\t\t".join(str(privilege) for privilege in privileges)
+        return "\n\t\t\t".join(special_privilege_profile(profile_name))
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Get a seeded system process PID by role name."""
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
+
+    def _get_windows_boot_smss_pid(self, hostname: str) -> int:
+        """Resolve the live host boot SMSS identity from State before using a PID hint."""
+
+        boot_smss = next(
+            (
+                process
+                for process in self.state_manager.get_processes_on_system(hostname)
+                if process.image.casefold().endswith("\\smss.exe")
+                and process.username.casefold() == "system"
+                and process.parent_pid == 4
+            ),
+            None,
+        )
+        if boot_smss is not None:
+            return boot_smss.pid
+        hinted_pid = self._get_system_pid(hostname, "smss", 0)
+        hinted = self.state_manager.get_process_identity(hostname, hinted_pid)
+        if hinted is not None and hinted.image.casefold().endswith("\\smss.exe"):
+            return hinted.pid
+        return 0
 
     def _existing_windows_singleton_service_pid(
         self,
@@ -35215,6 +37024,63 @@ class ActivityGenerator:
         self.dispatcher.dispatch_builder(event)
         self._record_process_source_create_time(system.hostname, pid, event)
 
+    def _create_windows_session_smss(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        boot_smss_pid: int,
+        winlogon_start: datetime,
+    ) -> int:
+        """Create the session-specific SMSS child that owns one Winlogon process."""
+        if session.session_winlogon_pid is not None:
+            winlogon = self.state_manager.get_process(
+                system.hostname,
+                session.session_winlogon_pid,
+            )
+            existing_smss = (
+                self.state_manager.get_process(system.hostname, winlogon.parent_pid)
+                if winlogon is not None
+                else None
+            )
+            if (
+                existing_smss is not None
+                and existing_smss.pid != boot_smss_pid
+                and existing_smss.image.casefold().endswith("\\smss.exe")
+            ):
+                return existing_smss.pid
+
+        boot_smss = self.state_manager.get_process(system.hostname, boot_smss_pid)
+        if boot_smss is None or not boot_smss.image.casefold().endswith("\\smss.exe"):
+            raise StateError("Windows session bootstrap requires the active boot SMSS process")
+        lead_ms = 100 + (
+            _stable_seed(f"windows-session-smss-lead:{system.hostname}:{session.logon_id}") % 1_401
+        )
+        smss_start = ensure_utc(winlogon_start) - timedelta(milliseconds=lead_ms)
+        if smss_start <= boot_smss.start_time:
+            smss_start = boot_smss.start_time + timedelta(milliseconds=1)
+        original_time = self.state_manager.state.current_time
+        try:
+            self.state_manager.set_current_time(smss_start)
+            plan = self.state_manager.plan_process_materialization(
+                system=system.hostname,
+                parent_pid=boot_smss_pid,
+                image=r"C:\Windows\System32\smss.exe",
+                command_line="smss.exe",
+                username="SYSTEM",
+                integrity_level="System",
+                os_category="windows",
+                logon_id="0x3e7",
+                lifecycle_group_id=f"windows-session-smss:{system.hostname}:{session.logon_id}",
+                auth_session_id=session.session_id,
+                auth_logon_type=session.logon_type,
+            )
+            with self.state_manager.materialization_guard(plan.expected_version):
+                return self.state_manager.materialize_process(plan).pid
+        finally:
+            if original_time is not None:
+                self.state_manager.set_current_time(original_time)
+
     def _create_windows_session_shell_lifecycle(
         self,
         *,
@@ -35227,6 +37093,25 @@ class ActivityGenerator:
         """Create a visible Windows session shell and end userinit after handoff."""
         original_time = self.state_manager.state.current_time
         try:
+            winlogon = self.state_manager.get_process(system.hostname, winlogon_pid)
+            session_smss = (
+                self.state_manager.get_process(system.hostname, winlogon.parent_pid)
+                if winlogon is not None
+                else None
+            )
+            if (
+                session_smss is not None
+                and session_smss.image.casefold().endswith("\\smss.exe")
+                and session_smss.pid != self._get_windows_boot_smss_pid(system.hostname)
+            ):
+                self._emit_windows_session_process_create(
+                    system=system,
+                    session=session,
+                    pid=session_smss.pid,
+                    event_username="SYSTEM",
+                    event_logon_id="0x3e7",
+                    integrity_level="System",
+                )
             self._emit_windows_session_process_create(
                 system=system,
                 session=session,
@@ -35872,6 +37757,12 @@ class ActivityGenerator:
             dispatcher=self.dispatcher,
             ensure_linux_session_shell=self.ensure_linux_session_shell,
             ensure_linux_visible_shell_parent=self.ensure_linux_visible_shell_parent,
+            ensure_macos_session_shell=(
+                self.ensure_macos_session_shell
+                if self.macos_execution_metadata is not None
+                and self.macos_execution_metadata.profile.terminal_startups
+                else None
+            ),
             generate_process=self.generate_process,
             generate_system_process=self.generate_system_process,
             state_manager=self.state_manager,
@@ -35918,6 +37809,7 @@ class ActivityGenerator:
             state_manager=self.state_manager,
             queries=self._process_queries(),
             identity=self._process_identity_capabilities(),
+            activity_timing=self._process_activity_timing(),
         )
 
     def _process_sources(self) -> "ProcessSourceTiming":
@@ -35963,6 +37855,28 @@ class ActivityGenerator:
             state_manager=self.state_manager,
         )
 
+    def _process_credentials(
+        self, system: System, username: str, parent_pid: int, time: datetime
+    ) -> PosixProcessCredentials | None:
+        """Resolve Mac launch credentials from modeled state and account inventory.
+
+        Same-principal children inherit a known parent's snapshot. A fresh local
+        actor starts with its directory UID/GID; no audit session is inferred from
+        a GUI session ID, Windows LogonID, username, or the generator host.
+        """
+
+        if _get_os_category(system.os) != "macos":
+            return None
+        parent = self.state_manager.get_process_identity_at(system.hostname, parent_pid, time)
+        if parent is not None and parent.principal == username and parent.credentials is not None:
+            return parent.credentials
+        if self.identity_directory is None:
+            return None
+        account = self.identity_directory.macos_account(username, system.hostname)
+        if account is None:
+            return None
+        return PosixProcessCredentials(account.uid, account.uid, account.gid, account.gid)
+
     def _process_identity_capabilities(self) -> "ProcessIdentityCapabilities":
         """Bind the existing shared capabilities for this call only."""
         from evidenceforge.generation.actions.process_support.capabilities import (
@@ -35973,6 +37887,8 @@ class ActivityGenerator:
             user_for_username=self._user_model_for_username,
             host_context=self._build_host_context,
             user_sid=self._get_sid,
+            process_credentials=self._process_credentials,
+            macos_execution_metadata=self.macos_execution_metadata,
         )
 
     def _process_activity_timing(self) -> "ProcessActivityTiming":
@@ -36020,6 +37936,7 @@ class ActivityGenerator:
             dispatcher=self.dispatcher,
             lifecycle_authority=self._lifecycle_authority,
             runtime_content_manager=self._runtime_content_manager,
+            finder_startups=self._macos_finder_startups,
         )
 
     def _process_termination_service(self) -> "ProcessTerminationService":

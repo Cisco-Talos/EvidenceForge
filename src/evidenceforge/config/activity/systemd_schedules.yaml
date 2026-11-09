@@ -213,6 +213,7 @@ schedules:
 
   - service: tracker-miner-fs
     id: linux-tracker-miner-timer
+    execution_scope: user
     release_policy: host_build
     product_id: linux-host
     variant: core-os
@@ -308,9 +309,10 @@ schedules:
     product_id: linux-host
     variant: core-os
     type: cron
-    frequency: 30min
+    frequency: 10min
     typical_hour: 0
-    jitter_minutes: 8
+    typical_minute: 5
+    jitter_minutes: 2
     distro: debian
     cron_user: sysstat
     cron_commands:

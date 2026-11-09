@@ -1,0 +1,563 @@
+{
+  "composition": {
+    "project_root": "/Users/dabianco/projects/SURGe/EvidenceForge",
+    "selected_packs": []
+  },
+  "input": {
+    "kind": "scenario-3.0",
+    "path": "scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+  },
+  "issues": [
+    {
+      "code": "scenario.semantic",
+      "field_path": "environment.network.sensors",
+      "message": "Network topology has no firewall sensor; firewall policy, NAT, deny baseline, and Cisco ASA evidence will not be modeled",
+      "provenance": {
+        "field_path": "environment.network.sensors",
+        "origin_kind": "authored-field"
+      },
+      "severity": "warning",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      },
+      "suggestion": "Add a sensor entry with type: firewall and log_formats: [cisco_asa] when the lab should include firewall control or ASA logs."
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.0",
+      "message": "[maya-login] \u2192 [owen-login] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.0",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.1",
+      "message": "[owen-login] \u2192 [local-check] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.1",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.7",
+      "message": "[release-share] \u2192 [mac-remote-login] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.7",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.10",
+      "message": "[mac-remote-logoff] \u2192 [provisioner] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.10",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    }
+  ],
+  "resource_forecast": {
+    "available": true,
+    "calibration_label": "Historical bounded-registry and cross-platform emitter working-set calibration",
+    "calibration_version": 5,
+    "checkpoint_workspace": {
+      "expected_bytes": 0,
+      "lower_bytes": 0,
+      "upper_bytes": 0
+    },
+    "disk": {
+      "expected_bytes": 9531613,
+      "lower_bytes": 1076379,
+      "upper_bytes": 14297419
+    },
+    "final_output": {
+      "expected_bytes": 7688425,
+      "lower_bytes": 1076379,
+      "upper_bytes": 11532637
+    },
+    "memory": {
+      "expected_bytes": 136977784,
+      "lower_bytes": 99993782,
+      "upper_bytes": 287653346
+    },
+    "pressures": [],
+    "registry_report": {
+      "emitter_payload_excluded_bytes": 132001784,
+      "excluded_components": [
+        "interpreter_and_generator_base",
+        "emitter_queues_and_format_state",
+        "rendered_payload_and_attachment_buffers",
+        "external_sort_and_storage_catalog_state"
+      ],
+      "legacy_calibrated_peak_bytes": 136977784,
+      "modeled_peak_floor_bytes": 134038467,
+      "peak_memory_combination": "maximum_not_sum",
+      "registries": [
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.059538264,
+            "lookup_operations": 148212,
+            "lookup_p95_microseconds": 9.041,
+            "mutation_operations": 4296,
+            "mutation_seconds": 0.18266592
+          },
+          "entries": {
+            "backing_entries": 2191,
+            "created_entries": 2148,
+            "expired_entries": 0,
+            "high_water_entries": 2148,
+            "leased_entries": 215,
+            "live_entries": 614,
+            "retained_entries": 1534,
+            "stale_entries": 43
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 7020,
+            "channel_fanout": 23.0,
+            "channel_observations": 164680,
+            "effect_fanout": 1.01994301994302,
+            "effect_occurrences": 7160,
+            "registry": "lifecycle",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 25200,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 2,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_lifecycle_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 1685352,
+            "lower_bytes": 490879,
+            "upper_bytes": 2106690
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 180000,
+          "plateau_reached_after_seconds": null,
+          "registry": "lifecycle",
+          "structural_bytes": 490879
+        },
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 408,
+            "expiry_seconds": 0.0265812,
+            "load_seconds": 0.014436391200000002,
+            "lookup_operations": 26358,
+            "lookup_p95_microseconds": 9.75,
+            "mutation_operations": 1719,
+            "mutation_seconds": 0.18023714999999998
+          },
+          "entries": {
+            "backing_entries": 169,
+            "created_entries": 573,
+            "expired_entries": 408,
+            "high_water_entries": 165,
+            "leased_entries": 0,
+            "live_entries": 164,
+            "retained_entries": 1,
+            "stale_entries": 4
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 7020,
+            "channel_fanout": 23.0,
+            "channel_observations": 164680,
+            "effect_fanout": 1.01994301994302,
+            "effect_occurrences": 7160,
+            "registry": "application_channels",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 25200,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 2,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_application_channels_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 82462,
+            "lower_bytes": 22780,
+            "upper_bytes": 103078
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 7230,
+          "plateau_reached_after_seconds": 7230,
+          "registry": "application_channels",
+          "structural_bytes": 22780
+        },
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.005985600000000001,
+            "lookup_operations": 9890,
+            "lookup_p95_microseconds": 7.96,
+            "mutation_operations": 323,
+            "mutation_seconds": 0.00510663
+          },
+          "entries": {
+            "backing_entries": 220,
+            "created_entries": 215,
+            "expired_entries": 0,
+            "high_water_entries": 215,
+            "leased_entries": 5,
+            "live_entries": 215,
+            "retained_entries": 0,
+            "stale_entries": 5
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 7020,
+            "channel_fanout": 23.0,
+            "channel_observations": 164680,
+            "effect_fanout": 1.01994301994302,
+            "effect_occurrences": 7160,
+            "registry": "local_artifacts",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 25200,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_local_artifacts_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 54768,
+            "lower_bytes": 54110,
+            "upper_bytes": 68460
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 172800,
+          "plateau_reached_after_seconds": null,
+          "registry": "local_artifacts",
+          "structural_bytes": 54110
+        },
+        {
+          "compaction_budget_entries": 0,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.0012265212,
+            "lookup_operations": 2139,
+            "lookup_p95_microseconds": 1.291,
+            "mutation_operations": 0,
+            "mutation_seconds": 0.0
+          },
+          "entries": {
+            "backing_entries": 93,
+            "created_entries": 93,
+            "expired_entries": 0,
+            "high_water_entries": 93,
+            "leased_entries": 0,
+            "live_entries": 93,
+            "retained_entries": 0,
+            "stale_entries": 0
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 7020,
+            "channel_fanout": 23.0,
+            "channel_observations": 164680,
+            "effect_fanout": 1.01994301994302,
+            "effect_occurrences": 7160,
+            "registry": "collection_deployment",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 25200,
+            "static_entries": 93
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_collection_deployment_calibration",
+          "measurement_status": "measured",
+          "measurement_unit": "source",
+          "memory": {
+            "expected_bytes": 33735,
+            "lower_bytes": 11498,
+            "upper_bytes": 42169
+          },
+          "operation_profile": null,
+          "plateau_horizon_seconds": 0,
+          "plateau_reached_after_seconds": 0,
+          "registry": "collection_deployment",
+          "structural_bytes": 11498
+        },
+        {
+          "compaction_budget_entries": 0,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.004804153,
+            "lookup_operations": 11569,
+            "lookup_p95_microseconds": 1.709,
+            "mutation_operations": 0,
+            "mutation_seconds": 0.0
+          },
+          "entries": {
+            "backing_entries": 503,
+            "created_entries": 503,
+            "expired_entries": 0,
+            "high_water_entries": 503,
+            "leased_entries": 0,
+            "live_entries": 503,
+            "retained_entries": 0,
+            "stale_entries": 0
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 7020,
+            "channel_fanout": 23.0,
+            "channel_observations": 164680,
+            "effect_fanout": 1.01994301994302,
+            "effect_occurrences": 7160,
+            "registry": "deployment_content",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 25200,
+            "static_entries": 503
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 1000000,
+          "measured_profile": "historical_deployment_path_packed_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "path_binding_equivalent",
+          "memory": {
+            "expected_bytes": 180366,
+            "lower_bytes": 85002,
+            "upper_bytes": 225458
+          },
+          "operation_profile": null,
+          "plateau_horizon_seconds": 0,
+          "plateau_reached_after_seconds": 0,
+          "registry": "deployment_content",
+          "structural_bytes": 85002
+        }
+      ],
+      "retained_state_family_coverage": [
+        {
+          "calibration_evidence_id": "resource_forecast:registry:lifecycle",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "lifecycle",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "lifecycle"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:application_channels",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "application_channels",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "application_channels"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:local_artifacts",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "local_artifacts",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "local_artifacts"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:collection_deployment",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "collection_deployment",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "collection_deployment"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:deployment_content",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "deployment_content",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "deployment_content"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:process_runtime",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "process_runtime",
+          "rationale": "Process-runtime caches remain in the calibrated whole-generator peak because no current scenario-driver calibration exists.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:timing_runtime",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "timing_runtime",
+          "rationale": "Timing audit, clock, and constraint indexes remain in the calibrated whole-generator peak until a scenario-driver projection is measured.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:http",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "http",
+          "rationale": "HTTP sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:proxy",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "proxy",
+          "rationale": "Explicit-proxy sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:smb",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "smb",
+          "rationale": "SMB sidecar memory is retained in the calibrated whole-generator peak and SMB output costs; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:rdp",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "rdp",
+          "rationale": "RDP reconnect sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:ssh",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "ssh",
+          "rationale": "SSH sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        }
+      ],
+      "total_created_entries": 3532,
+      "total_leased_entries": 220,
+      "total_live_entries": 1589,
+      "total_registry_memory": {
+        "expected_bytes": 2036683,
+        "lower_bytes": 664269,
+        "upper_bytes": 2545855
+      },
+      "total_retained_entries": 1535,
+      "total_stale_entries": 52,
+      "total_structural_bytes": 664269
+    },
+    "snapshot": {
+      "available_memory_bytes": 5569445888,
+      "disk_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source",
+      "free_disk_bytes": 40755200000,
+      "free_swap_bytes": 0,
+      "memory_limit_bytes": null,
+      "total_memory_bytes": 25769803776
+    }
+  },
+  "scenario": {
+    "description": "Six-hour fictional software-company benchmark: Mac workstation lifecycles, remote administration, shared files and explicit system-job stages. Revision 1 selects supported sources without Endpoint Security.",
+    "generation_seed": 327,
+    "name": "macos-assessment",
+    "network": {
+      "segments": 1,
+      "sensors": 1
+    },
+    "output_formats": [
+      "bash_history",
+      "ecar",
+      "macos_unified_log",
+      "syslog",
+      "windows",
+      "zeek",
+      "zsh_history"
+    ],
+    "personas": 15,
+    "red_herrings": 0,
+    "storyline_events": 19,
+    "systems": 4,
+    "users": 3,
+    "version": "2.0"
+  },
+  "schema_version": "1.0",
+  "severity_counts": {
+    "error": 0,
+    "info": 4,
+    "warning": 1
+  },
+  "status": "valid_with_warnings",
+  "suggestions": [
+    {
+      "field_path": "environment.network.sensors",
+      "message": "Add a sensor entry with type: firewall and log_formats: [cisco_asa] when the lab should include firewall control or ASA logs.",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.0",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.1",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.7",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.10",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/macos-assessment/revisions/01-supported/source/scenario.yaml"
+      }
+    }
+  ],
+  "valid": true
+}

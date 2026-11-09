@@ -61,6 +61,7 @@ def test_packaged_profiles_cover_native_client_and_server_modes() -> None:
     assert config.client_defaults == {
         "windows": "windows_explorer",
         "linux": "linux_gvfs",
+        "macos": "macos_smb_mount",
     }
     assert {profile.access_mode for profile in config.client_profiles.values()} == {
         "explorer",

@@ -1,0 +1,10 @@
+{
+  "compared_prior_loop": 44,
+  "files": 117,
+  "changed_data_files": [
+    "zeek-db/conn.json",
+    "zeek-core/conn.json",
+    "zeek-dmz/conn.json"
+  ],
+  "unchanged_data_files": 114
+}

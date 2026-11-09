@@ -38,6 +38,9 @@ from evidenceforge.events.content_identity import (
     LocalArtifactIdentity,
     ProcessBinaryIdentity,
 )
+from evidenceforge.events.http_semantics import http_wire_referrer, http_wire_target
+from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_file_operation import MacosFileOperationObservation
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -45,6 +48,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     SignaturePredicate,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.proxy import ProxyTransactionPlan
 
 
@@ -126,7 +130,7 @@ class ProcessTargetSecurityContext:
 
 @dataclass(slots=True)
 class ProcessContext:
-    """Process creation/termination details."""
+    """Current process facts for lifecycle and dependent observations."""
 
     pid: int  # Allocated by StateManager.create_process()
     parent_pid: int
@@ -146,6 +150,7 @@ class ProcessContext:
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
     target_security_context: ProcessTargetSecurityContext | None = None
     binary_identity: ProcessBinaryIdentity | None = None
+    exit_outcome: PosixProcessExit | None = None
 
 
 @dataclass(slots=True)
@@ -421,6 +426,9 @@ class FileContext:
     pid: int = 0
     artifact_identity: LocalArtifactIdentity | None = None
     content_identity: FileContentIdentity | None = None
+    macos_metadata: MacosFileMetadata | None = None
+    macos_operation: MacosFileOperationObservation | None = None
+    previous_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -602,7 +610,7 @@ class SslContext:
     server_name: str = ""  # SNI hostname
     resumed: bool = False
     established: bool = True
-    ssl_history: str = ""  # e.g., TLS 1.2 "CSXKNGIFIFD" or passive TLS 1.3 "CSD"
+    ssl_history: str = ""  # e.g., passive TLS 1.2 "CsxknGIi" or TLS 1.3 "Cs"
     cert_chain_fuids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -752,6 +760,7 @@ class HttpContext:
     version: str = "1.1"
     user_agent: str = ""
     user_agent_known_absent: bool = False
+    user_agent_is_generated_default: bool = False
     request_body_len: int = 0
     request_content_type: str = ""
     request_entity: HttpRequestEntityContext | None = None
@@ -763,6 +772,11 @@ class HttpContext:
     flow_request_body_len: int | None = None
     flow_response_body_len: int | None = None
     flow_transaction_count: int = 1
+    capture_traffic: NetworkTrafficLedger | None = None
+    capture_history: str = ""
+    capture_transaction_id: str = ""
+    request_stream_offset: int = 0
+    response_stream_offset: int = 0
     status_code: int = 200
     status_msg: str = "OK"
     referrer: str = ""
@@ -776,6 +790,10 @@ class HttpContext:
     resp_mime_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if min(self.request_stream_offset, self.response_stream_offset) < 0:
+            raise ValueError("HTTP stream offsets must be non-negative")
+        object.__setattr__(self, "uri", http_wire_target(self.uri))
+        object.__setattr__(self, "referrer", http_wire_referrer(self.referrer))
         if self.request_entity is not None and self.request_entity.size != self.request_body_len:
             raise ValueError("HTTP request entity size must match request_body_len")
         if (
@@ -887,16 +905,16 @@ class SmbContext:
     previous_client_path: str = ""  # Client-native mount, drive, or UNC rename source
     previous_server_path: str = ""  # Server-local backing path rename source
     # ``filesystem`` is retained as the backing-filesystem compatibility view.
-    # Zeek must render ``advertised_filesystem`` instead because Samba commonly
-    # reports NTFS over the wire while storing data on ext4 or XFS.
+    # ``advertised_filesystem`` describes protocol capability, not an observed
+    # SMB2 TreeConnect field. Samba may advertise NTFS while storing on ext4/XFS.
     filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
     backing_filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
     advertised_filesystem: str = "NTFS"
     server_platform: Literal["windows", "linux"] = "windows"
     provider: Literal["windows", "samba"] = "windows"
-    client_access: Literal["windows_native", "cifs_mount", "smbclient", "external"] = (
-        "windows_native"
-    )
+    client_access: Literal[
+        "windows_native", "cifs_mount", "macos_mount", "smbclient", "external"
+    ] = "windows_native"
     encrypted: bool = False
     audit: Literal["minimal", "standard", "high"] = "standard"
 
@@ -1026,6 +1044,10 @@ class ProxyContext:
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
     transaction: ProxyTransactionPlan | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "url", http_wire_target(self.url))
+        object.__setattr__(self, "referrer", http_wire_referrer(self.referrer))
 
 
 @dataclass(slots=True)

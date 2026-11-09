@@ -1,0 +1,15 @@
+{
+  "reported_finding": "Same macOS Unified Log traceID values appear across different host records and were interpreted as reused activity identifiers.",
+  "records": {
+    "loginwindow_trace_id": 562950054215684,
+    "sshd_session_trace_id": 1407374900461828,
+    "loginwindow_process_image_uuid": "BA387268-D031-451A-A883-CB3C1573F948",
+    "sshd_session_process_image_uuid": "A1C96CDD-D1E9-47BA-8D52-C690FD8790A6"
+  },
+  "project_semantics": {
+    "file": "src/evidenceforge/events/macos_logging.py",
+    "fact": "UnifiedLogCallsite.trace_id encodes static format-string offset, message type and flags; the callsite docstring explicitly distinguishes a tracepoint ID from an occurrence ID. Repeated calls at one point retain the same native trace ID."
+  },
+  "finding": "False positive: the same built-in callsite in the same executable image is expected to reuse the tracepoint identifier across hosts and occurrences. The value is not an activity identifier, so this does not create cross-host activity correlation.",
+  "decision": "No code change. Keep reviewer score unchanged; exclude this item from actionable defect priorities."
+}

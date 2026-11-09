@@ -1,0 +1,8 @@
+{
+  "loop": 68,
+  "qualified_confirmed_mysql_observations": 492,
+  "unqualified_midstream_or_gapped": 65,
+  "missing_required_direction": 0,
+  "examples": [],
+  "scope": "Tagged Zeek8.0.5 confirmation prerequisites; full visible TCP open, zero reported capture gap. Counts are sensor observations, not independent logical flows."
+}

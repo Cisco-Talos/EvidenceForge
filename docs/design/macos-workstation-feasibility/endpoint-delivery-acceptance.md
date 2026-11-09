@@ -1,0 +1,124 @@
+# Finite Mac endpoint delivery sequence
+
+This is the completion plan authorized on 2026-11-02, not an expanding catalog
+roadmap. The target is useful, correlated evidence for the fixed two-Mac workstation
+workload on macOS 27 arm64. All scenario identities are invented. Raw native references
+stay outside Git and are never inspected by agents without specific permission.
+
+On 2026-11-04 the user agreed to leave launchd ULF gated and proceed with a fresh
+generation and review of their `MacOS-test` scenario. This is the next user
+acceptance step beyond the fixed engineering workload. Keep all work on the
+feature branch; no PR into `dev` is authorized until the user is satisfied.
+The existing launchd result does not qualify a message family, and no further
+native collection is requested for this acceptance run.
+
+The November 4 user-scenario trial initially failed complete ES coverage. Owning-layer
+repairs at revision 380 now pass the unchanged workload: **229/229 forks, 291/291
+execs, zero aggregate starts**, all 85 authored Mac starts matched, and all 291 eCAR
+exec transitions matched independently. The earlier failed and partial diagnostics
+remain historical evidence. The fixed matrix below still describes its narrower
+scope; it is not relabelled as a revision-380 run. See the current results in the
+[worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
+
+The subsequent bounded walkthrough found an early successful sleep exit and history
+from a noninteractive SSH shell. Revision 381 repairs their canonical timing/lifecycle
+and shell-submission owners. Fresh unchanged MacOS-test generation measures
+**600.005884 seconds** from native sleep exec to exit 0 (eCAR: **600.005 seconds**).
+All thirteen removed history entries independently match noninteractive pipe-backed
+SSH commands still present in ES; local Terminal history is retained. The original
+39 chain assertions now pass, and separate current tests cover both Terminal and iTerm2
+history with native command evidence. Start coverage remains 229/229 forks, 291/291
+execs and 85/85 authored starts. One evaluation passes at 95.87391526820508 with
+224,543 records; all applicable hard gates pass. Existing unknown-exit, vendor-template/
+runtime-policy and ULF limits remain explicit. No new collection was performed.
+Launchd ULF stays gated and integration remains on hold for user review.
+
+Revision 384 completes exit coverage for the unchanged user workload using the approved
+ordinary-close model: **200/200 canonical/native exits**, zero unknown in-window results,
+exact eCAR lifetime/final-execution matches, and no duplicate exits. All 23 existing failed
+PostgreSQL/MySQL attempts have matching nonzero outcomes; three unfinished commands end
+with signal 15. Start coverage remains 229/229 forks, 291/291 execs and 85/85 authored
+starts. One evaluation passes at 95.87391526820508 with 224,701 records. The final
+combined recovery/filter test matches all 22 deterministic files. Shutdown results are
+selected simulation behavior; native sqlcmd network expansion and Homebrew SSH admission
+remain separate follow-ups. See the [exit-completeness contract](exit-completeness.md).
+
+| Phase | Completion evidence | Current state |
+| --- | --- | --- |
+| 1. Process starts | Every modeled in-window fork/exec reconciles against independent State, all required application/argument roles run, positive baseline is exercised, native filtering and full exact recovery agree. | Complete for the bounded workload, reconfirmed at revision 377. Primary: 33 forks/39 execs. Final recovery companion with ASP negative control: 63 forks/78 execs, 39 background execs, all 22 deterministic files identical. |
+| 2. Lifecycle and contradictions | Known outcomes render with their exact status; unknown outcomes are visible as coverage limitations. Repair concrete chronology, identity, parentage or cross-source failures in this workload. An unknown result cannot silently become success. | The approved ordinary-close model passes all 200 MacOS-test terminations. Current recovery companion reconciles 71 terminations, with 70 known native results and one unsupported compound-shell result retained as an explicit unknown negative control. |
+| 3. Minimum useful ULF | GUI workspace entry, qualified ASP policy refusal, ordinary-verbosity SSH accepted authentication, and launchd activation/completion, each produced by its canonical action and a qualified native writer/callsite profile. | Workspace entry, ASP refusal, observed PAM success and source-derived plain-public-key success through the same qualified logger exist. On 2026-11-03 the user retained ordinary daemon verbosity and left VERBOSE session messages gated. The final corrected category-or-message capture passed job/cleanup controls but retained zero rows. The agreed collection sequence has ended; launchd ULF stays gated and no template is enabled. See the [reference note](launchd-ulf-reference/REFERENCE.md). |
+| 4. Final acceptance | One combined exact recovery/filter run, one deterministic evaluation of its bundle and a bounded review of these supported families. Fix concrete blockers; no repeated blind panel loop. | Revision 384 passes combined exact recovery/filtering with all 22 deterministic files equal; the fresh unchanged MacOS-test evaluation and bounded start/exit/transport joins pass. Original full-scope acceptance remains unpassed because launchd ULF is unqualified; finite reference collection has ended. User acceptance still precedes integration. |
+
+The quiet thirty-minute primary is preserved as a quiet sampling case. The
+predeclared positive seed and longer same-seed recovery companion exercise background
+coverage separately; neither substitutes for the original primary.
+
+The completion goal does not require arbitrary applications, every Chrome auxiliary
+helper, Dock/Spotlight-specific attribution, every GUI message, browser IPC modeling,
+or every ES event family. Those are separate future requirements. Selecting ULF is
+not a claim that every process start has a ULF message; ES is the process evidence.
+
+## Remaining evidence, with a stopping rule
+
+Use one bounded reference for each missing ULF family. Launchd collection uses a
+nonce-labelled transient system job and `/usr/bin/true`, not real workloads. SSH
+collection must authenticate a controlled loopback connection before retaining its
+writer's messages. Existing account/terminal configuration must not be changed.
+Each diagnostic must return fixed comparisons, keep unknown fields/values private,
+preserve failed captures and make cleanup failures visible. Prepare and test code
+without collecting. Human execution remains a distinct step.
+
+If the reference cannot establish a message or native envelope, leave that family
+gated and report the exact missing classification. Do not continue collecting unrelated
+process metadata, expand the scenario, or repeat an authenticity assessment to compensate.
+An own-process readiness marker is not proof of visibility into a root service's
+logs. A separate launchd diagnostic file must not be passed off as ULF or added as
+an implicit new product requirement. A zero under a narrow predicate is not proof
+of global absence.
+Reference-qualified generation still uses explicit synthetic build offsets and invented
+entity values; it does not claim byte identity with the private system's executable.
+
+The launchd diagnostic is documented in
+[launchd-ulf-reference/PRIVATE-RUN.md](launchd-ulf-reference/PRIVATE-RUN.md).
+After its initial unobserved result, the user ran the bounded
+[SSH ULF check](ssh-startup-reference/ULF-PRIVATE-RUN.md). It reused the existing
+controlled loopback connection and ES ancestry solely to authenticate ULF retention;
+it does not expand the ES metadata research scope. Its first fixed report retained
+38 bound rows with successful cleanup but failed the implemented schema. The approved
+[offline shape review](ssh-startup-reference/ULF-REFERENCE.md) resolved that failure:
+17 valid ordinary logs and 21 activity-creation entries. One ordinary log records
+successful keyboard-interactive/PAM authentication from root-owned sshd-session.
+The separately approved grouped comparison qualifies its static main-image callsite
+with PRIVATE_DATA flag and public %.500s format. That bounded PAM-success producer
+is now implemented. Plain public-key success reuses that qualified envelope through
+the common logger established by Apple's public OpenSSH code; its payload basis is
+source-derived, not a separate local observation. Canonical key type and SHA256
+fingerprint are required. Other SSH/PAM messages remain gated. The user explicitly
+chose ordinary verbosity on 2026-11-03, so VERBOSE session-start/close messages are
+outside this delivery scope; increasing collector verbosity cannot enable them.
+No capture is requested for those messages. See the same reference note for exact
+source and visibility limits. Launchd ULF remains the only unclosed minimum-family
+evidence gate; ES already covers the controlled job's process start and known exit.
+
+The human-run corrected launchd selector subsequently returned failed job activation
+and removal/file controls. Its zero rows are inconclusive, not a qualified absence.
+Exact-label cleanup also failed its original fixed checks; a tested grouped cleanup
+diagnostic subsequently verified both test directory and exact service ABSENT.
+The temporary-resource concern is closed and no cleanup is needed. This does not
+establish activation or ULF visibility in the failed attempt. No further collection
+is requested, and no native files were opened by the agent. Launchd ULF remains
+gated; it is not silently removed from full-scope phase 3/4 acceptance. See the
+launchd reference note for the fixed reports and their limits.
+
+The user subsequently authorized the next finite step: a collector-free activation/
+cleanup check with fixed stage/reason diagnostics. Its private version-4 report now
+passes every control, guard_exit ZERO and result PASS. This establishes launchctl
+acknowledgements and cleanup only. The separate fresh version-4 bounded ULF capture
+subsequently passed job/collector controls and cleanup but retained zero rows under
+the corrected category-or-message selector. This is a valid bounded empty result,
+not a global absence claim. The agreed stopping rule is now exercised: collection
+ends, launchd ULF remains gated, and no alternate file source or broader metadata/
+assessment investigation is added. Known launchd process evidence remains in ES.
+Current supported-family acceptance passes; original full-scope phase 3/4 acceptance
+is still explicitly incomplete because launchd ULF has no qualified message/envelope.

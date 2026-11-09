@@ -18,6 +18,8 @@ from datetime import datetime
 from typing import Protocol
 
 from evidenceforge.events.content_identity import ServiceDeploymentIdentity
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleHold,
@@ -31,6 +33,7 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingRole,
 )
 from evidenceforge.events.network import NetworkTransactionPlan, NetworkTuple
+from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleClosedTransportAdmissionToken,
     LifecycleClosedTransportPreparationCensus,
@@ -51,7 +54,6 @@ from evidenceforge.generation.lifecycle_registry import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
-from evidenceforge.utils.time import ensure_utc
 
 
 class _LifecycleDispatcher(Protocol):
@@ -85,6 +87,9 @@ class ServiceLifecyclePublicationPlan:
     transition_ordinal: int = 0
     process_bindings: tuple[ServiceProcessBindingIdentity, ...] = ()
     staged_process_bindings: tuple[LifecycleServiceStagedProcessBindingMember, ...] = ()
+
+    process_group: PosixGroupIdentity | None = None
+    active_process: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete or internally inconsistent service plans."""
@@ -156,11 +161,7 @@ class TransportLifecyclePublicationPlan:
 def service_boot_id(hostname: str, boot_time: datetime) -> str:
     """Return one deterministic boot-scope identity from canonical state time."""
 
-    return stable_uuid(
-        "lifecycle-service-boot",
-        hostname.strip().casefold(),
-        ensure_utc(boot_time).isoformat(),
-    )
+    return modeled_boot_id(hostname, boot_time)
 
 
 def installed_service_publication_plan(
@@ -402,6 +403,8 @@ class LifecycleProductionAdapter:
             transition_id=plan.transition_id,
             transition_ordinal=plan.transition_ordinal,
             staged_process_bindings=plan.staged_process_bindings,
+            process_group=plan.process_group,
+            active_process=plan.active_process,
         )
 
     def prepare_service_publication(

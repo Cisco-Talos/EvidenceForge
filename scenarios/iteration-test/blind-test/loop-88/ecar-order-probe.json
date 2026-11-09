@@ -1,0 +1,17 @@
+{
+  "question": "Are nondecreasing timestamps across per-host eCAR files an unexplained realism defect?",
+  "dataset": "fixed-seed output byte-identical to Loop 84, copied for final fresh panel",
+  "measurement": {
+    "host_files": 23,
+    "total_records": 38468,
+    "timestamp_inversions": 0,
+    "files_with_adjacent_equal_millisecond_timestamps": 13
+  },
+  "implementation_evidence": {
+    "file": "src/evidenceforge/generation/emitters/ecar.py",
+    "setting": "EcarEmitter._sort_flat_file = True; _sort_key = _ecar_sort_key; _defer_sorted_flush_until_close = True; _external_sorting = True",
+    "sort_key_docstring": "Extract timestamp_ms for chronological per-host eCAR output sorting."
+  },
+  "interpretation": "The ordering is explicitly imposed by the source writer as a chronological flattened export. Every host file is nondecreasing, with millisecond ties on a subset. This matches a normalized time-ordered export and is not an accidental lifecycle claim or evidence of impossible event order.",
+  "decision": "No code change. Retain chronological per-host export ordering."
+}

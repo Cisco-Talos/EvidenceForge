@@ -83,9 +83,12 @@ def test_failed_tls_handshake_does_not_publish_resumption_points(
     crypto_census_before = crypto.census()
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", (("SF", 1, "ShADadf"),))
-    monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", (("SF", 1, "ShADadf"),))
+    monkeypatch.setattr(
+        network_planner_module,
+        "connection_state_distribution",
+        lambda protocol: [("SF", 1, "ShADadf")],
+    )
     monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", (1,))
-    monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", (1,))
 
     _generate_tls(generator, at=_START, source_port=50_001, conn_state=None)
 

@@ -1,0 +1,26 @@
+{
+  "mode": "full_pipeline_initial_round",
+  "loop": 1,
+  "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/diagnostic-scenario.yaml",
+  "bundle": "/private/tmp/eforge-iteration-macos-loop1-njdnyda_/bundle-diagnostic-assessment-2",
+  "trial_root": "/private/tmp/eforge-iteration-macos-loop1-njdnyda_",
+  "behavior_revision": 392,
+  "source_workload": "iteration-test fork; original preserved",
+  "native_log_reads": "No private/native captures authorized; generated synthetic data only",
+  "implementation_fixes": "Only concrete preflight generation blockers repaired; no blind realism repair loop",
+  "authoring_correction": "Explicit mounted SMB mappings for the new Mac engineering clients; canonical Finder argv quoting",
+  "preflight_repairs": [
+    "Explicit new Mac mounts",
+    "Baseline mounted-share capability admission",
+    "Automatic SSH warmup bootstrap timing fence",
+    "Canonical artifact lifecycle identity in inherited SCP transfer",
+    "Process-owned file effect canonical identity sibling",
+    "Transfer artifact token and commit-before-evidence handoff",
+    "Authored logoff acknowledgement of exact completed RDP owner",
+    "Exact authoritative Linux SSH terminal owner"
+  ],
+  "blind_root": "/private/tmp/log-study-9lowe06w",
+  "complete_source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/scenario.yaml",
+  "assessment_scope": "USER_APPROVED_PARTIAL_COVERAGE_DIAGNOSTIC",
+  "complete_coverage_gate": "FAILED; mounted-SMB helper native exec gap"
+}

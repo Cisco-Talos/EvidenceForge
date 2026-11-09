@@ -37,11 +37,15 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
-from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
+from evidenceforge.generation.checkpoints.activity_head import (
+    ActivityGeneratorStateParticipant,
+    _restore_ssh_lifecycles,
+)
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
 from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
+from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
 from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.network_runtime_head import (
     NetworkTransactionRuntimeParticipant,
@@ -423,10 +427,15 @@ def test_ssh_transport_fits_before_action_bundle_source_session_end(tmp_path: Pa
     assert observed_close < source_session_end
 
 
-def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_zeek", [True, False])
+def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(
+    tmp_path: Path, with_zeek: bool
+) -> None:
     """Hydration reconstructs untouched SSH close work against fresh runtime owners."""
 
     original = _fixture(tmp_path / "original")
+    if not with_zeek:
+        del original.generator.dispatcher.emitters["zeek_conn"]
     request = replace(
         original.request(),
         emit_session_close=True,
@@ -451,6 +460,8 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
     activity_seal = ActivityGeneratorStateParticipant(original.generator).prepare_checkpoint(0)
 
     fresh = _fixture(tmp_path / "fresh")
+    if not with_zeek:
+        del fresh.generator.dispatcher.emitters["zeek_conn"]
     fresh.generator._scenario_environment = SimpleNamespace(
         systems=[fresh.source, fresh.target],
         users=[fresh.user],
@@ -478,6 +489,13 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
     restored = fresh.generator._pending_ssh_session_closures[0]
     assert restored.prepared.ssh_manager_owner is fresh.generator._ssh_channel_manager
     assert restored.prepared.dispatcher_owner is fresh.generator.dispatcher
+
+    corrupted_rows = loads(activity_seal.head.payload)["ssh_lifecycles"]
+    corrupted_rows[0][27][4] = corrupted_rows[0][27][6]
+    pending_before = tuple(fresh.generator._pending_ssh_session_closures)
+    with pytest.raises(CheckpointCorruptionError, match="authentication phases"):
+        _restore_ssh_lifecycles(fresh.generator, corrupted_rows)
+    assert tuple(fresh.generator._pending_ssh_session_closures) == pending_before
 
     original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     original.close_and_read()
@@ -855,6 +873,31 @@ def test_real_ssh_caller_publishes_exact_cisco_transport_lifecycle(
     assert built_ids == teardown_ids
     assert any(row.get("object") == "USER_SESSION" for row in ecar_rows)
     assert len(zeek_rows) == 1
+
+
+def test_real_exact_ssh_caller_publishes_linux_auth_syslog_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """Exact deferred SSH must retain the bundle-owned server auth observations."""
+
+    reset_thread_rng(42)
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    fixture = _fixture(tmp_path, extra_emitters={"syslog": syslog})
+
+    _uid, _logon_id = _execute_real_caller(fixture)
+
+    syslog.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+    )
+    assert "Connection from 10.0.0.10 port 50001" in rendered
+    assert "Accepted password for analyst" in rendered
+    assert "pam_unix(sshd:session): session opened for user analyst" in rendered
+    assert "New session" in rendered
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    fixture.close_and_read()
+    syslog.close()
 
 
 def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
@@ -2659,18 +2702,18 @@ def test_exact_ssh_open_preserves_unresolved_source_process_compatibility(tmp_pa
     fixture.zeek.close()
 
 
-def test_no_ecar_uses_exact_bridge_only_for_wholly_suppressed_warmup(
+def test_no_ecar_retains_exact_ownership_across_collection_boundaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing eCAR sink preserves exact warm-up ownership but not visible cohorts."""
+    """An absent sink keeps exact ownership for warm-up, visible and crossing cohorts."""
 
     reset_thread_rng(42)
     output_start = _START + timedelta(hours=2)
     fixture = _fixture(tmp_path, output_start_time=output_start)
     assert fixture.generator.dispatcher.emitters.pop("ecar") is fixture.ecar
     visible = replace(fixture.request(), time=output_start)
-    assert not SshSessionActionBundle(
+    assert SshSessionActionBundle(
         visible,
         fixture.generator,
     )._uses_exact_deferred_publication()
@@ -2682,7 +2725,7 @@ def test_no_ecar_uses_exact_bridge_only_for_wholly_suppressed_warmup(
             "ssh-warmup-crossing-close",
         ),
     )
-    assert not SshSessionActionBundle(
+    assert SshSessionActionBundle(
         crossing_authoritative_close,
         fixture.generator,
     )._uses_exact_deferred_publication()
@@ -4301,6 +4344,7 @@ def test_exact_close_syslog_admission_rejects_nonconcrete_targets_before_state(
         _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
         session_before = fixture.state.get_session_identity(logon_id)
         assert session_before is not None
+        ordinary_emit_calls = _DuckExactSyslog.emit_calls
 
         with pytest.raises(EventContractError, match="syslog.*unsupported before State"):
             fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
@@ -4309,7 +4353,7 @@ def test_exact_close_syslog_admission_rejects_nonconcrete_targets_before_state(
         assert len(fixture.generator._pending_ssh_session_closures) == 1
         _assert_no_dispatcher_residue(fixture.generator.dispatcher)
         assert _DuckExactSyslog.marker_reads == 0
-        assert _DuckExactSyslog.emit_calls == 0
+        assert _DuckExactSyslog.emit_calls == ordinary_emit_calls
         assert alias_marker_reads == 0
         if isinstance(target, SyslogEmitter):
             exact = target.exact_candidate_census()
@@ -5486,3 +5530,95 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
         for row in ecar_rows
     )
     assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_external_ssh_ecar_filter_preserves_exact_receiver_lifecycle(
+    tmp_path: Path, threaded: bool, deferred: bool
+) -> None:
+    snapshots: list[tuple[dict[str, object], ...]] = []
+    for name, with_zeek in (("full", True), ("filtered", False)):
+        reset_thread_rng(42)
+        fixture = _fixture(tmp_path / name, threaded=threaded, production_timing_runtime=True)
+        if not with_zeek:
+            del fixture.generator.dispatcher.emitters["zeek_conn"]
+        request = replace(
+            fixture.request(),
+            source_system=None,
+            source_ip="198.51.100.41",
+            emit_session_close=True,
+            defer_session_close=deferred,
+        )
+        bundle = SshSessionActionBundle(request, fixture.generator)
+        assert bundle._uses_exact_deferred_publication()
+        bundle.execute()
+        fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=1))
+        assert fixture.generator.ssh_close_journal_census().total_pending == 0
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        rows, zeek = fixture.close_and_read()
+        assert bool(zeek) is with_zeek
+        assert any(row["object"] == "USER_SESSION" and row["action"] == "LOGIN" for row in rows)
+        assert any(row["object"] == "USER_SESSION" and row["action"] == "LOGOUT" for row in rows)
+        snapshots.append(tuple(rows))
+    assert snapshots[0] == snapshots[1]
+
+
+@pytest.mark.parametrize("inserted_owner", ["real", "null", "foreign"])
+def test_filtered_ssh_close_rejects_new_projection_owner_until_original_absence_restored(
+    tmp_path: Path, inserted_owner: str
+) -> None:
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    emitters = fixture.generator.dispatcher.emitters
+    del emitters["zeek_conn"]
+    request = replace(fixture.request(), emit_session_close=True, defer_session_close=True)
+    SshSessionActionBundle(request, fixture.generator).execute()
+    continuation = fixture.generator._pending_ssh_session_closures[0].prepared
+    continuation.require_projection_owner_shape()
+    emitters["zeek_conn"] = (
+        fixture.zeek if inserted_owner == "real" else None if inserted_owner == "null" else Mock()
+    )
+    digest = fixture.state.materialization_digest()
+    with pytest.raises(StateError, match="original eCAR/Zeek"):
+        continuation.require_projection_owner_shape()
+    assert fixture.state.materialization_digest() == digest
+    del emitters["zeek_conn"]
+    continuation.require_projection_owner_shape()
+    fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=1))
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    fixture.close_and_read()
+
+
+def test_authoritative_linux_ssh_logoff_retires_exact_application_owner(tmp_path: Path) -> None:
+    """An authored Linux close owns both endpoint teardown and the SSH sidecar."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(minutes=20)
+    end_plan = SessionEndPlan(deadline, "explicit_storyline", "close-ssh")
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=end_plan,
+    )
+    _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+    fixture.generator.generate_logoff(
+        fixture.user,
+        fixture.target,
+        deadline,
+        logon_id,
+        from_storyline=True,
+        session_end_plan=end_plan,
+    )
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    rows, _network = fixture.close_and_read()
+    target_sessions = [
+        row
+        for row in rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_sessions] == ["LOGIN", "LOGOUT"]

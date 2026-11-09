@@ -1,5 +1,31 @@
 # PRD: EvidenceForge Canonical Event Model
 
+The explicit `macos_launch_item.launch_profile: root_xpcproxy_v11` system-job preset
+now owns bounded root true activation through canonical fork, xpcproxy exec, setsid
+and target exec. The loaded definition retains its clean environment independently
+of later file edits/removal. The existing service authority binds the already
+published process/group; no rendered record triggers sibling evidence. Other
+images, domains, automatic triggers and launchd Unified Log remain unqualified.
+
+## Current generation admission (2026-11-06)
+
+The active Mac generation target is macOS 27 arm64 workstations. Qualified v11 process
+and bounded regular-file observations publish through canonical State/action/artifact owners;
+historical decoding does not admit other targets. Supported terminal, Finder/app/helper,
+SSH and root-job producers retain their own metadata and lifecycle contracts. Selected ULF
+workspace/authentication/policy-refusal observations remain separate from ES and do not
+constitute general app/service logging.
+
+`MacosFilesystemActionBundle` owns explicit empty create, modified/unmodified close,
+same-directory rename/replacement and unlink. The ordinary Code document caller supplies
+nominal activity and mutable directory/inode state; neither rendered source triggers its
+sibling. The current [architecture](../ARCHITECTURE.md#macos-bounded-filesystem-publication)
+and [Mac guide](../macos.md) supersede earlier implementation-stage limitations below.
+
+The Phase 7 examples/tables below retain the original refactor's design context. They are
+not a complete current event/format inventory; the format/source catalog and context
+contracts remain authoritative.
+
 > **Status:** ✅ COMPLETE (Phase 7, implemented 2026-03-19)
 > **Addendum to:** `docs/PRD.md` (main EvidenceForge PRD)
 > **Scope:** Architectural refactor of the generation engine to use a canonical event model for cross-log consistency by construction.
@@ -234,7 +260,8 @@ Each `event_type` string maps to which contexts must/may be populated. "required
 | `system_process_create` | required | - | required | - | - | - | - | - | OS boot process tree (svchost chains, systemd) |
 | `connection` | - | - | - | required | optional | - | - | optional | Network connection (Zeek conn, eCAR FLOW, Snort) |
 | `dns_query` | - | - | - | required | required | - | - | - | DNS lookup (Zeek dns) |
-| `bash_command` | required | required | - | - | - | - | - | - | Bash history entry |
+| `bash_command` | required | required | - | - | - | - | - | - | Explicit Bash history entry (Linux/Mac) |
+| `zsh_command` | required | required | - | - | - | - | - | - | Experimental Mac interactive history entry |
 | `file_operation` | required | - | - | - | - | required | - | - | File create/modify/delete (eCAR FILE) |
 | `registry_operation` | required | - | - | - | - | - | required | - | Registry modification (eCAR REGISTRY) |
 | `image_load` | required | - | optional | - | - | - | - | - | Module/DLL load (Sysmon Event 7, eCAR MODULE/LOAD) |
@@ -316,6 +343,8 @@ _NETWORK_FORMATS = {"zeek_conn", "zeek_dns", "snort_alert"}
 ```
 
 ### 4.2 StateManager Changes
+
+Current Mac implementation: immutable `ProcessIdentity` snapshots distinguish lifetime and execution identity and can carry `PosixProcessCredentials`. The canonical allocation/fork/exec owner preserves historical real/effective UID/GID and optional audit origin. An exec can change effective credentials without rewriting the login principal or earlier observations; unknown audit identity remains absent. These are shared state facts, not native ES wire records. Native audit PID version, saved IDs, supplementary groups and responsible-process snapshots still require explicit ownership before ES generation is admitted.
 
 **New method:** `apply(event)` -- records already-allocated state from a SecurityEvent. Does NOT allocate IDs (those are allocated in the two-phase build before dispatch).
 
@@ -400,6 +429,7 @@ class LogEmitter(ABC):
 | `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, image_load, create_remote_thread, process_access, service_installed}` |
 | `SnortEmitter` | `{connection}` (only when `event.ids` is populated) |
 | `BashHistoryEmitter` | `{bash_command}` |
+| `ZshHistoryEmitter` | `{zsh_command}` |
 | `WebEmitter` | `{web_request}` |
 
 **`can_handle()` pattern** (common to all emitters):
@@ -690,3 +720,36 @@ Use `tests/fixtures/scenarios/retail-store-ftp-attack.yaml` as the primary compa
 - Rename old `emit_event()` to `emit_raw()` if not already done
 - Update `docs/PRD.md` with reference to this document in Post-MVP section
 - Final eval comparison run: `eforge evaluate` before vs. after on reference scenario
+
+### Internal POSIX exec extension
+
+`process_exec` requires source host, process, lifecycle and exact before/after identity roles; it is a dependent State mutation consumed by eCAR and qualified native ES projection. The post-exec subject and pre-exec actor share one lifetime. Ordinary exec preserves audit origin and POSIX membership. A separately authenticated local GUI adoption may bind the exact GUI session's origin and a new own process group during xpcproxy-to-app replacement; it cannot change real/effective credentials or invent a fork. Authored `process` semantics are unchanged. See the architecture's POSIX exec publication section for exact cohort ownership and the evidence-format reference for the EvidenceForge eCAR extension.
+
+Qualified literal local-terminal and non-PTY SSH process launches share canonical fork/exec
+production. The terminal chain explicitly owns its descendants through an exact responsible
+lifetime reference under the current modeled policy. A quoted interpreter input remains one
+argv element and does not itself expand into child activities. Consumers such as session teardown
+must use the lifecycle current execution view for image/ordinal facts rather than compare the
+current image against the immutable birth image. Full process coverage enforcement remains open.
+
+The internal `process_audit_bind`, `process_privilege_drop` and `process_service_drop` kinds preserve lifetime and execution identity while projecting exact authenticated State credential patches. The eCAR modification extension distinguishes these aggregate transitions; native event families and authored entry points remain separate gates.
+
+The bounded macOS workstation SSH receiver reuses `ssh_session` and existing process/session contexts. Distinct fork, exec, audit adoption, service/user credential changes and termination remain bundle-owned canonical phases. The shared continuation owns startup recovery and terminal execution for automatic or paired authored logout; SCP/SFTP receiver helpers are not yet admitted. This adds no authored event type or native log-format claim.
+
+The internal `macos_workspace_request` kind carries `MacosWorkspaceRequest`, source Host, explicit identity roles and a dependent session lifecycle. It represents entry into workspace launch, not completion. Its subject is the interactive session; its optional actor is the canonical loginwindow writer. Source preparation freezes exact execution/thread/image/boot facts independently of collection. The experimental `macos_unified_log` emitter is its only consumer; no authored event type or scenario field is added.
+
+The qualified SSH authentication source is a facet of the native receiver's existing `process_audit_bind` occurrence at successful authentication. `MacosSshAuthentication` freezes the subject SSH session, root pre-adoption writer and actual transport peer. The credential transition keeps its before/after process roles and process lifecycle, and adds the session role. Its State cohort authenticates the exact audit binding and session activity patch. ULF and eCAR use one exact publication journal, including filtering, partial sink failure and lost-return recovery. A static main-image callsite may explicitly carry the private-data flag and modeled main-image backtrace offsets; renderers do not derive frames, allocate writers or change message privacy. Both PTY modes share this producer. Password intent uses the observed keyboard-interactive/PAM payload. Plain public-key intent carries its canonical key type/SHA256 fingerprint and source-derived text through the same qualified logger, with an explicit public_source_same_logger semantic basis. This is not an additional local public-key observation. Missing/unsupported keys produce no fabricated native row. Ordinary daemon verbosity is retained; verbose session messages, other unqualified SSH messages and launchd ULF remain gated.
+
+The experimental `macos_endpoint_security` source renders complete authenticated Mac
+process and bounded regular-file observations through the exact canonical cohort journal.
+Canonical boot activation owns the modeled collector, not a real host command. Qualified
+fork/exec/known-exit and file-operation producers supply their own complete facts; missing
+required metadata remains an explicit admission error. Source-local/global counters are
+allocated during chronological final delivery, independently of process planning order.
+
+Internal file kinds `file_create`, `file_close`, `file_rename` and `file_delete` carry
+`FileContext.macos_operation` with explicit immutable source/target/content/stat facts.
+`MacosFilesystemChange` binds mutable directory and inode changes to that same transaction.
+The nominal Code document workload uses these kinds; they add no authored event type or
+automatic native conversion of other file producers. Source renderers allocate no identities,
+file metadata or sibling occurrences.

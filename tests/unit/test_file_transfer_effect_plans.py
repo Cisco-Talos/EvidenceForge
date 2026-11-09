@@ -52,7 +52,7 @@ class _Dispatcher:
     def dispatch_builder(self, builder: Any) -> None:
         self.builders.append(builder)
 
-    def prepare_builder(self, builder: Any) -> Any:
+    def prepare_builder(self, builder: Any, **_kwargs: Any) -> Any:
         """Return one allocation-free compatibility prepared projection."""
 
         return builder
@@ -626,3 +626,26 @@ def test_scp_plan_is_pythonhashseed_independent() -> None:
 if __name__ == "__main__":
     namespace = runpy.run_path(Path(__file__).resolve())
     print(json.dumps(namespace["_scp_plan_signature"](), sort_keys=True))
+
+
+def test_scp_prepared_receiver_artifact_is_authenticated_by_real_dispatcher() -> None:
+    from unittest.mock import Mock
+
+    from evidenceforge.events.dispatcher import EventDispatcher
+
+    fixture = _fixture()
+    registry = LocalArtifactVersionRegistry(capacity=16, shard_count=2)
+    fixture.activity._runtime_content_manager = RuntimeContentIdentityManager(registry)
+    emitter = Mock()
+    fixture.executor.dispatcher = EventDispatcher(
+        state_manager=fixture.state,
+        emitters={"ecar": emitter},
+        local_artifact_registry=registry,
+    )
+
+    assert fixture.scp.execute()
+    events = [call.args[0] for call in emitter.emit.call_args_list]
+    created = next(event for event in events if event.event_type == "file_create")
+    assert created.file.artifact_identity is not None
+    assert created.identity_plan.object_id == created.file.artifact_identity.artifact_id
+    assert registry.census().prepared_publications == 0

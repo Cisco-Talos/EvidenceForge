@@ -1,0 +1,30 @@
+{
+  "new_cases": 9,
+  "focused_suites_passed": [
+    163,
+    195,
+    54
+  ],
+  "suites_overlap": true,
+  "selected_native_recovery_passed": 67,
+  "combined_cli_recovery_passed": 1,
+  "combined_evidence": "Exact resume bytes, native-only filter equivalence, complete starts and retained unknown-outcome negative control",
+  "config_files_checked": 101,
+  "config_errors": 0,
+  "config_warnings": 0,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 465,
+  "state_manager_checkpoint_schema": "13",
+  "broader_macos_routine_gate": {
+    "passed": 5182,
+    "initial_failed": 19,
+    "selected_reconciliation_passed": 154,
+    "all_initial_failed_modules_reconciled": true
+  },
+  "initial_failures": "Private-field placement/import typo and temporary-ledger cleanup corrected; fixture comparisons now use public projection/full checkpoint facts; manifest formatting mismatch reconciled before accepted CLI run. Historical host assumption in negative control removed without changing outcome checks.",
+  "source_type_checks_passed": 148,
+  "rendered_native_identity_probe": "PASS:219newallocations,1608tokenrefs,117execpairs,zeroinversions/wrongPID/mismatchedprevious/missingpairs",
+  "accepted_automated_eval": "96.785230PASS;100%schema",
+  "snapshot_race_disclosed": "Original descriptor preserved; source before/after digest and all source mtimes checked; corrected coordinator snapshot only; no data edits."
+}

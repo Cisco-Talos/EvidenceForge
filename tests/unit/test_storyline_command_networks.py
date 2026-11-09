@@ -47,6 +47,7 @@ from evidenceforge.models.scenario import (
     System,
     User,
 )
+from evidenceforge.models.state import ActiveSession
 
 
 class _CapturingDispatcherProxy:
@@ -765,12 +766,31 @@ class TestStorylineCommandNetworks:
     def test_storyline_shell_friction_stays_before_authored_process_anchor(self):
         """Optional prep history must not reschedule its owning typed process."""
 
-        emitted: list[tuple[datetime, str]] = []
+        emitted: list[tuple[datetime, str, str | None]] = []
+        process_time = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
+        ready_time = process_time - timedelta(minutes=1)
+        logon_id = "0xssh-session"
         engine = object.__new__(StorylineMixin)
+        engine.state_manager = SimpleNamespace(
+            get_session_at=lambda requested_id, _time: (
+                ActiveSession(
+                    logon_id=logon_id,
+                    username="alice",
+                    system="DB01",
+                    logon_type=10,
+                    start_time=ready_time - timedelta(seconds=10),
+                    source_ip="10.0.0.10",
+                    source_ready_time=ready_time,
+                    session_kind="ssh",
+                )
+                if requested_id == logon_id
+                else None
+            )
+        )
         engine.activity_generator = SimpleNamespace(
             _prepare_bash_history_command=lambda _system, command: command,
-            _emit_bash_command_event=lambda _actor, _system, time, command: emitted.append(
-                (time, command)
+            _emit_bash_command_event=lambda _actor, _system, time, command, **kwargs: (
+                emitted.append((time, command, kwargs.get("logon_id")))
             ),
         )
         actor = User(username="alice", full_name="Alice Example", email="alice@example.test")
@@ -780,8 +800,6 @@ class TestStorylineCommandNetworks:
             os="Ubuntu 22.04",
             type="server",
         )
-        process_time = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
-
         latest = engine._emit_linux_storyline_shell_friction(
             actor=actor,
             system=system,
@@ -789,12 +807,16 @@ class TestStorylineCommandNetworks:
             process_name="/usr/bin/scp",
             command_line="scp /tmp/archive.bin archive@10.0.0.10:/srv/archive.bin",
             output_file=None,
+            logon_id=logon_id,
             rng=random.Random(7),
         )
 
         assert len(emitted) == 2
-        assert [time for time, _command in emitted] == sorted(time for time, _command in emitted)
-        assert all(time < process_time for time, _command in emitted)
+        assert [time for time, _command, _id in emitted] == sorted(
+            time for time, _command, _id in emitted
+        )
+        assert all(ready_time <= time < process_time for time, _command, _id in emitted)
+        assert all(emitted_logon_id == logon_id for _time, _command, emitted_logon_id in emitted)
         assert latest == emitted[-1][0]
 
     def test_storyline_shell_friction_skips_when_prior_foreground_leaves_no_room(self):
@@ -802,10 +824,23 @@ class TestStorylineCommandNetworks:
 
         emitted: list[tuple[datetime, str]] = []
         engine = object.__new__(StorylineMixin)
+        logon_id = "0xssh-session"
+        engine.state_manager = SimpleNamespace(
+            get_session_at=lambda _requested_id, _time: ActiveSession(
+                logon_id=logon_id,
+                username="root",
+                system="DB01",
+                logon_type=10,
+                start_time=prior_completion,
+                source_ip="10.0.0.10",
+                source_ready_time=prior_completion,
+                session_kind="ssh",
+            )
+        )
         engine.activity_generator = SimpleNamespace(
             _prepare_bash_history_command=lambda _system, command: command,
-            _emit_bash_command_event=lambda _actor, _system, time, command: emitted.append(
-                (time, command)
+            _emit_bash_command_event=lambda _actor, _system, time, command, **kwargs: (
+                emitted.append((time, command))
             ),
         )
         actor = User(username="root", full_name="root", email="root@example.test")
@@ -822,11 +857,98 @@ class TestStorylineCommandNetworks:
             process_name="/usr/bin/gzip",
             command_line="gzip -9 /tmp/archive.sql",
             output_file=None,
+            logon_id=logon_id,
             rng=random.Random(7),
         )
 
         assert emitted == []
         assert latest is None
+
+    def test_storyline_shell_friction_skips_before_session_is_ready(self):
+        """No friction command may be assigned to a session before source readiness."""
+
+        emitted: list[datetime] = []
+        logon_id = "0xssh-session"
+        ready_time = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = SimpleNamespace(
+            get_session_at=lambda _requested_id, _time: ActiveSession(
+                logon_id=logon_id,
+                username="root",
+                system="DB01",
+                logon_type=10,
+                start_time=ready_time - timedelta(minutes=1),
+                source_ip="10.0.0.10",
+                source_ready_time=ready_time,
+                session_kind="ssh",
+            )
+        )
+        engine.activity_generator = SimpleNamespace(
+            _prepare_bash_history_command=lambda _system, command: command,
+            _emit_bash_command_event=lambda _actor, _system, time, _command, **_kwargs: (
+                emitted.append(time)
+            ),
+        )
+        actor = User(username="root", full_name="root", email="root@example.test")
+        system = System(hostname="DB01", ip="10.0.0.25", os="Ubuntu 22.04", type="server")
+
+        latest = engine._emit_linux_storyline_shell_friction(
+            actor=actor,
+            system=system,
+            time=ready_time + timedelta(seconds=1),
+            process_name="/usr/bin/gzip",
+            command_line="gzip -9 /tmp/archive.sql",
+            output_file=None,
+            logon_id=logon_id,
+            rng=random.Random(7),
+        )
+
+        assert emitted == []
+        assert latest is None
+
+    def test_storyline_shell_friction_preserves_ready_local_interactive_path(self):
+        """A ready local session retains optional pre-process shell history."""
+
+        emitted: list[datetime] = []
+        logon_id = "0xinteractive-session"
+        process_time = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
+        ready_time = process_time - timedelta(minutes=1)
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = SimpleNamespace(
+            get_session_at=lambda _requested_id, _time: ActiveSession(
+                logon_id=logon_id,
+                username="alice",
+                system="DB01",
+                logon_type=2,
+                start_time=ready_time - timedelta(seconds=10),
+                source_ip="",
+                source_ready_time=ready_time,
+                session_kind="interactive",
+            )
+        )
+        engine.activity_generator = SimpleNamespace(
+            _prepare_bash_history_command=lambda _system, command: command,
+            _emit_bash_command_event=lambda _actor, _system, time, _command, **_kwargs: (
+                emitted.append(time)
+            ),
+        )
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.test")
+        system = System(hostname="DB01", ip="10.0.0.25", os="Ubuntu 22.04", type="server")
+
+        latest = engine._emit_linux_storyline_shell_friction(
+            actor=actor,
+            system=system,
+            time=process_time,
+            process_name="/usr/bin/scp",
+            command_line="scp /tmp/archive.bin archive@10.0.0.10:/srv/archive.bin",
+            output_file=None,
+            logon_id=logon_id,
+            rng=random.Random(7),
+        )
+
+        assert len(emitted) == 2
+        assert all(ready_time <= time < process_time for time in emitted)
+        assert latest == emitted[-1]
 
     def test_explicit_storyline_process_ref_sets_child_parent_pid(self):
         """Explicit process_ref/parent_ref lineage should reach canonical process context."""
@@ -1755,11 +1877,13 @@ class _FakeActivityGenerator:
         system: System,
         time: datetime,
         command: str,
+        *,
+        logon_id: str | None = None,
     ) -> None:
         self.bash_commands.append(
             {
                 "args": (actor, system, time, command),
-                "kwargs": {},
+                "kwargs": {"logon_id": logon_id},
                 "scheduled_time": time,
             }
         )
@@ -2016,6 +2140,10 @@ class _FakeStateManager:
 
     def get_session(self, logon_id: str) -> SimpleNamespace | None:
         return self.sessions.get(logon_id)
+
+    def get_session_at(self, logon_id: str, at_time: datetime) -> SimpleNamespace | None:
+        _ = at_time
+        return self.get_session(logon_id)
 
     def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
         return [
@@ -3481,6 +3609,18 @@ class TestStorylineCommandSideEffects:
         )
         engine.malicious_events = []
         start_time = datetime(2026, 5, 11, 17, 15, tzinfo=UTC)
+        logon_id = "0xssh-session"
+        engine.state_manager.sessions[logon_id] = SimpleNamespace(
+            username=actor.username,
+            system=source.hostname,
+            logon_id=logon_id,
+            logon_type=10,
+            source_ip="10.10.2.30",
+            start_time=start_time - timedelta(minutes=10),
+            source_ready_time=start_time - timedelta(minutes=9),
+            session_kind="ssh",
+            network_close_time=None,
+        )
         specs = [
             SimpleNamespace(
                 type="process",

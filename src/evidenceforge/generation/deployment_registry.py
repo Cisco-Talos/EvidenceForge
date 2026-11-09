@@ -47,12 +47,16 @@ from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from copy import copy
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from threading import RLock, get_ident
 from typing import cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
+from evidenceforge.events.artifact_placement import (
+    LocalArtifactPlacementObservation,
+    MacosRuntimeFilePlacementObservation,
+)
 from evidenceforge.events.content_identity import (
     ApplicationProfileCanonicalKey,
     ApplicationProfileIdentity,
@@ -73,6 +77,8 @@ from evidenceforge.events.content_identity import (
     LocalArtifactCanonicalKey,
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
+    MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     RuntimeServiceDeploymentIdentity,
@@ -82,6 +88,13 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_file_operation import (
+    MacosFileOperationObservation,
+    MacosFileRenameObservation,
+    validate_macos_file_rename_records,
+)
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
     IndexMetrics,
@@ -295,10 +308,14 @@ def _artifact_name(path: str, platform: Platform) -> str:
     return posixpath.basename(path)
 
 
-def _has_posix_path_backslash(path: str, platform: Platform) -> bool:
-    """Return whether POSIX would treat a retained backslash as literal path data."""
+def _has_unsupported_path_backslash(path: str, platform: Platform) -> bool:
+    """Reject ambiguous paths under the legacy Linux separator contract.
 
-    return platform != "windows" and "\\" in path
+    Mac identity preserves literal backslashes end to end. Linux retains its
+    existing admission guard until its legacy normalization can be migrated.
+    """
+
+    return platform == "linux" and "\\" in path
 
 
 def _canonical_software_installation(
@@ -1782,7 +1799,7 @@ def _command_executable_matches(
 ) -> bool:
     """Return whether an actual command executable denotes the declared image."""
 
-    if platform != "windows" and "\\" in command_executable:
+    if _has_unsupported_path_backslash(command_executable, platform):
         return False
     command_drive, _command_tail = (
         ntpath.splitdrive(command_executable) if platform == "windows" else ("", "")
@@ -1929,6 +1946,7 @@ def _require_exact_application_descriptor_graph(
     command_parameter_pools: object,
     singleton_per_session: object,
     selection_ordinal: object,
+    child_commands: object,
 ) -> None:
     """Reject callback-capable descriptor values before any virtual operation."""
 
@@ -1945,6 +1963,15 @@ def _require_exact_application_descriptor_graph(
         raise ValueError("compiled application command_templates exceeds the bounded limit")
     if any(type(value) is not str for value in command_templates):
         raise ValueError("command_templates must contain exact str values")
+    if type(child_commands) is not tuple:
+        raise ValueError("child_commands must be an exact tuple")
+    if len(child_commands) > _MAX_APPLICATION_COMMAND_TEMPLATES:
+        raise ValueError("compiled application child_commands exceeds the bounded limit")
+    for child in child_commands:
+        if type(child) is not tuple or len(child) != 2:
+            raise ValueError("child_commands entries must be exact image/command tuples")
+        if any(type(value) is not str for value in child):
+            raise ValueError("child_commands must contain exact str values")
     if type(categories) is not tuple:
         raise ValueError("categories must be an exact tuple")
     if len(categories) > _MAX_APPLICATION_DESCRIPTOR_CATEGORIES:
@@ -1988,6 +2015,7 @@ class CompiledApplicationDescriptor:
     command_parameter_pools: tuple[tuple[str, tuple[str, ...]], ...] = ()
     singleton_per_session: bool = False
     selection_ordinal: int = 0
+    child_commands: tuple[tuple[str, str], ...] = ()
     executable: str = field(init=False)
     command_parameter_pool_names: tuple[str, ...] = field(init=False, repr=False)
     uses_username: bool = field(init=False, repr=False)
@@ -2005,6 +2033,7 @@ class CompiledApplicationDescriptor:
             command_parameter_pools=self.command_parameter_pools,
             singleton_per_session=self.singleton_per_session,
             selection_ordinal=self.selection_ordinal,
+            child_commands=self.child_commands,
         )
         platform = _normalize_platform(self.platform)
         application_id = _normalize_name(
@@ -2013,7 +2042,7 @@ class CompiledApplicationDescriptor:
             casefold=True,
         )
         image_path = _normalize_name(self.image_path, "image_path")
-        if platform != "windows" and "\\" in image_path:
+        if _has_unsupported_path_backslash(image_path, platform):
             raise ValueError("compiled POSIX application image_path cannot contain backslashes")
         image_placeholders = {
             match.group(1) for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(image_path)
@@ -2101,6 +2130,25 @@ class CompiledApplicationDescriptor:
         if type(self.selection_ordinal) is not int or self.selection_ordinal < 0:
             raise ValueError("selection_ordinal must be a non-negative exact int")
         command_parameter_pools = tuple(sorted(parameter_pools, key=lambda item: item[0]))
+        normalized_children: list[tuple[str, str]] = []
+        children_use_username = False
+        for child_image, child_command in self.child_commands:
+            # Apply the same executable, placeholder and expansion contract as
+            # a main command. The temporary child has no descendants, so this
+            # cannot recurse through caller-supplied descriptor graphs.
+            child = CompiledApplicationDescriptor(
+                application_id=application_id,
+                platform=platform,
+                image_path=child_image,
+                command_templates=(child_command,),
+                categories=categories,
+                command_parameter_pools=command_parameter_pools,
+            )
+            charge_text(child.image_path)
+            charge_text(child.command_templates[0])
+            normalized_children.append((child.image_path, child.command_templates[0]))
+            children_use_username = children_use_username or child.uses_username
+        child_commands = tuple(normalized_children)
         _validate_application_command_expansion_bounds(
             command_templates,
             command_parameter_pools,
@@ -2133,6 +2181,7 @@ class CompiledApplicationDescriptor:
         object.__setattr__(self, "image_path", image_path)
         object.__setattr__(self, "command_templates", command_templates)
         object.__setattr__(self, "categories", categories)
+        object.__setattr__(self, "child_commands", child_commands)
         object.__setattr__(
             self,
             "command_parameter_pools",
@@ -2146,7 +2195,8 @@ class CompiledApplicationDescriptor:
         object.__setattr__(
             self,
             "uses_username",
-            "username" in image_placeholders
+            children_use_username
+            or "username" in image_placeholders
             or any(
                 match.group(1) == "username"
                 for value in (
@@ -2408,6 +2458,7 @@ class LocalArtifactPublishToken:
     retained_until: datetime
     lease_owner: str = ""
     lease_until: datetime | None = None
+    withdraw_placement: bool = False
     _registry_token: int = field(repr=False, default=0)
     _reservation_id: int = field(repr=False, default=0)
     _shard_id: int = field(repr=False, default=0)
@@ -2530,6 +2581,7 @@ class _LocalArtifactPreparedRollbackSavepoint:
     prior_deadline_high_water: int = 0
     prior_deadline_order_counter: int = 0
     prior_route_high_water: int = 0
+    withdrawal_rows: tuple[tuple[int, int, int, int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2545,6 +2597,7 @@ class _LocalArtifactPreparedCommitPlan:
     route: _ArtifactRouteShard | None
     route_key: bytes | None
     packed_route_locator: int | None
+    places_record: bool
     rollback: _LocalArtifactPreparedRollbackSavepoint
 
 
@@ -2792,22 +2845,38 @@ def _pack_artifact_payload(
                     version_info.original_filename,
                 ),
             )
+            if record.binary.code_signature is not None or record.binary.mach_o_image is not None:
+                signature = record.binary.code_signature
+                image = record.binary.mach_o_image
+                binary_fields = (
+                    *binary_fields,
+                    None if signature is None else signature.serialized_values(),
+                    None if image is None else (image.build_uuid, image.architecture),
+                )
+    fields: tuple[object, ...] = (
+        artifact.hostname,
+        artifact.principal,
+        artifact.user_profile_id,
+        artifact.application_profile_id,
+        artifact.application_id,
+        artifact.family,
+        artifact.source_object_id,
+        artifact.native_path,
+        artifact.content_id,
+        artifact.slot,
+        artifact.version,
+        content_fields,
+        binary_fields,
+    )
+    if record is not None and (record.launchd_job is not None or record.macos_file is not None):
+        fields = (
+            *fields,
+            None if record.launchd_job is None else record.launchd_job.model_dump_json(),
+        )
+        if record.macos_file is not None:
+            fields = (*fields, record.macos_file.canonical_json())
     encoded = json.dumps(
-        (
-            artifact.hostname,
-            artifact.principal,
-            artifact.user_profile_id,
-            artifact.application_profile_id,
-            artifact.application_id,
-            artifact.family,
-            artifact.source_object_id,
-            artifact.native_path,
-            artifact.content_id,
-            artifact.slot,
-            artifact.version,
-            content_fields,
-            binary_fields,
-        ),
+        fields,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -2848,7 +2917,7 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
     )
     if any(type(value) is not str for value in (*artifact_text, *content_text)):
         raise StateError("local artifact publication record contains malformed text")
-    if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+    if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
         raise StateError("POSIX local artifact native_path cannot contain backslashes")
     if (
         type(artifact.version) is not int
@@ -2907,8 +2976,20 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
                     "local artifact publication binary has malformed version-info text"
                 )
         binary_values = (*binary_text, version_info_values)
+        if binary.code_signature is not None or binary.mach_o_image is not None:
+            signature = binary.code_signature
+            image = binary.mach_o_image
+            if signature is not None and type(signature) is not MachOCodeSignature:
+                raise StateError("local artifact binary has malformed signing metadata")
+            if image is not None and type(image) is not MachOImageIdentity:
+                raise StateError("local artifact binary has malformed image metadata")
+            binary_values = (
+                *binary_values,
+                None if signature is None else signature.serialized_values(),
+                None if image is None else (image.build_uuid, image.architecture),
+            )
 
-    return (
+    values: tuple[object, ...] = (
         artifact_text,
         artifact.version,
         content_text,
@@ -2917,6 +2998,62 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
         digest_values,
         binary_values,
     )
+
+    if record.launchd_job is None:
+        return _with_macos_file_metadata(values, record)
+    job = record.launchd_job
+    if type(job) is not LaunchdSystemJobSpec:
+        raise StateError("local artifact publication has malformed launchd metadata")
+    if (
+        type(job.schema_version) is not int
+        or job.schema_version != 1
+        or type(job.arguments) is not tuple
+        or any(
+            type(value) is not str
+            for value in (job.label, job.program, job.principal, *job.arguments)
+        )
+        or type(job.run_at_load) is not bool
+        or (
+            job.launch_profile is not None
+            and (type(job.launch_profile) is not str or job.launch_profile != "root_xpcproxy_v11")
+        )
+    ):
+        raise StateError("local artifact publication has malformed launchd fields")
+    return _with_macos_file_metadata(
+        (
+            *values,
+            (
+                job.schema_version,
+                job.label,
+                job.program,
+                job.arguments,
+                job.principal,
+                job.run_at_load,
+                *((job.launch_environment,) if job.launch_environment is not None else ()),
+                *(
+                    (("launch-profile-v1", job.launch_profile),)
+                    if job.launch_profile is not None
+                    else ()
+                ),
+            ),
+        ),
+        record,
+    )
+
+
+def _with_macos_file_metadata(
+    values: tuple[object, ...], record: LocalArtifactVersionRecord
+) -> tuple[object, ...]:
+    if record.macos_file is None:
+        return values
+    metadata = record.macos_file
+    if type(metadata) is not MacosFileMetadata:
+        raise StateError("local artifact has malformed Mac file metadata")
+    # Revalidation also protects publication from object.__setattr__ tampering.
+    encoded = metadata.canonical_json()
+    if MacosFileMetadata.model_validate_json(encoded) != metadata:
+        raise StateError("local artifact has inconsistent Mac file metadata")
+    return (*values, ("macos-file-v1", encoded))
 
 
 def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionRecord:
@@ -2933,11 +3070,32 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
             record.binary,
             digests=replace(record.binary.digests),
             pe_version_info=None if version_info is None else replace(version_info),
+            code_signature=None
+            if record.binary.code_signature is None
+            else replace(record.binary.code_signature),
+            mach_o_image=None
+            if record.binary.mach_o_image is None
+            else replace(record.binary.mach_o_image),
         )
     canonical = LocalArtifactVersionRecord(
         artifact=canonical_artifact,
         content=canonical_content,
         binary=canonical_binary,
+        launchd_job=None
+        if record.launchd_job is None
+        else LaunchdSystemJobSpec(
+            schema_version=record.launchd_job.schema_version,
+            label=record.launchd_job.label,
+            program=record.launchd_job.program,
+            arguments=record.launchd_job.arguments,
+            principal=record.launchd_job.principal,
+            run_at_load=record.launchd_job.run_at_load,
+            launch_profile=record.launchd_job.launch_profile,
+            launch_environment=record.launchd_job.launch_environment,
+        ),
+        macos_file=None
+        if record.macos_file is None
+        else MacosFileMetadata.model_validate_json(record.macos_file.canonical_json()),
     )
     if _local_artifact_record_primitive(canonical) != primitive:
         raise StateError("local artifact publication record is not canonically self-consistent")
@@ -2969,6 +3127,7 @@ def _local_artifact_publish_token_preimage(token: LocalArtifactPublishToken) -> 
             and (type(token.lease_until) is not datetime or token.lease_until.tzinfo is not UTC)
         )
         or type(token.lease_owner) is not str
+        or type(token.withdraw_placement) is not bool
         or type(token._registry_token) is not int
         or type(token._reservation_id) is not int
         or token._reservation_id <= 0
@@ -2993,7 +3152,8 @@ def _local_artifact_publish_token_preimage(token: LocalArtifactPublishToken) -> 
             token._reservation_id,
             token._shard_id,
             token._existing_handle,
-        ),
+        )
+        + (("withdraw-placement",) if token.withdraw_placement else ()),
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -3565,11 +3725,31 @@ class _PackedInlineEqualityGroups:
         )
 
 
+_UNKNOWN_ARTIFACT_PLACEMENT_TIME = -(1 << 63)
+_ARTIFACT_PLACEMENT_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _artifact_placement_microseconds(value: datetime) -> int:
+    delta = ensure_utc(value) - _ARTIFACT_PLACEMENT_EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def _artifact_placement_datetime(value: int) -> datetime | None:
+    return (
+        None
+        if value == _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+        else _ARTIFACT_PLACEMENT_EPOCH + timedelta(microseconds=value)
+    )
+
+
 class _PackedArtifactStore:
     """Primitive-column artifact storage with lazy frozen-value reconstruction."""
 
     __slots__ = (
         "_active",
+        "_withdrawn",
+        "_introduced_at_us",
+        "_withdrawn_at_us",
         "_application_profile_index",
         "_artifact_digests",
         "_artifact_index",
@@ -3603,6 +3783,9 @@ class _PackedArtifactStore:
 
     def __init__(self, capacity: int) -> None:
         self._active = bytearray(capacity)
+        self._withdrawn = bytearray(capacity)
+        self._introduced_at_us = array("q", [_UNKNOWN_ARTIFACT_PLACEMENT_TIME]) * capacity
+        self._withdrawn_at_us = array("q", [_UNKNOWN_ARTIFACT_PLACEMENT_TIME]) * capacity
         self._payload_arena = bytearray(capacity * _ARTIFACT_INLINE_PAYLOAD_BYTES)
         self._payload_lengths = array("I", [0]) * capacity
         self._payload_overflow: dict[int, bytes] = {}
@@ -3680,7 +3863,9 @@ class _PackedArtifactStore:
     def _execution_path_key(self, handle: int) -> str:
         platform = _ARTIFACT_PLATFORMS[self._platforms[handle]]
         native_path = self._field(handle, self._FIELD_NATIVE_PATH)
-        if _has_posix_path_backslash(native_path, platform):  # pragma: no cover - admission guard
+        if _has_unsupported_path_backslash(
+            native_path, platform
+        ):  # pragma: no cover - admission guard
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         return "\0".join(
             (
@@ -3857,7 +4042,7 @@ class _PackedArtifactStore:
     ) -> None:
         """Publish one reserved handle with rollback-safe index installation."""
 
-        if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+        if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         artifact_digest = _semantic_artifact_digest(artifact.artifact_id, "artifact-")
         version_digest = _semantic_artifact_digest(
@@ -3923,6 +4108,9 @@ class _PackedArtifactStore:
             # The shard lock excludes readers while indexes are installed. Marking
             # the staged columns active lets exact index callbacks inspect them;
             # every escaping failure clears the flag before the lock is released.
+            self._withdrawn[handle] = 0
+            self._introduced_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+            self._withdrawn_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
             self._active[handle] = 1
 
             started.append((self._primary, version_digest, self._version_digest, None))
@@ -4066,6 +4254,9 @@ class _PackedArtifactStore:
         self._write_digest(self._artifact_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._active[handle] = 0
+        self._withdrawn[handle] = 0
+        self._introduced_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+        self._withdrawn_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
         self._append_free_handle(handle)
         self._live -= 1
         return artifact
@@ -4134,6 +4325,8 @@ class _PackedArtifactStore:
         values = _unpack_artifact_payload(self._payload(handle))
         if len(values) < 13 or values[11] is None:
             return None
+        if len(values) not in {13, 14, 15}:
+            raise StateError("local artifact content row width is invalid")
         content_values = values[11]
         if not isinstance(content_values, list) or len(content_values) != 5:
             raise StateError("local artifact content descriptor is malformed")
@@ -4148,7 +4341,7 @@ class _PackedArtifactStore:
         binary_values = values[12]
         binary = None
         if binary_values is not None:
-            if not isinstance(binary_values, list) or len(binary_values) != 3:
+            if not isinstance(binary_values, list) or len(binary_values) not in {3, 5}:
                 raise StateError("local artifact binary descriptor is malformed")
             version_values = binary_values[2]
             version_info = None
@@ -4170,11 +4363,23 @@ class _PackedArtifactStore:
                 architecture=cast(Architecture, str(binary_values[0])),
                 artifact_name=str(binary_values[1]),
                 pe_version_info=version_info,
+                code_signature=MachOCodeSignature.from_serialized_values(binary_values[3])
+                if len(binary_values) == 5 and binary_values[3] is not None
+                else None,
+                mach_o_image=MachOImageIdentity(*binary_values[4])
+                if len(binary_values) == 5 and binary_values[4] is not None
+                else None,
             )
         return LocalArtifactVersionRecord(
             artifact=artifact,
             content=content,
             binary=binary,
+            launchd_job=LaunchdSystemJobSpec.model_validate_json(values[13])
+            if len(values) >= 14 and values[13] is not None
+            else None,
+            macos_file=MacosFileMetadata.model_validate_json(values[14])
+            if len(values) == 15
+            else None,
         )
 
     def bind_record(
@@ -4263,11 +4468,15 @@ class _PackedArtifactStore:
         self,
         index_name: str,
         indexed_value: Hashable,
+        *,
+        placed_only: bool = False,
     ) -> Iterator[LocalArtifactVersionRecord]:
         """Yield canonical records for one exact equality-index value."""
 
         index, digest, digest_for_handle, equals_handle = self._query(index_name, indexed_value)
         for handle in index.iter_handles(digest, digest_for_handle, equals_handle):
+            if placed_only and self._withdrawn[handle]:
+                continue
             record = self.get_record_by_handle(handle)
             if record is not None:
                 yield record
@@ -4333,6 +4542,9 @@ class _PackedArtifactStore:
                 for value in (
                     self,
                     self._active,
+                    self._withdrawn,
+                    self._introduced_at_us,
+                    self._withdrawn_at_us,
                     self._payload_arena,
                     self._payload_lengths,
                     self._payload_overflow,
@@ -4690,36 +4902,62 @@ def _json_row(values: tuple[object, ...]) -> bytes:
 
 def _pack_binary_release(value: BinaryReleaseIdentity) -> bytes:
     pe = value.pe_version_info
-    return _json_row(
-        (
-            value.key.product_id,
-            value.key.version,
-            value.key.build,
-            value.key.architecture,
-            value.key.platform,
-            value.key.artifact_name,
-            value.key.variant,
-            None
-            if pe is None
-            else (
-                pe.file_version,
-                pe.description,
-                pe.product,
-                pe.company,
-                pe.original_filename,
-            ),
-            value.release_id,
-            value.content_id,
-            value.digests.md5,
-            value.digests.sha1,
-            value.digests.sha256,
-            value.digests.imphash,
-        )
+    values: tuple[object, ...] = (
+        value.key.product_id,
+        value.key.version,
+        value.key.build,
+        value.key.architecture,
+        value.key.platform,
+        value.key.artifact_name,
+        value.key.variant,
+        None
+        if pe is None
+        else (
+            pe.file_version,
+            pe.description,
+            pe.product,
+            pe.company,
+            pe.original_filename,
+        ),
+        value.release_id,
+        value.content_id,
+        value.digests.md5,
+        value.digests.sha1,
+        value.digests.sha256,
+        value.digests.imphash,
     )
+    if value.code_signature is not None or value.mach_o_image is not None:
+        signature = value.code_signature
+        values = (
+            *values,
+            signature.serialized_values() if signature is not None else None,
+        )
+    if value.mach_o_image is not None:
+        values = (*values, (value.mach_o_image.build_uuid, value.mach_o_image.architecture))
+    return _json_row(values)
 
 
 def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     values = cast(list[object], json.loads(row))
+    if len(values) not in {14, 15, 16}:
+        raise StateError("binary release row width is invalid")
+    signature = None
+    image = None
+    if len(values) >= 15 and (len(values) == 15 or values[14] is not None):
+        signature_values = values[14]
+        if type(signature_values) is not list or len(signature_values) not in {3, 4}:
+            raise StateError("binary release code signature row is invalid")
+        signature = MachOCodeSignature.from_serialized_values(signature_values)
+    if len(values) == 16:
+        image_values = values[15]
+        if type(image_values) is not list or len(image_values) != 2:
+            raise StateError("binary release Mach-O image row is invalid")
+        try:
+            image = MachOImageIdentity(*image_values)
+        except (TypeError, ValueError) as exc:
+            raise StateError("binary release Mach-O image row is invalid") from exc
+        if values[4] != "macos" or values[3] != image.architecture:
+            raise StateError("binary release Mach-O image architecture is invalid")
     pe_values = cast(list[str] | None, values[7])
     key = object.__new__(BinaryReleaseKey)
     for field_name, value in zip(
@@ -4747,6 +4985,8 @@ def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     identity = object.__new__(BinaryReleaseIdentity)
     object.__setattr__(identity, "key", key)
     object.__setattr__(identity, "pe_version_info", pe)
+    object.__setattr__(identity, "code_signature", signature)
+    object.__setattr__(identity, "mach_o_image", image)
     object.__setattr__(identity, "release_id", values[8])
     object.__setattr__(identity, "content_id", values[9])
     object.__setattr__(identity, "digests", digests)
@@ -4836,22 +5076,34 @@ def _unpack_application_profile(row: bytes) -> ApplicationProfileIdentity:
 
 
 def _pack_application_descriptor(value: CompiledApplicationDescriptor) -> bytes:
-    return _json_row(
-        (
-            value.application_id,
-            value.platform,
-            value.image_path,
-            value.command_templates,
-            value.categories,
-            value.command_parameter_pools,
-            value.singleton_per_session,
-            value.selection_ordinal,
-        )
+    values: tuple[object, ...] = (
+        value.application_id,
+        value.platform,
+        value.image_path,
+        value.command_templates,
+        value.categories,
+        value.command_parameter_pools,
+        value.singleton_per_session,
+        value.selection_ordinal,
     )
+    return _json_row((*values, value.child_commands) if value.child_commands else values)
 
 
 def _unpack_application_descriptor(row: bytes) -> CompiledApplicationDescriptor:
     values = cast(list[object], json.loads(row))
+    if type(values) is not list or len(values) not in {8, 9}:
+        raise ValueError("Unsupported compiled application descriptor row")
+    child_commands: tuple[tuple[str, str], ...] = ()
+    if len(values) == 9:
+        children = values[8]
+        if type(children) is not list or any(
+            type(child) is not list
+            or len(child) != 2
+            or any(type(value) is not str for value in child)
+            for child in children
+        ):
+            raise ValueError("Invalid compiled application child command row")
+        child_commands = tuple((child[0], child[1]) for child in children)
     return CompiledApplicationDescriptor(
         application_id=cast(str, values[0]),
         platform=cast(Platform, values[1]),
@@ -4864,6 +5116,7 @@ def _unpack_application_descriptor(row: bytes) -> CompiledApplicationDescriptor:
         ),
         singleton_per_session=cast(bool, values[6]),
         selection_ordinal=cast(int, values[7]),
+        child_commands=child_commands,
     )
 
 
@@ -5036,6 +5289,7 @@ class DeploymentContentRegistry:
     """Scenario-scoped immutable deployment and content identity registry."""
 
     __slots__ = (
+        "_binary_available_from",
         "_application_descriptor_ids_by_executable",
         "_application_descriptors",
         "_application_executable_links",
@@ -5074,6 +5328,7 @@ class DeploymentContentRegistry:
         self,
         *,
         binary_releases: Iterable[BinaryReleaseIdentity] = (),
+        binary_available_from: Iterable[tuple[str, date]] = (),
         installed_software_releases: Iterable[InstalledSoftwareReleaseIdentity] = (),
         user_profiles: Iterable[UserProfileIdentity] = (),
         installations: Iterable[SoftwareInstallationIdentity] = (),
@@ -5238,6 +5493,18 @@ class DeploymentContentRegistry:
         self._local_artifact_path_index = _PackedDigestGroupIndex()
 
         self._compile_releases(binary_releases)
+        self._binary_available_from: dict[str, date] = {}
+        for content_id, available_at in binary_available_from:
+            if (
+                type(content_id) is not str
+                or type(available_at) is not date
+                or self.binary_release_by_content_id(content_id) is None
+            ):
+                raise ValueError("Release availability requires an exact binary and calendar date")
+            previous = self._binary_available_from.get(content_id)
+            self._binary_available_from[content_id] = (
+                available_at if previous is None else max(previous, available_at)
+            )
         self._compile_installed_software_releases(installed_software_releases)
         self._installed_software_releases.seal()
         self._compile_user_profiles(user_profiles)
@@ -5296,6 +5563,7 @@ class DeploymentContentRegistry:
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
             + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
+            + _owned_graph_size(self._binary_available_from)
         )
 
     def _estimate_scale_index_bytes(self) -> int:
@@ -5321,6 +5589,7 @@ class DeploymentContentRegistry:
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
             + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
+            + _owned_graph_size(self._binary_available_from)
         )
 
     def _iter_group[K: Hashable, V](
@@ -5496,8 +5765,9 @@ class DeploymentContentRegistry:
     ) -> None:
         for source in installations:
             installation = _canonical_software_installation(source)
-            if installation.platform != "windows" and any(
-                "\\" in image_path for image_path in installation.image_paths
+            if any(
+                _has_unsupported_path_backslash(image_path, installation.platform)
+                for image_path in installation.image_paths
             ):
                 raise ValueError(
                     "compiled POSIX application installation image_paths cannot contain backslashes"
@@ -5672,6 +5942,7 @@ class DeploymentContentRegistry:
                 command_parameter_pools=source.command_parameter_pools,
                 singleton_per_session=source.singleton_per_session,
                 selection_ordinal=source.selection_ordinal,
+                child_commands=source.child_commands,
             )
             retained_text_bytes += descriptor.retained_text_bytes
             if retained_text_bytes > _MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES:
@@ -5868,7 +6139,10 @@ class DeploymentContentRegistry:
                 if command_is_bounded is None:
                     try:
                         _validate_application_command_expansion_bounds(
-                            descriptor.command_templates,
+                            (
+                                *descriptor.command_templates,
+                                *(command for _image, command in descriptor.child_commands),
+                            ),
                             descriptor.command_parameter_pools,
                             literal_replacements=(("username", materialization_principal),),
                         )
@@ -6015,7 +6289,7 @@ class DeploymentContentRegistry:
                 artifact = _canonical_local_artifact_identity(source)
             except StateError as exc:
                 raise ValueError(str(exc)) from None
-            if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+            if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
                 raise ValueError("POSIX local artifact native_path cannot contain backslashes")
             application_profile = self.application_profile_by_id(artifact.application_profile_id)
             user_profile = self.user_profile_by_id(artifact.user_profile_id)
@@ -6097,6 +6371,10 @@ class DeploymentContentRegistry:
         """Return the unique binary artifact for an exact content ID."""
 
         return self._releases.find_one("content_id", content_id.strip())
+
+    def binary_available_from(self, content_id: str) -> date | None:
+        """Return a declared release lower bound; missing dates remain unknown."""
+        return self._binary_available_from.get(content_id.strip())
 
     def binary_artifacts_for_release(self, release_id: str) -> tuple[BinaryReleaseIdentity, ...]:
         """Compatibility wrapper materializing one release's artifact group."""
@@ -6572,7 +6850,7 @@ class DeploymentContentRegistry:
         principal: str,
     ) -> tuple[int, int] | None:
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(image_path, normalized_platform):
+        if _has_unsupported_path_backslash(image_path, normalized_platform):
             return None
         host = _normalize_hostname(hostname)
         user = _normalize_principal(principal, normalized_platform)
@@ -6846,8 +7124,63 @@ class DeploymentContentRegistry:
             normalized_username = _normalize_principal(username, registered.platform)
             if normalized_username != registered.principal:
                 return None
+        return image_path, self._materialize_compiled_application_command(
+            rng,
+            descriptor,
+            registered.materialization_principal,
+            rng.choice(descriptor.command_templates),
+        )
+
+    def materialize_application_child_command(
+        self,
+        rng: random.Random,
+        assignment: UserApplicationAssignment,
+        *,
+        child_index: int,
+        username: str = "",
+    ) -> tuple[str, str] | None:
+        """Materialize one installed helper from the exact frozen parent assignment.
+
+        Selection, parent binding and process lifecycle belong to the calling
+        action bundle. This method neither chooses nor launches a child.
+        """
+        if type(child_index) is not int or child_index < 0:
+            return None
+        resolved = self._application_runtime_for_assignment(assignment)
+        if resolved is None:
+            return None
+        registered, descriptor, installation = resolved
+        if child_index >= len(descriptor.child_commands):
+            return None
+        if username and _normalize_principal(username, registered.platform) != registered.principal:
+            return None
+        image, template = descriptor.child_commands[child_index]
+        image = image.replace("{username}", registered.materialization_principal)
+        path_key = canonical_native_path(image, registered.platform)
+        installed_image = next(
+            (
+                path
+                for path in installation.image_paths
+                if canonical_native_path(path, registered.platform) == path_key
+            ),
+            None,
+        )
+        if installed_image is None:
+            return None
+        return installed_image, self._materialize_compiled_application_command(
+            rng, descriptor, registered.materialization_principal, template
+        )
+
+    @staticmethod
+    def _materialize_compiled_application_command(
+        rng: random.Random,
+        descriptor: CompiledApplicationDescriptor,
+        principal: str,
+        template: str,
+    ) -> str:
+        """Expand a validated frozen template using its owning application pools."""
         output: list[str] = []
-        stack: list[tuple[str, str]] = [("text", rng.choice(descriptor.command_templates))]
+        stack: list[tuple[str, str]] = [("text", template)]
         while stack:
             kind, value = stack.pop()
             if kind == "literal":
@@ -6856,7 +7189,7 @@ class DeploymentContentRegistry:
             if kind == "placeholder":
                 name = value[1:-1]
                 if name == "username":
-                    output.append(registered.materialization_principal)
+                    output.append(principal)
                     continue
                 values = descriptor._command_parameter_values(name)
                 if values is None:
@@ -6875,7 +7208,7 @@ class DeploymentContentRegistry:
                 segments.append(("literal", value[cursor:]))
             for segment_kind, segment_value in reversed(segments):
                 stack.append((segment_kind, segment_value))
-        return image_path, "".join(output)
+        return "".join(output)
 
     def host_deployment(self, hostname: str) -> HostDeployment | None:
         """Return the immutable compiled deployment for one exact host."""
@@ -7610,7 +7943,7 @@ class DeploymentContentRegistry:
         """Return one exact application/profile/path/version artifact binding."""
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         path_key = (
             normalized_platform,
@@ -7848,6 +8181,8 @@ class LocalArtifactVersionRegistry:
         "_gate",
         "_high_water_mark",
         "_live_count",
+        "_placement_observation_claims",
+        "_placement_deferred_expiry",
         "_next_reservation_id",
         "_prepared_byte_capacity",
         "_prepared_capability_locators",
@@ -7907,6 +8242,8 @@ class LocalArtifactVersionRegistry:
         self._routes = tuple(_ArtifactRouteShard() for _ in range(self._shard_count))
         self._gate = _ArtifactRegistryGate()
         self._capacity_lock = RLock()
+        self._placement_observation_claims: set[object] = set()
+        self._placement_deferred_expiry: set[tuple[int, str]] = set()
         self._claimed_reservations: set[int] = set()
         self._committing_reservations: set[int] = set()
         self._live_count = 0
@@ -8036,6 +8373,53 @@ class LocalArtifactVersionRegistry:
         reservation_id = self._prepared_versions.get(artifact_version_id)
         return reservation_id is not None and reservation_id in self._claimed_reservations
 
+    def prepare_version_retention(
+        self,
+        artifact_version_id: str,
+        *,
+        observed_at: datetime,
+        retained_until: datetime,
+        lease_owner: str = "",
+    ) -> LocalArtifactPublishToken:
+        """Prepare a retention floor for an existing version without changing placement.
+
+        The lifecycle owner supplies the complete required interval, including
+        any late-observation window. An explicit owner also protects the version
+        from capacity eviction through that window. This never owns an indefinite
+        lease. Use the existing artifact-first composite commit;
+        cancelling or a failed commit leaves the prior deadline unchanged.
+        A version evicted between lookup and reservation must never be revived.
+        """
+        version_id = _normalize_name(artifact_version_id, "artifact_version_id")
+        if (
+            type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+            or type(retained_until) is not datetime
+            or retained_until.utcoffset() is None
+        ):
+            raise StateError("artifact retention requires an ordered aware interval")
+        event_time = ensure_utc(observed_at)
+        deadline = ensure_utc(retained_until)
+        if deadline <= event_time:
+            raise StateError("artifact retention requires an ordered aware interval")
+        if type(lease_owner) is not str or (lease_owner and not lease_owner.strip()):
+            raise StateError("artifact retention lease requires an exact nonempty owner")
+        try:
+            lease_until = deadline + timedelta(microseconds=1) if lease_owner else None
+        except OverflowError as exc:
+            raise StateError("artifact retention lease lacks deadline headroom") from exc
+        record = self.resolve_version(version_id)
+        if record is None:
+            raise StateError("artifact retention requires its exact existing version")
+        return self.prepare_publish_version(
+            record,
+            event_time,
+            retention=deadline - event_time,
+            lease_owner=lease_owner,
+            lease_until=lease_until,
+            require_existing=True,
+        )
+
     def prepare_publish_version(
         self,
         record: LocalArtifactVersionRecord,
@@ -8044,6 +8428,8 @@ class LocalArtifactVersionRegistry:
         retention: timedelta | None = None,
         lease_owner: str = "",
         lease_until: datetime | None = None,
+        withdraw_placement: bool = False,
+        require_existing: bool = False,
     ) -> LocalArtifactPublishToken:
         """Reserve one exact record publication before external state allocation.
 
@@ -8054,6 +8440,10 @@ class LocalArtifactVersionRegistry:
         before mutating its coupled lifecycle/StateManager transaction.
         """
 
+        if type(require_existing) is not bool:
+            raise StateError("artifact existing-version guard requires an exact boolean")
+        if type(withdraw_placement) is not bool:
+            raise StateError("artifact placement operation requires an exact boolean")
         if not isinstance(record, LocalArtifactVersionRecord):
             raise TypeError("record must be a LocalArtifactVersionRecord")
         normalized_event_time = ensure_utc(observed_at)
@@ -8101,11 +8491,19 @@ class LocalArtifactVersionRegistry:
         _pack_artifact_payload(canonical_record.artifact, canonical_record)
         version_id = canonical_record.artifact.artifact_version_id
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             self._require_after_watermark_locked(
                 event_time,
                 "artifact observed_at",
                 allow_boundary=True,
             )
+            if withdraw_placement:
+                artifact = canonical_record.artifact
+                current = self.resolve_record_for_execution_path(
+                    artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+                )
+                if current != canonical_record:
+                    raise StateError("prepared removal requires the current file version")
             if len(self._prepared_reservations) >= self._capacity:
                 raise LocalArtifactCapacityError(
                     "artifact registry has no free slot: prepared-publication member capacity "
@@ -8129,6 +8527,10 @@ class LocalArtifactVersionRegistry:
                     else:
                         current = shard.store.get_by_handle(existing_handle)
                         current_record = shard.store.get_record_by_handle(existing_handle)
+                        if require_existing and current_record is None:
+                            raise StateError(
+                                "artifact retention requires its exact existing record"
+                            )
                         if current != canonical_record.artifact or (
                             current_record is not None and current_record != canonical_record
                         ):
@@ -8151,6 +8553,8 @@ class LocalArtifactVersionRegistry:
                                     "artifact deadline"
                                 )
             if located is None:
+                if require_existing:
+                    raise StateError("artifact retention requires its exact existing version")
                 existing_handle = None
                 shard = self._reserve_prepared_capacity_slot_locked(
                     canonical_record.artifact.artifact_id
@@ -8163,6 +8567,7 @@ class LocalArtifactVersionRegistry:
                 retained_until=retained_until,
                 lease_owner=owner_id,
                 lease_until=normalized_lease_until,
+                withdraw_placement=withdraw_placement,
                 _registry_token=id(self),
                 _reservation_id=reservation_id,
                 _shard_id=shard.shard_id,
@@ -8266,6 +8671,11 @@ class LocalArtifactVersionRegistry:
         if active is None or active.token_ref() is not token:
             self._prepared_capability_locators.pop(id(token), None)
             raise StateError("local artifact publish token is stale or already consumed")
+        if (
+            type(token.withdraw_placement) is not bool
+            or token.withdraw_placement != active.canonical_token.withdraw_placement
+        ):
+            raise StateError("local artifact placement operation changed after preparation")
         return active
 
     def _release_prepared_locked(
@@ -8456,6 +8866,21 @@ class LocalArtifactVersionRegistry:
             ):
                 return False
             return True
+
+    def authenticates_prepared_retention(self, token: object) -> bool:
+        """Admit only an authenticated existing-version extension without path mutation."""
+        if type(token) is not LocalArtifactPublishToken:
+            return False
+        with self._capacity_lock:
+            if (
+                not self.authenticates_prepared_publication(token)
+                or token._existing_handle is None
+                or token.withdraw_placement
+            ):
+                return False
+            shard = self._shards[token._shard_id]
+            with shard.lock:
+                return shard.store.get_record_by_handle(token._existing_handle) == token.record
 
     def authenticates_publication_receipt(
         self,
@@ -8664,6 +9089,208 @@ class LocalArtifactVersionRegistry:
                     raise
             if cleanup_error is not None:
                 raise cleanup_error
+
+    @staticmethod
+    def validate_macos_file_rename(
+        source: LocalArtifactVersionRecord,
+        target: LocalArtifactVersionRecord,
+        *,
+        replacement: LocalArtifactVersionRecord | None = None,
+    ) -> None:
+        """Validate the bounded unchanged-object rename before any reservation."""
+        source = _canonical_local_artifact_record(source)
+        target = _canonical_local_artifact_record(target)
+        if replacement is not None:
+            replacement = _canonical_local_artifact_record(replacement)
+        try:
+            validate_macos_file_rename_records(source, target, replacement=replacement)
+        except ValueError as error:
+            raise StateError(str(error)) from error
+
+    def validate_macos_file_operation(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+        observation: MacosFileOperationObservation,
+    ) -> None:
+        """Fence an explicit file occurrence against its exact placement transaction."""
+        if type(observation) is not MacosFileOperationObservation:
+            raise StateError("Mac filesystem commit requires exact canonical operation facts")
+        observation.__post_init__()
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            members = self._active_claimed_group_locked(transaction)
+            if any(member.claimed_by != get_ident() or member.committing for member in members):
+                raise StateError("Mac file operation requires its active claiming thread")
+            paths = {member.canonical_token.record.artifact.native_path for member in members}
+            owner = observation.source.artifact
+            for path in paths:
+                key = "\0".join((owner.hostname, owner.principal, "macos", path))
+                count = 0
+                for shard in self._shards:
+                    for candidate in shard.store.find_record_iter("execution_path", key):
+                        count += 1
+                        if count > 256:
+                            raise StateError("Mac file operation exceeds bounded placement history")
+                        placement = self.observe_version_placement(
+                            candidate.artifact.artifact_version_id
+                        )
+                        if (
+                            placement is None
+                            or placement.introduced_at is None
+                            or any(
+                                at is not None and at > observation.observed_at
+                                for at in (placement.introduced_at, placement.withdrawn_at)
+                            )
+                        ):
+                            raise StateError(
+                                "Mac file operations require known chronological placement history"
+                            )
+            if observation.operation == "rename":
+                rename = self._observe_macos_file_rename_locked(transaction)
+                if (
+                    rename.source != observation.source
+                    or rename.target != observation.target
+                    or rename.replacement != observation.replacement
+                    or rename.observed_at != observation.observed_at
+                ):
+                    raise StateError("Mac rename publication changed its canonical observation")
+                return
+            if len(members) != 1:
+                raise StateError("Mac file occurrence requires one exact artifact publication")
+            token = members[0].canonical_token
+            source = observation.source
+            artifact = source.artifact
+            if (
+                token.record != source
+                or token.observed_at != observation.observed_at
+                or token.withdraw_placement != (observation.operation == "unlink")
+            ):
+                raise StateError("Mac file occurrence changed its exact publication member")
+            current = self.resolve_record_for_execution_path(
+                artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+            )
+            expected = None if observation.operation == "create" else observation.previous or source
+            if current != expected:
+                raise StateError(
+                    "Mac file operation no longer names its expected current placement"
+                )
+            for other in self._prepared_reservations.values():
+                candidate = other.canonical_token.record.artifact
+                if other is not members[0] and (
+                    candidate.hostname == artifact.hostname
+                    and candidate.principal == artifact.principal
+                    and candidate.platform == artifact.platform
+                    and candidate.normalized_native_path == artifact.normalized_native_path
+                ):
+                    raise StateError("Mac file operation has a competing prepared placement")
+
+    def commit_macos_file_operation(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+        observation: MacosFileOperationObservation,
+    ) -> LocalArtifactPublicationGroupReceipt:
+        """Commit the validated file mutation under the shared registry placement fence."""
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self.validate_macos_file_operation(transaction, observation)
+            return transaction.commit_no_fail()
+
+    def commit_macos_file_rename(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> LocalArtifactPublicationGroupReceipt:
+        """Commit a same-directory rename with an optional exact replacement.
+
+        Ordered authenticated members withdraw the source and optional destination,
+        then publish the same source object/content at its new placement. Existing
+        group rollback retains both loaded versions and their leases. This commits
+        file state only, not process state, directory stat or source evidence.
+        """
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self._observe_macos_file_rename_locked(transaction)
+            return transaction.commit_no_fail()
+
+    def observe_macos_file_rename(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> MacosFileRenameObservation:
+        """Capture exact prepared file facts without committing or reading the host.
+
+        Only the active registry-issued rename group is admitted. The returned
+        value is detached from its owners; it cannot authorize publication and
+        does not remain a statement of current placement after later mutations.
+        """
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            return self._observe_macos_file_rename_locked(transaction)
+
+    def _observe_macos_file_rename_locked(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> MacosFileRenameObservation:
+        """Validate the same exact ownership fence for observation and commit."""
+        members = self._active_claimed_group_locked(transaction)
+        if any(member.claimed_by != get_ident() or member.committing for member in members):
+            raise StateError("Mac rename observation requires its active claiming thread")
+        if len(members) not in {2, 3}:
+            raise StateError("Mac rename requires two or three artifact publications")
+        removal = members[0].canonical_token
+        publication = members[-1].canonical_token
+        replaced = members[1].canonical_token if len(members) == 3 else None
+        source, target = removal.record, publication.record
+        if (
+            not removal.withdraw_placement
+            or publication.withdraw_placement
+            or publication._existing_handle is not None
+            or removal.observed_at != publication.observed_at
+            or (
+                replaced is not None
+                and (
+                    not replaced.withdraw_placement
+                    or replaced.observed_at != publication.observed_at
+                )
+            )
+        ):
+            raise StateError("Mac rename requires an exact removal and new placement group")
+        horizon = self.retained_version_deadline(source.artifact.artifact_version_id)
+        if horizon is None or publication.retained_until < max(horizon, removal.retained_until):
+            raise StateError(
+                "Mac rename must retain placement through its source retention horizon"
+            )
+        replacement = None if replaced is None else replaced.record
+        self.validate_macos_file_rename(source, target, replacement=replacement)
+        after = target.artifact
+        destination_key = (after.hostname, after.principal, after.native_path, after.platform)
+        destination = self.resolve_record_for_execution_path(*destination_key)
+        if replacement is None and destination is not None:
+            raise StateError("Mac rename destination is occupied; explicit replacement is required")
+        if replacement is not None and destination != replacement:
+            raise StateError("Mac rename replacement no longer names the current destination")
+        for other in self._prepared_reservations.values():
+            if any(other is member for member in members):
+                continue
+            candidate = other.canonical_token.record.artifact
+            if (
+                candidate.hostname == after.hostname
+                and candidate.principal == after.principal
+                and candidate.platform == after.platform
+                and candidate.normalized_native_path == after.normalized_native_path
+            ):
+                raise StateError("Mac rename destination has a competing prepared publication")
+        before = source.artifact
+        if (
+            self.resolve_record_for_execution_path(
+                before.hostname, before.principal, before.native_path, before.platform
+            )
+            != source
+        ):
+            raise StateError("Mac rename source removal no longer names the current file version")
+        return MacosFileRenameObservation(
+            source=_canonical_local_artifact_record(source),
+            target=_canonical_local_artifact_record(target),
+            replacement=None
+            if replacement is None
+            else _canonical_local_artifact_record(replacement),
+            observed_at=removal.observed_at,
+            canonical_token=transaction.expected_receipt.group_token,
+        )
 
     def _release_failed_claim_locked(
         self,
@@ -9164,6 +9791,7 @@ class LocalArtifactVersionRegistry:
 
         with self._gate.mutation(), self._capacity_lock:
             reservation = self._active_claimed_commit_locked(transaction)
+            self._validate_observed_retention_locked((reservation,))
             if reservation.claimed_by != get_ident():
                 raise StateError(
                     "local artifact prepared publication must commit on its claiming thread"
@@ -9171,7 +9799,17 @@ class LocalArtifactVersionRegistry:
             if reservation.committing:
                 raise StateError("local artifact prepared publication is already committing")
             shard = self._shards[reservation.canonical_token._shard_id]
-            with shard.lock:
+            with (
+                self._all_shards_locked()
+                if (
+                    reservation.canonical_token.withdraw_placement
+                    or (
+                        reservation.commit_plan is not None
+                        and reservation.commit_plan.places_record
+                    )
+                )
+                else shard.lock
+            ):
                 plan = reservation.commit_plan
                 if plan is None:
                     raise StateError("local artifact prepared commit lost its sealed plan")
@@ -9235,6 +9873,7 @@ class LocalArtifactVersionRegistry:
 
         with self._gate.mutation(), self._capacity_lock:
             reservations = self._active_claimed_group_locked(transaction)
+            self._validate_observed_retention_locked(reservations)
             if any(reservation.claimed_by != get_ident() for reservation in reservations):
                 raise StateError(
                     "local artifact prepared publication group must commit on its claiming thread"
@@ -9272,7 +9911,15 @@ class LocalArtifactVersionRegistry:
                         self._shards[reservation.canonical_token._shard_id],
                     )
                 )
-            shard_ids = tuple(sorted({shard.shard_id for _, _, shard in entries}))
+            shard_ids = (
+                tuple(range(len(self._shards)))
+                if any(
+                    item.canonical_token.withdraw_placement
+                    or (item.commit_plan is not None and item.commit_plan.places_record)
+                    for item in reservations
+                )
+                else tuple(sorted({shard.shard_id for _, _, shard in entries}))
+            )
             touched = 0
             with ExitStack() as locks:
                 for shard_id in shard_ids:
@@ -9352,6 +9999,10 @@ class LocalArtifactVersionRegistry:
                 for member in group_receipt.receipts:
                     self._publication_receipts[id(member)] = member
                 self._publication_group_receipts[id(group_receipt)] = group_receipt
+                # Retain terminal truth before returning through caller wrappers. An outer
+                # canonical transaction must recognize a committed group after a lost return.
+                transaction._receipt = group_receipt
+                transaction._committed = True
             return group_receipt
 
     def _prepare_claimed_commit_locked(
@@ -9370,6 +10021,7 @@ class LocalArtifactVersionRegistry:
         if expected_handle is None:  # pragma: no cover - reservation invariant
             raise StateError("prepared local artifact reservation lost its exact handle")
         prior_payload: bytes | None = None
+        places_record = True
         route: _ArtifactRouteShard | None = None
         route_key: bytes | None = None
         packed_route_locator: int | None = None
@@ -9381,6 +10033,7 @@ class LocalArtifactVersionRegistry:
             ):
                 raise StateError("prepared local artifact version was invalidated")
             existing_record = shard.store.get_record_by_handle(existing_handle)
+            places_record = existing_record is None
             if existing_record is not None and existing_record != token.record:
                 raise StateError("prepared local artifact content changed before commit")
             prior_payload = shard.store._payload(existing_handle)
@@ -9436,6 +10089,7 @@ class LocalArtifactVersionRegistry:
             route=route,
             route_key=route_key,
             packed_route_locator=packed_route_locator,
+            places_record=places_record,
             rollback=_LocalArtifactPreparedRollbackSavepoint(lease=lease_savepoint),
         )
 
@@ -9488,6 +10142,10 @@ class LocalArtifactVersionRegistry:
             lease.prior_store_high_water = lease_store._high_water_mark
             lease.prior_store_primary_peak = lease_store._primary_peak_entries
             lease.prior_store_slots = len(lease_store._slot_values)
+        if token.withdraw_placement:
+            rollback.withdrawal_rows = self._prepare_withdrawal_rows_locked(reservation)
+        elif plan.places_record:
+            rollback.withdrawal_rows = self._prepare_superseded_rows_locked(reservation, plan)
         rollback.captured = True
 
     def _rollback_prepared_commit_locked(
@@ -9543,6 +10201,15 @@ class LocalArtifactVersionRegistry:
             else:
                 shard.pending_expiry.discard(version_id)
             shard.mutation_version = rollback.prior_mutation_version
+        except BaseException as error:
+            failures.append(error)
+
+        try:
+            for shard_id, handle, withdrawn, version, withdrawn_at in rollback.withdrawal_rows:
+                owner = self._shards[shard_id]
+                owner.store._withdrawn[handle] = withdrawn
+                owner.store._withdrawn_at_us[handle] = withdrawn_at
+                owner.mutation_version = version
         except BaseException as error:
             failures.append(error)
 
@@ -9678,6 +10345,9 @@ class LocalArtifactVersionRegistry:
                 token.record,
                 packed_payload=plan.packed_payload,
             )
+            shard.store._introduced_at_us[plan.expected_handle] = _artifact_placement_microseconds(
+                token.observed_at
+            )
             self._live_count += 1
             self._high_water_mark = max(self._high_water_mark, self._live_count)
         else:
@@ -9688,6 +10358,14 @@ class LocalArtifactVersionRegistry:
             )
         shard.pending_expiry.discard(token.record.artifact.artifact_version_id)
         shard.mutation_version += 1
+        for shard_id, handle, withdrawn, version, _ in plan.rollback.withdrawal_rows:
+            owner = self._shards[shard_id]
+            owner.store._withdrawn[handle] = 1
+            if not withdrawn:
+                owner.store._withdrawn_at_us[handle] = _artifact_placement_microseconds(
+                    token.observed_at
+                )
+            owner.mutation_version = version + 1
         return plan.receipt
 
     def publish_version(
@@ -9717,7 +10395,9 @@ class LocalArtifactVersionRegistry:
         """Publish or refresh one immutable artifact version and return its handle."""
 
         canonical_artifact = _canonical_local_artifact_identity(artifact)
-        if _has_posix_path_backslash(canonical_artifact.native_path, canonical_artifact.platform):
+        if _has_unsupported_path_backslash(
+            canonical_artifact.native_path, canonical_artifact.platform
+        ):
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         event_time = ensure_utc(observed_at)
         effective_retention = retention or self._retention
@@ -9732,6 +10412,7 @@ class LocalArtifactVersionRegistry:
                 allow_boundary=True,
             )
             with self._capacity_lock:
+                self._require_unclaimed_placement_locked()
                 if version_id in self._prepared_versions:
                     raise StateError(
                         f"artifact version {version_id!r} has an active prepared publication"
@@ -9744,8 +10425,11 @@ class LocalArtifactVersionRegistry:
                         shard.store.is_live_handle(handle)
                         and shard.store.artifact_version_id(handle) == version_id
                     ):
-                        return self._publish_locked(shard, handle, canonical_artifact, deadline)
+                        return self._publish_locked(
+                            shard, handle, canonical_artifact, deadline, observed_at=event_time
+                        )
             with self._capacity_lock:
+                self._require_unclaimed_placement_locked()
                 if version_id in self._prepared_versions:
                     raise StateError(
                         f"artifact version {version_id!r} has an active prepared publication"
@@ -9763,6 +10447,7 @@ class LocalArtifactVersionRegistry:
                                 handle,
                                 canonical_artifact,
                                 deadline,
+                                observed_at=event_time,
                             )
                 routing_identity = (
                     canonical_artifact.artifact_id
@@ -9773,7 +10458,9 @@ class LocalArtifactVersionRegistry:
                 with shard.lock:
                     self._live_count += 1
                     self._high_water_mark = max(self._high_water_mark, self._live_count)
-                    return self._publish_locked(shard, None, canonical_artifact, deadline)
+                    return self._publish_locked(
+                        shard, None, canonical_artifact, deadline, observed_at=event_time
+                    )
 
     def _publish_locked(
         self,
@@ -9782,11 +10469,13 @@ class LocalArtifactVersionRegistry:
         artifact: LocalArtifactIdentity,
         deadline: float,
         *,
+        observed_at: datetime,
         record: LocalArtifactVersionRecord | None = None,
         packed_payload: bytes | None = None,
     ) -> int:
         """Commit one artifact publish while holding its stable owner shard."""
 
+        self._require_unclaimed_placement_locked()
         version_id = artifact.artifact_version_id
         if handle is not None:
             current = shard.store.get_by_handle(handle)
@@ -9802,6 +10491,7 @@ class LocalArtifactVersionRegistry:
                 record,
                 packed_payload=packed_payload,
             )
+            shard.store._introduced_at_us[handle] = _artifact_placement_microseconds(observed_at)
             self._set_route(version_id, shard.shard_id, handle)
         current_deadline = shard.deadlines.deadline(handle)
         retained_until = (
@@ -10079,7 +10769,7 @@ class LocalArtifactVersionRegistry:
         """Return one exact retained profile/path/version binding."""
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         normalized_path = canonical_native_path(native_path, normalized_platform)
         user_profile = user_profile_id.strip()
@@ -10099,6 +10789,176 @@ class LocalArtifactVersionRegistry:
                         return artifact
         return None
 
+    @contextmanager
+    def claimed_placement_observations(self) -> Iterator[None]:
+        """Fence file facts through a short outer canonical publication.
+
+        This bounded read claim holds no locks across owners. Placement writes,
+        eviction and lease release reject while it is active; already-prepared
+        unchanged-content retention may commit. Callers must validate their
+        observations after entering. This grants no source or mutation authority.
+        """
+        claim = object()
+        primary: BaseException | None = None
+        try:
+            with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+                if len(self._placement_observation_claims) >= self._capacity:
+                    raise LocalArtifactCapacityError(
+                        "Artifact placement observation capacity exhausted"
+                    )
+                self._placement_observation_claims.add(claim)
+            yield
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            with self._capacity_lock:
+                self._placement_observation_claims.discard(claim)
+                if not self._placement_observation_claims:
+                    try:
+                        self._drain_placement_deferred_expiry_locked()
+                    except BaseException as cleanup_error:
+                        if primary is None:
+                            raise
+                        primary.add_note(
+                            "Artifact placement expiry cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+
+    def _drain_placement_deferred_expiry_locked(self) -> tuple[LocalArtifactIdentity, ...]:
+        """Retire only due versions whose cancellation met an observation fence."""
+        evicted: list[LocalArtifactIdentity] = []
+        for shard_id, version_id in sorted(self._placement_deferred_expiry):
+            artifact = self._evict_pending_version(self._shards[shard_id], version_id)
+            if artifact is not None:
+                evicted.append(artifact)
+            self._placement_deferred_expiry.discard((shard_id, version_id))
+        return tuple(evicted)
+
+    def _require_unclaimed_placement_locked(self) -> None:
+        if self._placement_observation_claims:
+            raise StateError("Artifact placement is fenced by an active native observation")
+
+    def _validate_observed_retention_locked(
+        self, reservations: Sequence[_LocalArtifactPreparedReservation]
+    ) -> None:
+        """Permit only unchanged payload retention under a placement observation fence."""
+        if self._placement_observation_claims and any(
+            item.canonical_token.withdraw_placement
+            or item.commit_plan is None
+            or item.commit_plan.places_record
+            or item.commit_plan.prior_payload != item.commit_plan.packed_payload
+            for item in reservations
+        ):
+            raise StateError("Artifact placement is fenced by an active native observation")
+
+    def retained_version_deadline(self, artifact_version_id: str) -> datetime | None:
+        """Read the exact version's existing retention/lease horizon without extending it."""
+        with self._capacity_lock:
+            located = self._existing_locator(artifact_version_id)
+            if located is None:
+                return None
+            shard, handle = located
+            with shard.lock:
+                if (
+                    not shard.store.is_live_handle(handle)
+                    or shard.store.artifact_version_id(handle) != artifact_version_id
+                ):
+                    return None
+                deadlines = (
+                    shard.deadlines.deadline(handle),
+                    shard.leases.latest_deadline(artifact_version_id),
+                )
+                latest = max((value for value in deadlines if value is not None), default=None)
+                return None if latest is None else datetime.fromtimestamp(latest, tz=UTC)
+
+    def observe_version_placement(
+        self, artifact_version_id: str
+    ) -> LocalArtifactPlacementObservation | None:
+        """Return retained publication/removal facts for one exact version, if present.
+
+        This is not a complete file-object path history. Unknown legacy bounds
+        remain unknown; refreshing a lease cannot recreate placement history.
+        """
+        with self._all_shards_locked():
+            located = self._existing_locator(artifact_version_id)
+            if located is None:
+                return None
+            shard, handle = located
+            if (
+                not shard.store.is_live_handle(handle)
+                or shard.store.artifact_version_id(handle) != artifact_version_id
+            ):
+                return None
+            return LocalArtifactPlacementObservation(
+                artifact=shard.store.get_by_handle(handle),
+                introduced_at=_artifact_placement_datetime(shard.store._introduced_at_us[handle]),
+                withdrawn=bool(shard.store._withdrawn[handle]),
+                withdrawn_at=_artifact_placement_datetime(shard.store._withdrawn_at_us[handle]),
+            )
+
+    def observe_macos_file_placement(
+        self,
+        artifact_version_id: str,
+        observed_at: datetime,
+        *,
+        max_versions: int = 256,
+    ) -> MacosRuntimeFilePlacementObservation | None:
+        """Resolve a retained file object's bounded event-time placement.
+
+        The exact reference must still exist. Indexed history is examined under
+        one registry snapshot; ambiguous, incomplete, expired or unsupported
+        facts return unavailable. Neither leases nor current paths are changed.
+        A bounded query refuses excess history instead of choosing a partial hit.
+        """
+        if type(observed_at) is not datetime or observed_at.utcoffset() is None:
+            raise ValueError("Mac file placement requires an aware observation time")
+        if type(max_versions) is not int or not 1 <= max_versions <= 256:
+            raise ValueError("Mac file placement history bound must be between 1 and 256")
+        with self._all_shards_locked():
+            reference = self.resolve_version(artifact_version_id)
+            if (
+                reference is None
+                or reference.artifact.platform != "macos"
+                or reference.macos_file is None
+                or reference.macos_file.link_count != 1
+            ):
+                return None
+            origin = self.observe_version_placement(artifact_version_id)
+            if origin is None or origin.introduced_at is None or observed_at < origin.introduced_at:
+                return None
+            artifact_id = reference.artifact.artifact_id
+            count = sum(shard.store.count("artifact_object", artifact_id) for shard in self._shards)
+            if count > max_versions:
+                return None
+            selected: LocalArtifactVersionRecord | None = None
+            selected_placement: LocalArtifactPlacementObservation | None = None
+            for shard in self._shards:
+                for candidate in shard.store.find_iter("artifact_object", artifact_id):
+                    placement = self.observe_version_placement(candidate.artifact_version_id)
+                    if placement is None:
+                        return None
+                    present = placement.present_at(observed_at)
+                    if present is None:
+                        return None
+                    if not present:
+                        continue
+                    if selected is not None:
+                        return None
+                    selected = self.resolve_version(candidate.artifact_version_id)
+                    if selected is None:
+                        return None
+                    selected_placement = placement
+            if selected is None or selected_placement is None:
+                return None
+            try:
+                return MacosRuntimeFilePlacementObservation(
+                    reference, selected, selected_placement, observed_at
+                )
+            except ValueError:
+                # Unsupported changes cannot be projected as a renamed loaded file.
+                return None
+
     def resolve_record_for_execution_path(
         self,
         hostname: str,
@@ -10106,7 +10966,7 @@ class LocalArtifactVersionRegistry:
         native_path: str,
         platform: Platform,
     ) -> LocalArtifactVersionRecord | None:
-        """Resolve the newest retained record for one exact execution placement.
+        """Resolve the newest nonwithdrawn record for one exact execution placement.
 
         Runtime executable admission uses the host, principal, platform, and
         canonical native path together. The equality index returns only exact
@@ -10116,7 +10976,7 @@ class LocalArtifactVersionRegistry:
         """
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         key = "\0".join(
             (
@@ -10127,9 +10987,11 @@ class LocalArtifactVersionRegistry:
             )
         )
         resolved: LocalArtifactVersionRecord | None = None
-        for shard in self._shards:
-            with shard.lock:
-                for candidate in shard.store.find_record_iter("execution_path", key):
+        with self._all_shards_locked():
+            for shard in self._shards:
+                for candidate in shard.store.find_record_iter(
+                    "execution_path", key, placed_only=True
+                ):
                     if resolved is None or (
                         candidate.artifact.version,
                         candidate.artifact.artifact_version_id,
@@ -10139,6 +11001,226 @@ class LocalArtifactVersionRegistry:
                     ):
                         resolved = candidate
         return resolved
+
+    def _prepare_superseded_rows_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
+        """Withdraw superseded placements while retaining their immutable content.
+
+        Every shard is locked by the publication owner. Preserve the established
+        version/semantic-ID ordering for out-of-order publication. Once superseded,
+        a retained version cannot reappear at the path when its replacement expires.
+        A later explicit new publication can establish a new placement; refreshing
+        an already retained record cannot restore a withdrawn one.
+        """
+        token = reservation.canonical_token
+        artifact = token.record.artifact
+        key = "\0".join(
+            (
+                artifact.hostname,
+                artifact.principal,
+                artifact.platform,
+                artifact.normalized_native_path,
+            )
+        )
+        incoming = (artifact.version, artifact.artifact_version_id)
+        rows: list[tuple[int, int, int, int, int]] = []
+        superseded = False
+        for shard in self._shards:
+            index, digest, digest_for_handle, equals_handle = shard.store._query(
+                "execution_path", key
+            )
+            for handle in index.iter_handles(digest, digest_for_handle, equals_handle):
+                if shard.store._withdrawn[handle]:
+                    continue
+                current = shard.store.get_record_by_handle(handle)
+                if current is None:
+                    continue
+                if (current.artifact.version, current.artifact.artifact_version_id) > incoming:
+                    superseded = True
+                else:
+                    rows.append(
+                        (
+                            shard.shard_id,
+                            handle,
+                            0,
+                            shard.mutation_version,
+                            shard.store._withdrawn_at_us[handle],
+                        )
+                    )
+        if superseded:
+            owner = self._shards[token._shard_id]
+            rows.append(
+                (
+                    owner.shard_id,
+                    plan.expected_handle,
+                    0,
+                    owner.mutation_version,
+                    owner.store._withdrawn_at_us[plan.expected_handle],
+                )
+            )
+        return tuple(rows)
+
+    def _prepare_withdrawal_rows_locked(
+        self, reservation: _LocalArtifactPreparedReservation
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
+        """Freeze exact placement withdrawal while every affected shard is locked."""
+        expected = reservation.canonical_token.record
+        artifact = expected.artifact
+        placement = (
+            artifact.hostname,
+            artifact.principal,
+            artifact.platform,
+            artifact.normalized_native_path,
+        )
+        successor_count = 0
+        for other in self._prepared_reservations.values():
+            if other is reservation:
+                continue
+            staged = other.canonical_token.record.artifact
+            if placement == (
+                staged.hostname,
+                staged.principal,
+                staged.platform,
+                staged.normalized_native_path,
+            ):
+                # An ordered atomic group may explicitly replace the withdrawn
+                # placement. Unrelated reservations still prevent the removal.
+                group_ids = self._prepared_commit_locators.get(reservation.commit_id, ())
+                successor = other.canonical_token
+                if (
+                    reservation.committing
+                    and other.committing
+                    and reservation.commit_id is not None
+                    and other.commit_id == reservation.commit_id
+                    and reservation.reservation_id in group_ids
+                    and other.reservation_id in group_ids
+                    and group_ids.index(reservation.reservation_id)
+                    < group_ids.index(other.reservation_id)
+                    and not successor.withdraw_placement
+                    and successor._existing_handle is None
+                    and successor.observed_at == reservation.canonical_token.observed_at
+                ):
+                    successor_count += 1
+                    if successor_count == 1:
+                        continue
+                raise StateError("artifact removal conflicts with a prepared placement publication")
+        current = self.resolve_record_for_execution_path(
+            artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+        )
+        if current != expected:
+            raise StateError("prepared removal no longer names the current file version")
+        key = "\0".join(placement)
+        rows: list[tuple[int, int, int, int, int]] = []
+        for shard in self._shards:
+            index, digest, digest_for_handle, equals_handle = shard.store._query(
+                "execution_path", key
+            )
+            rows.extend(
+                (
+                    shard.shard_id,
+                    handle,
+                    shard.store._withdrawn[handle],
+                    shard.mutation_version,
+                    shard.store._withdrawn_at_us[handle],
+                )
+                for handle in index.iter_handles(digest, digest_for_handle, equals_handle)
+            )
+        return tuple(rows)
+
+    def withdraw_execution_path(
+        self,
+        expected: LocalArtifactVersionRecord,
+        observed_at: datetime,
+    ) -> bool:
+        """Remove an exact current placement while retaining historical content.
+
+        The action owner supplies the current canonical version and owns event
+        ordering. All retained versions at this placement are withdrawn together,
+        so expiration of the newest record cannot resurrect older leased content.
+        Replaying a retained publication does not restore its placement; a new
+        write requires a new artifact version. This is a synchronous state
+        transition, not an evidence publication or file-cache eviction.
+        """
+        expected = _canonical_local_artifact_record(expected)
+        artifact = expected.artifact
+        key = "\0".join(
+            (
+                artifact.hostname,
+                artifact.principal,
+                artifact.platform,
+                artifact.normalized_native_path,
+            )
+        )
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self._require_unclaimed_placement_locked()
+            self._require_after_watermark_locked(
+                ensure_utc(observed_at), "artifact removal observed_at", allow_boundary=True
+            )
+            for reservation in self._prepared_reservations.values():
+                staged = reservation.canonical_token.record.artifact
+                if (
+                    staged.hostname,
+                    staged.principal,
+                    staged.platform,
+                    staged.normalized_native_path,
+                ) == (
+                    artifact.hostname,
+                    artifact.principal,
+                    artifact.platform,
+                    artifact.normalized_native_path,
+                ):
+                    raise StateError("artifact placement has a prepared publication")
+            located = self._existing_locator(artifact.artifact_version_id)
+            if located is None:
+                raise StateError("artifact removal requires a retained current file version")
+            expected_shard, expected_handle = located
+            if expected_shard.store.get_record_by_handle(expected_handle) != expected:
+                raise StateError("artifact removal does not match the retained file version")
+            current = self.resolve_record_for_execution_path(
+                artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+            )
+            if current is None and expected_shard.store._withdrawn[expected_handle]:
+                return False
+            if current != expected:
+                raise StateError("artifact removal requires the current file version")
+            updates: list[tuple[_LocalArtifactShard, int, int, int]] = []
+            versions: list[tuple[_LocalArtifactShard, int]] = []
+            for shard in self._shards:
+                index, digest, digest_for_handle, equals_handle = shard.store._query(
+                    "execution_path", key
+                )
+                handles = tuple(index.iter_handles(digest, digest_for_handle, equals_handle))
+                if handles:
+                    versions.append((shard, shard.mutation_version))
+                    updates.extend(
+                        (
+                            shard,
+                            handle,
+                            shard.store._withdrawn[handle],
+                            shard.store._withdrawn_at_us[handle],
+                        )
+                        for handle in handles
+                    )
+            try:
+                for shard, handle, prior, _ in updates:
+                    shard.store._withdrawn[handle] = 1
+                    if not prior:
+                        shard.store._withdrawn_at_us[handle] = _artifact_placement_microseconds(
+                            observed_at
+                        )
+                for shard, version in versions:
+                    shard.mutation_version = version + 1
+            except BaseException:
+                for shard, handle, prior, withdrawn_at in updates:
+                    shard.store._withdrawn[handle] = prior
+                    shard.store._withdrawn_at_us[handle] = withdrawn_at
+                for shard, version in versions:
+                    shard.mutation_version = version
+                raise
+            return True
 
     def resolve_binary_for_path(
         self,
@@ -10204,6 +11286,7 @@ class LocalArtifactVersionRegistry:
         shard: _LocalArtifactShard | None = None
         released = False
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             if self._version_has_claimed_preparation_locked(version_id):
                 raise StateError(
                     "artifact lease cannot change during an active claimed publication"
@@ -10233,6 +11316,7 @@ class LocalArtifactVersionRegistry:
         released: list[str] = []
         pending: list[tuple[_LocalArtifactShard, str]] = []
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             for shard in self._shards:
                 with shard.lock:
                     owner_versions = tuple(shard.leases.keys_for_owner(owner_id))
@@ -10255,6 +11339,7 @@ class LocalArtifactVersionRegistry:
 
         cutoff = ensure_utc(watermark)
         with self._gate.watermark(), self._capacity_lock, self._all_shards_locked():
+            self._require_unclaimed_placement_locked()
             if self._watermark is not None and cutoff < self._watermark:
                 raise ValueError("artifact registry watermark cannot move backwards")
             if self._claimed_reservations and cutoff != self._watermark:
@@ -10263,7 +11348,7 @@ class LocalArtifactVersionRegistry:
                     "publication"
                 )
             cutoff_timestamp = cutoff.timestamp()
-            evicted: list[LocalArtifactIdentity] = []
+            evicted = list(self._drain_placement_deferred_expiry_locked())
             for shard in self._shards:
                 expired_leases = shard.leases.expire_before(
                     cutoff_timestamp,
@@ -10384,6 +11469,9 @@ class LocalArtifactVersionRegistry:
                 or shard.leases.is_leased(artifact_version_id)
             ):
                 return None
+            if self._placement_observation_claims:
+                self._placement_deferred_expiry.add((shard.shard_id, artifact_version_id))
+                return None
             artifact = self._evict_locked(shard, artifact_version_id)
             if artifact is not None:
                 self._live_count -= 1
@@ -10491,6 +11579,8 @@ class LocalArtifactVersionRegistry:
                     + sys.getsizeof(self._prepared_reservations)
                     + sys.getsizeof(self._prepared_versions)
                     + sys.getsizeof(self._claimed_reservations)
+                    + _owned_graph_size(self._placement_observation_claims)
+                    + _owned_graph_size(self._placement_deferred_expiry)
                     + sys.getsizeof(self._committing_reservations)
                     + sum(sys.getsizeof(count) for count in self._prepared_counts)
                     + sum(

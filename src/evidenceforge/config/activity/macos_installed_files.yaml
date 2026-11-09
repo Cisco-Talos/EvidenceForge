@@ -1,0 +1,30 @@
+# Sizes, times and allocation are synthetic model choices, not host inventory.
+# Exact image permission rules are separately qualified static vendor metadata.
+# Every file is modeled as one immutable, single-link regular object in one
+# host-local volume. Dense allocation is explicit and does not model APFS
+# compression, clones, sparse files or separate sealed/data volume layouts.
+schema_version: "1.0"
+profile: modeled-macos-installed-v1
+volume_id: modeled-installed-volume
+volume_device: {min: 1, max: 4095}
+first_inode: {min: 50000, max: 5000000}
+logical_size_bytes: {min: 16384, max: 33554432}
+size_median_bytes: 1048576
+size_log_sigma: 1.2
+installation_age_seconds: {min: 86400, max: 15552000}
+build_lead_seconds: {min: 86400, max: 5184000}
+# Some packages preserve whole-second build dates; host-local times retain native precision.
+package_whole_second_probability: 0.5
+allocation_policy: dense-rounded
+allocation_unit_bytes: 4096
+permissions: 493 # 0755
+# Verified Apple-shipped macOS 27 login: root-owned setuid 04555.
+# Machine installation and exact product/artifact/path must all match. Older
+# frozen profiles without these rules retain their prior permissions.
+permission_rules:
+  - product_id: apple-macos
+    artifact_name: login
+    native_path: /usr/bin/login
+    permissions: 2413 # 04555
+flags: 0
+generation: 0

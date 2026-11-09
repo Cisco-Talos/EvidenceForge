@@ -1,0 +1,32 @@
+{
+  "process_activity": [
+    {
+      "hostname": "WS-AJOHNSON-01",
+      "object_id": "0d9d4d6a-9d3e-4fb1-8118-1c6684cd8136",
+      "pid": "5892",
+      "logon_id": "0x26d93a8",
+      "principal": "aisha.johnson",
+      "started_at": "2026-11-02 16:00:26.426824+00:00"
+    }
+  ],
+  "session_activity": [
+    {
+      "hostname": "WS-AJOHNSON-01",
+      "object_id": "ef0c7afd-e36c-4805-af40-51b526e3b41f",
+      "pid": "None",
+      "logon_id": "0x2700f1b",
+      "principal": "aisha.johnson",
+      "started_at": "2026-11-02 16:20:10.295412+00:00"
+    }
+  ],
+  "holds": [
+    {
+      "hostname": "None",
+      "object_id": "0d9d4d6a-9d3e-4fb1-8118-1c6684cd8136",
+      "pid": "None",
+      "logon_id": "None",
+      "principal": "None",
+      "started_at": "None"
+    }
+  ]
+}

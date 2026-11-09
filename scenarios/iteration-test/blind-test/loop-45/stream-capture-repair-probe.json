@@ -1,0 +1,136 @@
+{
+  "loop": 45,
+  "before_loop": 44,
+  "source_results": [
+    {
+      "sensor": "zeek-db",
+      "records": 433,
+      "changed_stream_records": 35,
+      "other_field_changes": 0,
+      "qualified_complete_gapped_records": 34,
+      "restored_extent_matches_gap": 34,
+      "examples": [
+        {
+          "uid": "C4brqyIfM7tA5sPCJC",
+          "restored_sequence_bytes": 684,
+          "content_gap_bytes": 684,
+          "matches": true
+        },
+        {
+          "uid": "CVAVNshweDvOh8ae6Iv",
+          "restored_sequence_bytes": 17,
+          "content_gap_bytes": 17,
+          "matches": true
+        },
+        {
+          "uid": "Cl5LUZXg2B3KvoDaQoA",
+          "restored_sequence_bytes": 155,
+          "content_gap_bytes": 155,
+          "matches": true
+        },
+        {
+          "uid": "CGoPfCx8oKjBqFcVly",
+          "restored_sequence_bytes": 8,
+          "content_gap_bytes": 8,
+          "matches": true
+        }
+      ],
+      "other_examples": []
+    },
+    {
+      "sensor": "zeek-core",
+      "records": 12314,
+      "changed_stream_records": 651,
+      "other_field_changes": 0,
+      "qualified_complete_gapped_records": 649,
+      "restored_extent_matches_gap": 649,
+      "examples": [
+        {
+          "uid": "C3ODY8b4myLQhgDjrP",
+          "restored_sequence_bytes": 1,
+          "content_gap_bytes": 1,
+          "matches": true
+        },
+        {
+          "uid": "CdZQkvfHSFlkZ6rzHE",
+          "restored_sequence_bytes": 334,
+          "content_gap_bytes": 334,
+          "matches": true
+        },
+        {
+          "uid": "CT3WYRTyLs4vQAv8BG2",
+          "restored_sequence_bytes": 387,
+          "content_gap_bytes": 387,
+          "matches": true
+        },
+        {
+          "uid": "CuVlDunz4MDf9Qv1jJ",
+          "restored_sequence_bytes": 699,
+          "content_gap_bytes": 699,
+          "matches": true
+        }
+      ],
+      "other_examples": []
+    },
+    {
+      "sensor": "zeek-dmz",
+      "records": 9401,
+      "changed_stream_records": 633,
+      "other_field_changes": 0,
+      "qualified_complete_gapped_records": 632,
+      "restored_extent_matches_gap": 632,
+      "examples": [
+        {
+          "uid": "CSUqBOqJUYQfwuBa16s",
+          "restored_sequence_bytes": 6,
+          "content_gap_bytes": 6,
+          "matches": true
+        },
+        {
+          "uid": "CGCqk4LLDwjLoedur2",
+          "restored_sequence_bytes": 59,
+          "content_gap_bytes": 59,
+          "matches": true
+        },
+        {
+          "uid": "CkxDMbuTlvBaOtB3mi",
+          "restored_sequence_bytes": 267,
+          "content_gap_bytes": 267,
+          "matches": true
+        },
+        {
+          "uid": "C9Nv7szP5HBihtVEvx",
+          "restored_sequence_bytes": 42,
+          "content_gap_bytes": 42,
+          "matches": true
+        }
+      ],
+      "other_examples": []
+    }
+  ],
+  "unchanged_captured_packet_ip_gap_history_and_timing_fields": true,
+  "conservative_cross_sensor_comparisons": [
+    {
+      "left": "zeek-core",
+      "right": "zeek-dmz",
+      "eligible": 1824,
+      "affected": 0,
+      "exact_subtraction": 0
+    },
+    {
+      "left": "zeek-core",
+      "right": "zeek-db",
+      "eligible": 41,
+      "affected": 0,
+      "exact_subtraction": 0
+    },
+    {
+      "left": "zeek-dmz",
+      "right": "zeek-db",
+      "eligible": 191,
+      "affected": 0,
+      "exact_subtraction": 0
+    }
+  ],
+  "qualification": "Known SYN/FIN boundaries only. Pair populations overlap and are not summed as independent flows. Physical retained/missing packet partitions and application/file loss are separately covered by focused tests."
+}

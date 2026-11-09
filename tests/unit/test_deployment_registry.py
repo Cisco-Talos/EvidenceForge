@@ -528,6 +528,31 @@ def test_file_content_is_object_versioned_and_path_free() -> None:
     assert not hasattr(first, "payload")
 
 
+def test_empty_file_content_uses_standard_empty_payload_digests() -> None:
+    """Empty-file hashes describe zero bytes even when object identities differ."""
+
+    first = FileContentIdentity(
+        file_object_id="empty-file-one",
+        version=1,
+        size_bytes=0,
+        mime_type="application/octet-stream",
+    )
+    second = FileContentIdentity(
+        file_object_id="empty-file-two",
+        version=1,
+        size_bytes=0,
+        mime_type="text/plain",
+    )
+
+    assert first.digests.md5.casefold() == "d41d8cd98f00b204e9800998ecf8427e"
+    assert first.digests.sha1.casefold() == "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+    assert first.digests.sha256.casefold() == (
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+    assert first.digests == second.digests
+    assert first.content_id != second.content_id
+
+
 def test_file_content_exact_lookup_does_not_scan_large_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

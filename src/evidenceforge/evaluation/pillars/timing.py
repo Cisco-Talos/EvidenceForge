@@ -595,7 +595,7 @@ def _is_rate_plausibility_user_event(record: ParsedRecord) -> bool:
         )
         return not any(fragment in message for fragment in lifecycle_fragments)
 
-    return fmt in {"bash_history", "web_access"}
+    return fmt in {"bash_history", "zsh_history", "web_access"}
 
 
 def _extract_system_service(record: ParsedRecord) -> str:

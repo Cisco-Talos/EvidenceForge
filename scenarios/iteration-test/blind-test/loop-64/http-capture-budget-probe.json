@@ -1,0 +1,48 @@
+{
+  "loop": 64,
+  "counts": {
+    "joined_depth0_files": 482,
+    "gapped_files": 25,
+    "body_extent_mismatches": 20,
+    "direction_mismatches": 5,
+    "aggregate_gap_budget_excesses": 5
+  },
+  "examples": [
+    {
+      "sensor": "zeek-db",
+      "uid": "C0LkzP4Q93NkcyJS7Wx",
+      "fuid": "FV0wSMECLjBgXzApTyB",
+      "body": 1940,
+      "total": 1951
+    },
+    {
+      "sensor": "zeek-core",
+      "uid": "C6wUNZczX4ArB1TQ8V6",
+      "fuid": "F7SSvFipDr8vvG9UAoc",
+      "body": 137345,
+      "total": 137719
+    },
+    {
+      "sensor": "zeek-core",
+      "uid": "C0HaZxnBWSw7qVP2wd",
+      "fuid": "FMgFvWpiYYYYSqws2Z",
+      "body": 18052,
+      "total": 18107
+    },
+    {
+      "sensor": "zeek-core",
+      "uid": "CcynEcD5QTOOvJzYDby",
+      "fuid": "FbgV2khHOglpw52VNXz",
+      "body": 2207,
+      "total": 2227
+    },
+    {
+      "sensor": "zeek-core",
+      "uid": "Cc8R7tc7sNx3eBNArA",
+      "fuid": "F5cyymbI8AXXnRoSEvj",
+      "body": 385100,
+      "total": 387266
+    }
+  ],
+  "scope": "Bounded uncompressed, completed depth0 HTTP200/206 entities in this benchmark; recognized capture loss only. No universal claim about compressed bodies, raw omissions or analyzer gaps."
+}

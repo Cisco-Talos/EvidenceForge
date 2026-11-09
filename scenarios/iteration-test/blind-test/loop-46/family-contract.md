@@ -1,0 +1,11 @@
+# Loop46 contract: native DNS and SMB protocol projections
+
+Selected new families: Network45's415 DNS sensor-row projections and132 SMB mappings. Classification `source_native_single_schema`: canonical full RDATA, share identity and advertised/backing storage facts are valid; only Zeek's protocol-specific observation shapes are wrong. A higher canonical rewrite would corrupt Windows DNS results or storage consumers.
+
+Owners: Zeek DNS renderer's answer adapter, shared TXT wire-character-string partition, and Zeek SMB2/3 mapping schema. Invariant: SRV renders target, MX exchange, SOA primary name, TXT native length/string summaries using exactly the character-string partition used for wire accounting. Other RR types, answer order, TTL alignment, transaction identity and raw escape hatches retain their meaning. SMB2/3 exposes path/share_type but does not invent SMB1-only service/native_file_system observations from share names or backing storage knowledge.
+
+Entry inventory: baseline, storyline, causal DNS lookups all carry DnsContext through the same emitter; direct typed emitter callers use that adapter. TXT packet accounting uses network_dns. Raw source-native emit_event is already-native and must not be transformed twice. SMB baseline/storyline/persistent channels carry canonical SMB2/3 SmbContext through the single mapping renderer; direct callers follow it. SMB1 is not modeled by SmbContext and must not be fabricated.
+
+Consumers: Zeek DNS/SMB JSON templates, parsers/eval, all sensor copies, Windows DNS query output, packet sizing, SMB audit and filesystem projection. Full canonical answers and advertised filesystem remain unchanged. Risk: long TXT string partitions must agree with wire size, empty/non-ASCII strings and multiple answers; optional SMB field omission must survive required-field validation. Recheck parseability, persistent publication and transport lifecycles. No request-target/timing/runtime fixes in this loop.
+
+Primary pinned reference: Zeek v8.0.5 scripts/base/protocols/dns/main.zeek SHA4ae48baaacc6ee9246b7d9506ec2905f9d4cc866 and SMB smb2-main.zeek SHA31f0a7704ae94d8f4b48cc0f2491df73a9bd24c7. SMB2 tree-connect handler sets path/share_type, not SMB1 service/native filesystem. Protocol source semantics, not reviewer authority alone, justify this bounded repair.

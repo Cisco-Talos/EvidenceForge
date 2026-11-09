@@ -2222,3 +2222,38 @@ def test_connection_pin_rejects_supplied_reserved_type3_logon_ids(
 
     assert manager.materialization_digest() == digest
     cursor.cancel()
+
+
+def test_strict_active_rdp_without_allocation_keeps_patch_authentication() -> None:
+    manager, _batch, patch, _target = _active_rdp_state_inputs()
+    before = manager.materialization_digest()
+    payload = manager.prepare_deferred_session_state_authority(
+        protocol=DeferredSessionProtocol.RDP,
+        binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
+        bound_at=patch.after.source_ready_time,
+        batch=None,
+        existing_session_patch=patch,
+    )
+    assert payload.allocation_free_rdp_reconnect
+    assert payload.batch is None
+    assert manager.materialization_digest() == before
+    assert manager.authenticates_deferred_session_state_authority(payload)
+    from dataclasses import replace
+
+    altered = replace(payload, bound_at=payload.bound_at + timedelta(microseconds=1))
+    assert not manager.authenticates_deferred_session_state_authority(altered)
+    for protocol, disposition in [
+        (DeferredSessionProtocol.SSH, DeferredSessionBindingDisposition.ACTIVE_SESSION),
+        (DeferredSessionProtocol.RDP, DeferredSessionBindingDisposition.NEW_SESSION),
+        (DeferredSessionProtocol.RDP, DeferredSessionBindingDisposition.PREALLOCATED_SESSION_START),
+    ]:
+        with pytest.raises((StateError, TypeError)):
+            manager.prepare_deferred_session_state_authority(
+                protocol=protocol,
+                binding_disposition=disposition,
+                bound_at=patch.after.source_ready_time,
+                batch=None,
+                existing_session_patch=patch,
+            )
+    with pytest.raises(StateError, match="empty"):
+        manager.begin_materialization_batch().seal()

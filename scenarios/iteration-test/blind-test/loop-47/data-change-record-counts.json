@@ -1,0 +1,82 @@
+[
+  {
+    "file": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+    "before": 528,
+    "after": 528
+  },
+  {
+    "file": "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "before": 464,
+    "after": 464
+  },
+  {
+    "file": "PROXY-01.meridianhcs.local/ecar.json",
+    "before": 5568,
+    "after": 5566
+  },
+  {
+    "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+    "before": 3524,
+    "after": 3524
+  },
+  {
+    "file": "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+    "before": 756,
+    "after": 756
+  },
+  {
+    "file": "WS-PPATEL-01.meridianhcs.local/ecar.json",
+    "before": 1119,
+    "after": 1119
+  },
+  {
+    "file": "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml",
+    "before": 778,
+    "after": 778
+  },
+  {
+    "file": "WS-PPATEL-01.meridianhcs.local/windows_event_sysmon.xml",
+    "before": 448,
+    "after": 448
+  },
+  {
+    "file": "fw-perimeter/cisco_asa.log",
+    "before": 22721,
+    "after": 22721
+  },
+  {
+    "file": "zeek-core/conn.json",
+    "before": 12314,
+    "after": 12314
+  },
+  {
+    "file": "zeek-dmz/conn.json",
+    "before": 9401,
+    "after": 9401
+  },
+  {
+    "file": "zeek-dmz/files.json",
+    "before": 1686,
+    "after": 1686
+  },
+  {
+    "file": "zeek-dmz/http.json",
+    "before": 2431,
+    "after": 2431
+  },
+  {
+    "file": "zeek-dmz/ocsp.json",
+    "before": 90,
+    "after": 90
+  },
+  {
+    "file": "zeek-dmz/ssl.json",
+    "before": 2725,
+    "after": 2725
+  },
+  {
+    "file": "zeek-dmz/x509.json",
+    "before": 1079,
+    "after": 1079
+  }
+]

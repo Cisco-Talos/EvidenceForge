@@ -1,0 +1,254 @@
+{
+  "loop": 62,
+  "builds": 8440,
+  "native_interface_order_mismatches": 0,
+  "equal_security_unqualified": 26,
+  "distribution": [
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "dmz",
+      "second_interface": "inside",
+      "count": 2171
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 1561
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 2287
+    },
+    {
+      "direction": "inbound",
+      "protocol": "UDP",
+      "first_interface": "dmz",
+      "second_interface": "inside",
+      "count": 1017
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "inside",
+      "second_interface": "inside",
+      "count": 26
+    },
+    {
+      "direction": "outbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "inside",
+      "count": 20
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "outside",
+      "second_interface": "inside",
+      "count": 15
+    },
+    {
+      "direction": "outbound",
+      "protocol": "UDP",
+      "first_interface": "outside",
+      "second_interface": "inside",
+      "count": 4
+    },
+    {
+      "direction": "inbound",
+      "protocol": "TCP",
+      "first_interface": "dmz",
+      "second_interface": "inside",
+      "count": 1329
+    },
+    {
+      "direction": "outbound",
+      "protocol": "UDP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 2
+    },
+    {
+      "direction": "inbound",
+      "protocol": "UDP",
+      "first_interface": "outside",
+      "second_interface": "dmz",
+      "count": 8
+    }
+  ],
+  "qualified_reset_matches": 155,
+  "reset_side_mismatches": 0,
+  "reset_distribution": [
+    {
+      "state": "RSTO",
+      "asa_reason": "TCP Reset-I",
+      "count": 22
+    },
+    {
+      "state": "RSTO",
+      "asa_reason": "TCP Reset-O",
+      "count": 54
+    },
+    {
+      "state": "RSTR",
+      "asa_reason": "TCP Reset-I",
+      "count": 24
+    },
+    {
+      "state": "REJ",
+      "asa_reason": "TCP Reset-O",
+      "count": 9
+    },
+    {
+      "state": "RSTR",
+      "asa_reason": "TCP Reset-O",
+      "count": 26
+    },
+    {
+      "state": "REJ",
+      "asa_reason": "TCP Reset-I",
+      "count": 20
+    }
+  ],
+  "order_examples": [],
+  "reset_examples": [
+    {
+      "connection_id": "1681574",
+      "state": "RSTO",
+      "expected": "TCP Reset-I",
+      "actual": "TCP Reset-I",
+      "build_line": 43,
+      "teardown_line": 44,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 22,
+        "uid": "C62BhpRqMyB7tevbQ"
+      }
+    },
+    {
+      "connection_id": "1681639",
+      "state": "RSTO",
+      "expected": "TCP Reset-I",
+      "actual": "TCP Reset-I",
+      "build_line": 223,
+      "teardown_line": 224,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 91,
+        "uid": "CKQuillTePvJFbN1wo"
+      }
+    },
+    {
+      "connection_id": "1681732",
+      "state": "RSTO",
+      "expected": "TCP Reset-I",
+      "actual": "TCP Reset-I",
+      "build_line": 463,
+      "teardown_line": 464,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 198,
+        "uid": "CBBV1thpUrJwoGXAHqF"
+      }
+    },
+    {
+      "connection_id": "1681745",
+      "state": "RSTO",
+      "expected": "TCP Reset-O",
+      "actual": "TCP Reset-O",
+      "build_line": 495,
+      "teardown_line": 498,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 213,
+        "uid": "CHwVBqFy4ObUudGNuv"
+      }
+    },
+    {
+      "connection_id": "1681961",
+      "state": "RSTO",
+      "expected": "TCP Reset-O",
+      "actual": "TCP Reset-O",
+      "build_line": 1096,
+      "teardown_line": 1099,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 461,
+        "uid": "CGXPZ9LeSoeGEjqG83"
+      }
+    },
+    {
+      "connection_id": "1681980",
+      "state": "RSTO",
+      "expected": "TCP Reset-I",
+      "actual": "TCP Reset-I",
+      "build_line": 1142,
+      "teardown_line": 1143,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 481,
+        "uid": "CZVdyOzABgFkcmZnCJ8"
+      }
+    },
+    {
+      "connection_id": "1682003",
+      "state": "RSTR",
+      "expected": "TCP Reset-I",
+      "actual": "TCP Reset-I",
+      "build_line": 1200,
+      "teardown_line": 1201,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 506,
+        "uid": "CFKk1HTgDAi7U5xLgo"
+      }
+    },
+    {
+      "connection_id": "1682028",
+      "state": "RSTO",
+      "expected": "TCP Reset-O",
+      "actual": "TCP Reset-O",
+      "build_line": 1253,
+      "teardown_line": 1254,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 532,
+        "uid": "CbiabH0uArWxezFeZ0F"
+      }
+    },
+    {
+      "connection_id": "1682038",
+      "state": "RSTO",
+      "expected": "TCP Reset-O",
+      "actual": "TCP Reset-O",
+      "build_line": 1277,
+      "teardown_line": 1278,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 543,
+        "uid": "CtpoZSmhyHQvSaRWAS"
+      }
+    },
+    {
+      "connection_id": "1682088",
+      "state": "REJ",
+      "expected": "TCP Reset-O",
+      "actual": "TCP Reset-O",
+      "build_line": 1388,
+      "teardown_line": 1389,
+      "zeek_example": {
+        "path": "zeek-dmz/conn.json",
+        "line": 595,
+        "uid": "CePzfMVRLraFu3IgII"
+      }
+    }
+  ],
+  "reset_mismatch_examples": [],
+  "qualification": "Conventional relative interface levels; exact real tuple and unanimous state across matching sensor rows. Equal-security and ambiguous/reused tuples excluded; no raw capture reset proof is claimed."
+}

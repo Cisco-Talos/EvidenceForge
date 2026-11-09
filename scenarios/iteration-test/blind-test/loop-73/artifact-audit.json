@@ -1,0 +1,57 @@
+{
+  "loop": 73,
+  "review_report_checks": {
+    "threat": {
+      "assessment_present": true,
+      "verdict_confidence_present": true,
+      "synthetic_confidence_present": true,
+      "all_required_sections": true
+    },
+    "detection": {
+      "assessment_present": true,
+      "verdict_confidence_present": true,
+      "synthetic_confidence_present": true,
+      "all_required_sections": true
+    },
+    "network": {
+      "assessment_present": true,
+      "verdict_confidence_present": true,
+      "synthetic_confidence_present": true,
+      "all_required_sections": true
+    },
+    "host": {
+      "assessment_present": true,
+      "verdict_confidence_present": true,
+      "synthetic_confidence_present": true,
+      "all_required_sections": true
+    }
+  },
+  "all_review_reports_valid": true,
+  "standalone_mean": 41.75,
+  "recorded_mean": 41.75,
+  "score_mean_valid": true,
+  "file_count": 20,
+  "manifest_sha256": "339d2b9060ece642bc51d0de8c9c09c000ce272af9d8676285562f671d22ede0",
+  "hashes": {
+    "REPORT.md": "8e80833f6c469d9ca0821e26eb90413ef3476278a50167bfc49c10424a44cfaf",
+    "automated-eval.json": "0a037910c1120f0baaf8aa54ce1a4071ba460b5092e48fa954edcb9c81dfc704",
+    "automated-eval.txt": "aa63a6615c252cf9e5a97efa6dd1dfccc2cedfec942f165a46219cf0ad84c130",
+    "data-hash-audit.json": "a470176d663dc2f545aebe991904da651d3d334023d7c69beb812eba4fc1dbdf",
+    "deliberation.md": "cc745b94c5866749e4950e9b57293264f65d6c08451590abb1709cc2d721de53",
+    "detection-engineer.md": "4a38a45859c9e44a13ef1aebbd0c3bf4efe0342607c1309c62081f548fd5c989",
+    "family-contract.md": "4970e64a2bcd3ffa3fe292d4261d5eb9f47fa5455d4c5b4e919db311c5215f08",
+    "host-edr-forensics.md": "b88fd5ac412e0451023db83e8bed0910c1e2e385d068c812e47965738f461fee",
+    "logind-id-probe.json": "1266c6bbbaff6d5a55a641d03c677a7888d9387ad49c1c7624e330cf13f0475e",
+    "network-forensics.md": "aa17f9ef7a6cce29ced8e43ce73b51379b297da865e142ac1690add40420db12",
+    "provenance.json": "1cf7d3fbe961951162ec418128f24c43e228455ed38f267c81cc1e3982834a6e",
+    "scores.json": "14ca0866fa44db597dbda82a526e34cd0c920821b300e52f23d7487d21a99cff",
+    "source/ENVIRONMENT.md": "3bb4fd26d7e860d9c500a46eb84be91be2a843b2c0e754464cac8a5d50ed6e88",
+    "source/ORIGIN.json": "b39e065d47ea046521d429a1286fd4f49032c9c308084c74c23fac804f7b2460",
+    "source/baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "source/email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002",
+    "source/environment.yaml": "0d303660bc5c069b2fbe0236520aa33025b7d15c6b4a132fd727c2feb33a0121",
+    "source/scenario.yaml": "652627916df2fcdb0f0c3f00c1de1286ce97f33a1c95b649ea028cbe2e0c7eaa",
+    "test-evidence.json": "3f92230c8992a5f9984a03db7346762fee7db4a6976a563759234e838eb26537",
+    "threat-hunter.md": "3758cb1eaae7d665589a7ac7b6ea257c5767f28212c569982ad84fe9bf272768"
+  }
+}

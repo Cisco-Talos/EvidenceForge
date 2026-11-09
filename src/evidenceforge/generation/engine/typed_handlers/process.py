@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import random
+import shlex
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.content_identity import FileContentIdentity
+from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -19,6 +21,10 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.process_helpers import (
+    _macos_foreground_lifetime,
+    _macos_process_uses_shell,
+)
 from evidenceforge.models.scenario import (
     CreateRemoteThreadEventSpec,
     ProcessAccessEventSpec,
@@ -38,6 +44,9 @@ def handle_process(
     self: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the process evidence path using the existing runtime owners."""
+    if getattr(spec, "outcome", "success") != "success":
+        return _handle_unsuccessful_process(self, spec, context)
+
     from evidenceforge.generation.engine.storyline_helpers.process import (
         _estimate_process_lifetime,
         _extract_schtasks_option,
@@ -85,6 +94,21 @@ def handle_process(
         username=process_actor.username,
     )
     command_line = spec.command_line or process_name
+    provider = self.activity_generator.macos_execution_metadata if os_category == "macos" else None
+    launch_session = self.state_manager.get_session_at(logon_id, time) if provider else None
+    finder = getattr(spec, "launch_method", None) == "finder" or (
+        os_category == "macos"
+        and provider is not None
+        and process_name in provider.profile.finder_launch_images
+        and spec.parent_ref is None
+        and launch_session is not None
+        and launch_session.session_kind == "interactive"
+        and launch_session.logon_type == 2
+    )
+    if finder and os_category != "macos":
+        from evidenceforge.models.exceptions import StateError
+
+        raise StateError("Finder launch_method requires a supported Mac host")
     shell_key = (system.hostname, process_actor.username)
 
     if "<base64_encoded_command>" in command_line:
@@ -139,9 +163,23 @@ def handle_process(
         malicious_event["skipped_reason"] = "no_live_parent_ref"
         return malicious_event
     requires_interactive_session = False
-    if explicit_parent is not None:
+    if finder:
+        parent_pid = 1
+        requires_interactive_session = True
+    elif explicit_parent is not None:
         parent_pid, _parent_image = explicit_parent
         requires_interactive_session = True
+    elif (
+        os_category == "macos"
+        and process_actor.username == "root"
+        and not process_logon_id
+        and (
+            foothold_pid := self.activity_generator._get_system_pid(
+                system.hostname, "preexisting-root-shell", 0
+            )
+        )
+    ):
+        parent_pid = foothold_pid
     elif service_process_identity is not None:
         process_actor, _service_name, service_lifecycle_group_id = service_process_identity
         process_logon_id = {
@@ -198,6 +236,14 @@ def handle_process(
             malicious_event["skipped_reason"] = "rdp_session_not_connected"
             return malicious_event
         time = max(time, interactive_ready_at)
+        if (
+            os_category == "macos"
+            and parent_pid is None
+            and _macos_process_uses_shell(process_name)
+        ):
+            parent_pid = self.activity_generator.ensure_macos_session_shell(
+                process_actor, system, process_logon_id, time, allow_deferred_start=True
+            )
         if parent_pid is None:
             parent_pid = self.activity_generator._resolve_parent(
                 system,
@@ -271,6 +317,7 @@ def handle_process(
             process_name=process_name,
             command_line=command_line,
             output_file=output_file,
+            logon_id=process_logon_id,
             rng=rng,
         )
         prepared_shell_command = self.activity_generator._prepare_bash_history_command(
@@ -282,7 +329,24 @@ def handle_process(
             system,
             time,
             prepared_shell_command,
+            logon_id=process_logon_id,
         )
+        malicious_event["time"] = time
+    if os_category == "macos" and not finder:
+        reserved_start = self.activity_generator.reserve_macos_foreground_process_start(
+            system=system,
+            username=process_actor.username,
+            logon_id=process_logon_id,
+            parent_pid=parent_pid,
+            requested_time=time,
+            command_line=process_command_line,
+        )
+        if reserved_start is None:
+            malicious_event["process_name"] = process_name
+            malicious_event["command_line"] = command_line
+            malicious_event["skipped_reason"] = "foreground_shell_unavailable"
+            return malicious_event
+        time = reserved_start
         malicious_event["time"] = time
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     service_backed_process = service_process_identity is not None or (
@@ -332,6 +396,18 @@ def handle_process(
             <= (timedelta(minutes=2) if exe_name == "psexesvc.exe" else timedelta(minutes=30))
         ):
             service_lifecycle_group_id = str(recent_service.get("lifecycle_group_id") or "")
+    finder_arguments = (
+        {
+            "arguments": catalog_direct_exec_arguments(process_name, process_command_line),
+            "macos_launch_kind": "finder",
+            "allow_existing_browser_reuse": False,
+            "allow_browser_launch_spacing": False,
+        }
+        if finder
+        else {}
+    )
+    if finder:
+        process_command_line = shlex.join(finder_arguments["arguments"])
     pid = self.activity_generator.generate_process(
         user=process_actor,
         system=system,
@@ -340,18 +416,76 @@ def handle_process(
         process_name=process_name,
         command_line=process_command_line,
         parent_pid=parent_pid,
-        require_exact_parent=explicit_parent is not None,
+        require_exact_parent=explicit_parent is not None or finder,
         ensure_file_event=not service_backed_process,
         from_storyline=True,
         suppress_command_file_effect=output_file is not None,
         lifecycle_group_id=service_lifecycle_group_id,
+        **finder_arguments,
     )
+    if pid <= 0:
+        malicious_event["process_name"] = process_name
+        malicious_event["command_line"] = command_line
+        malicious_event["skipped_reason"] = "process_launch_unavailable"
+        return malicious_event
     running_process = self.state_manager.get_process(system.hostname, pid)
     if running_process is not None:
         time = max(ensure_utc(time), ensure_utc(running_process.start_time))
         malicious_event["time"] = time
+    if os_category == "macos":
+        if running_process is not None:
+            malicious_event["native_process_model"] = (
+                "gui_exec"
+                if finder and running_process.execution_ordinal > 0
+                else "fork_exec"
+                if running_process.execution_ordinal > 0
+                else "aggregate_birth"
+            )
+        submission_time = (
+            ensure_utc(running_process.start_time)
+            if running_process is not None and running_process.execution_ordinal > 0
+            else time
+        )
+        self.activity_generator.emit_macos_shell_history(
+            process_actor,
+            system,
+            submission_time,
+            command_line,
+            logon_id=process_logon_id,
+            shell_pid=parent_pid,
+        )
     self.activity_generator._record_user_process(system, process_actor, pid, process_name)
     self._record_last_storyline_process(system, pid, process_name, process_command_line)
+    pipeline_children = ()
+    if os_category == "linux":
+        from .process_pipeline import emit_storyline_linux_pipeline_children
+
+        # Child evidence is scoped to this pipeline and must not consume the
+        # storyline's shared RNG stream. In particular, the parent shell's
+        # planned lifetime must remain independent of how many pipeline stages
+        # are rendered.
+        pipeline_rng_state = rng.getstate()
+        try:
+            pipeline_children = emit_storyline_linux_pipeline_children(
+                self,
+                user=process_actor,
+                system=system,
+                start_time=time,
+                logon_id=process_logon_id,
+                shell_pid=pid,
+                shell_image=process_name,
+                command_line=process_command_line,
+            )
+        finally:
+            rng.setstate(pipeline_rng_state)
+        if pipeline_children:
+            effect_owner = pipeline_children[-1]
+            self._record_last_storyline_process(
+                system,
+                effect_owner.pid,
+                effect_owner.image,
+                effect_owner.command_line,
+            )
     process_ref = getattr(spec, "process_ref", None)
     if not isinstance(process_ref, str) or not process_ref:
         process_ref = None
@@ -474,10 +608,16 @@ def handle_process(
 
     # Mark as story process and schedule termination
     self.state_manager.mark_story_process(system.hostname, pid)
-    lifetime = _estimate_process_lifetime(process_name, process_command_line)
+    lifetime = (
+        _macos_foreground_lifetime(process_name, process_command_line)
+        if os_category == "macos"
+        else _estimate_process_lifetime(process_name, process_command_line)
+    )
+    pipeline_parent_termination_time: datetime | None = None
     if lifetime is not None:
         term_delay = rng.uniform(lifetime[0], lifetime[1])
         term_time = time + timedelta(seconds=term_delay)
+        pipeline_parent_termination_time = term_time
         shell_release_time = term_time
         terminate_immediately = False
         if os_category == "windows":
@@ -528,6 +668,64 @@ def handle_process(
                 future_specs,
             ):
                 terminate_immediately = False
+        if os_category == "macos":
+            canonical_close = self.activity_generator.foreground_process_termination_time(
+                system.hostname, pid
+            )
+            terminate_immediately = (
+                _macos_foreground_lifetime(process_name, process_command_line) is not None
+                and canonical_close is not None
+                and process_ref is None
+                and not self._process_has_following_same_host_connection(system, future_specs)
+            )
+            if canonical_close is not None:
+                term_time = ensure_utc(canonical_close)
+                shell_release_time = term_time
+        if pipeline_children:
+            owner_pid = pipeline_children[-1].pid
+            owner_close_getter = getattr(
+                self.activity_generator,
+                "foreground_process_termination_time",
+                None,
+            )
+            owner_close = (
+                owner_close_getter(system.hostname, owner_pid)
+                if callable(owner_close_getter)
+                else None
+            )
+            if owner_close is not None:
+                parent_release_delay = 80 + (
+                    _stable_seed(
+                        f"storyline_linux_pipeline_parent_wait:{system.hostname}:"
+                        f"{pid}:{owner_pid}:{ensure_utc(owner_close).isoformat()}"
+                    )
+                    % 921
+                )
+                pipeline_parent_termination_time = max(
+                    ensure_utc(term_time),
+                    ensure_utc(owner_close) + timedelta(milliseconds=parent_release_delay),
+                )
+                term_time = pipeline_parent_termination_time
+                shell_release_time = term_time
+                self.activity_generator._remember_foreground_process_finalizer(
+                    system=system,
+                    user=process_actor,
+                    pid=pid,
+                    process_name=process_name,
+                    logon_id=process_logon_id,
+                    termination_time=term_time,
+                )
+            from .process_pipeline import terminate_storyline_linux_pipeline_children
+
+            terminate_storyline_linux_pipeline_children(
+                self,
+                children=pipeline_children,
+                user=process_actor,
+                system=system,
+                logon_id=process_logon_id,
+                parent_termination_time=pipeline_parent_termination_time,
+                owner_pid=pipeline_children[-1].pid,
+            )
         if terminate_immediately:
             self.activity_generator.generate_process_termination(
                 user=process_actor,
@@ -537,6 +735,7 @@ def handle_process(
                 process_name=process_name,
                 logon_id=process_logon_id,
                 from_storyline=True,
+                **({"macos_command_completed": True} if os_category == "macos" else {}),
             )
         else:
             release_storyline_index = (
@@ -1123,4 +1322,74 @@ def handle_process_access(
         if not evidence_emitted:
             malicious_event["skipped_reason"] = "no_live_target_process"
 
+    return context.malicious_event
+
+
+def _handle_unsuccessful_process(
+    runtime: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
+) -> dict[str, Any]:
+    """Record an explicit no-new-execution outcome on its exact existing caller."""
+    from evidenceforge.generation.actions.process_policy import (
+        generate_policy_refusal,
+        record_denied_process_launch,
+        record_failed_process_exec,
+    )
+    from evidenceforge.models.exceptions import StateError
+
+    label = {
+        "denied": "Denied launch",
+        "exec_failed": "Returning exec failure",
+        "policy_refused": "App-policy refusal",
+    }[spec.outcome]
+    if _get_os_category(context.system.os) != "macos":
+        raise StateError(f"{label} currently requires a Mac workstation")
+    reference = getattr(runtime, "_storyline_process_refs", {}).get(
+        (context.system.hostname, context.actor.username, spec.parent_ref)
+    )
+    if reference is None or len(reference) != 3:
+        raise StateError(f"{label} requires an earlier exact process_ref lifetime")
+    pid, image, object_id = reference
+    state = runtime.state_manager
+    parent = state.get_process_identity(context.system.hostname, pid)
+    if parent is None or parent.object_id != object_id or parent.image != image:
+        raise StateError(f"{label} parent_ref no longer names its original live process")
+    if spec.outcome == "policy_refused":
+        refusal = generate_policy_refusal(
+            runtime.activity_generator,
+            system=context.system,
+            actor=parent,
+            attempted_at=context.time,
+            image=spec.process_name,
+        )
+        context.malicious_event.update(
+            process_name=refusal.target.image,
+            command_line=spec.command_line or spec.process_name,
+            outcome=spec.outcome,
+            refused_target_pid=refusal.target.pid,
+            refusal_cause="unclassified",
+            execution_stage="unclassified",
+            expected_sources=["macos_unified_log"] if refusal.native else [],
+        )
+        return context.malicious_event
+    recorder = (
+        record_denied_process_launch if spec.outcome == "denied" else record_failed_process_exec
+    )
+    result = recorder(
+        state,
+        actor=parent,
+        attempted_at=context.time,
+        image=spec.process_name,
+        command_line=spec.command_line or spec.process_name,
+    )
+    context.malicious_event.update(
+        process_name=result.image,
+        command_line=result.command_line,
+        outcome=spec.outcome,
+        skipped_reason=(
+            "execution_denied_before_spawn"
+            if spec.outcome == "denied"
+            else "exec_failed_caller_preserved"
+        ),
+        expected_sources=[],
+    )
     return context.malicious_event

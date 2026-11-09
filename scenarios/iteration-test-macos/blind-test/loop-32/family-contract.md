@@ -1,0 +1,5 @@
+# Generic SSH transport versus authentication intent
+
+Owner: canonical network responder/preauthentication evidence construction before rendering. Completed TCP/22 does not prove SSH user authentication. Generic responder evidence without an attempted principal must emit connection/preauth closure only; explicit known and invalid-user attempts retain failure evidence. Shared path covers storyline scans, baseline probes and raw generic connections; SSH bundle sessions remain separate. Preserve responder process/transport identities, no sample keys or emitter filtering. Unauthenticated close intent follows transport rather than invented password delay. Verify24/100-byte scans, known/invalid-user siblings, and rendered tuple joins. Low-to-medium risk.
+
+Second family: transport-aware DNS payload accounting. The shared protocol planner owns mandatory two-byte TCP message prefixes and full TCP message sizes; UDP budgets remain unchanged. Explicit DNS contexts and contextless modeled-DNS fallback both use the helper before packet/IP-byte planning. Cover A/AAAA/TXT, unanswered queries, and TCP responses beyond the UDP1232-byte ceiling. No emitter budget patch.

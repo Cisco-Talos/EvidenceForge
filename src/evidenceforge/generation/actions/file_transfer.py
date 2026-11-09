@@ -346,7 +346,10 @@ def _http_content_seed_material(
     """Return the canonical HTTP response-content identity seed."""
 
     identity_uri = _http_content_identity_uri(host, uri)
-    return f"http:{host}:{identity_uri}:{response_body_len}:{mime_type}"
+    from evidenceforge.generation.activity.http_content import http_response_resource_identity
+
+    resource_identity = http_response_resource_identity(host, identity_uri)
+    return f"http:{resource_identity}:{response_body_len}:{mime_type}"
 
 
 def _http_content_identity_uri(host: str, uri: str) -> str:
@@ -1014,7 +1017,7 @@ def _publish_prepared_file_occurrences(
         ...,
     ],
 ) -> None:
-    """Publish prepared file projections, then commit every artifact token last."""
+    """Prepare every file projection, commit artifacts, then publish their evidence."""
 
     publication_list: list[LocalArtifactPublishToken] = []
     seen_reservations: set[int] = set()
@@ -1061,14 +1064,15 @@ def _publish_prepared_file_occurrences(
                     executor,
                     occurrence,
                     artifact_publication=publication,
-                )
+                ),
+                artifact_publications=(publication,) if publication is not None else (),
             )
             for occurrence, publication in planned
         )
-        for prepared in prepared_dispatches:
-            publish_prepared(prepared)
         for commit in commits:
             commit.commit()
+        for prepared in prepared_dispatches:
+            publish_prepared(prepared)
 
 
 def _reconcile_exact_effects(

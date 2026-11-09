@@ -37,6 +37,15 @@ app config and optional caller-supplied apps for CIM checks.
 | Windows Security `windows_event_security_snare.log` | `sof-elk-windows-security-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated under `<host>/<year>/windows_event_security_snare.log`, staged under `/logstash/syslog/<year>/<host>/...`, and requires `snare_log`, `parse_done`, and normalized `winlog.*` fields. |
 | Sysmon `windows_event_sysmon_snare.log` | `sof-elk-windows-sysmon-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; validates `winlog.event_id`, provider, channel, computer, and staged source year. |
 
+## Native Mac files outside harness discovery
+
+The current harness does not recognize `macos_endpoint_security.ndjson`,
+`macos_unified_log.ndjson` or `*.zsh_history` as parser-validation inputs. They
+have no validated SOF-ELK/Splunk parser or normalization mapping here. Unlike the
+recognized unsupported families below, they do not currently produce a per-file
+unsupported warning. Do not interpret a successful mixed-fleet harness run as
+coverage of these files. Native internal decoding/evaluation remains a separate check.
+
 ## Unsupported
 
 | EvidenceForge output | Validator | Notes |

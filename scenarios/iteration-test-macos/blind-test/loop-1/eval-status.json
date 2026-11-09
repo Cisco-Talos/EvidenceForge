@@ -1,0 +1,14 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--no-sync",
+    "eforge",
+    "eval",
+    "/private/tmp/eforge-iteration-macos-loop1-njdnyda_/bundle-diagnostic-assessment-2",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 13.73
+}

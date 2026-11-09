@@ -53,7 +53,7 @@ from evidenceforge.cli.commands import (
     _GenerationSpeedColumn,
     app,
 )
-from evidenceforge.composition import compile_scenario
+from evidenceforge.composition import compile_scenario, with_runtime_scenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
@@ -382,6 +382,54 @@ class TestVersionCommand:
 
 class TestValidateCommand:
     """Tests for 'eforge validate' command."""
+
+    @pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 27"])
+    def test_validate_network_only_output_reports_endpoint_info_without_warnings(
+        self, scenarios_dir: Path, tmp_path: Path, os_name: str
+    ) -> None:
+        scenario_data = yaml.safe_load((scenarios_dir / "minimal.yaml").read_text())
+        scenario_data["environment"]["systems"][0]["os"] = os_name
+        if os_name.startswith("macOS"):
+            scenario_data["environment"]["systems"][0]["architecture"] = "arm64"
+        scenario_data["output"]["logs"] = [{"format": "zeek_conn"}]
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["valid"] is True
+        assert payload["severity_counts"]["error"] == 0
+        assert payload["severity_counts"]["warning"] == 0
+        notes = [
+            issue
+            for issue in payload["issues"]
+            if "no observable host endpoint source" in issue["message"]
+        ]
+        assert len(notes) == 1
+        assert notes[0]["severity"] == "info"
+
+    @pytest.mark.parametrize(
+        "format_name", ["ecar", "zsh_history", "macos_unified_log", "macos_endpoint_security"]
+    )
+    def test_validate_rejects_retired_mac_target_for_every_output(
+        self, scenarios_dir: Path, tmp_path: Path, format_name: str
+    ) -> None:
+        scenario_data = yaml.safe_load((scenarios_dir / "minimal.yaml").read_text())
+        scenario_data["environment"]["systems"][0].update(os="macOS 26", architecture="arm64")
+        scenario_data["output"]["logs"] = [{"format": format_name}]
+        scenario_file = tmp_path / "retired-target.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+        assert result.exit_code != EXIT_SUCCESS
+        payload = json.loads(result.stdout)
+        assert payload["valid"] is False
+        assert any(
+            issue["severity"] == "error"
+            and "Unsupported macOS generation target" in issue["message"]
+            for issue in payload["issues"]
+        )
 
     def test_validate_rejects_behavior_with_no_possible_evidence_projection(
         self,
@@ -725,6 +773,43 @@ class TestEvalCommand:
         assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.call_args.kwargs["scenario"] is compiled.scenario
         assert mock_engine_class.call_args.kwargs["effective_config"] is compiled.effective_config
+
+    @pytest.mark.parametrize("changed", [False, True])
+    def test_eval_compares_ordered_runtime_formats_without_masking_source_drift(
+        self, tmp_path: Path, changed: bool
+    ) -> None:
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "GENERATION_MANIFEST.json").write_text("{}", encoding="utf-8")
+        compiled = compile_scenario("tests/fixtures/scenarios/minimal.yaml")
+        runtime = compiled.scenario.model_copy(deep=True)
+        runtime.output.logs = [{"format": "zeek"}, {"format": "windows"}]
+        compiled = with_runtime_scenario(compiled, runtime)
+        candidate = compiled
+        if changed:
+            altered = runtime.model_copy(deep=True)
+            altered.environment.description += " A changed environment."
+            candidate = with_runtime_scenario(compiled, altered)
+        manifest = {
+            "compiled_sha256": compiled.digests["compiled_sha256"],
+            "generation_seed": compiled.scenario.generation_seed,
+            "formats": ["windows", "zeek"],
+        }
+        with (
+            patch("evidenceforge.cli.commands.verify_generation_bundle", return_value=manifest),
+            patch(
+                "evidenceforge.cli.commands.compile_scenario",
+                side_effect=[compiled, candidate],
+            ),
+            patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine,
+            patch("evidenceforge.evaluation.report.format_text_report"),
+        ):
+            result = runner.invoke(
+                app,
+                ["eval", str(bundle), "--scenario", "tests/fixtures/scenarios/minimal.yaml"],
+            )
+        assert result.exit_code == (EXIT_SCHEMA_VALIDATION if changed else EXIT_SUCCESS)
+        assert mock_engine.called is not changed
 
     def test_eval_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge eval should treat include conflicts as scenario validation errors."""

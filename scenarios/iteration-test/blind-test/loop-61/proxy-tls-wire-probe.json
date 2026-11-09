@@ -1,0 +1,82 @@
+{
+  "baseline_loop": 53,
+  "before": {
+    "qualified_tunnels": 977,
+    "exact_control_plus_plaintext": 543,
+    "below_handshake_and_record_floor": 815,
+    "examples": [
+      {
+        "setup_line": 28,
+        "tunnel_id": "PT-9ad389908c1ea0ea",
+        "actual": [
+          2199,
+          70292
+        ],
+        "plaintext": [
+          1407,
+          68680
+        ],
+        "requests": 2
+      },
+      {
+        "setup_line": 30,
+        "tunnel_id": "PT-72b59bcc62b8128a",
+        "actual": [
+          835,
+          129900
+        ],
+        "plaintext": [
+          835,
+          129900
+        ],
+        "requests": 1
+      },
+      {
+        "setup_line": 32,
+        "tunnel_id": "PT-50115c2280fff2c0",
+        "actual": [
+          715,
+          1233
+        ],
+        "plaintext": [
+          715,
+          1233
+        ],
+        "requests": 1
+      },
+      {
+        "setup_line": 67,
+        "tunnel_id": "PT-1aab2afba7a59afa",
+        "actual": [
+          1700,
+          26004
+        ],
+        "plaintext": [
+          985,
+          25514
+        ],
+        "requests": 1
+      },
+      {
+        "setup_line": 69,
+        "tunnel_id": "PT-bb6c7faae1993f53",
+        "actual": [
+          903,
+          714
+        ],
+        "plaintext": [
+          903,
+          259
+        ],
+        "requests": 1
+      }
+    ]
+  },
+  "after": {
+    "qualified_tunnels": 1020,
+    "exact_control_plus_plaintext": 0,
+    "below_handshake_and_record_floor": 0,
+    "examples": []
+  },
+  "qualification": "Unique core tuple plus SF/SYN/SYNACK/bothFIN; compares visible plaintext requests with conservative fresh client TLS profile. Other captures excluded, not declared failures."
+}

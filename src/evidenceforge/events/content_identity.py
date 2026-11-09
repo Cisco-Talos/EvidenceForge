@@ -42,6 +42,18 @@ import posixpath
 import re
 from dataclasses import dataclass, field
 from typing import Literal, cast
+from uuid import UUID
+
+from evidenceforge.events.macos_entitlements import (
+    EntitlementObject,
+    FrozenEntitlements,
+    canonical_entitlements,
+    extended_entitlements,
+    freeze_entitlements,
+    native_entitlements,
+)
+from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 
 type Platform = Literal["windows", "linux", "macos"]
 type Architecture = Literal["x86", "x64", "arm64", "neutral"]
@@ -93,6 +105,8 @@ def canonical_native_path(path: str, platform: Platform) -> str:
     """Return an exact platform-native lookup key for a path.
 
     Windows paths are slash- and case-insensitive. POSIX paths retain case.
+    Mac paths preserve literal backslashes; Linux retains its legacy separator
+    normalization for compatibility with existing authored inputs.
     This helper canonicalizes path spelling only; it never accesses the host
     filesystem and therefore cannot resolve symlinks or materialize content.
     """
@@ -100,6 +114,8 @@ def canonical_native_path(path: str, platform: Platform) -> str:
     normalized = _text(path, "path")
     if platform == "windows":
         return ntpath.normpath(normalized.replace("/", "\\")).casefold()
+    if platform == "macos":
+        return posixpath.normpath(normalized)
     return posixpath.normpath(normalized.replace("\\", "/"))
 
 
@@ -223,7 +239,7 @@ class BinaryReleaseKey:
             "artifact_name",
             casefold=platform == "windows",
         )
-        if "/" in artifact_name or "\\" in artifact_name:
+        if "/" in artifact_name or (platform != "macos" and "\\" in artifact_name):
             raise ValueError("artifact_name must not contain an installation path")
 
         object.__setattr__(self, "product_id", _text(self.product_id, "product_id", casefold=True))
@@ -263,11 +279,188 @@ class BinaryReleaseKey:
 
 
 @dataclass(frozen=True, slots=True)
+class MachOCodeSignature:
+    """Explicit signing identity and a separately modeled CodeDirectory digest.
+
+    A signing identifier is not an application bundle identifier. Missing signer
+    metadata is not evidence that a binary is unsigned or trusted.
+    """
+
+    signing_id: str | None
+    team_id: str | None
+    cdhash: str
+    entitlements: Literal["absent"] | FrozenEntitlements | None = None
+
+    def _comparison_key(self) -> tuple[object, ...]:
+        return (json.dumps(self.serialized_values(), sort_keys=True, ensure_ascii=True),)
+
+    def __eq__(self, other: object) -> bool:
+        """Keep integer 1 distinct from Boolean true even in mixed entitlement objects."""
+        if type(other) is not MachOCodeSignature:
+            return NotImplemented
+        return self._comparison_key() == other._comparison_key()
+
+    def __hash__(self) -> int:
+        """Use the same exact-type key as equality; never use this hash for derivation."""
+        return hash(self._comparison_key())
+
+    def __post_init__(self) -> None:
+        """Reject malformed signing metadata without filling unknown fields."""
+
+        for name in ("signing_id", "team_id"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or not value.strip() or "\0" in value):
+                raise ValueError(f"{name} must be nonempty text or explicit absence")
+        object.__setattr__(self, "cdhash", _validate_digest(self.cdhash, "sha1"))
+        if self.entitlements is not None and self.entitlements != "absent":
+            entries = self.entitlements
+            object.__setattr__(self, "entitlements", canonical_entitlements(entries))
+
+    def serialized_values(self) -> tuple[object, ...]:
+        """Preserve old encodings and tag newly supported value families explicitly."""
+        values = (self.signing_id, self.team_id, self.cdhash)
+        if self.entitlements is None:
+            return values
+        if type(self.entitlements) is tuple and extended_entitlements(self.entitlements):
+            return (*values, ("property-object-v2", native_entitlements(self.entitlements)))
+        if type(self.entitlements) is tuple and any(
+            type(value) is EntitlementObject for _, value in self.entitlements
+        ):
+            return (*values, ("property-object-v1", native_entitlements(self.entitlements)))
+        encoded = (
+            (
+                "integer-object-v1"
+                if any(type(value) is int for _, value in self.entitlements)
+                else "bounded-object-v2"
+                if not self.entitlements
+                or any(type(value) is str for _, value in self.entitlements)
+                else "boolean-string-array-v1"
+                if any(type(value) is tuple for _, value in self.entitlements)
+                else "boolean-v1",
+                self.entitlements,
+            )
+            if type(self.entitlements) is tuple
+            else self.entitlements
+        )
+        return (*values, encoded)
+
+    @classmethod
+    def from_serialized_values(cls, values: object) -> MachOCodeSignature:
+        """Restore explicit versioned values without promoting legacy unknown facts."""
+        if type(values) not in {list, tuple} or len(values) not in {3, 4}:
+            raise ValueError("Malformed serialized Mach-O signature")
+        entries = values[3] if len(values) == 4 else None
+        tag: str | None = None
+        if type(entries) in {list, tuple}:
+            if len(entries) == 2 and entries[0] in {"property-object-v1", "property-object-v2"}:
+                restored = cls(values[0], values[1], values[2], freeze_entitlements(entries[1]))
+                if restored.serialized_values()[3][0] != entries[0]:
+                    raise ValueError("Entitlement representation tag disagrees with its values")
+                return restored
+            if (
+                len(entries) != 2
+                or entries[0]
+                not in (
+                    "boolean-v1",
+                    "boolean-string-array-v1",
+                    "bounded-object-v2",
+                    "integer-object-v1",
+                )
+                or type(entries[1]) not in {list, tuple}
+            ):
+                raise ValueError("Unknown serialized entitlement representation")
+            pairs = entries[1]
+            if any(type(pair) not in {list, tuple} or len(pair) != 2 for pair in pairs):
+                raise ValueError("Malformed serialized entitlement entries")
+            tag = entries[0]
+            entries = tuple(
+                (pair[0], tuple(pair[1]) if type(pair[1]) in (list, tuple) else pair[1])
+                for pair in pairs
+            )
+        restored = cls(values[0], values[1], values[2], entries)
+        if tag is not None and restored.serialized_values()[3][0] != tag:
+            raise ValueError("Entitlement representation tag disagrees with its values")
+        return restored
+
+    @classmethod
+    def derive(
+        cls,
+        key: BinaryReleaseKey,
+        *,
+        signing_id: str | None,
+        team_id: str | None,
+        entitlements: Literal["absent"] | FrozenEntitlements | None = None,
+    ) -> MachOCodeSignature:
+        """Derive synthetic digest-shaped metadata once from the signed release.
+
+        The separate namespace represents a CodeDirectory, not whole-file SHA-1.
+        These values are synthetic identities, not publisher binary measurements.
+        """
+
+        if key.platform != "macos":
+            raise ValueError("Mach-O code signatures require a macOS binary release")
+        if type(entitlements) is tuple:
+            entitlements = canonical_entitlements(entitlements)
+        facts = (*key.canonical_key, signing_id, team_id)
+        if entitlements is not None:
+            facts = (*facts, ("entitlements", entitlements))
+        digest = _semantic_sha256("mach-o-code-directory", facts)[:40]
+        return cls(signing_id=signing_id, team_id=team_id, cdhash=digest, entitlements=entitlements)
+
+
+@dataclass(frozen=True, slots=True)
+class MachOImageIdentity:
+    """Explicit native image metadata, separate from content and signing identity.
+
+    An LC_UUID names an architecture-specific build image. Merely having a Mac
+    path does not establish a Mach-O image; producers must supply this fact.
+    The initial generation profile supports native arm64 only.
+    """
+
+    build_uuid: str
+    architecture: Literal["arm64"] = "arm64"
+
+    def __post_init__(self) -> None:
+        """Reject unknown architectures, nil UUIDs and noncanonical UUID spelling."""
+        if self.architecture != "arm64":
+            raise ValueError("Mach-O image metadata requires the supported arm64 profile")
+        if (
+            type(self.build_uuid) is not str
+            or re.fullmatch(
+                r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", self.build_uuid
+            )
+            is None
+        ):
+            raise ValueError("Mach-O build UUID requires a canonical UUID string")
+        parsed = UUID(self.build_uuid)
+        if parsed.int == 0:
+            raise ValueError("Mach-O build UUID cannot be nil")
+        object.__setattr__(self, "build_uuid", str(parsed).upper())
+
+    @classmethod
+    def derive(cls, key: BinaryReleaseKey) -> MachOImageIdentity:
+        """Model one release-scoped image UUID without inspecting a host binary.
+
+        Like canonical content digests, the value is stable for the release,
+        independent of host, installation path and generation seed. It is a
+        synthetic UUID-shaped identity, not a measurement of publisher bytes.
+        """
+        if key.platform != "macos" or key.architecture != "arm64":
+            raise ValueError("Mach-O image derivation requires a native macOS arm64 release")
+        image_uuid = UUID(
+            hex=_semantic_sha256("mach-o-build-image", key.canonical_key)[:32], version=4
+        )
+        return cls(build_uuid=str(image_uuid))
+
+
+@dataclass(frozen=True, slots=True)
 class BinaryReleaseIdentity:
     """Canonical identity and deterministic hashes for one binary release artifact."""
 
     key: BinaryReleaseKey
     pe_version_info: PeVersionInfo | None = None
+    code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
     release_id: str = field(init=False)
     content_id: str = field(init=False)
     digests: ContentDigests = field(init=False)
@@ -281,6 +474,16 @@ class BinaryReleaseIdentity:
     def __post_init__(self) -> None:
         """Derive immutable release and content identifiers exactly once."""
 
+        if self.code_signature is not None and (
+            self.key.platform != "macos" or type(self.code_signature) is not MachOCodeSignature
+        ):
+            raise ValueError("Code signature metadata requires a macOS binary and exact snapshot")
+        if self.mach_o_image is not None and (
+            type(self.mach_o_image) is not MachOImageIdentity
+            or self.key.platform != "macos"
+            or self.key.architecture != self.mach_o_image.architecture
+        ):
+            raise ValueError("Mach-O image metadata must match its native binary architecture")
         object.__setattr__(
             self,
             "release_id",
@@ -413,7 +616,15 @@ class FileContentIdentity:
         object.__setattr__(
             self,
             "digests",
-            ContentDigests.derive("file-content", content_key),
+            (
+                ContentDigests(
+                    md5=hashlib.md5(b"", usedforsecurity=False).hexdigest(),
+                    sha1=hashlib.sha1(b"").hexdigest(),
+                    sha256=hashlib.sha256(b"").hexdigest(),
+                )
+                if self.size_bytes == 0
+                else ContentDigests.derive("file-content", content_key)
+            ),
         )
 
     @property
@@ -874,6 +1085,8 @@ class LocalArtifactBinaryIdentity:
     architecture: Architecture
     artifact_name: str
     pe_version_info: PeVersionInfo | None = None
+    code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
     identity_kind: Literal["local_artifact"] = field(init=False, default="local_artifact")
 
     def __post_init__(self) -> None:
@@ -881,6 +1094,16 @@ class LocalArtifactBinaryIdentity:
 
         platform = _platform(self.platform)
         architecture = _text(self.architecture, "architecture", casefold=True)
+        if self.code_signature is not None and (
+            platform != "macos" or type(self.code_signature) is not MachOCodeSignature
+        ):
+            raise ValueError("Code signature metadata requires an exact macOS binary snapshot")
+        if self.mach_o_image is not None and (
+            type(self.mach_o_image) is not MachOImageIdentity
+            or platform != "macos"
+            or architecture != self.mach_o_image.architecture
+        ):
+            raise ValueError("Mach-O image metadata must match its native binary architecture")
         if architecture not in _ARCHITECTURES:
             raise ValueError(f"architecture must be one of {sorted(_ARCHITECTURES)}")
         artifact_name = _text(
@@ -888,7 +1111,7 @@ class LocalArtifactBinaryIdentity:
             "artifact_name",
             casefold=platform == "windows",
         )
-        if "/" in artifact_name or "\\" in artifact_name:
+        if "/" in artifact_name or (platform != "macos" and "\\" in artifact_name):
             raise ValueError("artifact_name must not contain an installation path")
         object.__setattr__(
             self,
@@ -1006,12 +1229,30 @@ class LocalArtifactVersionRecord:
     artifact: LocalArtifactIdentity
     content: FileContentIdentity
     binary: LocalArtifactBinaryIdentity | None = None
+    launchd_job: LaunchdSystemJobSpec | None = None
+    macos_file: MacosFileMetadata | None = None
 
     def __post_init__(self) -> None:
         """Reject contradictory artifact, content, or executable descriptors."""
 
         if self.artifact.content_id != self.content.content_id:
             raise ValueError("local artifact content_id must match its file content identity")
+        if self.macos_file is not None and (
+            type(self.macos_file) is not MacosFileMetadata
+            or self.artifact.platform != "macos"
+            or self.macos_file.file_object_id != self.content.file_object_id
+            or self.macos_file.size_bytes != self.content.size_bytes
+            or not self.artifact.native_path.startswith("/")
+            or "\0" in self.artifact.native_path
+        ):
+            raise ValueError("Mac file metadata must match its exact object, platform and size")
+        if self.launchd_job is not None:
+            if type(self.launchd_job) is not LaunchdSystemJobSpec:
+                raise ValueError("launchd file metadata requires an exact bounded spec")
+            if self.artifact.platform != "macos" or self.binary is not None:
+                raise ValueError("launchd metadata belongs to a non-executable Mac file")
+            if self.content.seed_ref != self.launchd_job.content_seed:
+                raise ValueError("launchd file content must match its exact job semantics")
         if self.binary is None:
             return
         if (
@@ -1049,6 +1290,8 @@ __all__ = [
     "LocalArtifactIdentity",
     "LocalArtifactObjectKey",
     "LocalArtifactVersionRecord",
+    "MachOCodeSignature",
+    "MachOImageIdentity",
     "PeVersionInfo",
     "Platform",
     "ProcessBinaryIdentity",

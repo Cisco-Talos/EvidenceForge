@@ -1,0 +1,28 @@
+{
+  "family": "Linux foreground decision timing",
+  "profile": "baseline.foreground_think",
+  "configured_window_ms": [
+    800,
+    180000
+  ],
+  "reviewed_host": "WS-LNGUYEN-01.meridianhcs.local",
+  "command_count": 15,
+  "inter_command_gaps_seconds": [
+    1641.9,
+    137.225,
+    114.129,
+    2580.079,
+    193.687,
+    174.807,
+    229.908,
+    115.263,
+    85.525,
+    154.285,
+    3384.826,
+    309.684,
+    112.83,
+    107.4
+  ],
+  "gaps_94_to_98_seconds": 0,
+  "result": "The prior repeated 95\u201396 second burst is absent in the regenerated Linux developer command sample. Command starts remain represented in both eCAR and bash history; authoritative eval hard acceptance passed. This is one fixed-seed rendered family probe, not a general distribution study."
+}

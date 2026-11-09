@@ -13,6 +13,44 @@
 # "string_dict_fields": mappings whose keys and values must be non-empty strings
 # "string_fields" / "number_fields": scalar root fields with explicit primitive types
 OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
+    "activity/macos_endpoint_security_profiles.yaml": {
+        "string_fields": {"schema_version"},
+        "list_fields": {"profiles": "profile"},
+    },
+    "activity/macos_execution_metadata.yaml": {
+        "dict_fields": {"terminal", "directory_inode_range", "directory_age_range"},
+        "string_fields": {"schema_version", "profile"},
+        "string_list_fields": {"user_environment", "root_environment"},
+        "scalar_fields": {
+            "cpu_subtype": int,
+            "directory_permissions": int,
+            "directory_size_bytes": int,
+            "directory_allocated_blocks": int,
+            "first_pipe_id": int,
+        },
+    },
+    "activity/macos_installed_files.yaml": {
+        "dict_fields": {
+            "volume_device",
+            "first_inode",
+            "logical_size_bytes",
+            "installation_age_seconds",
+            "build_lead_seconds",
+        },
+        "string_fields": {"schema_version", "profile", "volume_id", "allocation_policy"},
+        "scalar_fields": {
+            "allocation_unit_bytes": int,
+            "permissions": int,
+            "flags": int,
+            "generation": int,
+            "size_median_bytes": int,
+        },
+        "number_fields": {"size_log_sigma"},
+    },
+    "activity/macos_unified_log_profiles.yaml": {
+        "dict_fields": {"mach_timebase", "workspace_request"},
+        "string_fields": {"schema_version", "profile"},
+    },
     "activity/dns_registry.yaml": {
         "list_fields": {"domains": "domain"},
         "dict_fields": {"valid_tags", "long_tail", "ipv6_map", "ipv6_prefixes"},
@@ -27,7 +65,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "dict_fields": {"role_traffic", "persona_traffic"},
     },
     "activity/spawn_rules.yaml": {
-        "dict_fields": {"windows", "linux"},
+        "dict_fields": {"windows", "linux", "macos"},
     },
     "activity/proxy_uri_templates.yaml": {
         "dict_fields": {"domains", "tags", "generic"},
@@ -35,7 +73,13 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "string_fields": {"default_http_policy"},
     },
     "activity/proxy_user_agents.yaml": {
-        "dict_fields": {"domain_overrides", "workstation", "server"},
+        "dict_fields": {
+            "domain_overrides",
+            "workstation",
+            "server",
+            "browser_process_families",
+            "browser_profile_roots",
+        },
     },
     "activity/beacon_profiles.yaml": {
         "dict_fields": {"profiles"},
@@ -46,6 +90,14 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     },
     "activity/process_network_map.yaml": {
         "list_fields": {"mappings": None},
+    },
+    "activity/process_output_profiles.yaml": {
+        "dict_fields": {"profiles"},
+        "scalar_fields": {"schema_version": str},
+    },
+    "activity/runtime_executable_profiles.yaml": {
+        "dict_fields": {"profiles"},
+        "scalar_fields": {"schema_version": str},
     },
     "activity/email_background.yaml": {
         "list_fields": {
@@ -117,7 +169,15 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "dict_fields": {"domain_ca_overrides"},
     },
     "activity/tls_realism.yaml": {
-        "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
+        "dict_fields": {
+            "san",
+            "serial_numbers",
+            "ocsp",
+            "certificate_chains",
+            "destinations",
+            "wire_budget",
+            "public_leaf_validity",
+        },
     },
     "activity/public_dns_profiles.yaml": {
         "list_fields": {
@@ -139,7 +199,10 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
             "dns_tunnel_rtt",
             "dns_tunnel_rcode_weights",
             "nmap_command_probe",
+            "protocol_confirmation",
             "proxy_connect_status_messages",
+            "transport_histories",
+            "ssl_histories",
         },
         "string_list_fields": {
             "dns_tunnel_response_templates",
@@ -213,7 +276,12 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         },
     },
     "activity/http_file_profiles.yaml": {
-        "dict_fields": {"extension_mime_types", "request_profiles", "multipart"},
+        "dict_fields": {
+            "extension_mime_types",
+            "request_profiles",
+            "multipart",
+            "shared_resources",
+        },
     },
     "activity/ids_signatures.yaml": {
         "list_fields": {"signatures": None},

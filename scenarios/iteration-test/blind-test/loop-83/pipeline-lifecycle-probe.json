@@ -1,0 +1,80 @@
+{
+  "host": "WEB-EXT-01",
+  "source": "ecar.json",
+  "typed_pipeline_root_pid": 2702831,
+  "events": [
+    {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "pid": 2702831,
+      "parent_pid": 23966,
+      "image": "/bin/bash",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:10.078000+00:00"
+    },
+    {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "pid": 2702832,
+      "parent_pid": 2702831,
+      "image": "/usr/bin/base64",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:10.122000+00:00"
+    },
+    {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "pid": 2702833,
+      "parent_pid": 2702831,
+      "image": "/bin/bash",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:10.152000+00:00"
+    },
+    {
+      "object": "PROCESS",
+      "action": "TERMINATE",
+      "pid": 2702832,
+      "parent_pid": null,
+      "image": "/usr/bin/base64",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:16.437000+00:00"
+    },
+    {
+      "object": "FLOW",
+      "action": "CONNECT",
+      "pid": 2702833,
+      "parent_pid": null,
+      "image": "/bin/bash",
+      "dst_ip": "45.33.32.30",
+      "dst_port": "8443",
+      "timestamp": "2026-11-02T14:20:21.349000+00:00"
+    },
+    {
+      "object": "PROCESS",
+      "action": "TERMINATE",
+      "pid": 2702831,
+      "parent_pid": null,
+      "image": "/bin/bash",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:24.165000+00:00"
+    },
+    {
+      "object": "PROCESS",
+      "action": "TERMINATE",
+      "pid": 2702833,
+      "parent_pid": null,
+      "image": "/bin/bash",
+      "dst_ip": null,
+      "dst_port": null,
+      "timestamp": "2026-11-02T14:20:35.700000+00:00"
+    }
+  ],
+  "flow_owner_matches_final_child": true,
+  "final_child_terminates_after_flow": true,
+  "parent_terminates_after_final_child": false
+}

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.events.content_identity import ProcessBinaryIdentity
     from evidenceforge.events.dispatcher import PreparedActionCohortBatch, PreparedDispatch
     from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
     from evidenceforge.events.lifecycle import SessionEndPlan
@@ -74,6 +75,14 @@ class ProcessRootPlan:
     session_id: int
     session_identity: SessionIdentity | None
     parent_identity: ProcessIdentity | None
+    binary: ProcessBinaryIdentity | None = None
+    executed: ProcessIdentity | None = None
+    birth_event: OccurrenceBuilder | None = None
+
+    @property
+    def identity(self) -> ProcessIdentity:
+        """Return the current execution while retaining the exact birth plan."""
+        return self.executed if self.executed is not None else self.process.identity
 
 
 @dataclass(frozen=True)

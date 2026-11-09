@@ -455,3 +455,475 @@ linux:
     lifetime: long
     children:
       - runc
+
+# Native macOS ancestry. These are eligible relationships, not a claim that
+# every application or helper starts in every session.
+macos:
+  # Assignment-only env prints the environment and starts no second executable.
+  # These are modeled carrier lifetimes, not measured command/result references.
+  env:
+    command_templates:
+      - /usr/bin/env API_TOKEN={value}
+      - /usr/bin/env SECRET={value}
+      - /usr/bin/env LOG_FIELD={value}
+      - /usr/bin/env USER_INPUT={value}
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.05, maximum: 2.5, sigma: 0.85}
+    children: []
+  # Explicit no-op command; nominal synthetic timing, not a host benchmark.
+  "true":
+    command_templates: [/usr/bin/true]
+    lifetime: short
+    short_timing: {minimum: 0.001, median: 0.008, maximum: 0.15, sigma: 0.85}
+    children: []
+  # Bounded office discovery queries. These modeled command profiles do not
+  # classify arbitrary invocations or long-running shell commands as short.
+  id:
+    command_templates: [/usr/bin/id, /usr/bin/id -u, /usr/bin/id -un, /usr/bin/id -a]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  sw_vers:
+    command_templates: [/usr/bin/sw_vers, /usr/bin/sw_vers -productVersion]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  ifconfig:
+    command_templates: [/sbin/ifconfig -a, /sbin/ifconfig en0]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  ps:
+    command_templates: [/bin/ps aux, /bin/ps -ef, "/bin/ps -axo pid,ppid,command"]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  uname:
+    command_templates: [/usr/bin/uname, /usr/bin/uname -a, /usr/bin/uname -sr, /usr/bin/uname -m]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  dscl:
+    command_templates: [/usr/bin/dscl . -list /Users]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  pwd:
+    command_templates: [/bin/pwd]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  ls:
+    command_templates:
+      - /bin/ls -la /Users/{username}/Documents
+      - /bin/ls -la /Users/{username}/Library/LaunchAgents
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  du:
+    command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.65, maximum: 30, sigma: 0.9}
+    children: []
+  df:
+    command_templates: [/bin/df -h]
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+  find:
+    command_templates:
+      - /usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.65, maximum: 30, sigma: 0.9}
+    children: []
+  Code:
+    command_templates: ['"/Applications/Visual Studio Code.app/Contents/MacOS/Code"']
+    lifetime: long
+    spawn_delay: [0.5, 3.0]
+    max_children: 3
+    children: [Code Helper]
+  Google Chrome:
+    command_templates: ['"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"']
+    lifetime: long
+    # Modeled bounds for the initial helper subset, not empirical browser counts.
+    spawn_delay: [0.5, 3.0]
+    max_children: 3
+    children:
+      - Google Chrome Helper (Renderer)
+      - Google Chrome Helper
+  launchd:
+    command_templates: [/sbin/launchd]
+    lifetime: long
+    children:
+      - loginwindow
+      - logind
+      - syspolicyd
+      - tccd
+      - smd
+      - mds
+      - Finder
+      - Terminal
+      - iTerm2
+      - Safari
+      - Google Chrome
+      - Microsoft Edge
+      - firefox
+      - Code
+      - dbeaver
+      - idea
+      - sublime_text
+      - Microsoft Word
+      - Microsoft Excel
+      - Microsoft Outlook
+      - MSTeams
+      - Slack
+      - zoom.us
+      - Postman
+      - OneDrive
+      - thunderbird
+      - Dropbox
+      - Google Drive
+      - AdobeAcrobat
+      - Webex
+      - Cisco Secure Client
+      - GlobalProtect
+      - Tableau
+      - xpcproxy
+      - EForgeReference
+  Terminal:
+    command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
+    lifetime: long
+    children: [login]
+  iTerm2:
+    command_templates: [/Applications/iTerm.app/Contents/MacOS/iTerm2]
+    lifetime: long
+    children: [login]
+  login:
+    command_templates: ['/usr/bin/login -fp {username}']
+    lifetime: long
+    children: [zsh, bash]
+  zsh:
+    # Only these one-shot invocations are bounded. The canonical login shell
+    # has argv -zsh, so it keeps session ownership and never matches this list.
+    command_templates:
+      - /bin/zsh -c 'id; groups'
+      - /bin/zsh -c 'ls -la ~/Library/LaunchAgents'
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children:
+      - bash
+      - zsh
+      - docker
+      - git
+      - node
+      - Python
+      - pwsh
+      - kubectl
+      - vim
+      - nano
+      - emacs
+      - gmake
+      - cargo
+      - mysql
+      - psql
+      - redis-cli
+      - sqlcmd
+      - ldapsearch
+      - 7zz
+      - dotnet
+      - ssh
+      - curl
+      - gcc-16
+  bash:
+    command_templates: [/bin/bash -l]
+    lifetime: long
+    children:
+      - bash
+      - zsh
+      - docker
+      - git
+      - node
+      - Python
+      - pwsh
+      - kubectl
+      - vim
+      - nano
+      - emacs
+      - gmake
+      - cargo
+      - mysql
+      - psql
+      - redis-cli
+      - sqlcmd
+      - ldapsearch
+      - 7zz
+      - dotnet
+      - ssh
+      - curl
+      - gcc-16
+
+  7zz:
+    command_templates:
+    - /opt/homebrew/bin/7zz i
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+
+  dotnet:
+    command_templates:
+    - /opt/homebrew/opt/dotnet/libexec/dotnet --info
+    - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
+    - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -version
+    - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -help
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.45, maximum: 8, sigma: 0.8}
+    children: []
+
+  node:
+    command_templates:
+    - /opt/homebrew/bin/node --version
+    - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
+    - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js --version
+    - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js config get prefix
+    lifetime: short
+    short_timing: {minimum: 0.015, median: 0.22, maximum: 8, sigma: 0.85}
+    children: []
+
+  git:
+    command_templates:
+    - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} status
+    - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} log --oneline -5
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.35, maximum: 10, sigma: 0.9}
+    children: []
+
+  docker:
+    command_templates:
+    - '"/Applications/Docker.app/Contents/Resources/bin/docker" ps'
+    - '"/Applications/Docker.app/Contents/Resources/bin/docker" images'
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.35, maximum: 10, sigma: 0.9}
+    children: []
+
+  kubectl:
+    command_templates:
+    - /opt/homebrew/bin/kubectl get pods
+    - /opt/homebrew/bin/kubectl get deployments
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  ssh:
+    command_templates:
+    - /opt/homebrew/bin/ssh -V
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+
+  curl:
+    command_templates:
+    - /opt/homebrew/opt/curl/bin/curl --head {internal_url}
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  vim:
+    command_templates:
+    - /opt/homebrew/bin/vim /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  nano:
+    command_templates:
+    - /opt/homebrew/bin/nano /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  emacs:
+    command_templates:
+    - /opt/homebrew/bin/emacs -nw /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  gmake:
+    command_templates:
+    - /opt/homebrew/bin/gmake -C /Users/{username}/Projects/{project} test
+    lifetime: short
+    short_timing: {minimum: 0.2, median: 12, maximum: 180, sigma: 0.85}
+    children: []
+
+  gcc-16:
+    command_templates:
+    - /opt/homebrew/bin/gcc-16 --version
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+
+  cargo:
+    command_templates:
+    - /opt/homebrew/bin/cargo check --manifest-path /Users/{username}/Projects/{project}/Cargo.toml
+    lifetime: short
+    short_timing: {minimum: 0.2, median: 12, maximum: 180, sigma: 0.85}
+    children: []
+
+  sqlcmd:
+    command_templates:
+    - /opt/homebrew/bin/sqlcmd -S {db_server} -Q "SELECT 1"
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  mysql:
+    command_templates:
+    - /opt/homebrew/opt/mysql-client/bin/mysql --host={db_server} --execute="SELECT
+      1"
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  psql:
+    command_templates:
+    - /opt/homebrew/opt/libpq/bin/psql -h {db_server} -c "SELECT 1"
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  redis-cli:
+    command_templates:
+    - /opt/homebrew/bin/redis-cli -h {db_server} PING
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  ldapsearch:
+    command_templates:
+    - /opt/homebrew/opt/openldap/bin/ldapsearch -x -H ldap://{dc_server} -b "{base_dn}"
+      "(objectClass=person)"
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
+    children: []
+
+  Microsoft Word:
+    command_templates:
+    - '"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"'
+    lifetime: long
+    children: []
+
+  Microsoft Excel:
+    command_templates:
+    - '"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel"'
+    lifetime: long
+    children: []
+
+  Microsoft Outlook:
+    command_templates:
+    - '"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"'
+    lifetime: long
+    children: []
+
+  MSTeams:
+    command_templates:
+    - '"/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"'
+    lifetime: long
+    children: []
+
+  Slack:
+    command_templates:
+    - '"/Applications/Slack.app/Contents/MacOS/Slack"'
+    lifetime: long
+    children: []
+
+  zoom.us:
+    command_templates:
+    - '"/Applications/zoom.us.app/Contents/MacOS/zoom.us"'
+    lifetime: long
+    children: []
+
+  Postman:
+    command_templates:
+    - '"/Applications/Postman.app/Contents/MacOS/Postman"'
+    lifetime: long
+    children: []
+
+  OneDrive:
+    command_templates:
+    - '"/Applications/OneDrive.app/Contents/MacOS/OneDrive"'
+    lifetime: long
+    children: []
+
+  thunderbird:
+    command_templates:
+    - '"/Applications/Thunderbird.app/Contents/MacOS/thunderbird"'
+    lifetime: long
+    children: []
+
+  Dropbox:
+    command_templates:
+    - '"/Applications/Dropbox.app/Contents/MacOS/Dropbox"'
+    lifetime: long
+    children: []
+
+  Citrix Workspace:
+    command_templates:
+    - '"/Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace"'
+    lifetime: long
+    children: []
+
+  AdobeAcrobat:
+    command_templates:
+    - '"/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat"'
+    lifetime: long
+    children: []
+
+  Webex:
+    command_templates:
+    - /Applications/Webex.app/Contents/MacOS/Webex
+    lifetime: long
+    children: []
+
+  GlobalProtect:
+    command_templates:
+    - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+    lifetime: long
+    children: []
+  Tableau:
+    command_templates:
+    - '"/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau"'
+    lifetime: long
+    children: []
+  Cisco Secure Client:
+    command_templates: ['"/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"']
+    lifetime: long
+    children: []
+
+  launchctl:
+    command_templates:
+    - /bin/launchctl list
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+
+  plutil:
+    command_templates:
+    - /usr/bin/plutil -help
+    lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
+    children: []
+
+  Python:
+    launch_kind: shell
+    command_templates:
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pytest --version
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip --version
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip list --format=columns
+    lifetime: short
+    short_timing: {minimum: 0.03, median: 0.45, maximum: 8, sigma: 0.8}
+    children: []
+
+  pwsh:
+    command_templates:
+    - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
+    - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
+    lifetime: short
+    short_timing: {minimum: 0.04, median: 0.7, maximum: 12, sigma: 0.85}
+    children: []

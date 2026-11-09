@@ -33,8 +33,30 @@ runtime state tracking.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from evidenceforge.events.identity import (
+    MacosAuditSession,
+    MacosProcessAuditBinding,
+    MacosProcessPrivilegeDrop,
+    MacosProcessServiceDrop,
+    PosixIdentifier,
+    PosixProcessArguments,
+    PosixProcessCredentials,
+    PosixProcessEnvironment,
+    ProcessIdentity,
+)
+from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.events.network import NetworkTrafficLedger
+from evidenceforge.events.macos_descriptors import MacosDescriptorTable
+from evidenceforge.events.macos_exec_image import MacosExecImage
+from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
+from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
+from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
+from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility
 
 
 @dataclass
@@ -94,6 +116,8 @@ class ActiveSession:
     auth_session_ref: str = ""
     effective_uid: int | None = None
     effective_gid: int | None = None
+    audit_origin: MacosAuditSession | None = None
+    ssh_command_streams: MacosSshCommandStreams | None = None
 
 
 @dataclass
@@ -136,6 +160,30 @@ class RunningProcess:
     concurrency_group_id: str = ""
     pid_logical_position: int = -1
     end_time: datetime | None = None
+    execution_ordinal: int = 0
+    executed_at: datetime | None = None
+    prior_executions: tuple[ProcessIdentity, ...] = ()
+    lifetime_image: str = ""
+    credentials: PosixProcessCredentials | None = None
+    audit_pid_version: PosixIdentifier | None = None
+    audit_binding: MacosProcessAuditBinding | None = None
+    privilege_drop: MacosProcessPrivilegeDrop | None = None
+    service_drop: MacosProcessServiceDrop | None = None
+    exit_outcome: PosixProcessExit | None = None
+    arguments: PosixProcessArguments | None = None
+    job_control: PosixGroupIdentity | None = None
+    job_control_history: tuple[PosixJobControlChange, ...] = ()
+    environment: PosixProcessEnvironment | None = None
+    parentage: ProcessParentage | None = None
+    parentage_history: tuple[ProcessParentageChange, ...] = ()
+    responsibility: ProcessResponsibility | None = None
+    image_security: MacosImageSecurity | None = None
+    execution_directory: MacosExecutionDirectory | None = None
+    executable_version: ProcessExecutableVersion | None = None
+    directory_history: tuple[MacosExecutionDirectory, ...] = ()
+    descriptor_history: tuple[MacosDescriptorTable, ...] = ()
+    exec_image: MacosExecImage | None = None
+    exec_script: MacosExecScript | None = None
 
 
 @dataclass
@@ -196,6 +244,7 @@ class OpenConnection:
     bytes_sent: int = 0
     bytes_received: int = 0
     traffic_ledger: NetworkTrafficLedger = field(default_factory=NetworkTrafficLedger)
+    http_capture_transaction: NetworkTransactionPlan | None = None
     transaction_id: str = ""
     conn_state: str = ""
     history: str = ""

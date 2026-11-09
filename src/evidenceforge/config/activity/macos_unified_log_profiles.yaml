@@ -1,0 +1,43 @@
+# Experimental macOS 27 arm64 source vocabulary, not a captured record template.
+# Main-image workspace method entry does not prove workspace completion.
+# Public provenance and limits: docs/design/macos-workstation-feasibility/capability-matrix.md
+# Offsets below are independently chosen model values, not Apple binary offsets.
+# The explicit timebase models an awake host; it is not inferred from arm64 and
+# does not claim empirical calibration for every Mac. No sleep/wake profile.
+schema_version: "1.0"
+profile: macos27-workspace-entry-v1
+mach_timebase:
+  numerator: 125
+  denominator: 3
+workspace_request:
+  message_type: Default
+  subsystem: com.apple.loginwindow.logging
+  category: Standard
+  format_string: "%s | enter"
+  message: "-[Login1 launchWorkspace] | enter"
+  format_string_offset: 131072
+  program_counter: 65536
+  has_rules: true
+policy_refusal:
+  profile: macos27-asp-refusal-v1
+  kernel_path: /System/Library/Kernels/kernel
+  kernel_export_path: /kernel
+  sender_path: /System/Library/Extensions/AppleSystemPolicy.kext/Contents/MacOS/AppleSystemPolicy
+  format_string: "ASP: Security policy would not allow process: %d, %s\n"
+  # Independently modeled offsets, never private kernel addresses or captured values.
+  format_string_offset: 262144
+  program_counter: 98304
+ssh_authentication:
+  profile: macos27-ssh-accepted-v1
+  writer_path: /usr/libexec/sshd-session
+  message_type: Info
+  format_string: "%.500s"
+  message: "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
+  # Public auth.c routes successful methods through the same Info logger.
+  # Only the PAM payload was observed locally; plain-key text reuses public source.
+  public_key_message: "Accepted publickey for {username} from {source_ip} port {source_port} ssh2: {key_type} {key_hash}"
+  has_private_data: true
+  # Explicit synthetic build locations; these are not captured native offsets.
+  format_string_offset: 327680
+  program_counter: 114688
+  backtrace_offsets: [114688]

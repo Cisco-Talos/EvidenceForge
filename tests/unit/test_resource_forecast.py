@@ -214,7 +214,7 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     assert forecast.disk.expected_bytes < forecast.disk.upper_bytes
     assert forecast.disk.lower_bytes >= forecast.final_output.lower_bytes
     assert forecast.disk.expected_bytes >= forecast.final_output.expected_bytes
-    assert forecast.calibration_version == 5
+    assert forecast.calibration_version == 6
     assert forecast.registry_report is not None
     assert len(forecast.registry_report.registries) == 5
     coverage = forecast.registry_report.retained_state_family_coverage
@@ -889,3 +889,34 @@ def test_sysmon_projection_accounts_for_retained_event_state() -> None:
     )
 
     assert sysmon_forecast.memory.expected_bytes > zeek_forecast.memory.expected_bytes
+
+
+def test_mac_native_ingress_budget_applies_when_only_ecar_is_exported() -> None:
+    scenario = _minimal_scenario()
+    scenario.environment.systems[0].os = "macOS 27"
+    scenario.environment.systems[0].architecture = "arm64"
+    scenario.output.logs = [{"format": "ecar"}]
+    estimate = estimate_workload(scenario)
+    calibration = load_resource_forecast_calibration()
+    without = calibration.model_copy(
+        update={
+            "memory": calibration.memory.model_copy(update={"macos_es_ingress_mib_per_host": 0.0}),
+            "disk": calibration.disk.model_copy(
+                update={
+                    "macos_es_ingress_bytes_per_host_second": 0.0,
+                    "macos_es_ingress_bytes_per_authored_occurrence": 0,
+                }
+            ),
+        }
+    )
+    arguments = dict(
+        scenario=scenario,
+        estimate=estimate,
+        destination=Path("/forecast-target"),
+        snapshot=_snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB),
+    )
+    budgeted = build_resource_forecast(**arguments, calibration=calibration)
+    prior = build_resource_forecast(**arguments, calibration=without)
+    assert budgeted.memory.expected_bytes > prior.memory.expected_bytes
+    assert budgeted.disk.expected_bytes > prior.disk.expected_bytes
+    assert budgeted.final_output == prior.final_output

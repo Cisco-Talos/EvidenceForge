@@ -8,8 +8,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from evidenceforge.events.collection_policy import CollectionCapability
 from evidenceforge.events.evidence_requirements import (
     AUTHORED_EVENT_EVIDENCE_CONTRACTS,
+    MACOS_HISTORY_SPILLAGE_EVIDENCE,
+    MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS,
+    MACOS_POLICY_REFUSAL_EVIDENCE,
     PERSISTENT_WINDOWS_SMB_EVIDENCE,
     BehaviorEvidenceContract,
     EvidenceProjectionAlternative,
@@ -20,6 +24,7 @@ from evidenceforge.generation.collection_deployment import (
     CompiledCollectionDeployment,
     SourceInstanceDeployment,
 )
+from evidenceforge.generation.macos_logging import workspace_request_profile_available
 from evidenceforge.generation.source_deployment_compiler import (
     SourceDeploymentCompilationError,
     compile_scenario_source_deployment,
@@ -27,12 +32,13 @@ from evidenceforge.generation.source_deployment_compiler import (
 from evidenceforge.generation.storage_world import StorageWorldModel
 from evidenceforge.generation.world_model import WorldModel
 from evidenceforge.models import Scenario
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.time import resolve_time_window
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReachabilityFinding:
-    """One configured behavior with no possible effective evidence projection."""
+    """One behavior visibility finding or informational host coverage note."""
 
     behavior_id: str
     severity: str
@@ -54,6 +60,16 @@ def _source_window_overlaps_scenario(source: SourceInstanceDeployment, scenario:
     return any(
         (window.end is None or start < window.end) and (window.start is None or window.start < end)
         for window in source.policy.windows
+    )
+
+
+def _source_can_observe(
+    source: SourceInstanceDeployment, source_format: str, scenario: Scenario
+) -> bool:
+    return (
+        source.policy.enabled
+        and source.policy.missingness_for(source_format) < 1.0
+        and _source_window_overlaps_scenario(source, scenario)
     )
 
 
@@ -81,14 +97,13 @@ def _alternative_is_reachable(
     scenario: Scenario,
 ) -> bool:
     for source_format in sorted(alternative.formats):
+        descriptor = DEFAULT_SOURCE_CATALOG.descriptor(source_format)
+        if not descriptor.capabilities.covers(alternative.capabilities):
+            continue
         for source in deployment.iter_format(source_format):
-            if not source.policy.enabled:
+            if not _source_can_observe(source, source_format, scenario):
                 continue
             if not source.policy.capabilities.covers(alternative.capabilities):
-                continue
-            if source.policy.missingness_for(source_format) >= 1.0:
-                continue
-            if not _source_window_overlaps_scenario(source, scenario):
                 continue
             if _source_in_scope(
                 source,
@@ -118,7 +133,7 @@ def _activation_is_reachable(
 
 def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation, ...]:
     grouped: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    known_hosts = {system.hostname.casefold() for system in scenario.environment.systems}
+    known_hosts = {system.hostname.casefold(): system for system in scenario.environment.systems}
     for section_name, events in (
         ("storyline", scenario.storyline or ()),
         ("red_herrings", scenario.red_herrings or ()),
@@ -128,7 +143,22 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
             if hostname not in known_hosts:
                 continue
             for spec_index, spec in enumerate(event.events):
-                contract = AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
+                if spec.type == "process" and getattr(spec, "outcome", "success") != "success":
+                    if spec.outcome != "policy_refused":
+                        continue  # Other no-new-execution outcomes have no native source.
+                contract = (
+                    MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.get(spec.operation)
+                    if spec.type == "macos_launch_item"
+                    else AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
+                )
+                if spec.type == "process" and spec.outcome == "policy_refused":
+                    contract = MACOS_POLICY_REFUSAL_EVIDENCE
+                if (
+                    spec.type == "spillage"
+                    and spec.surface == "shell_history"
+                    and platform_for_os(known_hosts[hostname].os) == "macos"
+                ):
+                    contract = MACOS_HISTORY_SPILLAGE_EVIDENCE
                 if contract is None:
                     continue
                 field_path = f"{section_name}.{event_index}.events.{spec_index}"
@@ -139,7 +169,13 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
 
     activations: list[_BehaviorActivation] = []
     contracts_by_id = {
-        contract.behavior_id: contract for contract in AUTHORED_EVENT_EVIDENCE_CONTRACTS.values()
+        contract.behavior_id: contract
+        for contract in (
+            *AUTHORED_EVENT_EVIDENCE_CONTRACTS.values(),
+            *MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values(),
+            MACOS_HISTORY_SPILLAGE_EVIDENCE,
+            MACOS_POLICY_REFUSAL_EVIDENCE,
+        )
     }
     for (behavior_id, hostname), occurrences in sorted(grouped.items()):
         contract = contracts_by_id[behavior_id]
@@ -217,11 +253,78 @@ def _observable_source_formats(
             {
                 source_format
                 for source in deployment
-                if source.policy.enabled and _source_window_overlaps_scenario(source, scenario)
                 for source_format in source.formats
-                if source.policy.missingness_for(source_format) < 1.0
+                if _source_can_observe(source, source_format, scenario)
             }
         )
+    )
+
+
+def analyze_host_endpoint_coverage(scenario: Scenario) -> tuple[EvidenceReachabilityFinding, ...]:
+    """Describe hosts without any potentially observable endpoint collection.
+
+    A limited source counts as endpoint collection, without implying it can
+    express every behavior. Action-specific reachability checks own that decision.
+    Application access logs and network sensors do not stand in for an endpoint
+    source, even when they observe traffic involving the same host.
+    """
+    try:
+        deployment = compile_scenario_source_deployment(scenario).deployment
+    except SourceDeploymentCompilationError:
+        # Malformed selections/policies have their own validation findings.
+        return ()
+
+    endpoint_markers = (
+        CollectionCapability.PROCESS
+        | CollectionCapability.SESSION
+        | CollectionCapability.SOURCE_ENDPOINT
+        | CollectionCapability.DESTINATION_ENDPOINT
+    )
+    identity_capabilities = (
+        CollectionCapability.COHERENT_ACTOR
+        | CollectionCapability.SOURCE_ENDPOINT
+        | CollectionCapability.DESTINATION_ENDPOINT
+    )
+    covered_hosts: set[str] = set()
+    systems = {system.hostname.casefold(): system for system in scenario.environment.systems}
+    for source in deployment:
+        for source_format in source.formats:
+            descriptor = DEFAULT_SOURCE_CATALOG.descriptor(source_format)
+            if source_format == "macos_unified_log":
+                system = systems[source.identity.hostname.casefold()]
+                if system.type != "workstation" or not workspace_request_profile_available(
+                    system.os
+                ):
+                    continue
+            activity_capabilities = (
+                source.policy.capabilities & descriptor.capabilities & ~identity_capabilities
+            )
+            if (
+                descriptor.owner is SourceOwnerKind.HOST
+                and descriptor.capabilities & endpoint_markers
+                and activity_capabilities
+                and _source_can_observe(source, source_format, scenario)
+            ):
+                covered_hosts.add(source.identity.hostname.casefold())
+
+    return tuple(
+        EvidenceReachabilityFinding(
+            behavior_id="host_endpoint_coverage",
+            severity="info",
+            field_path=f"environment.systems.{index}",
+            message=(
+                f"System '{system.hostname}' ({platform_for_os(system.os)}) has no observable "
+                "host endpoint source in the effective collection deployment. "
+                "Network or application sources may still provide evidence."
+            ),
+            suggestion=(
+                "Keep this selection for a network/application-only exercise, or enable an "
+                "applicable endpoint source on this host if endpoint visibility is intended."
+            ),
+        )
+        for index, system in enumerate(scenario.environment.systems)
+        if platform_for_os(system.os) != "unknown"
+        and system.hostname.casefold() not in covered_hosts
     )
 
 
@@ -283,4 +386,8 @@ def analyze_evidence_reachability(
     )
 
 
-__all__ = ["EvidenceReachabilityFinding", "analyze_evidence_reachability"]
+__all__ = [
+    "EvidenceReachabilityFinding",
+    "analyze_evidence_reachability",
+    "analyze_host_endpoint_coverage",
+]

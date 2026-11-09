@@ -25,6 +25,11 @@ accepts in their source-native shape generally stay unchanged.
 | Proxy access | Apache/Nginx combined log text with absolute URLs and CONNECT authorities. |
 | Other families | Unchanged, but not necessarily supported by this backend. |
 
+Mac ES/ULF NDJSON and zsh-history files keep their source representation, but
+are outside this backend's current parser discovery/validation. A passing mixed-fleet
+harness result does not include those sources or establish native Mac normalization.
+See the [source and parser boundaries](README.md#native-mac-output-and-parser-coverage).
+
 ## Generate And Validate
 
 ```bash

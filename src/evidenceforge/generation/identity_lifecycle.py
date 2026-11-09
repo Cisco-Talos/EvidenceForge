@@ -58,6 +58,18 @@ class IdentityLifecyclePlanner:
         or thread state remains missing; this layer never invents attribution.
         """
 
+        if event.event_type in {
+            "process_fork",
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
+            "macos_policy_refusal",
+        }:
+            # Both snapshots belong to the State transition plan, including the prior actor.
+            # Inferring from live state would overwrite the immutable role boundary.
+            return
         session = self._session_identity(event)
         process = self._process_identity(event)
         inferred_plan = self._plan_roles(event, process=process, session=session)
@@ -181,7 +193,11 @@ class IdentityLifecyclePlanner:
         if event.file is not None:
             semantic_key = f"{hostname}:{event.file.path.casefold()}"
             return EntityIdentity(
-                object_id=stable_uuid("file-identity", semantic_key),
+                object_id=(
+                    event.file.artifact_identity.artifact_id
+                    if event.file.artifact_identity is not None
+                    else stable_uuid("file-identity", semantic_key)
+                ),
                 kind="file",
                 hostname=hostname,
                 semantic_key=semantic_key,
@@ -268,49 +284,26 @@ class IdentityLifecyclePlanner:
 
     def _process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         host = event.src_host or event.dst_host
-        if host is None:
+        if host is None or event.process is None or event.process.pid < 0:
             return None
-        if event.process is not None and event.process.pid >= 0:
-            if (
-                event.event_type not in _PROCESS_CLOSURE_TYPES
-                and self._state_manager.get_process(host.hostname, event.process.pid) is None
-            ):
-                return None
-            process = self._state_manager.get_process_identity(host.hostname, event.process.pid)
-            if process is not None:
-                return process
-        return None
+        if event.event_type in _PROCESS_CLOSURE_TYPES:
+            return self._state_manager.get_process_identity(host.hostname, event.process.pid)
+        return self._state_manager.get_process_identity_at(
+            host.hostname, event.process.pid, event.timestamp
+        )
 
     def _network_actor_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         if event.network is None or event.src_host is None or event.network.initiating_pid < 0:
             return None
-        if (
-            self._state_manager.get_process(
-                event.src_host.hostname,
-                event.network.initiating_pid,
-            )
-            is None
-        ):
-            return None
-        return self._state_manager.get_process_identity(
-            event.src_host.hostname,
-            event.network.initiating_pid,
+        return self._state_manager.get_process_identity_at(
+            event.src_host.hostname, event.network.initiating_pid, event.timestamp
         )
 
     def _network_target_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         if event.network is None or event.dst_host is None or event.network.responding_pid < 0:
             return None
-        if (
-            self._state_manager.get_process(
-                event.dst_host.hostname,
-                event.network.responding_pid,
-            )
-            is None
-        ):
-            return None
-        return self._state_manager.get_process_identity(
-            event.dst_host.hostname,
-            event.network.responding_pid,
+        return self._state_manager.get_process_identity_at(
+            event.dst_host.hostname, event.network.responding_pid, event.timestamp
         )
 
     def _target_process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:

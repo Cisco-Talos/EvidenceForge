@@ -18,7 +18,7 @@ import secrets
 import struct
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
@@ -27,7 +27,9 @@ from typing import Any, Literal, Protocol, cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.es_collector import ESCollectorRegistry
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
@@ -35,7 +37,10 @@ from evidenceforge.events.lifecycle import (
     LifecycleHold,
     LifecycleSingletonLease,
     LifecycleTransition,
+    ProcessGUIAttribution,
     ProcessLifecycleIdentity,
+    ProcessRuntimeChange,
+    ProcessRuntimeView,
     ServiceProcessBindingIdentity,
     SessionLifecycleIdentity,
 )
@@ -74,6 +79,7 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleServiceAdmissionToken,
     LifecycleServiceClosureAdmissionToken,
     LifecycleServiceProcessClosureReceipt,
+    LifecycleServiceProcessClosureRequest,
     LifecycleServicePublicationReceipt,
     LifecycleServiceStagedProcessBindingMember,
     LifecycleSessionStartRequest,
@@ -90,6 +96,7 @@ from evidenceforge.generation.network_runtime import (
     NetworkTransportLifecycleMode,
     PreparedNetworkTransactionRoot,
 )
+from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionCommitResult,
     ExplicitProxyAdmissionToken,
@@ -295,7 +302,7 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
 
     if type(identity) is not ProcessIdentity:
         raise StateError("Materialization-batch process identity must have its exact type")
-    return (
+    legacy = (
         "process-identity-v1",
         identity.hostname,
         identity.object_id,
@@ -310,6 +317,139 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         identity.parent_lifecycle_group_id,
         _thread_identity_payload(identity.primary_thread),
     )
+
+    payload = legacy
+    if identity.execution_ordinal or identity.executed_at is not None or identity.lifetime_image:
+        payload = (
+            *payload,
+            (
+                "process-execution-v1",
+                identity.execution_ordinal,
+                identity.executed_at,
+                identity.lifetime_image,
+            ),
+        )
+    if identity.credentials is not None:
+        credentials = identity.credentials
+        payload = (
+            *payload,
+            (
+                "posix-credentials-v1",
+                credentials.real_uid,
+                credentials.effective_uid,
+                credentials.real_gid,
+                credentials.effective_gid,
+                credentials.audit_uid,
+                credentials.audit_session_id,
+            ),
+        )
+    if identity.audit_pid_version is not None:
+        payload = (*payload, ("macos-audit-pid-version-v1", identity.audit_pid_version))
+    if identity.arguments is not None:
+        payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
+    if identity.environment is not None:
+        payload = (*payload, ("posix-process-environment-v1", identity.environment))
+    if identity.execution_directory is not None:
+        directory = identity.execution_directory
+        directory.__post_init__()
+        payload = (
+            *payload,
+            (
+                "macos-execution-directory-v1",
+                directory.hostname,
+                directory.native_path,
+                directory.observed_at,
+                directory.metadata.canonical_json(),
+            ),
+        )
+    if identity.exec_script is not None:
+        identity.exec_script.__post_init__()
+        script = identity.exec_script
+        payload = (
+            *payload,
+            (
+                "macos-exec-script-v1",
+                script.hostname,
+                script.artifact_version_id,
+                script.content_id,
+                script.native_path,
+            ),
+        )
+    if identity.exec_image is not None:
+        identity.exec_image.__post_init__()
+        payload = (
+            *payload,
+            (
+                "macos-exec-image-v1",
+                identity.exec_image.cpu_subtype,
+                identity.exec_image.dyld_exec_path,
+            ),
+        )
+    if identity.executable_version is not None:
+        version = identity.executable_version
+        version.__post_init__()
+        payload = (
+            *payload,
+            (
+                "process-executable-version-v1",
+                version.platform,
+                version.identity_kind,
+                version.content_id,
+                version.artifact_version_id,
+            ),
+        )
+    if identity.image_security is not None:
+        security = identity.image_security
+        payload = (
+            *payload,
+            (
+                "macos-image-security-v1",
+                security.codesigning_flags,
+                security.is_platform_binary,
+                security.validation_category,
+            ),
+        )
+    if identity.parentage is not None:
+        parentage = tuple(
+            None
+            if reference is None
+            else (reference.hostname, reference.object_id, reference.pid, reference.started_at)
+            for reference in (identity.parentage.original, identity.parentage.current)
+        )
+        payload = (*payload, ("process-parentage-v1", *parentage))
+    if identity.responsibility is not None:
+        reference = identity.responsibility.responsible
+        payload = (
+            *payload,
+            (
+                "process-responsibility-v1",
+                None
+                if reference is None
+                else (
+                    reference.hostname,
+                    reference.object_id,
+                    reference.pid,
+                    reference.started_at,
+                ),
+            ),
+        )
+    if identity.job_control is not None:
+        group = identity.job_control
+        session = group.session
+        payload = (
+            *payload,
+            (
+                "posix-job-control-v1",
+                group.pgid,
+                group.leader_object_id,
+                group.started_at,
+                session.hostname,
+                session.sid,
+                session.leader_object_id,
+                session.started_at,
+            ),
+        )
+    return payload
 
 
 def _session_identity_payload(identity: SessionIdentity | None) -> tuple[object, ...] | None:
@@ -773,6 +913,7 @@ class LifecycleProcessServiceCompositeReceipt:
     process_receipt: LifecycleMaterializationReceipt
     service_receipt: LifecycleServicePublicationReceipt
     _integrity_token: str
+    source_timing_receipt: SourceTimingPreparationReceipt | None = None
 
     @classmethod
     def _issue(
@@ -781,11 +922,12 @@ class LifecycleProcessServiceCompositeReceipt:
         authority_secret: bytes,
         process_receipt: LifecycleMaterializationReceipt,
         service_receipt: LifecycleServicePublicationReceipt,
+        source_timing_receipt: SourceTimingPreparationReceipt | None = None,
     ) -> LifecycleProcessServiceCompositeReceipt:
         """Issue an authority-keyed proof over both registry receipts."""
 
         integrity_token = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
-        return cls(process_receipt, service_receipt, integrity_token)
+        return cls(process_receipt, service_receipt, integrity_token, source_timing_receipt)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
         expected = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
@@ -3565,7 +3707,19 @@ class GeneratorLifecycleAuthority:
                 f"{identity.object_id}"
             )
         parent_object_id = ""
-        if identity.parent_pid != 0:
+        if snapshot.parentage_change is not None:
+            parentage = identity.parentage
+            if (
+                parentage != snapshot.parentage_change.after
+                or parentage is None
+                or parentage.original is None
+                or parentage.original.object_id != snapshot.identity.parent_object_id
+                or parentage.current is None
+                or parentage.current.pid != identity.parent_pid
+            ):
+                raise StateError("Action cohort process changed its authenticated parent adoption")
+            parent_object_id = snapshot.identity.parent_object_id
+        elif identity.parent_pid != 0:
             parent = self._registry.process_for_pid_at(
                 identity.hostname,
                 identity.parent_pid,
@@ -3691,6 +3845,7 @@ class GeneratorLifecycleAuthority:
             )
 
         staged_processes: dict[tuple[str, int], ProcessMaterializationPlan] = {}
+        staged_views: dict[str, ProcessRuntimeView] = {}
         for ordinal, process_plan in enumerate(plan.processes):
             identity = process_plan.identity
             parent_object_id = ""
@@ -3722,6 +3877,7 @@ class GeneratorLifecycleAuthority:
                 session_logon_type=session_logon_type,
                 parent_object_id=parent_object_id,
             )
+            staged_views[identity.object_id] = ProcessRuntimeView.initial(lifecycle_identity, token)
             category = "process-start"
             append(
                 identity.started_at,
@@ -3819,11 +3975,130 @@ class GeneratorLifecycleAuthority:
                 ),
             )
 
+        for ordinal, execution in enumerate(plan.process_executions):
+            identity = execution.target
+            before = staged_views.get(identity.object_id)
+            if before is None:
+                self._action_cohort_registered_process(identity)
+                snapshot = self._registry.get_process(identity.object_id)
+                assert snapshot is not None
+                before = snapshot.current_view
+            if (before.execution_ordinal, before.image) != (
+                identity.execution_ordinal,
+                identity.image,
+            ):
+                raise StateError("Process exec disagrees with the current lifecycle execution")
+            after = ProcessRuntimeView(
+                revision=before.revision + 1,
+                execution_ordinal=execution.after.execution_ordinal,
+                changed_at=execution.after.execution_started_at,
+                image=execution.after.image,
+                role=self._shadow._process_role(execution.after.image),
+                token=before.token,
+                gui_attribution=before.gui_attribution,
+            )
+            category = "process-execution"
+            append(
+                execution.after.execution_started_at,
+                2,
+                LifecycleTransition(
+                    transition_id=self._action_cohort_id(
+                        plan, category, ordinal, identity.object_id, "transition"
+                    ),
+                    subject=LifecycleEntityRef("process", identity.object_id),
+                    kind="dependent",
+                    canonical_time=execution.after.execution_started_at,
+                    action_id=self._action_cohort_id(
+                        plan, category, ordinal, identity.object_id, "action"
+                    ),
+                    reason="State process image replacement",
+                    process_change=ProcessRuntimeChange(before, after, "exec"),
+                ),
+            )
+
         for ordinal, patch in enumerate(plan.process_activity_patches):
             target = patch.target
             identity = target.identity if type(target) is ProcessMaterializationPlan else target
-            if type(target) is not ProcessMaterializationPlan:
+            if type(target) is not ProcessMaterializationPlan and not any(
+                execution.after == target for execution in plan.process_executions
+            ):
                 self._action_cohort_registered_process(identity)
+            process_change = None
+            if patch.privilege_drop is not None or patch.service_drop is not None:
+                snapshot = self._registry.get_process(identity.object_id)
+                assert snapshot is not None
+                before = snapshot.current_view
+                drop = patch.privilege_drop or patch.service_drop
+                assert drop is not None
+                if (before.token.principal, before.token.integrity_level) != (
+                    drop.before_principal,
+                    drop.before_integrity,
+                ):
+                    raise StateError(
+                        "SSH privilege drop disagrees with the current lifecycle token"
+                    )
+                after = replace(
+                    before,
+                    revision=before.revision + 1,
+                    changed_at=drop.dropped_at,
+                    token=replace(
+                        before.token,
+                        principal=drop.after_principal,
+                        integrity_level=drop.after_integrity,
+                        **(
+                            {
+                                "logon_id": drop.after_logon_id,
+                                "session_id": drop.gui_session.session_id,
+                                "logon_type": 2,
+                            }
+                            if patch.service_drop is not None and drop.gui_session is not None
+                            else {}
+                        ),
+                    ),
+                )
+                if patch.service_drop is not None and drop.gui_session is not None:
+                    after = replace(
+                        after,
+                        gui_attribution=ProcessGUIAttribution(
+                            before.token,
+                            after.token,
+                            after.changed_at,
+                            after.revision,
+                        ),
+                    )
+                # Effective-UID-only login drops preserve this registry's
+                # principal/integrity/auth token. Canonical State owns numeric
+                # POSIX credentials; this activity still advances its frontier.
+                if after.token != before.token:
+                    process_change = ProcessRuntimeChange(
+                        before,
+                        after,
+                        "gui_credentials"
+                        if patch.service_drop is not None and drop.gui_session is not None
+                        else "credentials",
+                    )
+            if (
+                patch.job_control_actor is not None
+                and patch.job_control_actor.object_id != identity.object_id
+            ):
+                actor = patch.job_control_actor
+                self._action_cohort_registered_process(actor)
+                append(
+                    patch.activity_time,
+                    2,
+                    LifecycleTransition(
+                        transition_id=self._action_cohort_id(
+                            plan, "job-control-actor", ordinal, actor.object_id, "transition"
+                        ),
+                        subject=LifecycleEntityRef("process", actor.object_id),
+                        kind="dependent",
+                        canonical_time=patch.activity_time,
+                        action_id=self._action_cohort_id(
+                            plan, "job-control-actor", ordinal, actor.object_id, "action"
+                        ),
+                        reason="State POSIX group-changing parent activity",
+                    ),
+                )
             category = "process-activity"
             append(
                 patch.activity_time,
@@ -3846,7 +4121,19 @@ class GeneratorLifecycleAuthority:
                         identity.object_id,
                         "action",
                     ),
-                    reason="State process activity transition",
+                    reason="State process audit-origin adoption"
+                    if patch.audit_binding is not None
+                    else "State SSH child privilege drop"
+                    if patch.privilege_drop is not None
+                    else "State service child privilege drop"
+                    if patch.service_drop is not None
+                    else "State POSIX job-control transition"
+                    if patch.job_control_change is not None
+                    else "State parent exit adoption"
+                    if patch.parentage_change is not None
+                    else "State process activity transition",
+                    process_change=process_change,
+                    parentage_change=patch.parentage_change,
                 ),
             )
 
@@ -4255,7 +4542,12 @@ class GeneratorLifecycleAuthority:
             if hold.subject.kind != "process":
                 raise StateError("Connection composite holds must target processes")
             process_patch = process_patches[hold.subject.object_id]
-            if process_patch.activity_time != hold.hold_until:
+            expected_activity = (
+                plan.batch.process_hold_activity_time(process_patch.identity, hold.hold_until)
+                if plan.batch is not None
+                else hold.hold_until
+            )
+            if process_patch.activity_time != expected_activity:
                 raise StateError("Connection process hold and State activity deadline disagree")
             logon_id = process_patch.identity.logon_id
             if not logon_id:
@@ -8096,6 +8388,16 @@ class GeneratorLifecycleAuthority:
         request = token.request
         if request.identity.hostname != plan.identity.hostname:
             raise StateError("Service publication and staged process hosts do not match")
+        if request.process_group is not None and request.process_group != plan.identity.job_control:
+            raise StateError("Service group differs from its exact State process membership")
+        prior_service = self._registry.get_service_instance(request.identity.object_id)
+        if prior_service is not None and prior_service.process_group is not None:
+            if self._state_manager.get_posix_group_members(prior_service.process_group, limit=256):
+                raise StateError("Launchd activation cannot replace a group with live members")
+            if request.process_group is None:
+                raise StateError(
+                    "Group-owned launchd activation must retain explicit group ownership"
+                )
         members = request.staged_process_bindings
         if len(members) != 1:
             raise StateError("Process/service coordinator requires one staged process binding")
@@ -8121,27 +8423,91 @@ class GeneratorLifecycleAuthority:
             # Exact-object tamper cleanup releases its retained canonical preimage.
             pass
 
+    def publish_existing_process_service(
+        self, identity: ProcessIdentity, token: LifecycleServiceAdmissionToken
+    ) -> LifecycleServicePublicationReceipt:
+        """Bind a fully published native job without replaying its process start.
+
+        The existing service token/capability owns this publication. State's
+        current-process guard establishes State-to-registry lock order; ordinary
+        service commits cannot consume an active-process group request.
+        """
+        try:
+            if (
+                not self._registry.authenticates_service_admission_token(token)
+                or token.request.active_process != identity
+            ):
+                raise StateError("Active service publication requires its exact process request")
+            with self._registry.claimed_service_publication(token) as capability:
+                with self._state_manager.current_process_guard(identity):
+                    prior = self._registry.get_service_instance(token.request.identity.object_id)
+                    if prior is None:
+                        raise StateError("Native job activation lost its loaded service")
+                    if (
+                        prior.process_group is not None
+                        and prior.process_group != identity.job_control
+                        and self._state_manager.get_posix_group_members(
+                            prior.process_group, limit=1
+                        )
+                    ):
+                        raise StateError("Native job cannot replace a group with live members")
+                    hook = self._materialization_precommit_hook
+                    if hook is not None:
+                        hook()
+                    if (
+                        self._state_manager.get_process_identity(identity.hostname, identity.pid)
+                        != identity
+                    ):
+                        raise StateError("Native job changed before service binding")
+                    return capability._commit_active_process_no_fail(identity)
+        except BaseException:
+            self._discard_service_admission(token)
+            raise
+
     def materialize_process_service_composite(
         self,
         plan: ProcessMaterializationPlan,
         service_token: LifecycleServiceAdmissionToken,
         *,
-        finalize_external_no_fail: Callable[[], None] | None = None,
+        commit_external_first: Callable[[], object] | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
     ) -> LifecycleProcessServiceCompositeResult:
         """Atomically publish one staged process, service, and exact binding.
 
         Passing ``service_token`` transfers its one-shot reservation to this
         authority. Any rejection before primitive commit releases that exact
         capability without consuming foreign or copied tokens. The optional
-        finalizer follows the same preclaimed, primitive-only contract as the
-        ordinary process materialization boundary.
+        preclaimed external transaction commits after all admission checks and
+        before canonical allocation. A failure cannot create a process/service
+        prefix. Successfully committed external retention may conservatively
+        survive a lost acknowledgement; it owns no process or service effects.
+        The remaining lifecycle/State tail uses validated primitive commits.
+        Optional bound source timing is claimed before State, cancelled on
+        rejection and completed after canonical allocation. Its exact proof is
+        retained in the composite receipt for source publication.
         """
 
         identity = plan.identity
-        process_start = self._process_start_request(plan)
+        timing_receipt = None
         try:
+            if source_timing_preparation is not None and (
+                type(source_timing_preparation) is not SourceTimingPreparation
+                or source_timing_preparation.owner is not self._source_timing_planner
+                or not self._source_timing_planner.authenticates_preparation(
+                    source_timing_preparation
+                )
+                or source_timing_preparation.committed
+            ):
+                raise StateError("Service activation requires its exact uncommitted timing owner")
+            process_start = self._process_start_request(plan)
             self._validate_process_service_admission(plan, process_start, service_token)
-            with self._registry.claimed_service_publication(service_token) as service_publication:
+            with (
+                self._registry.claimed_service_publication(service_token) as service_publication,
+                ExitStack() as external,
+            ):
+                if source_timing_preparation is not None:
+                    external.enter_context(source_timing_preparation.claimed_commit())
+                    timing_receipt = source_timing_preparation.expected_receipt
                 with self._state_manager.materialization_guard(plan):
                     self._state_manager.validate_process_materialization(plan)
                     with self._registry.prepare_start_batch(
@@ -8157,19 +8523,37 @@ class GeneratorLifecycleAuthority:
                             process_start,
                             service_token,
                         )
-                        ticket.commit()
+                        if source_timing_preparation is not None:
+                            source_timing_preparation.certify_composite_commit(timing_receipt)
+                        if commit_external_first is not None:
+                            commit_external_first()
+                        try:
+                            ticket.commit()
+                        except BaseException:
+                            if source_timing_preparation is None or not ticket.committed:
+                                raise
                         service_receipt = ticket.service_receipt
                         if service_receipt is None:
                             raise AssertionError(
                                 "Composite lifecycle ticket returned no service receipt"
                             )
-                        process = self._state_manager._commit_prevalidated_process_materialization(
-                            plan
-                        )
-                        if finalize_external_no_fail is not None:
-                            finalize_external_no_fail()
+                        if source_timing_preparation is None:
+                            process = (
+                                self._state_manager._commit_prevalidated_process_materialization(
+                                    plan
+                                )
+                            )
+                        else:
+                            process = self._commit_service_process_state_recoverably(plan)
+                            self._commit_source_timing_recoverably(source_timing_preparation)
         except BaseException:
             self._discard_service_admission(service_token)
+            if (
+                type(source_timing_preparation) is SourceTimingPreparation
+                and source_timing_preparation.owner is self._source_timing_planner
+                and not source_timing_preparation.committed
+            ):
+                source_timing_preparation.cancel()
             raise
 
         process_receipt = LifecycleMaterializationReceipt._issue(
@@ -8184,8 +8568,34 @@ class GeneratorLifecycleAuthority:
             authority_secret=self._receipt_secret,
             process_receipt=process_receipt,
             service_receipt=service_receipt,
+            source_timing_receipt=timing_receipt,
         )
         return LifecycleProcessServiceCompositeResult(process=process, receipt=receipt)
+
+    def _commit_service_process_state_recoverably(
+        self, plan: ProcessMaterializationPlan
+    ) -> RunningProcess:
+        """Finish exact State allocation after the admitted lifecycle/service commit."""
+        state = self._state_manager
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                return state._commit_prevalidated_process_materialization(plan)
+            except BaseException as error:
+                if first_failure is None:
+                    first_failure = error
+                current = state.get_process(plan.identity.hostname, plan.identity.pid)
+                if (
+                    state.materialization_version == plan.expected_version + 1
+                    and current is not None
+                    and state.get_process_identity(plan.identity.hostname, plan.identity.pid)
+                    == plan.identity
+                ):
+                    return current
+                if state.materialization_version != plan.expected_version or current is not None:
+                    raise
+        assert first_failure is not None
+        raise first_failure
 
     def authenticates_process_service_composite_receipt(
         self,
@@ -8197,6 +8607,14 @@ class GeneratorLifecycleAuthority:
         if not isinstance(receipt, LifecycleProcessServiceCompositeReceipt):
             return False
         if not receipt._has_valid_integrity(self._receipt_secret):
+            return False
+        if receipt.source_timing_receipt is not None and (
+            type(receipt.source_timing_receipt) is not SourceTimingPreparationReceipt
+            or self._source_timing_planner is None
+            or not self._source_timing_planner.authenticates_preparation_receipt(
+                receipt.source_timing_receipt
+            )
+        ):
             return False
         if not self.authenticates_materialization_receipt(
             plan,
@@ -8251,6 +8669,14 @@ class GeneratorLifecycleAuthority:
             raise StateError("Service closure must close every exact process binding at exit")
         if any(item.barrier.requested_at != plan.end_time for item in request.service_closures):
             raise StateError("Service terminalization must share the process exit frontier")
+        for control in request.service_closures:
+            service = self._registry.get_service_instance(control.barrier.subject.object_id)
+            if service is not None and service.process_group is not None:
+                members = self._state_manager.get_posix_group_members(
+                    service.process_group, limit=256
+                )
+                if any(member.object_id != identity.object_id for member in members):
+                    raise StateError("Service unload requires its complete retained process group")
 
     def _discard_service_closure_admission(
         self,
@@ -8315,6 +8741,290 @@ class GeneratorLifecycleAuthority:
         )
         return LifecycleProcessServiceClosureCompositeResult(process=ended, receipt=receipt)
 
+    def materialize_process_group_service_closure_composite(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        collectors: ESCollectorRegistry | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Close one exact live group and its service relations in one State version.
+
+        The caller supplies explicit completed outcomes and child-first order.
+        No signal, escalation, group membership or termination success is inferred.
+        This transfers the service token, including on precommit rejection.
+        An optional preparation from the bound timing planner is also transferred;
+        it is claimed before State, cancelled on rejection and committed with the
+        canonical owners. A foreign planner's preparation remains caller-owned.
+        """
+        return self._materialize_posix_service_closure_cohort(
+            plan,
+            group,
+            service_token,
+            close_group=True,
+            collectors=collectors,
+            source_timing_preparation=source_timing_preparation,
+        )
+
+    def materialize_process_group_leader_exit_composite(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        collectors: ESCollectorRegistry | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Close one bound launchd leader and adopt its children, preserving its job/group."""
+        return self._materialize_posix_service_closure_cohort(
+            plan,
+            group,
+            service_token,
+            close_group=False,
+            collectors=collectors,
+            source_timing_preparation=source_timing_preparation,
+        )
+
+    def validate_process_group_service_closure(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        request: LifecycleServiceProcessClosureRequest,
+        *,
+        close_group: bool,
+    ) -> tuple[ProcessTerminationMaterializationPlan, ...]:
+        """Validate one exact State/service terminal contract without reserving or committing.
+
+        Source coordinators may use this same contract before preparing their
+        owners. Passing validation is not publication authority: the caller must
+        retain and revalidate State and lifecycle claims before canonical commit.
+        """
+        if (
+            type(request) is not LifecycleServiceProcessClosureRequest
+            or type(close_group) is not bool
+        ):
+            raise StateError("Group closure requires its exact service request and closure mode")
+        request.__post_init__()
+        state = self._state_manager
+        with state._lock:
+            if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
+                plan
+            ):
+                raise StateError("Group closure requires exact group and State cohort identities")
+            state.validate_action_cohort_materialization(plan)
+            if (
+                any(
+                    (
+                        plan.sessions,
+                        plan.processes,
+                        plan._session_process_links,
+                        plan.live_session_process_role_patches,
+                        plan.session_metadata_patches,
+                        plan.process_executions,
+                        plan.session_activity_patches,
+                        plan.session_terminalizations,
+                        plan._smb_connection_finalization is not None,
+                        plan._smb_file_mutation_terminalization is not None,
+                    )
+                )
+                or not 1 <= len(plan.process_terminations) <= 256
+            ):
+                raise StateError("Group closure requires a bounded termination-only cohort")
+            if len(plan.process_activity_patches) > 256 or any(
+                patch.parentage_change is None or patch.adopting_parent is None
+                for patch in plan.process_activity_patches
+            ):
+                raise StateError("Group closure only permits bounded parent adoption patches")
+            closes = tuple(item.target for item in plan.process_terminations)
+            if any(type(item) is not ProcessTerminationMaterializationPlan for item in closes):
+                raise StateError("Group closure requires existing exact process close plans")
+            if any(item.parent_activity is not None for item in plan.process_terminations):
+                raise StateError("Group closure cannot patch unrelated parent activity")
+            if tuple(
+                (patch.target.object_id, patch.parentage_change)
+                for patch in plan.process_activity_patches
+            ) != tuple(
+                (item.subject.object_id, item.parentage_change) for item in request.parent_adoptions
+            ):
+                raise StateError("Group service adoptions must match every exact State patch")
+            identities = tuple(item.identity for item in closes)
+            at = closes[0].end_time
+            if (
+                any(item.end_time != at or item.identity.job_control != group for item in closes)
+                or tuple(item.barrier.subject.object_id for item in request.process_closures)
+                != tuple(identity.object_id for identity in identities)
+                or any(item.barrier.requested_at != at for item in request.process_closures)
+                or any(item.barrier.requested_at != at for item in request.service_closures)
+                or any(
+                    item.closed_at != at
+                    or item.identity.process_object_id not in {row.object_id for row in identities}
+                    for item in request.binding_closures
+                )
+            ):
+                raise StateError("Group service controls must match every exact State close")
+            if not close_group:
+                if (
+                    len(identities) != 1
+                    or identities[0].object_id != group.leader_object_id
+                    or len(request.binding_closures) != 1
+                    or request.service_closures
+                ):
+                    raise StateError(
+                        "Leader exit requires one bound group leader and a retained loaded job"
+                    )
+                owner = self._registry.get_service_instance(
+                    request.binding_closures[0].identity.service_object_id
+                )
+                if (
+                    owner is None
+                    or owner.closed_at is not None
+                    or owner.close_barrier is not None
+                    or owner.identity.launchd_job is None
+                    or owner.process_group != group
+                ):
+                    raise StateError("Leader exit lost its exact live launchd group owner")
+            if not request.binding_closures:
+                owned = tuple(
+                    self._registry.get_service_instance(item.barrier.subject.object_id)
+                    for item in request.service_closures
+                )
+                if len(owned) != 1 or owned[0] is None or owned[0].process_group != group:
+                    raise StateError("Leaderless group cleanup requires its retained service owner")
+            if close_group and set(state.get_posix_group_members(group, limit=256)) != set(
+                identities
+            ):
+                raise StateError("Group membership changed or the closure omits a member")
+            return closes
+
+    def _materialize_posix_service_closure_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        close_group: bool,
+        collectors: ESCollectorRegistry | None,
+        source_timing_preparation: SourceTimingPreparation | None,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Share the exact transaction boundary for group unload and bound leader exit."""
+        state = self._state_manager
+        collector_token = ""
+        timing_receipt = None
+        try:
+            if source_timing_preparation is not None and (
+                type(source_timing_preparation) is not SourceTimingPreparation
+                or source_timing_preparation.owner is not self._source_timing_planner
+                or not self._source_timing_planner.authenticates_preparation(
+                    source_timing_preparation
+                )
+                or source_timing_preparation.committed
+            ):
+                raise StateError("Group closure requires its exact uncommitted source timing owner")
+            if collectors is not None and type(collectors) is not ESCollectorRegistry:
+                raise StateError("Group closure requires its exact optional collector registry")
+            if not self._registry.authenticates_service_closure_admission_token(service_token):
+                raise StateError("Group closure requires an authentic service admission")
+            closes = self.validate_process_group_service_closure(
+                plan, group, service_token.request, close_group=close_group
+            )
+            identities = tuple(item.identity for item in closes)
+            at = closes[0].end_time
+            with (
+                self._registry.claimed_service_process_closure(service_token) as service,
+                ExitStack() as external,
+            ):
+                if source_timing_preparation is not None:
+                    external.enter_context(source_timing_preparation.claimed_commit())
+                    timing_receipt = source_timing_preparation.expected_receipt
+                if any(effective != at for _, effective in service.effective_times):
+                    raise StateError("Group closure cannot precede lifecycle holds or leases")
+                hook = self._materialization_precommit_hook
+                if hook is not None:
+                    hook()
+                with state.prepared_action_cohort_materialization(plan) as prepared:
+                    collector_closure = None
+                    if collectors is not None:
+                        from evidenceforge.generation.actions.es_collection import (
+                            ESCollectionActionOwner,
+                        )
+
+                        owner = ESCollectionActionOwner(state, collectors)
+                        requests, processes = owner.process_execution_closures(plan)
+                        if requests:
+                            collector_closure = external.enter_context(
+                                owner.prepared_closures(requests, processes)
+                            )
+                            collector_token = collector_closure.publication_token
+                            collector_closure.certify_composite_commit(
+                                collector_closure.expected_result
+                            )
+                    if close_group and set(state.get_posix_group_members(group, limit=256)) != set(
+                        identities
+                    ):
+                        raise StateError("Group membership changed or the closure omits a member")
+                    expected = prepared.expected_result
+                    prepared.certify_composite_commit(expected)
+                    if source_timing_preparation is not None:
+                        source_timing_preparation.certify_composite_commit(timing_receipt)
+                    service.certify_composite_commit(service.expected_receipt)
+                    # State remains rollback-owned until the registry's no-fail tail.
+                    prepared.apply_provisional()
+                    if collector_closure is not None:
+                        collector_closure.apply_provisional()
+                    try:
+                        receipt = service.commit_no_fail()
+                        if source_timing_preparation is not None:
+                            self._commit_source_timing_recoverably(source_timing_preparation)
+                        result = prepared.finalize_no_fail()
+                        if collector_closure is not None:
+                            collector_closure.finalize_no_fail()
+                    except BaseException as error:
+                        if service.committed:
+                            receipt = service.receipt
+                            assert receipt is not None
+                            if (
+                                source_timing_preparation is not None
+                                and not source_timing_preparation.committed
+                            ):
+                                self._commit_source_timing_recoverably(source_timing_preparation)
+                            if not prepared.committed:
+                                prepared.finalize_no_fail()
+                            if collector_closure is not None and not collector_closure.committed:
+                                collector_closure.finalize_no_fail()
+                            proof = PosixGroupServiceClosureReceipt.issue(
+                                secret=self._receipt_secret,
+                                group=group,
+                                plans=closes,
+                                service_receipt=receipt,
+                                prior_version=expected.prior_version,
+                                committed_version=expected.committed_version,
+                                collector_publication_token=collector_token,
+                                source_timing_receipt=timing_receipt,
+                            )
+                            error.process_group_service_receipt = proof
+                        raise
+            return PosixGroupServiceClosureReceipt.issue(
+                secret=self._receipt_secret,
+                group=group,
+                plans=closes,
+                service_receipt=receipt,
+                prior_version=result.prior_version,
+                committed_version=result.committed_version,
+                collector_publication_token=collector_token,
+                source_timing_receipt=timing_receipt,
+            )
+        except BaseException:
+            self._discard_service_closure_admission(service_token)
+            if (
+                type(source_timing_preparation) is SourceTimingPreparation
+                and source_timing_preparation.owner is self._source_timing_planner
+                and not source_timing_preparation.committed
+            ):
+                source_timing_preparation.cancel()
+            raise
+
     def authenticates_process_service_closure_composite_receipt(
         self,
         plan: ProcessTerminationMaterializationPlan,
@@ -8322,6 +9032,32 @@ class GeneratorLifecycleAuthority:
     ) -> bool:
         """Verify one exact committed State/lifecycle service closure receipt."""
 
+        if type(receipt) is PosixGroupServiceClosureReceipt:
+            if (
+                not receipt.authenticates(self._receipt_secret)
+                or (
+                    receipt.source_timing_receipt is not None
+                    and (
+                        self._source_timing_planner is None
+                        or not self._source_timing_planner.authenticates_preparation_receipt(
+                            receipt.source_timing_receipt
+                        )
+                    )
+                )
+                or not self._registry.authenticates_service_process_closure_receipt(
+                    receipt.service_receipt
+                )
+                or not self._state_manager.authenticates_process_termination_plan(plan)
+                or plan.expected_version != receipt.prior_version
+                or receipt.committed_version != receipt.prior_version + 1
+            ):
+                return False
+            return any(
+                token == plan.publication_token and identity == plan.identity
+                for token, identity in zip(
+                    receipt.process_plan_tokens, receipt.processes, strict=True
+                )
+            )
         if not isinstance(receipt, LifecycleProcessServiceClosureCompositeReceipt):
             return False
         if not receipt._has_valid_integrity(self._receipt_secret):
@@ -8367,11 +9103,15 @@ class GeneratorLifecycleAuthority:
         plan: ProcessMaterializationPlan,
         *,
         finalize_external_no_fail: Callable[[], None] | None = None,
+        commit_external_first: Callable[[], object] | None = None,
     ) -> tuple[RunningProcess, LifecycleMaterializationReceipt]:
         """Atomically publish one planned process/thread and external token.
 
         ``finalize_external_no_fail`` has the same preclaimed, primitive-only
         contract and global lock ordering as :meth:`materialize_session`.
+        Fallible preclaimed artifact transactions use ``commit_external_first``
+        after validation and before canonical allocation. Committed conservative
+        retention may survive a lost acknowledgement without creating a process.
         """
 
         identity = plan.identity
@@ -8382,6 +9122,8 @@ class GeneratorLifecycleAuthority:
                 hook = self._materialization_precommit_hook
                 if hook is not None:
                     hook()
+                if commit_external_first is not None:
+                    commit_external_first()
                 ticket.commit()
                 process = self._state_manager._commit_prevalidated_process_materialization(plan)
                 if finalize_external_no_fail is not None:
@@ -8438,7 +9180,7 @@ class GeneratorLifecycleAuthority:
             )
         return ForegroundShellOwner(
             hostname=process.hostname,
-            principal=snapshot.token.principal,
+            principal=snapshot.current_view.token.principal,
             session_object_id=session_object_id,
             process_object_id=process.object_id,
         )
@@ -8475,7 +9217,7 @@ class GeneratorLifecycleAuthority:
             return None
         lease = self._registry.foreground_lease_for(
             identity.hostname,
-            snapshot.token.principal,
+            snapshot.current_view.token.principal,
             snapshot.membership.session_object_id,
             identity.object_id,
         )

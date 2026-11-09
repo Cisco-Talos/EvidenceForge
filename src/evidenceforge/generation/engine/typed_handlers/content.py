@@ -16,6 +16,7 @@ from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SpillageEventSpec,
 )
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 
 from .context import TypedEventContext
@@ -208,7 +209,9 @@ def handle_spillage(
     # can be shifted and dropped during eCAR post-flush normalization —
     # leaving a labeled-but-unwritten credential (a phantom). A standalone
     # process keeps a stable, unique identity and always lands.
-    if spec.surface == "process_command_line":
+    if spec.surface == "process_command_line" or (
+        spec.surface == "shell_history" and platform_for_os(system.os) == "macos"
+    ):
         spill_logon_id = self._resolve_storyline_process_spill_logon_id(
             actor,
             system,

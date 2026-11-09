@@ -215,6 +215,42 @@ def test_windows_explorer_is_deployed_where_session_shell_generation_is_supporte
     assert len({explorer.digests.sha256 for explorer in exact_explorers}) == 4
 
 
+def test_remote_ssh_administrator_compiles_target_profile_without_desktop_assignments() -> None:
+    workstation = _system("WS-01", 1)
+    server = _system("BUILD-01", 2, os_name="Ubuntu 24.04")
+    server.update({"type": "server", "services": ["ssh"]})
+    scenario = _scenario_with_systems([workstation, server])
+    scenario.environment.users[0].persona = "sysadmin"
+    registry = compile_native_deployment_registry(scenario, WorldModel(scenario, "example.com"))
+
+    profile = registry.user_profile_for("BUILD-01", "test_user", "linux")
+    assert profile is not None
+    assert profile.profile_root == "/home/test_user"
+    assert not registry.user_application_assignments_for_product("BUILD-01", "chrome")
+
+
+@pytest.mark.parametrize("event_type", ["logon", "ssh_session", "rdp_session"])
+def test_authored_session_actor_compiles_exact_target_profile(event_type: str) -> None:
+    scenario = _scenario_with_systems([_system("WS-01", 1), _system("WS-02", 2)])
+    payload = scenario.model_dump(mode="json")
+    payload["storyline"] = [
+        {
+            "id": "remote-session",
+            "time": "+10m",
+            "actor": "test_user",
+            "system": "WS-02",
+            "activity": "Explicit target session",
+            "events": [{"type": event_type}],
+        }
+    ]
+    scenario = Scenario.model_validate(payload)
+    registry = compile_native_deployment_registry(scenario, WorldModel(scenario, "example.com"))
+
+    profile = registry.user_profile_for("WS-02", "test_user", "windows")
+    assert profile is not None
+    assert profile.profile_root == r"C:\Users\test_user"
+
+
 def test_capability_owned_native_processes_keep_host_build_pe_metadata() -> None:
     """Service/task ownership must not discard native VERSIONINFO."""
 

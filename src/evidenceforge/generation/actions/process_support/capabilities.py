@@ -10,7 +10,10 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import NmapCommandProbeRequest
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
 from evidenceforge.generation.actions.process_execution import (
@@ -22,6 +25,7 @@ from evidenceforge.generation.actions.scanner_probe import (
     NmapCommandProbePlan,
     NmapCommandProbePlanningProfile,
 )
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.scenario import System, User
@@ -130,6 +134,21 @@ class WorkstationLogonLockedAtCapability(Protocol):
         ...
 
 
+class EnsureMacosSessionShellCapability(Protocol):
+    def __call__(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        activity_time: datetime,
+        *,
+        allow_deferred_start: bool = False,
+        terminal_application_id: str | None = None,
+    ) -> int | None:
+        """Delegate to the shared local Mac terminal startup and reuse owner."""
+        ...
+
+
 class EnsureLinuxSessionShellCapability(Protocol):
     def __call__(
         self,
@@ -178,6 +197,9 @@ class GenerateProcessCapability(Protocol):
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
+        new_posix_session: bool = False,
+        arguments: tuple[str, ...] | None = None,
+        exec_script: MacosExecScript | None = None,
     ) -> int:
         """Delegate to the existing generate process owner."""
         ...
@@ -194,6 +216,10 @@ class GenerateProcessTerminationCapability(Protocol):
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
+        macos_command_completed: bool = False,
     ) -> None:
         """Delegate to the existing generate process termination owner."""
         ...
@@ -220,6 +246,14 @@ class GenerateSystemProcessCapability(Protocol):
         ...
 
 
+class ProcessCredentialsCapability(Protocol):
+    def __call__(
+        self, system: System, username: str, parent_pid: int, time: datetime
+    ) -> PosixProcessCredentials | None:
+        """Read explicit modeled process credentials without allocating identity."""
+        ...
+
+
 @dataclass(frozen=True)
 class ProcessIdentityCapabilities:
     """Bind shared host and user identity capabilities without exposing the generator interface."""
@@ -227,6 +261,8 @@ class ProcessIdentityCapabilities:
     user_for_username: UserModelForUsernameCapability
     host_context: BuildHostContextCapability
     user_sid: GetSidCapability
+    process_credentials: ProcessCredentialsCapability
+    macos_execution_metadata: MacosExecutionMetadataProducer | None = None
 
 
 @dataclass(frozen=True)

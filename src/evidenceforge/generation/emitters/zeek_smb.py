@@ -36,12 +36,8 @@ class ZeekSmbMappingEmitter(SensorMultiplexEmitter):
             "id.resp_h": net.dst_ip,
             "id.resp_p": net.dst_port,
             "path": f"\\\\{smb.share_ref.split('.', 1)[0]}\\{smb.share_name}",
-            "service": smb.share_name,
-            "native_file_system": smb.advertised_filesystem
-            or {"ntfs": "NTFS", "refs": "ReFS"}.get(
-                smb.filesystem,
-                str(smb.filesystem).upper(),
-            ),
+            # SMB2/3 TreeConnect exposes share_type. SMB1-only service and
+            # native filesystem strings are not observations of this response.
             "share_type": "DISK",
             "_source_timing_key": network_source_timing_key("zeek_smb_mapping"),
             **self._sensor_metadata(event, self.format_def.name),

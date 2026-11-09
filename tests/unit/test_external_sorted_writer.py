@@ -264,12 +264,12 @@ def test_external_writer_preserves_prior_output_on_merge_failure(
     original_merge = writer._merge_runs_unlocked
     fail_once = True
 
-    def fail_merge(paths: object, destination: object) -> None:
+    def fail_merge(paths: object, destination: object, *, export: bool = False) -> None:
         nonlocal fail_once
         if fail_once:
             fail_once = False
             raise OSError("injected merge failure")
-        original_merge(paths, destination)
+        original_merge(paths, destination, export=export)
 
     monkeypatch.setattr(writer, "_merge_runs_unlocked", fail_merge)
 

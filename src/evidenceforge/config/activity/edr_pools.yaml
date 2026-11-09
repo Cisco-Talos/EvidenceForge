@@ -129,8 +129,8 @@ file_side_effect_profiles:
     executables: ["systemd-journald"]
     actions: ["modify"]
     paths_linux:
-      - "/var/log/journal/{hex}/system.journal"
-      - "/run/log/journal/{hex}/system.journal"
+      - "/var/log/journal/{machine_id}/system.journal"
+      - "/run/log/journal/{machine_id}/system.journal"
 
   - name: linux_syslog_state
     executables: ["rsyslogd", "syslog-ng"]
@@ -384,7 +384,7 @@ file_paths_linux:
   # Logs and system
   - "/var/log/syslog"
   - "/var/log/auth.log"
-  - "/var/log/journal/{hex}/system.journal"
+  - "/var/log/journal/{machine_id}/system.journal"
 # Registry keys for EDR events. Format: [key, value_name, details].
 # TargetObject in Sysmon = key\value_name. Details = data written.
 runmru_commands:

@@ -1,0 +1,7 @@
+{
+  "focused": "26 public-policy/runtime/overlay +42 cryptographic/protocol/wire/retention +1 selected slow config clean +1 negative policy validate-config =70 passing checks",
+  "config_validation": "101 files, zero errors/warnings/info",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "policy_scope": "Explicit public issuer metadata; modeled issuance-era rotation; private and CA generation excluded; no authored input changes"
+}

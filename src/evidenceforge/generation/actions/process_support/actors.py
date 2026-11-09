@@ -32,9 +32,13 @@ from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
 from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+    normalize_process_command,
+)
+from evidenceforge.generation.activity.process_helpers import (
     _windows_service_process_account as _windows_service_process_account,
 )
-from evidenceforge.generation.activity.process_helpers import normalize_process_command
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
@@ -178,7 +182,19 @@ class ProcessActorResolver:
             if started_at <= shell_ready:
                 started_at = shell_ready + timedelta(milliseconds=50)
         parent = self.state_manager.get_process(system.hostname, request.parent_pid)
-        if parent is not None and started_at <= ensure_utc(parent.start_time):
+        parent_execution = (
+            self.state_manager.get_process_identity(system.hostname, request.parent_pid)
+            if _get_os_category(system.os) == "macos"
+            else None
+        )
+        parent_ready_at = (
+            parent_execution.execution_started_at
+            if parent_execution is not None
+            else ensure_utc(parent.start_time)
+            if parent is not None
+            else None
+        )
+        if parent_ready_at is not None and started_at <= parent_ready_at:
             offset_ms = 50 + (
                 _stable_seed(
                     f"process_after_parent:{system.hostname}:{request.parent_pid}:{process_name}:"
@@ -186,7 +202,7 @@ class ProcessActorResolver:
                 )
                 % 450
             )
-            started_at = ensure_utc(parent.start_time) + timedelta(milliseconds=offset_ms)
+            started_at = parent_ready_at + timedelta(milliseconds=offset_ms)
 
         if not request.from_storyline and request.source_visible_by is None:
             started_at = self.scheduling._preview_one_shot_cli_launch(
@@ -207,11 +223,14 @@ class ProcessActorResolver:
                     time=started_at,
                 )
         if (
-            _get_os_category(system.os) == "linux"
+            _get_os_category(system.os) in {"linux", "macos"}
             and request.source_visible_by is None
             and not request.from_storyline
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is not None
+            and _posix_shell_process_reserves_foreground(
+                _get_os_category(system.os), process_name, command_line
+            )
+            and _posix_foreground_lifetime(_get_os_category(system.os), process_name, command_line)
+            is not None
         ):
             started_at = self.foreground._reserve_foreground_shell_time(
                 system=system,

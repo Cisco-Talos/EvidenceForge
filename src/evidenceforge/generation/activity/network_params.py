@@ -13,7 +13,13 @@ from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
-from evidenceforge.config.schemas import DnsTunnelRttConfig, NmapCommandProbeConfig
+from evidenceforge.config.schemas import (
+    DnsTunnelRttConfig,
+    HttpRequestPhaseConfig,
+    HttpTransportFloorSlackConfig,
+    NmapCommandProbeConfig,
+    ProtocolConfirmationConfig,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 _CACHED_DATA: dict[str, Any] | None = None
@@ -85,6 +91,19 @@ _DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge overlay network params into defaults."""
     result = dict(default)
+    for family in ("transport_histories", "ssl_histories"):
+        if isinstance(overlay.get(family), dict):
+            result[family] = {**default.get(family, {}), **overlay[family]}
+    if isinstance(overlay.get("http_request_phase"), dict):
+        result["http_request_phase"] = {
+            **default.get("http_request_phase", {}),
+            **overlay["http_request_phase"],
+        }
+    if isinstance(overlay.get("http_transport_floor_slack"), dict):
+        result["http_transport_floor_slack"] = {
+            **default.get("http_transport_floor_slack", {}),
+            **overlay["http_transport_floor_slack"],
+        }
     if "oui_prefixes" in overlay:
         result["oui_prefixes"] = extend_list(
             default.get("oui_prefixes", []), overlay["oui_prefixes"]
@@ -133,6 +152,17 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             **default.get("nmap_command_probe", {}),
             **overlay["nmap_command_probe"],
         }
+    if isinstance(overlay.get("protocol_confirmation"), dict):
+        result["protocol_confirmation"] = {
+            **default.get("protocol_confirmation", {}),
+            **overlay["protocol_confirmation"],
+        }
+        directions = overlay["protocol_confirmation"].get("payload_directions")
+        if isinstance(directions, dict):
+            result["protocol_confirmation"]["payload_directions"] = {
+                **default.get("protocol_confirmation", {}).get("payload_directions", {}),
+                **directions,
+            }
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     if isinstance(overlay.get("proxy_connect_status_messages"), dict):
@@ -185,6 +215,27 @@ def nmap_command_probe_config() -> NmapCommandProbeConfig:
     """Return validated bounded planning settings for nmap process effects."""
 
     return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
+
+
+def protocol_confirmation_config() -> ProtocolConfirmationConfig:
+    """Return qualified source-native protocol prerequisites."""
+    return ProtocolConfirmationConfig.model_validate(
+        load_network_params().get("protocol_confirmation", {})
+    )
+
+
+def http_request_phase_config() -> HttpRequestPhaseConfig:
+    """Read validated continuous first-request phase policy."""
+    return HttpRequestPhaseConfig.model_validate(
+        load_network_params().get("http_request_phase", {})
+    )
+
+
+def http_transport_floor_slack_config() -> HttpTransportFloorSlackConfig:
+    """Read frozen HTTP timing policy, retaining exact legacy defaults when absent."""
+    return HttpTransportFloorSlackConfig.model_validate(
+        load_network_params().get("http_transport_floor_slack", {})
+    )
 
 
 def public_ntp_ips() -> list[str]:

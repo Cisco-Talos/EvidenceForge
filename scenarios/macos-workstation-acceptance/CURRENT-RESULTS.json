@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "generation_behavior_revision": 377,
+  "phase_1": "COMPLETE_BOUNDED_WORKLOAD",
+  "phases_2_to_4": "NOT_ALL_COMPLETE",
+  "measurements": [
+    {
+      "run": "primary",
+      "seed": 373,
+      "forks": 33,
+      "execs": 39,
+      "background_native_execs": 0,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 13,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "5e855abad2362b9c09bcd04203fcd4e08536ef740c7a3b24bf01d0c3339bfd3b"
+    },
+    {
+      "run": "combined-recovery",
+      "seed": 373,
+      "forks": 63,
+      "execs": 78,
+      "background_native_execs": 39,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 51,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "85cca300843c2bceeb64b65e01399c7520a9b75f873aed86c0de5418da062e91",
+      "acceptance_control": "Explicit policy refusal; no successful target process or command effects"
+    }
+  ],
+  "combined_exact_resume_files_equal": true,
+  "combined_native_filter_bytes_equal": true,
+  "deterministic_files_compared": 22,
+  "primary_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 88.9058446346018,
+    "total_records": 346,
+    "source_counts": {
+      "ecar": 176,
+      "macos_endpoint_security": 85,
+      "macos_unified_log": 4,
+      "zeek_conn": 35,
+      "zeek_dns": 14,
+      "zeek_files": 4,
+      "zeek_ssl": 16,
+      "zeek_x509": 4,
+      "zsh_history": 8
+    },
+    "hard_gate_failures": []
+  },
+  "remaining": [
+    "Generic GUI/SSH teardown results remain explicitly unknown; no native success is invented.",
+    "Launchd ULF remains reference-gated. The final corrected bounded capture passed controls and cleanup but retained zero rows. Collection has ended under the agreed stopping rule; no alternate file source or further collection is requested.",
+    "Verbose SSH session messages remain gated under the user-selected ordinary daemon verbosity; other unqualified PAM/disconnect messages are not fabricated.",
+    "Full expanded ULF acceptance remains incomplete pending launchd evidence; current exact recovery/evaluation covers implemented families."
+  ],
+  "scope": "Synthetic engineering acceptance; no private records or observed native values are included.",
+  "combined_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 89.57687922297386,
+    "total_records": 3118,
+    "source_counts": {
+      "ecar": 1055,
+      "macos_endpoint_security": 154,
+      "macos_unified_log": 5,
+      "zeek_conn": 785,
+      "zeek_dns": 389,
+      "zeek_files": 185,
+      "zeek_http": 19,
+      "zeek_ocsp": 18,
+      "zeek_ssl": 344,
+      "zeek_x509": 156,
+      "zsh_history": 8
+    },
+    "hard_gate_failures": []
+  },
+  "bounded_current_code_review": {
+    "es_records_reviewed": 0,
+    "ulf_records_reviewed": 5,
+    "scope": "Independent full-process census and bounded assertions on all five synthetic ULF rows in the final recovery companion; original primary retains its four rows. No new blind panel.",
+    "result": "Workspace, root SSH writer, peer, callsite, canonical public-key fingerprint and ASP kernel/sender/target checks pass. Refused target has no process or command effects. Plain-key payload remains source-derived, not a separate local observation."
+  },
+  "generation_behavior_sha256": "3008dfcd000f671f24256c492c8b113c62eb13ca88fa5cd28d3fed105702c7e8",
+  "native_filter_formats": [
+    "macos_endpoint_security",
+    "macos_unified_log"
+  ],
+  "ulf_coverage": {
+    "workload_rows": 5,
+    "pam_success_rows": 1,
+    "publickey_success_rows": 1,
+    "non_pty_authentication": "password/PAM",
+    "pty_authentication": "plain publickey; source-derived payload with qualified common logger envelope",
+    "separate_password_pty_unit_gate": "PASS",
+    "daemon_verbosity": "ordinary; VERBOSE session messages remain gated by user choice on 2026-11-03",
+    "primary_workload_rows": 4,
+    "workspace_rows": 2,
+    "asp_refusal_rows": 1,
+    "refused_target_has_no_process_or_command_effects": true
+  },
+  "previous_bounded_review_revision_375": {
+    "es_records_reviewed": 10,
+    "ulf_records_reviewed": 2,
+    "result": "No concrete identity, helper-argument or writer contradiction in this sample; expanded ULF acceptance remains pending."
+  },
+  "previous_bounded_review_revision_376": {
+    "es_records_reviewed": 0,
+    "ulf_records_reviewed": 3,
+    "scope": "Independent full-process census plus bounded review of the three synthetic ULF rows; no new blind panel.",
+    "result": "Root/session-worker, peer, static format/private flag, sender/build and modeled-frame checks pass for PAM; two workspace rows remain unchanged. Unqualified families remain gated."
+  },
+  "phase_2": "COMPLETE_BOUNDED_OUTCOME_CONTRACT_WITH_EXPLICIT_UNKNOWNS",
+  "launchd_reference_cleanup": {
+    "basis": "Human-supplied fixed-output read-only check; no agent native-data access",
+    "controls": "PASS",
+    "directory": "ABSENT",
+    "exact_service": "ABSENT",
+    "cleanup_state": "ABSENCE_VERIFIED",
+    "cleanup_needed": false,
+    "qualifies_launchd_ulf": false
+  },
+  "launchd_activation_control_test": {
+    "status": "PASS_HUMAN_FIXED_REPORT",
+    "collection": "NONE",
+    "scope": "Launchctl activation acknowledgement and exact job/file cleanup",
+    "qualifies_native_execution_or_ulf": false,
+    "one_shot_kit_required": true,
+    "guard_exit": "ZERO",
+    "all_control_fields": "PASS",
+    "cleanup": "PASS"
+  },
+  "launchd_ulf_capture": {
+    "status": "COMPLETE_NO_QUALIFYING_ROWS",
+    "uses_separate_fresh_kit": true,
+    "stopping_rule": "If controls pass with no qualifying rows, leave gated and stop collecting",
+    "basis": "Human-supplied fixed report; no agent native-data access",
+    "controls": "PASS",
+    "cleanup": "PASS",
+    "retained_rows": 0,
+    "reference_result": "NO_MATCHING_ROWS",
+    "native_shapes": "INCONCLUSIVE",
+    "readiness_scope": "OWN_PROCESS_MARKER_ONLY",
+    "collection_sequence": "ENDED_BY_STOPPING_RULE",
+    "qualifies_launchd_ulf": false,
+    "global_absence_established": false,
+    "further_collection_requested": false
+  },
+  "previous_companion_before_asp_control_revision_377": {
+    "measurement": {
+      "run": "combined-recovery",
+      "seed": 373,
+      "forks": 45,
+      "execs": 55,
+      "background_native_execs": 16,
+      "native_exit_rows": 13,
+      "unknown_exit_observations": 32,
+      "census_complete": true,
+      "activity_supported": true,
+      "missing_images": [],
+      "missing_execution_roles": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "manifest_sha256": "bc83416a020b671d66e4b2486bf439b3a8716385d33d74c4e9a2cfd7a1a408fe"
+    },
+    "evaluation": {
+      "acceptance_passed": true,
+      "overall_score": 88.7088659642302,
+      "total_records": 2819,
+      "source_counts": {
+        "ecar": 912,
+        "macos_endpoint_security": 113,
+        "macos_unified_log": 4,
+        "zeek_conn": 714,
+        "zeek_dns": 352,
+        "zeek_files": 203,
+        "zeek_http": 15,
+        "zeek_ocsp": 15,
+        "zeek_ssl": 313,
+        "zeek_x509": 170,
+        "zsh_history": 8
+      }
+    },
+    "scope": "Historical companion before the explicit ASP negative control was added; original quiet primary unchanged."
+  },
+  "final_evaluation_repairs": {
+    "native_provenance": "Associate ES/ULF directory provenance only with declared hostname or same-domain FQDN; direct and unknown-source exports remain unattributed.",
+    "temporal_integrity": "Compare timestamp-ordered storyline neighbors without reordering authored input or loosening timing tolerance.",
+    "before_fix": {
+      "acceptance_passed": false,
+      "temporal_integrity": 79.16666666666667,
+      "missing_visible_events": 1
+    },
+    "after_fix": {
+      "acceptance_passed": true,
+      "temporal_integrity": 91.66666666666667,
+      "event_presence": 100.0,
+      "storyline_trace_coverage": 100.0
+    },
+    "preserved_bundle_reevaluated": true,
+    "generation_changed": false,
+    "remaining_nonblocking_findings": [
+      "Two eCAR inventory-exit temporal-order warnings",
+      "Three inferred pivots do not expose a shared rendered identity on the kernel refusal row"
+    ]
+  },
+  "validation": {
+    "errors": 0,
+    "warnings": 4,
+    "intentional_warnings": "Three pre-window setup steps and absent firewall sensor"
+  },
+  "verification": {
+    "evaluation_and_related_unit_tests": 496,
+    "skill_installer_unit_tests": 51,
+    "combined_slow_recovery_test": "PASS",
+    "whole_repository_ruff_check": "PASS",
+    "whole_repository_ruff_format_check": "PASS",
+    "generation_behavior_manifest": "UNCHANGED_AND_CURRENT"
+  }
+}

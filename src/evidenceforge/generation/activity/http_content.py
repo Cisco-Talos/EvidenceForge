@@ -298,12 +298,14 @@ def is_transfer_static_resource_path(uri: str, content_type: str) -> bool:
     return is_stable_resource_path(uri)
 
 
-def _uses_shared_static_response_seed(uri: str) -> bool:
-    """Return whether stable bytes should be shared across virtual hosts."""
-    clean_path = uri.split("?", 1)[0].split("#", 1)[0].lower()
-    if clean_path in {"/", "/index.html"}:
-        return False
-    return is_stable_resource_path(uri)
+def http_response_resource_identity(host: str, uri: str) -> str:
+    """Return the canonical site owner, or an explicitly shared content identity."""
+    clean_path = uri.split("?", 1)[0].split("#", 1)[0]
+    shared = load_http_file_profiles().get("shared_resources", {}).get(clean_path)
+    if shared:
+        return f"shared:{shared}"
+    resource_path = clean_path if is_stable_resource_path(uri) else uri.split("#", 1)[0]
+    return f"site:{host.casefold().rstrip('.')}:{resource_path}"
 
 
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
@@ -316,10 +318,8 @@ def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     if status_code < 400 and is_health_endpoint_path(uri):
         return response_size_for_health_endpoint(status_code, host, uri)
     if status_code < 400:
-        stable_resource = is_stable_resource_path(uri)
-        seed_host = "static-resource" if _uses_shared_static_response_seed(uri) else host
-        seed_uri = uri.split("?", 1)[0].split("#", 1)[0] if stable_resource else uri
-        rng = random.Random(_stable_seed(f"web_response:{status_code}:{seed_host}:{seed_uri}"))
+        resource_identity = http_response_resource_identity(host, uri)
+        rng = random.Random(_stable_seed(f"web_response:{status_code}:{resource_identity}"))
         return response_size_for_mime(rng, normalize_mime_type_for_path(uri, "text/html"))
 
     ranges = {

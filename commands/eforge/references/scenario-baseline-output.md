@@ -6,6 +6,9 @@ description: "Exact time-window, baseline shaping, observation profile, and outp
 
 Read this reference when the run window, baseline traffic, observation profile, or output changes.
 
+Contents: [time and controls](#time-and-top-level-controls) ·
+[baseline activity](#baseline-activity) · [output](#output)
+
 ## Time and top-level controls
 
 `time_window` supports required `start`, exactly one of `end` or `duration`, and optional `warmup`
@@ -15,6 +18,15 @@ use `d`, `h`, `m`, `s`, or `ms` components such as `2h30m`.
 `generation_seed` is an unsigned 64-bit integer and defaults to 42. `observation_profile` is a
 simple configured profile name and defaults to `complete`. `logon_grace_period` is a duration and
 defaults to `30m`.
+
+`macos_process_coverage` supports `complete` and `partial`. Native
+`macos_endpoint_security` selection defaults to complete, and runtime format filtering retains
+that request. Complete mode requires lossless process collection over the full simulation
+window and reconciles all canonical Mac starts/execs with native receipts and exported records.
+Unknown metadata or unresolved aggregate starts fail generation. Qualified in-window
+Terminal/iTerm2, Finder, SSH and selected system-job startup supports complete mode. Use
+`partial` explicitly for a narrower diagnostic/lossy request or legacy aggregate workflow;
+the independent census remains in `GROUND_TRUTH.json` without a complete-coverage claim.
 
 ## Baseline activity
 

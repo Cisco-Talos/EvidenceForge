@@ -1,0 +1,13 @@
+# Plain syslog forwarding owns simplex application traffic
+
+Classification: sibling_defect / baseline forwarding intent. Owner: canonical syslog route producers (health transport and centralized relay noise), before network transaction construction. Network55 found responder application bytes in ordinary TCPsyslog; both producer paths explicitly invent40–200responsebytes even though they model plain RFC5424/6587 forwarding with no application acknowledgment protocol.
+
+Invariant: ordinary UDP/TCP syslog forwarding has zero responder application payload. Preserve TCP SYNACK/ACK/close packets and IP bytes; zero application bytes does not mean zero response packets. Repair both canonical route callers, not every arbitrary caller using port514 or a custom acknowledged protocol. Native routing/process hints remain OS-aware: a Mac sender must not inherit a Windows svchost fallback; unresolved native forwarder PID stays unknown rather than fabricating a process.
+
+Entry paths: health forwarding and lateral relay, TCP/UDP, Linux/Windows/Mac identity defaults, partial/captured flows and explicit low-level custom-protocol escape hatches. Verify actual generated canonical traffic and source projection, sibling producer call coverage, retained control packets and native zero-response property. Primary RFC6587 describes simplex sender/receiver operation and no application back channel: https://www.rfc-editor.org/rfc/rfc6587.html . No collection threshold or source observation controls change.
+
+## Generation-blocking sibling: sudo bootstrap session reuse
+
+The first fresh attempt stops at hour2 on the retained invariant that a live Linux session owns one controlling terminal. A focused test reproduces it before the fix: an existing session covers the next sudo child start but expires before its full reserve interval. Sudo's TTY-aware selector correctly rejects it; generic local logon bootstrap then reuses it with weaker start-only coverage and attempts to bind a second TTY. Owner: sudo session/terminal admission, not source rendering or the one-TTY assertion.
+
+Repair bootstrap only after no compatible session is found: require full reserve_until coverage and disallow generic reuse, while retaining eligible-session reuse at the existing selector. Preserve terminal claims, session/lifecycle proof ownership, rollback and exact close semantics. Test the failing session-deadline counterexample and existing eligible reuse/TTY ownership/recovery siblings. This second family was investigated and reproduced before patching; this durable contract addition was written after the small patch (a procedural sequencing deviation), rather than claiming it predated it. No assertion is suppressed.

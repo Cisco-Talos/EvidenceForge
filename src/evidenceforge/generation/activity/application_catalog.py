@@ -482,6 +482,11 @@ def resolve_image_path(exe_basename: str, os_category: str = "windows", username
                 return exe_basename
         return path
 
+    if os_category == "macos":
+        raise ValueError(
+            f"Unknown macOS executable {exe_basename!r}; add a Mac catalog entry or provide a full path"
+        )
+
     # 2. Known system binaries with non-System32 paths
     _SPECIAL_PATHS = {
         "explorer.exe": r"C:\Windows\explorer.exe",
@@ -508,9 +513,9 @@ def _build_path_index() -> dict[str, dict[str, str]]:
     like 'git' and 'git.exe' both resolve to the catalog path.
     """
     data = load_catalog()
-    index: dict[str, dict[str, str]] = {"windows": {}, "linux": {}}
+    index: dict[str, dict[str, str]] = {"windows": {}, "linux": {}, "macos": {}}
     for app in data["applications"]:
-        for os_cat in ("windows", "linux"):
+        for os_cat in ("windows", "linux", "macos"):
             platform = app.get("platforms", {}).get(os_cat)
             if not platform:
                 continue
@@ -781,7 +786,8 @@ def is_singleton_application_image(image_path: str, os_category: str) -> bool:
                 and len(normalized) > len(prefix) + len(suffix)
             )
         if matches:
-            return bool(app.get("singleton_per_session"))
+            override = platform.get("singleton_per_session")
+            return bool(app.get("singleton_per_session") if override is None else override)
     return False
 
 

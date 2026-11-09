@@ -1,0 +1,619 @@
+{
+  "alerts": 157,
+  "by_message": [
+    [
+      "ET DNS Query to a .top domain",
+      34
+    ],
+    [
+      "ET DNS Query to .bit TLD",
+      17
+    ],
+    [
+      "ET DNS Query to .cloud TLD",
+      15
+    ],
+    [
+      "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      14
+    ],
+    [
+      "ET DNS Query to a .tk domain",
+      12
+    ],
+    [
+      "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
+      11
+    ],
+    [
+      "ET DNS Query for .to TLD",
+      10
+    ],
+    [
+      "PROTOCOL-ICMP PING BSDtype",
+      7
+    ],
+    [
+      "PROTOCOL-ICMP PING Linux",
+      6
+    ],
+    [
+      "PROTOCOL-ICMP PING",
+      5
+    ],
+    [
+      "ET P2P BitTorrent peer sync",
+      3
+    ],
+    [
+      "ET SCAN ICMP Unusual PING detected",
+      3
+    ],
+    [
+      "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+      3
+    ],
+    [
+      "ET POLICY curl User-Agent Outbound",
+      3
+    ],
+    [
+      "ET SCAN ICMP PING IPTools",
+      2
+    ],
+    [
+      "ET POLICY HTTP CONNECT Tunnel Attempt Inbound",
+      2
+    ],
+    [
+      "ET JA3 Hash - Possible Malware - Various RAT",
+      2
+    ],
+    [
+      "ET P2P BitTorrent Traffic",
+      2
+    ],
+    [
+      "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
+      2
+    ],
+    [
+      "ET SCAN Potential SSH Scan",
+      2
+    ],
+    [
+      "ET INFO LibreSSL Outbound Connection",
+      2
+    ]
+  ],
+  "by_sensor": {
+    "snort-perimeter": [
+      [
+        "ET DNS Query to a .top domain",
+        16
+      ],
+      [
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        14
+      ],
+      [
+        "ET DNS Query to .bit TLD",
+        8
+      ],
+      [
+        "PROTOCOL-ICMP PING BSDtype",
+        6
+      ],
+      [
+        "PROTOCOL-ICMP PING",
+        5
+      ],
+      [
+        "PROTOCOL-ICMP PING Linux",
+        5
+      ],
+      [
+        "ET DNS Query to .cloud TLD",
+        4
+      ],
+      [
+        "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
+        4
+      ],
+      [
+        "ET P2P BitTorrent peer sync",
+        3
+      ],
+      [
+        "ET SCAN ICMP Unusual PING detected",
+        3
+      ],
+      [
+        "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+        3
+      ],
+      [
+        "ET DNS Query for .to TLD",
+        3
+      ],
+      [
+        "ET DNS Query to a .tk domain",
+        3
+      ],
+      [
+        "ET POLICY curl User-Agent Outbound",
+        3
+      ],
+      [
+        "ET SCAN ICMP PING IPTools",
+        2
+      ],
+      [
+        "ET POLICY HTTP CONNECT Tunnel Attempt Inbound",
+        2
+      ],
+      [
+        "ET JA3 Hash - Possible Malware - Various RAT",
+        2
+      ],
+      [
+        "ET P2P BitTorrent Traffic",
+        2
+      ],
+      [
+        "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
+        2
+      ],
+      [
+        "ET INFO LibreSSL Outbound Connection",
+        2
+      ],
+      [
+        "ET SCAN Potential SSH Scan",
+        1
+      ]
+    ],
+    "snort-core": [
+      [
+        "ET DNS Query to a .top domain",
+        18
+      ],
+      [
+        "ET DNS Query to .cloud TLD",
+        11
+      ],
+      [
+        "ET DNS Query to .bit TLD",
+        9
+      ],
+      [
+        "ET DNS Query to a .tk domain",
+        9
+      ],
+      [
+        "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
+        7
+      ],
+      [
+        "ET DNS Query for .to TLD",
+        7
+      ],
+      [
+        "ET SCAN Potential SSH Scan",
+        1
+      ],
+      [
+        "PROTOCOL-ICMP PING Linux",
+        1
+      ],
+      [
+        "PROTOCOL-ICMP PING BSDtype",
+        1
+      ]
+    ]
+  },
+  "overlap_groups": [
+    [
+      [
+        "11/02-13:00:19.755567",
+        "1:2027865:4",
+        "ET DNS Query to a .top domain",
+        "UDP",
+        "10.10.3.20:55801",
+        "10.10.2.11:53"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:14:06.439491",
+        "1:2024291:4",
+        "ET DNS Query to .bit TLD",
+        "UDP",
+        "10.10.3.10:55492",
+        "10.10.2.10:53"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:20:33.582194",
+        "1:2027865:4",
+        "ET DNS Query to a .top domain",
+        "UDP",
+        "10.10.3.10:39324",
+        "10.10.2.11:53"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:22:40.546618",
+        "1:2024291:4",
+        "ET DNS Query to .bit TLD",
+        "UDP",
+        "10.10.3.20:48810",
+        "10.10.2.10:53"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:31:13.519165",
+        "1:2000334:14",
+        "ET P2P BitTorrent peer sync",
+        "TCP",
+        "10.10.3.10:46473",
+        "34.104.124.59:6881"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:31:50.343060",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:54956",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:32:49.323676",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:52332",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:33:44.422738",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:50475",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:35:25.114583",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:60284",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:36:12.907057",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:54065",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:37:38.059012",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:62907",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:38:28.786498",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:54643",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:39:43.310488",
+        "1:2003068:6",
+        "ET SCAN ICMP Unusual PING detected",
+        "ICMP",
+        "185.220.233.25",
+        "10.10.3.10"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:40:23.029957",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:51019",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:41:16.308191",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:60424",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:42:56.913835",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:60644",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:44:45.131095",
+        "1:2010935:3",
+        "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+        "TCP",
+        "10.10.3.20:37978",
+        "54.230.22.206:80"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:44:57.648803",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:51819",
+        "10.10.3.10:443"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:44:58.955459",
+        "1:2000575:8",
+        "ET SCAN ICMP PING IPTools",
+        "ICMP",
+        "185.220.20.190",
+        "10.10.3.10"
+      ],
+      1
+    ],
+    [
+      [
+        "11/02-13:46:03.036749",
+        "1:2002910:4",
+        "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+        "TCP",
+        "185.70.41.45:58803",
+        "10.10.3.10:443"
+      ],
+      1
+    ]
+  ],
+  "sample": [
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:00:19.755567",
+      "signature": "1:2027865:4",
+      "message": "ET DNS Query to a .top domain",
+      "protocol": "UDP",
+      "src": "10.10.3.20:55801",
+      "dst": "10.10.2.11:53"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:14:06.439491",
+      "signature": "1:2024291:4",
+      "message": "ET DNS Query to .bit TLD",
+      "protocol": "UDP",
+      "src": "10.10.3.10:55492",
+      "dst": "10.10.2.10:53"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:20:33.582194",
+      "signature": "1:2027865:4",
+      "message": "ET DNS Query to a .top domain",
+      "protocol": "UDP",
+      "src": "10.10.3.10:39324",
+      "dst": "10.10.2.11:53"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:22:40.546618",
+      "signature": "1:2024291:4",
+      "message": "ET DNS Query to .bit TLD",
+      "protocol": "UDP",
+      "src": "10.10.3.20:48810",
+      "dst": "10.10.2.10:53"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:31:13.519165",
+      "signature": "1:2000334:14",
+      "message": "ET P2P BitTorrent peer sync",
+      "protocol": "TCP",
+      "src": "10.10.3.10:46473",
+      "dst": "34.104.124.59:6881"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:31:50.343060",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:54956",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:32:49.323676",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:52332",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:33:44.422738",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:50475",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:35:25.114583",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:60284",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:36:12.907057",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:54065",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:37:38.059012",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:62907",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:38:28.786498",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:54643",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:39:43.310488",
+      "signature": "1:2003068:6",
+      "message": "ET SCAN ICMP Unusual PING detected",
+      "protocol": "ICMP",
+      "src": "185.220.233.25",
+      "dst": "10.10.3.10"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:40:23.029957",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:51019",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:41:16.308191",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:60424",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:42:56.913835",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:60644",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:44:45.131095",
+      "signature": "1:2010935:3",
+      "message": "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+      "protocol": "TCP",
+      "src": "10.10.3.20:37978",
+      "dst": "54.230.22.206:80"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:44:57.648803",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:51819",
+      "dst": "10.10.3.10:443"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:44:58.955459",
+      "signature": "1:2000575:8",
+      "message": "ET SCAN ICMP PING IPTools",
+      "protocol": "ICMP",
+      "src": "185.220.20.190",
+      "dst": "10.10.3.10"
+    },
+    {
+      "sensor": "snort-perimeter",
+      "timestamp": "11/02-13:46:03.036749",
+      "signature": "1:2002910:4",
+      "message": "ET SCAN Rapid HTTP/HTTPS Connection Attempts",
+      "protocol": "TCP",
+      "src": "185.70.41.45:58803",
+      "dst": "10.10.3.10:443"
+    }
+  ]
+}

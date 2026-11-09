@@ -1,0 +1,50 @@
+{
+  "icmp_port_zero_cohorts": [
+    {
+      "proto": "icmp",
+      "icmp_type": 8,
+      "state": "S0",
+      "count": 245
+    },
+    {
+      "proto": "icmp",
+      "icmp_type": 8,
+      "state": "SF",
+      "count": 9
+    }
+  ],
+  "dmz_http_rows": 2261,
+  "exact_1ms_rows": 37,
+  "user_agents": 16,
+  "source_ips": {
+    "10.10.3.20": 37
+  },
+  "sample_uids": [
+    "CxlDGmCHKYXqCauciI",
+    "C7D1peg8WZaoNmElQCn",
+    "CvMBN8bFRx4LgEfE2QS",
+    "Ctd2Exrlr7i7XyVSVG",
+    "CRm1eF5u0EGO0QZjfg"
+  ],
+  "dmz_duration_floor": {
+    "successful_https": 2516,
+    "near_1_2s": 152
+  },
+  "tls_budget": {
+    "zeek-core": {
+      "chain_plus_280_rows": 29,
+      "full_rsa_2048_ecdhe_rsa_rows": 22,
+      "no_missed_bytes": 22
+    },
+    "zeek-dmz": {
+      "chain_plus_280_rows": 27,
+      "full_rsa_2048_ecdhe_rsa_rows": 15,
+      "no_missed_bytes": 14
+    },
+    "zeek-db": {
+      "chain_plus_280_rows": 0,
+      "full_rsa_2048_ecdhe_rsa_rows": 0,
+      "no_missed_bytes": 0
+    }
+  }
+}

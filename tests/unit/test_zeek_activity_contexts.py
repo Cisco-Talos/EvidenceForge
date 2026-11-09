@@ -1587,7 +1587,7 @@ class TestSslContextPopulation:
             assert event.protocol.ssl.version in {"TLSv12", "TLSv13"}
             assert event.protocol.ssl.cipher != ""
             assert event.protocol.ssl.established is True
-            assert "S" in event.protocol.ssl.ssl_history
+            assert "s" in event.protocol.ssl.ssl_history
             if event.protocol.ssl.version == "TLSv13":
                 assert event.protocol.leaf_certificate is None
                 assert event.protocol.x509_chain == ()
@@ -1677,7 +1677,7 @@ class TestSslContextPopulation:
         assert event.network.resp_bytes >= 1840
         assert event.protocol.ssl is not None
         assert event.protocol.ssl.established is True
-        assert "S" in event.protocol.ssl.ssl_history
+        assert "s" in event.protocol.ssl.ssl_history
 
     def test_http_over_tls_forces_established_ssl_context(self, activity_gen, monkeypatch):
         """Successful HTTP evidence on TLS cannot coexist with failed ssl.log state."""
@@ -1722,7 +1722,7 @@ class TestSslContextPopulation:
         assert event.protocol.ssl is not None
         assert event.protocol.ssl.established is True
         assert event.protocol.ssl.cipher
-        assert "S" in event.protocol.ssl.ssl_history
+        assert "s" in event.protocol.ssl.ssl_history
 
     def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
         """Proxy egress should preserve canonical POST body size for exfil-style uploads."""
@@ -2574,7 +2574,7 @@ class TestSslContextPopulation:
         assert transport_event.network.initiating_pid == -1
         assert transport_event.network.initiating_pid != source_sshd_pid
         assert transport_event.process is None
-        assert transport_event.identity_plan.actor is None
+        assert transport_event.identity_plan is None or transport_event.identity_plan.actor is None
         assert all(
             process.image != "/usr/bin/ssh"
             for process in gen.state_manager.get_processes_on_system(source.hostname)
@@ -2657,12 +2657,10 @@ class TestSslContextPopulation:
         ]
         messages = [event.syslog.message for event in syslog_events]
         assert "Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22" in messages
-        assert "Invalid user unknown from 10.0.10.50 port 51111" in messages
-        assert (
-            "Failed password for invalid user unknown from 10.0.10.50 port 51111 ssh2" in messages
-        )
-        assert (
-            "Connection closed by invalid user unknown 10.0.10.50 port 51111 [preauth]" in messages
+        # A generic transport does not assert an authentication attempt.
+        assert "Connection closed by 10.0.10.50 port 51111 [preauth]" in messages
+        assert not any(
+            "Invalid user" in message or "Failed password" in message for message in messages
         )
         assert {event.syslog.pid for event in syslog_events} == {conn_event.network.responding_pid}
         assert all(conn_event.timestamp < event.timestamp for event in syslog_events)
@@ -2872,7 +2870,7 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None
             and event.syslog.app_name == "sshd"
-            and "invalid user unknown" in event.syslog.message
+            and "[preauth]" in event.syslog.message
         }
         assert preauth_syslog_pids == {first_conn.network.responding_pid}
 
@@ -3728,9 +3726,9 @@ class TestSslContextPopulation:
             assert event.protocol.leaf_certificate is None
             assert event.protocol.ssl.cert_chain_fuids == ()
             if event.protocol.ssl.version == "TLSv12":
-                assert event.protocol.ssl.ssl_history == "CSIFIFD"
+                assert event.protocol.ssl.ssl_history == "CsiI"
             else:
-                assert event.protocol.ssl.ssl_history == "CSD"
+                assert event.protocol.ssl.ssl_history == "Cs"
 
     def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
         """TLS resumption should require prior client/server pair state."""
@@ -3964,9 +3962,12 @@ class TestHttpContextPopulation:
         """SMB responder payload must not appear before any originator application payload."""
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
-        monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(
+            network_planner_module,
+            "connection_state_distribution",
+            lambda protocol: [("RSTR", 1, "ShAdr")],
+        )
         monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
-        monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", [1])
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -3993,9 +3994,12 @@ class TestHttpContextPopulation:
         """Port-only database flows should follow the same client-before-server invariant."""
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
-        monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(
+            network_planner_module,
+            "connection_state_distribution",
+            lambda protocol: [("RSTR", 1, "ShAdr")],
+        )
         monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
-        monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", [1])
 
         gen.generate_connection(
             src_ip="10.0.10.50",

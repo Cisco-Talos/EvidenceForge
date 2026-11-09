@@ -52,6 +52,17 @@ def test_timing_profiles_load_default_relationship():
     assert window.max_ms == 1500
     assert window.relationship_class == "causal_prerequisite"
 
+    foreground_think_window = get_timing_window(
+        "baseline.foreground_think",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert foreground_think_window.position == "after"
+    assert foreground_think_window.relationship_class == "human_workflow"
+    assert foreground_think_window.min_ms == 800
+    assert foreground_think_window.max_ms == 180_000
+
     source_window = get_timing_window(
         "source.ecar_flow",
         default_min_ms=0,

@@ -1,0 +1,84 @@
+{
+  "loop": 65,
+  "counts": {
+    "matched_browser_flows": 963,
+    "browser_family_mismatches": 10,
+    "matched_zoom_flows": 116,
+    "zoom_competing_browser_headers": 116
+  },
+  "examples": [
+    {
+      "endpoint": "MAC-MROSS-02.meridianhcs.local/ecar.json",
+      "line": 61,
+      "image": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper",
+      "expected": "chrome",
+      "actual": "edge",
+      "http_file": "zeek-core/http.json",
+      "http_line": 108
+    },
+    {
+      "endpoint": "MAC-MROSS-02.meridianhcs.local/ecar.json",
+      "line": 212,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "edge",
+      "http_file": "zeek-core/http.json",
+      "http_line": 761
+    },
+    {
+      "endpoint": "MAC-MROSS-02.meridianhcs.local/ecar.json",
+      "line": 480,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "edge",
+      "http_file": "zeek-core/http.json",
+      "http_line": 1788
+    },
+    {
+      "endpoint": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "line": 37,
+      "image": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper",
+      "expected": "chrome",
+      "actual": "safari",
+      "http_file": "zeek-core/http.json",
+      "http_line": 43
+    },
+    {
+      "endpoint": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "line": 231,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "safari",
+      "http_file": "zeek-core/http.json",
+      "http_line": 879
+    },
+    {
+      "endpoint": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "line": 320,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "safari",
+      "http_file": "zeek-core/http.json",
+      "http_line": 1298
+    },
+    {
+      "endpoint": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "line": 424,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "safari",
+      "http_file": "zeek-core/http.json",
+      "http_line": 1672
+    },
+    {
+      "endpoint": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "line": 455,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "expected": "chrome",
+      "actual": "safari",
+      "http_file": "zeek-core/http.json",
+      "http_line": 1843
+    }
+  ],
+  "qualification": "Exact four-tuple and nearest HTTP within10seconds, sensor repeats deduplicated per endpoint flow. Browser user-agent override/intermediary alternatives remain possible; Zoom is a separate application-planning lead, not an impossible browser-family claim."
+}

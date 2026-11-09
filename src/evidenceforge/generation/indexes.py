@@ -1287,6 +1287,16 @@ class IndexedEntityStore[K: Hashable, V](MutableMapping[K, V]):
         bucket = self._indexes[index_name].get(indexed_value, {})
         return [self._items[key] for key in bucket if key in self._items]
 
+    def find_iter(self, index_name: str, indexed_value: Hashable) -> Iterator[V]:
+        """Iterate matching values without copying an unbounded index bucket.
+
+        Callers must not mutate this store while consuming the iterator.
+        """
+        bucket = self._indexes[index_name].get(indexed_value, {})
+        for key in bucket:
+            if key in self._items:
+                yield self._items[key]
+
     def find_keys(self, index_name: str, indexed_value: Hashable) -> tuple[K, ...]:
         """Return matching primary keys in their index insertion order."""
         bucket = self._indexes[index_name].get(indexed_value, {})
@@ -3149,6 +3159,11 @@ class ReferenceLeaseIndex[K: Hashable, OwnerT: Hashable]:
 
         for lease in self._leases.find_iter("key", key):
             yield lease.owner
+
+    def latest_deadline(self, key: K) -> float | None:
+        """Return the latest active lease deadline from this key's indexed owners."""
+        deadlines = (self._expirations.deadline((key, owner)) for owner in self.owners(key))
+        return max((value for value in deadlines if value is not None), default=None)
 
     def keys_for_owner(self, owner: OwnerT) -> Iterator[K]:
         """Yield keys retained by one owner."""

@@ -78,6 +78,7 @@ from evidenceforge.generation.engine.storyline_helpers import periodic as period
 from evidenceforge.generation.engine.storyline_helpers import process as process_helpers
 from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.generation.storage_world import CompiledStorageFile
+from evidenceforge.generation.storyline_timing import STORYLINE_EVENT_JITTER_SECONDS
 from evidenceforge.generation.world_model import (
     RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
     RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
@@ -770,8 +771,17 @@ class StorylineMixin:
     ) -> None:
         """Record an explicit storyline process reference for later parentage."""
         if not hasattr(self, "_storyline_process_refs"):
-            self._storyline_process_refs: dict[tuple[str, str, str], tuple[int, str]] = {}
-        self._storyline_process_refs[(system.hostname, actor.username, process_ref)] = (pid, image)
+            self._storyline_process_refs: dict[
+                tuple[str, str, str], tuple[int, str] | tuple[int, str, str]
+            ] = {}
+        state = getattr(self, "state_manager", None)
+        if state is None:
+            state = getattr(getattr(self, "activity_generator", None), "state_manager", None)
+        resolver = getattr(state, "get_process_identity", None)
+        identity = resolver(system.hostname, pid) if callable(resolver) else None
+        self._storyline_process_refs[(system.hostname, actor.username, process_ref)] = (
+            (pid, image, identity.object_id) if identity is not None else (pid, image)
+        )
 
     def _storyline_process_ref_for_parent(
         self,
@@ -788,18 +798,22 @@ class StorylineMixin:
         resolved = refs.get(key)
         if resolved is None:
             return None
-        pid, image = resolved
+        pid, image = resolved[:2]
         state_manager = getattr(self, "state_manager", None)
         if state_manager is None:
             activity_generator = getattr(self, "activity_generator", None)
             state_manager = getattr(activity_generator, "state_manager", None)
         if state_manager is None:
-            return resolved
+            return resolved[:2]
         process = state_manager.get_process(system.hostname, pid)
-        if process is None or process.image != image:
+        if (
+            process is None
+            or process.image != image
+            or (len(resolved) == 3 and process.ecar_object_id != resolved[2])
+        ):
             refs.pop(key, None)
             return None
-        return resolved
+        return resolved[:2]
 
     def _storyline_process_ref_release_index(
         self,
@@ -832,6 +846,16 @@ class StorylineMixin:
                     if candidate_ref is not None:
                         active_ref_by_actor_system[actor_system] = candidate_ref
                         release_indices.setdefault((*actor_system, candidate_ref), event_index)
+                elif candidate_type == "macos_launch_item":
+                    caller_key = (*actor_system, candidate.caller_ref)
+                    release_indices[caller_key] = max(
+                        event_index, release_indices.get(caller_key, event_index)
+                    )
+                    if candidate.process_ref is not None:
+                        active_ref_by_actor_system[actor_system] = candidate.process_ref
+                        release_indices.setdefault(
+                            (*actor_system, candidate.process_ref), event_index
+                        )
                 elif candidate_type in {"create_remote_thread", "process_access"}:
                     active_ref = active_ref_by_actor_system.get(actor_system)
                     if active_ref is not None:
@@ -1280,7 +1304,6 @@ class StorylineMixin:
             password_last_set_to_event_time=True,
             old_uac_value="0x15",
             new_uac_value="0x10",
-            user_account_control="\n\t\t\t%%2081",
             primary_group_id="-",
         )
 
@@ -2169,6 +2192,10 @@ class StorylineMixin:
         os_category = _get_os_category(system.os)
         service_accounts = set(self.scenario.environment.service_accounts)
         is_local_account = actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
+        if os_category == "macos" and actor.username == "root":
+            # A modeled launchd/root process has no implicit authentication event.
+            # Its process credentials and POSIX ownership are resolved by State.
+            return ""
         is_interactive_linux_root = os_category == "linux" and actor.username == "root"
         if is_local_account and not is_interactive_linux_root:
             linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}
@@ -3134,14 +3161,19 @@ class StorylineMixin:
         """Return the newest live named process when an unreferenced process has ended."""
 
         refs = getattr(self, "_storyline_process_refs", {})
-        for key, (pid, image) in reversed(tuple(refs.items())):
+        for key, reference in reversed(tuple(refs.items())):
+            pid, image = reference[:2]
             hostname, _username, _process_ref = key
             if hostname != system.hostname or (
                 actor is not None and _username.casefold() != actor.username.casefold()
             ):
                 continue
             process = self.state_manager.get_process(system.hostname, pid)
-            if process is not None and process.image == image:
+            if (
+                process is not None
+                and process.image == image
+                and (len(reference) == 2 or process.ecar_object_id == reference[2])
+            ):
                 return pid, image
             refs.pop(key, None)
         return -1, None
@@ -3192,9 +3224,18 @@ class StorylineMixin:
         process_name: str,
         command_line: str,
         output_file: str | None,
+        logon_id: str,
         rng: random.Random,
     ) -> datetime | None:
-        """Emit bounded bash-history texture before an authored Linux process."""
+        """Emit session-owned bash-history preparation before an authored Linux process."""
+        session = self.state_manager.get_session_at(logon_id, time)
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.username != actor.username
+            or str(getattr(session, "session_kind", "")).casefold() not in {"interactive", "ssh"}
+        ):
+            return None
         commands = _linux_storyline_shell_friction_commands(
             username=actor.username,
             process_name=process_name,
@@ -3205,12 +3246,17 @@ class StorylineMixin:
         if not commands:
             return None
 
+        ready_at = ensure_utc(session.source_ready_time or session.start_time)
         lead_seconds = max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(
             5.0,
             35.0,
         )
         first_anchor = time - timedelta(seconds=lead_seconds)
         spacing_seconds = lead_seconds / (len(commands) + 1)
+        session_floor = ready_at + timedelta(milliseconds=250 + rng.randint(0, 650))
+        if first_anchor < session_floor:
+            first_anchor = session_floor
+            spacing_seconds = rng.uniform(1.2, 3.4)
         shell_key = (system.hostname, actor.username)
         prior_completion = getattr(self, "_storyline_shell_available_at", {}).get(shell_key)
         if prior_completion is not None:
@@ -3218,9 +3264,9 @@ class StorylineMixin:
             if first_anchor < earliest_anchor:
                 first_anchor = earliest_anchor
                 spacing_seconds = rng.uniform(1.6, 4.8)
-            latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
-            if latest_candidate >= ensure_utc(time) - timedelta(seconds=1):
-                return None
+        latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
+        if latest_candidate >= ensure_utc(time) - timedelta(milliseconds=700):
+            return None
         latest_scheduled: datetime | None = None
         for command_index, command in enumerate(commands):
             scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))
@@ -3233,6 +3279,7 @@ class StorylineMixin:
                 system,
                 scheduled,
                 prepared_command,
+                logon_id=logon_id,
             )
             latest_scheduled = scheduled
         return latest_scheduled
@@ -3283,6 +3330,15 @@ class StorylineMixin:
         """Defer termination until same-step and cross-step authored dependents run."""
         if not hasattr(self, "_pending_story_process_terminations"):
             self._pending_story_process_terminations = []
+        completion: dict[str, object] = {}
+        if _get_os_category(system.os) == "macos":
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is not None:
+                completion = {
+                    "macos_command_completed": True,
+                    "completion_process_object_id": process.object_id,
+                    "completion_execution_id": process.execution_id,
+                }
         self._pending_story_process_terminations.append(
             {
                 "actor": actor.username,
@@ -3292,6 +3348,7 @@ class StorylineMixin:
                 "process_name": process_name,
                 "logon_id": logon_id,
                 "release_storyline_index": release_storyline_index,
+                **completion,
             }
         )
 
@@ -3347,11 +3404,32 @@ class StorylineMixin:
             proc = self.state_manager.get_process(system.hostname, item["pid"])
             if proc is None:
                 continue
+            completed_command = item.get("macos_command_completed", False)
+            if type(completed_command) is not bool:
+                raise StateError("Deferred Mac command completion marker is invalid")
+            if completed_command:
+                identity = self.state_manager.get_process_identity(system.hostname, item["pid"])
+                if identity is None or identity.object_id != item.get(
+                    "completion_process_object_id"
+                ):
+                    raise StateError("Deferred Mac command completion lost its exact lifetime")
+                completed_command = identity.execution_id == item.get("completion_execution_id")
             termination_time = item["time"]
             if release_time is not None:
                 termination_time = max(
                     termination_time,
                     ensure_utc(release_time) + timedelta(milliseconds=1),
+                )
+            if _get_os_category(system.os) == "linux":
+                from evidenceforge.generation.engine.typed_handlers.process_pipeline import (
+                    linux_pipeline_parent_termination_time,
+                )
+
+                termination_time = linux_pipeline_parent_termination_time(
+                    self,
+                    system=system,
+                    shell_pid=item["pid"],
+                    requested_time=termination_time,
                 )
             self.activity_generator.generate_process_termination(
                 user=actor,
@@ -3361,6 +3439,7 @@ class StorylineMixin:
                 process_name=item["process_name"],
                 logon_id=item["logon_id"],
                 from_storyline=True,
+                **({"macos_command_completed": True} if completed_command else {}),
             )
         self._pending_story_process_terminations = retained
 
@@ -3696,10 +3775,13 @@ class StorylineMixin:
         self._ensure_account_sid_tracking()
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
-            event_time = self._parse_storyline_time(storyline_event.time)
+            nominal_time = self._parse_storyline_time(storyline_event.time)
+            event_time = nominal_time
             rng = _get_rng()
             jitter = timedelta(
-                seconds=rng.uniform(-30, 30),
+                seconds=rng.uniform(
+                    -STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS
+                ),
                 microseconds=rng.randint(0, 999999),
             )
             event_time = event_time + jitter
@@ -3802,6 +3884,9 @@ class StorylineMixin:
                             ),
                             authored_time_shift=cumulative_rdp_shift,
                             session_required_until=session_required_until,
+                            authored_nominal_time=nominal_time
+                            + timedelta(seconds=cadence_offsets[i])
+                            + cumulative_rdp_shift,
                         )
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
@@ -3835,10 +3920,11 @@ class StorylineMixin:
         storyline_event = self.scenario.storyline[event_idx]
         event_idx + 1
 
-        event_time = self._parse_storyline_time(storyline_event.time)
+        nominal_time = self._parse_storyline_time(storyline_event.time)
+        event_time = nominal_time
         rng = _get_rng()
         jitter = timedelta(
-            seconds=rng.uniform(-30, 30),
+            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
             microseconds=rng.randint(0, 999999),
         )
         event_time = event_time + jitter
@@ -3920,6 +4006,9 @@ class StorylineMixin:
                         ),
                         authored_time_shift=cumulative_rdp_shift,
                         session_required_until=session_required_until,
+                        authored_nominal_time=nominal_time
+                        + timedelta(seconds=cadence_offsets[i])
+                        + cumulative_rdp_shift,
                     )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
@@ -3952,10 +4041,11 @@ class StorylineMixin:
         self._ensure_account_sid_tracking()
         rh_event = self.scenario.red_herrings[event_idx]
 
-        event_time = self._parse_storyline_time(rh_event.time)
+        nominal_time = self._parse_storyline_time(rh_event.time)
+        event_time = nominal_time
         rng = _get_rng()
         jitter = timedelta(
-            seconds=rng.uniform(-30, 30),
+            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
             microseconds=rng.randint(0, 999999),
         )
         event_time = event_time + jitter
@@ -4030,6 +4120,9 @@ class StorylineMixin:
                         future_specs=itertools.islice(rh_event.events, i + 1, None),
                         authored_time_shift=cumulative_rdp_shift,
                         session_required_until=session_required_until,
+                        authored_nominal_time=nominal_time
+                        + timedelta(seconds=cadence_offsets[i])
+                        + cumulative_rdp_shift,
                     )
                     if result:
                         # Track as red herring, not malicious
@@ -4056,6 +4149,7 @@ class StorylineMixin:
         future_specs: Sequence[Any] = (),
         authored_time_shift: timedelta = timedelta(0),
         session_required_until: datetime | None = None,
+        authored_nominal_time: datetime | None = None,
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
@@ -4098,6 +4192,7 @@ class StorylineMixin:
             self,
             spec,
             TypedEventContext(
+                authored_nominal_time=authored_nominal_time,
                 actor=actor,
                 system=system,
                 time=time,

@@ -1,0 +1,17 @@
+{
+  "scenario_validation": "PASS; existing baseline-activity/storyline warning/info notices only",
+  "config_validation": "PASS; 0 errors, 0 warnings, 0 info across 101 files",
+  "tests": {
+    "tests/unit/test_rdp_deferred_production.py -m slow --no-cov": "PASS; 70 passed, including exact RDP session-manager termination on logout",
+    "tests/unit/test_activity.py tests/unit/test_state_manager.py": "PASS; 637 passed, 2 deselected",
+    "tests/unit/test_cisco_asa_emitter.py": "PASS; 71 passed in loop70 targeted regression coverage",
+    "tests/unit/test_network_observation.py": "PASS; 39 passed in loop70 targeted regression coverage"
+  },
+  "ruff_check": "PASS",
+  "ruff_format_check": "PASS",
+  "diff_check": "PASS",
+  "generation_behavior_manifest": "PASS; revision 491, digest b677db05bc0e2a53002dd1b2a5fdab6922e22a64c6ec338498dd6d6ccba8f707",
+  "generation": "PASS; fixed benchmark seed 42; 141745 records",
+  "evaluation": "PASS; 96.11812621700025, 141745 records",
+  "session_parent_probe": "PASS; all 21 visible Winlogon creates have a distinct matching SMSS parent. Sysmon and Security 4688 create counts are 21 SMSS / 21 Winlogon; eCAR create counts are 21 / 20. Sysmon 5, Security 4689, and eCAR termination counts are each 20 SMSS / 19 Winlogon; remaining visible session lifetimes are retained for bounded-window interpretation."
+}

@@ -53,6 +53,25 @@ def _base_time() -> datetime:
     return datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("source", ["bash_history", "zsh_history"])
+def test_history_execution_timestamp_survives_out_of_order_delivery(source: str) -> None:
+    planner = SourceTimingPlanner()
+    at = _base_time()
+    lifecycle = ActionLifecycleContext(
+        group_id="interactive-session", canonical_start=at, phase="dependent"
+    )
+    late = OccurrenceBuilder(
+        timestamp=at + timedelta(minutes=8), event_type="zsh_command", lifecycle=lifecycle
+    )
+    early = OccurrenceBuilder(
+        timestamp=at + timedelta(minutes=2), event_type="zsh_command", lifecycle=lifecycle
+    )
+    planner.plan_event(late, source)
+    result = planner.plan_event(early, source)
+    assert result.timestamp == early.timestamp
+    assert planner._latest_session_dependent_times[(source, lifecycle.group_id)] == late.timestamp
+
+
 def _network_context(duration: float = 0.05) -> NetworkTransactionPlan:
     return network_plan(
         src_ip="10.0.0.20",
@@ -1218,6 +1237,26 @@ def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> N
     assert enterprise_time == complete_time
 
 
+def test_macos_unified_log_keeps_wall_time_on_its_native_mach_clock() -> None:
+    timestamp = _base_time()
+    host = replace(_host_context(), hostname="MAC-TEST-00", os="macOS 27", os_category="macos")
+    event = OccurrenceBuilder(
+        timestamp=timestamp,
+        event_type="macos_ssh_authentication",
+        src_host=host,
+    )
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+
+    projected = planner.source_time(event, "source.macos_unified_log")
+
+    assert planner.endpoint_clock_adjustment_for_host(
+        hostname=host.hostname,
+        os_category="macos",
+        timestamp=timestamp,
+    ) != timedelta(0)
+    assert projected == timestamp
+
+
 def test_windows_endpoint_process_sources_are_not_globally_one_directional() -> None:
     """Security and Sysmon may reorder narrowly without broad occurrence-time jitter."""
     planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
@@ -1567,6 +1606,84 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
 
     assert dependent_time > process_time
+
+
+def test_process_exec_timing_scope_distinguishes_execution_epochs() -> None:
+    """Repeated exec repairs for one PID use distinct, ordered visible epochs."""
+
+    base = _base_time()
+    host = _host_context()
+    initial = _process_identity(
+        hostname=host.hostname,
+        pid=42171,
+        parent_pid=1,
+        started_at=base,
+        image="/sbin/launchd",
+    )
+    first = replace(
+        initial,
+        execution_ordinal=1,
+        executed_at=base + timedelta(milliseconds=10),
+        lifetime_image=initial.image,
+        image="/usr/libexec/xpcproxy",
+    )
+    second = replace(
+        initial,
+        execution_ordinal=2,
+        executed_at=base + timedelta(milliseconds=20),
+        lifetime_image=initial.image,
+        image="/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+    )
+    first_event = OccurrenceBuilder(
+        timestamp=first.execution_started_at,
+        event_type="process_exec",
+        src_host=host,
+        identity_plan=EventIdentityPlan(subject=first, actor=initial),
+    )
+    second_event = OccurrenceBuilder(
+        timestamp=second.execution_started_at,
+        event_type="process_exec",
+        src_host=host,
+        identity_plan=EventIdentityPlan(subject=second, actor=first),
+    )
+
+    first_scope = SourceTimingPlanner._endpoint_event_object_id(first_event, host.hostname, "base")
+    second_scope = SourceTimingPlanner._endpoint_event_object_id(
+        second_event, host.hostname, "base"
+    )
+
+    assert first_scope == f"{first.execution_id}:base"
+    assert second_scope == f"{second.execution_id}:base"
+    assert first_scope != second_scope
+
+    planner = SourceTimingPlanner()
+    source_instance = f"ecar:{host.hostname.casefold()}"
+    process_floor = base + timedelta(seconds=1)
+    planner._process_dependent_create_times[("ecar", source_instance, initial.object_id)] = (
+        process_floor
+    )
+    first_time = planner._apply_process_execution_constraints(
+        first_event,
+        family="ecar",
+        source_instance=source_instance,
+        hostname=host.hostname,
+        preferred=process_floor + timedelta(microseconds=100),
+    )
+    planner._runtime_process_execution_times[("ecar", source_instance, first.execution_id)] = (
+        first_time
+    )
+    second_time = planner._apply_process_execution_constraints(
+        second_event,
+        family="ecar",
+        source_instance=source_instance,
+        hostname=host.hostname,
+        preferred=process_floor + timedelta(microseconds=200),
+    )
+
+    assert first_time >= process_floor + timedelta(milliseconds=1)
+    assert second_time >= first_time + timedelta(milliseconds=1)
+    assert int(first_time.timestamp() * 1_000) > int(process_floor.timestamp() * 1_000)
+    assert int(second_time.timestamp() * 1_000) > int(first_time.timestamp() * 1_000)
 
 
 def test_ecar_startup_modules_preserve_loader_order_after_process_create(tmp_path: Path) -> None:
@@ -3032,6 +3149,71 @@ def test_remote_auth_failed_ecar_login_follows_transport_without_session() -> No
     assert timedelta(milliseconds=8) <= failure_time - flow_time <= timedelta(milliseconds=140)
     assert failed_event.remote_auth.session_object_id == ""
     assert failed_event.remote_auth.logon_id == ""
+
+
+def test_failed_linux_ssh_ecar_auth_follows_exact_admitted_flow() -> None:
+    """Failed SSH auth uses its exact tuple's inbound FLOW as the timing floor."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    source = _host_context()
+    target = replace(
+        _host_context(),
+        hostname="APP-LINUX-01",
+        ip="10.0.0.40",
+        fqdn="APP-LINUX-01.corp.local",
+        os="Ubuntu Linux",
+        os_category="linux",
+        system_type="server",
+    )
+    network = network_plan(
+        src_ip=source.ip,
+        src_port=53123,
+        dst_ip=target.ip,
+        dst_port=22,
+        protocol="tcp",
+        service="ssh",
+        zeek_uid="CfailedSshAuthTiming",
+        duration=3.0,
+        source_visible_start_time=start,
+        source_visible_close_time=start + timedelta(seconds=3),
+        orig_bytes=700,
+        resp_bytes=500,
+        conn_state="SF",
+    )
+    flow_event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network,
+    )
+    failed_event = OccurrenceBuilder(
+        timestamp=start + timedelta(milliseconds=350),
+        event_type="failed_logon",
+        dst_host=target,
+        auth=AuthContext(
+            username="svc_mgmt",
+            logon_type=10,
+            result="failure",
+            source_ip=source.ip,
+            source_port=53123,
+            auth_protocol="ssh",
+            session_kind="ssh",
+        ),
+    )
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(failed_event, "ecar")
+
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", target.hostname)
+    ]
+    failure_time = failed_event.source_timing.finalized_times[
+        ecar_session_render_key("failed_login")
+    ]
+    assert timedelta(milliseconds=8) <= failure_time - flow_time <= timedelta(milliseconds=140)
 
 
 def test_remote_auth_timing_does_not_correlate_wrong_transaction() -> None:

@@ -14,6 +14,7 @@ from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.config.schemas import (
     WindowsAnonymousSmbBaselineConfig,
     WindowsRemoteAuthTransportConfig,
+    WindowsSpecialPrivilegesConfig,
 )
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -180,3 +181,11 @@ def special_privileges_config() -> dict[str, Any]:
     """Return Windows 4672 privilege profile config."""
     config = load_windows_auth_realism().get("special_privileges", {})
     return config if isinstance(config, dict) else {}
+
+
+def special_privilege_profile(profile_name: str) -> tuple[str, ...]:
+    """Return one validated event-native sensitive privilege profile."""
+    config = WindowsSpecialPrivilegesConfig.model_validate(special_privileges_config())
+    if profile_name not in config.profiles:
+        raise ValueError(f"Unknown Windows special privilege profile: {profile_name}")
+    return tuple(config.profiles[profile_name].privileges)

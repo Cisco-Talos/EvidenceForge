@@ -25,6 +25,7 @@ from evidenceforge.composition.accounts import (
 from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.composition.models import (
     ApplicationCatalogEntry,
+    CustomProcess,
     DestinationCatalogEntry,
     PackReference,
     ProcessCatalogEntry,
@@ -199,6 +200,9 @@ RUNTIME_FILES = {
 def _editor_schema(model: type[BaseModel], category: str) -> dict[str, Any]:
     """Annotate authoring schemas with choices owned by the effective inventory."""
     document = model.model_json_schema()
+    platform_keys: dict[str, Any] = CustomProcess.model_json_schema()["properties"]["platforms"][
+        "propertyNames"
+    ]
     references = {
         "primary_system": "systems",
         "assigned_user": "users",
@@ -230,7 +234,7 @@ def _editor_schema(model: type[BaseModel], category: str) -> dict[str, Any]:
                 field_schema["x-asset-choices"] = vocabulary
                 field_schema["x-asset-custom"] = name in suggestions
             if name == "platforms":
-                field_schema.setdefault("propertyNames", {"enum": ["windows", "linux"]})
+                field_schema.setdefault("propertyNames", copy.deepcopy(platform_keys))
                 field_schema.setdefault("minProperties", 1)
             if name == "system_types":
                 field_schema.setdefault(

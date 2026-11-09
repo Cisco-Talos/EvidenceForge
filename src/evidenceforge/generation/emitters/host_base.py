@@ -456,7 +456,9 @@ class HostMultiplexEmitter(LogEmitter):
                     )
                 ),
                 checkpoint_mode=self._incremental_checkpointing,
-                defer_publication=self._defer_sorted_publication,
+                defer_publication=(
+                    self._defer_sorted_publication or self._defer_sorted_flush_until_close
+                ),
             )
             header_template = self.format_def.output.header_template
             if header_template:

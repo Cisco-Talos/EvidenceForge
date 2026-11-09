@@ -1,0 +1,12 @@
+{
+  "loop": 65,
+  "counts": {
+    "joined_depth0_files": 448,
+    "gapped_files": 33,
+    "body_extent_mismatches": 0,
+    "direction_mismatches": 0,
+    "aggregate_gap_budget_excesses": 0
+  },
+  "examples": [],
+  "scope": "Bounded uncompressed, completed depth0 HTTP200/206 entities in this benchmark; recognized capture loss only. No universal claim about compressed bodies, raw omissions or analyzer gaps."
+}

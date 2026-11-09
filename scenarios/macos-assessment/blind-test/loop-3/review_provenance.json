@@ -1,0 +1,12 @@
+{
+  "neutral_data_directory": "/private/tmp/field-study-20261021-c/dataset",
+  "reviewer_report_directory": "/private/tmp/field-study-20261021-c/reviews",
+  "isolation": "Four fresh fork_turns=none reviewers; full briefing and own full persona only; no source, scenario, ground truth, evaluation, earlier reports, web or parent context.",
+  "reports_unchanged_sha256": {
+    "threat-hunter-report.md": "3b3b25f93a7b2980dc9bdc1a8cb4f78e02fb984d80022e62018841ad616abd41",
+    "detection-engineer-report.md": "9c76ec8557ad8875f471663b35884ed28f932798edc64bfe26cae14121a71217",
+    "network-forensics-report.md": "46cb4838947400f5a04fc1d7bb66e37702572675ce8a630838a72fe593a3c768",
+    "host-forensics-report.md": "7d8a6c490fad3bc21bfa89892320e6dc691a7671061cfe93686b8ec64f3c6996"
+  },
+  "deliberation_triggered": false
+}

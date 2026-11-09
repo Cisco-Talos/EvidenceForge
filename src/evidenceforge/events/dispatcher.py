@@ -56,6 +56,8 @@ from evidenceforge.events.collection_policy import (
     ProjectionRole,
 )
 from evidenceforge.events.content_identity import (
+    LocalArtifactBinaryIdentity,
+    LocalArtifactVersionRecord,
     Platform,
     ProcessBinaryIdentity,
     UnresolvedBinaryIdentity,
@@ -74,9 +76,22 @@ from evidenceforge.events.contracts import (
     SemanticOccurrenceKey,
     shadow_seal,
 )
+from evidenceforge.events.es_collector import (
+    ESCollectorClosure,
+    ESCollectorObservation,
+    ESCollectorRegistry,
+    ESCollectorState,
+    ESDeliveryBatchPreparation,
+    ESDeliveryPreparation,
+    PreparedESCollectorClosures,
+    PreparedESDeliveryBatchCommit,
+    PreparedESDeliveryCommit,
+)
 from evidenceforge.events.evidence_requirements import (
     PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
 )
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -85,6 +100,7 @@ from evidenceforge.events.observation import (
     ObservationSummary,
     source_family_for_format,
 )
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.utils.rng import stable_uuid
@@ -109,6 +125,7 @@ if TYPE_CHECKING:
         ExactPublicationBatch,
         LogEmitter,
     )
+    from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
     from evidenceforge.generation.intent_ledger import (
         IntentExecutionBatchReceipt,
         IntentExecutionBatchRequest,
@@ -121,12 +138,18 @@ if TYPE_CHECKING:
         LifecycleActionCohortAdmissionToken,
         LifecycleActionCohortReceipt,
         LifecycleActionCohortRequest,
+        LifecycleServiceClosureAdmissionToken,
+        LifecycleServiceProcessClosureReceipt,
+        LifecycleServiceProcessClosureRequest,
         PreparedLifecycleActionCohort,
+        PreparedLifecycleServiceProcessClosure,
     )
     from evidenceforge.generation.lifecycle_shadow import (
         LifecycleShadow,
         LifecycleShadowViolationSummary,
     )
+    from evidenceforge.generation.macos_es_ingress import MacosESIngress, PreparedESIngress
+    from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.persistent_smb_projection import (
         PersistentSmbProjectionCommittedMemberRecovery,
@@ -503,7 +526,8 @@ class PreparedActionCohortBatch:
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
         source_timing_preparation: SourceTimingPreparation,
-        lifecycle_binding_token: LifecycleActionCohortAdmissionToken,
+        lifecycle_binding_token: LifecycleActionCohortAdmissionToken
+        | LifecycleServiceClosureAdmissionToken,
         audit_binding_token: object,
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
         intent_binding_token: IntentExecutionBatchToken | None,
@@ -590,7 +614,7 @@ class ActionCohortPublicationResult:
 
     receipt: ActionCohortPublicationReceipt
     state: ActionCohortMaterializationResult
-    lifecycle: LifecycleActionCohortReceipt
+    lifecycle: LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt
     audit: object
     artifacts: LocalArtifactPublicationGroupReceipt | None
     intent: IntentExecutionBatchReceipt | None
@@ -737,6 +761,7 @@ class PreparedActionCohortCapability:
         "_batch_id",
         "_claim_token",
         "_committed",
+        "_completed_projection_result",
         "_dispatcher",
         "_receipt",
         "_result",
@@ -754,6 +779,7 @@ class PreparedActionCohortCapability:
         self._claim_token = claim_token
         self._active = True
         self._committed = False
+        self._completed_projection_result: ActionCohortPublicationResult | None = None
         self._receipt: ActionCohortPublicationReceipt | None = None
         self._result: ActionCohortPublicationResult | None = None
 
@@ -774,6 +800,14 @@ class PreparedActionCohortCapability:
         """Return the completed result after every projection renders."""
 
         return self._result
+
+    @property
+    def projection_complete(self) -> bool:
+        """Return exact sink-release completion retained by this claimed capability."""
+        return (
+            self._completed_projection_result is not None
+            and self._completed_projection_result is self._result
+        )
 
     def commit_no_fail(self) -> ActionCohortPublicationResult:
         """Commit every prevalidated owner, then render the frozen projection tail."""
@@ -836,6 +870,15 @@ class _PersistentSmbSourcePublicationRecord:
     acknowledge_cursor: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class ActionCohortServiceClosure:
+    """Exact service owner for a Mac terminal cohort; not source publication authority."""
+
+    group: PosixGroupIdentity
+    request: LifecycleServiceProcessClosureRequest
+    close_group: bool
+
+
 @dataclass(slots=True)
 class _PreparedActionCohortBatchRecord:
     """Trusted canonical batch and nested reservations retained by the dispatcher."""
@@ -857,8 +900,8 @@ class _PreparedActionCohortBatchRecord:
     member_authored_intent_ids: tuple[str | None, ...]
     member_binary_identity_kinds: tuple[str, ...]
     source_timing_preparation: SourceTimingPreparation
-    lifecycle_request: LifecycleActionCohortRequest
-    lifecycle_token: LifecycleActionCohortAdmissionToken
+    lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest
+    lifecycle_token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken
     audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...]
     effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...]
     external_effect_links: tuple[ActionCohortExternalEffectLink, ...]
@@ -887,6 +930,24 @@ class _PreparedActionCohortBatchRecord:
     retained_bytes: int
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
+    service_closure: ActionCohortServiceClosure | None = None
+    canonical_interrupts: list[BaseException] = field(default_factory=list)
+    exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
+    es_closure_requests: tuple[ESCollectorClosure, ...] = ()
+    es_closure_processes: tuple[ProcessIdentity, ...] = ()
+    es_closure_registry: ESCollectorRegistry | None = None
+    es_closures_claimed: PreparedESCollectorClosures | None = None
+    es_closures_result: tuple[ESCollectorState, ...] = ()
+    es_closures_token: str = ""
+    es_registry: ESCollectorRegistry | None = None
+    es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None
+    es_collector_process: ProcessIdentity | None = None
+    es_native_projection: str | None = None
+    es_native_sink: ExternalSortedLineWriter | None = None
+    es_ingress: PreparedESIngress | None = None
+    es_claimed: PreparedESDeliveryCommit | PreparedESDeliveryBatchCommit | None = None
+    es_publication_token: str = ""
+    es_cleanup_complete: bool = True
     prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
     prepared_binary_counts: Counter[str] | None = None
     prepared_latest_network_observations_uid: str = ""
@@ -902,13 +963,17 @@ class _PreparedActionCohortBatchRecord:
     audit_claimed: PreparedExecutionEffectAuditCommit | None = None
     artifact_claimed: LocalArtifactPreparedGroupCommit | None = None
     intent_claimed: PreparedIntentExecutionBatch | None = None
-    lifecycle_claimed: PreparedLifecycleActionCohort | None = None
+    lifecycle_claimed: (
+        PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure | None
+    ) = None
     state_claimed: PreparedActionCohortMaterialization | None = None
     expected_timing_receipt: SourceTimingPreparationReceipt | None = None
     expected_audit_receipt: ExecutionEffectAuditCommitReceipt | None = None
     expected_artifact_receipt: LocalArtifactPublicationGroupReceipt | None = None
     expected_intent_receipt: IntentExecutionBatchReceipt | None = None
-    expected_lifecycle_receipt: LifecycleActionCohortReceipt | None = None
+    expected_lifecycle_receipt: (
+        LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt | None
+    ) = None
     expected_state_result: ActionCohortMaterializationResult | None = None
     expected_state_result_publication_token: str = ""
     publication_receipt: ActionCohortPublicationReceipt | None = None
@@ -989,8 +1054,10 @@ class _ActionCohortPreparationCleanupRecord:
     dispatches: tuple[PreparedDispatch, ...]
     source_timing_preparation: SourceTimingPreparation
     lifecycle_authority: GeneratorLifecycleAuthority
-    lifecycle_request: LifecycleActionCohortRequest
-    lifecycle_token: LifecycleActionCohortAdmissionToken | None
+    lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest
+    lifecycle_token: (
+        LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken | None
+    )
     execution_effect_audit: ExecutionEffectAuditCounter
     artifact_registry: LocalArtifactVersionRegistry | None
     artifact_publications: tuple[LocalArtifactPublishToken, ...]
@@ -1220,6 +1287,7 @@ class _PreparedDeferredSessionPublicationRecord:
     all_suppressed: bool
     retained_bytes: int
     integrity_token: str
+    es_ingress: PreparedESIngress | None = None
     exact_publication_batch: ExactPublicationBatch | None = None
     prepared_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     prepared_target_proofs: tuple[DeferredSessionExactTargetProof, ...] = ()
@@ -1396,6 +1464,10 @@ class EventDispatcher:
         self._publication_ledger_lock = RLock()
         self._source_evidence_version = 0
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
+        self.es_collectors = ESCollectorRegistry()
+        self.macos_es_ingress: MacosESIngress | None = None
+        # Immutable file facts rebuilt from frozen run inputs, never a cursor.
+        self.macos_installed_filesystem: MacosInstalledFilesystem | None = None
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
         self._recent_network_identifiers: deque[tuple[str, dict[str, str]]] = deque(
@@ -4444,6 +4516,7 @@ class EventDispatcher:
         carrier: PreparedActionCohortProjection,
         *,
         state_plan: ActionCohortMaterializationPlan,
+        artifact_publications: tuple[LocalArtifactPublishToken, ...] = (),
     ) -> PreparedDispatch:
         """Bind one frozen projection exactly once to one sealed State cohort plan."""
 
@@ -4475,6 +4548,11 @@ class EventDispatcher:
                 record.occurrence,
                 state_plan,
             )
+            artifact_publications = tuple(artifact_publications)
+            if artifact_publications:
+                self._bind_artifact_publications(
+                    record.occurrence, artifact_publications, attach=False
+                )
             prepared = PreparedDispatch(
                 occurrence=record.occurrence,
                 projection=record.projection,
@@ -4482,7 +4560,7 @@ class EventDispatcher:
                 state_intent=PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT,
                 lifecycle_ticket=state_plan,
                 binary_identity_kind=record.binary_identity_kind,
-                artifact_publications=(),
+                artifact_publications=artifact_publications,
                 source_timing_preparation=timing_preparation,
                 authored_intent_id=record.authored_intent_id,
                 integrity_token="",
@@ -4561,6 +4639,35 @@ class EventDispatcher:
             raise EventContractError("Prepared dispatch requires a valid canonical contract seal")
         if not isinstance(state_intent, PreparedDispatchStateIntent):
             raise EventContractError("Prepared dispatch requires a typed state intent")
+        if (
+            event.event_type
+            in {
+                EventKind.PROCESS_JOB_CONTROL,
+                EventKind.PROCESS_FORK,
+                EventKind.PROCESS_EXEC,
+                EventKind.PROCESS_AUDIT_BIND,
+                EventKind.PROCESS_PRIVILEGE_DROP,
+                EventKind.PROCESS_SERVICE_DROP,
+            }
+            and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+            and not (
+                event.event_type is EventKind.PROCESS_FORK
+                and state_intent is PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT
+            )
+        ):
+            raise EventContractError("Process mutation requires its exact State action cohort")
+        if (
+            event.process is not None
+            and event.process.exit_outcome is not None
+            and state_intent
+            not in {
+                PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT,
+                PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE,
+            }
+        ):
+            raise EventContractError(
+                "Explicit process exit result requires its State action cohort or authenticated close"
+            )
         if state_intent is not PreparedDispatchStateIntent.APPLY and lifecycle_ticket is None:
             raise EventContractError(
                 "Externally materialized dispatch requires an authority lifecycle ticket"
@@ -4633,6 +4740,37 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared deferred-session dependent version contradicts its State member"
                 )
+        elif state_intent is PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE:
+            from evidenceforge.events.process import process_exit_identity
+            from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+            if (
+                type(lifecycle_ticket) is not ProcessTerminationMaterializationPlan
+                or not self.state_manager.authenticates_process_termination_plan(lifecycle_ticket)
+            ):
+                raise EventContractError(
+                    "Externally materialized close requires an authentic State plan"
+                )
+            try:
+                identity = process_exit_identity(event)
+            except ValueError as error:
+                raise EventContractError(str(error)) from error
+            live = self.state_manager.get_process(identity.hostname, identity.pid)
+            if (
+                identity != lifecycle_ticket.identity
+                or event.timestamp != lifecycle_ticket.end_time
+                or event.process.exit_outcome != lifecycle_ticket.exit_outcome
+                or live is None
+                or live.ecar_object_id != identity.object_id
+                or event.process.integrity_level != live.integrity_level
+                or event.src_host.os_category != self.state_manager._pid_os.get(identity.hostname)
+            ):
+                raise EventContractError(
+                    "External process-close projection disagrees with its exact State plan"
+                )
+            version = lifecycle_ticket.expected_version
+            if expected_state_version is not None and expected_state_version != version:
+                raise EventContractError("External process close contradicts its State version")
         elif state_intent is not PreparedDispatchStateIntent.APPLY:
             ticket_version = getattr(lifecycle_ticket, "expected_version", None)
             publication_token = getattr(lifecycle_ticket, "publication_token", None)
@@ -4758,8 +4896,11 @@ class EventDispatcher:
                 else target
             )
             allowed_object_ids.add(identity.object_id)
+        allowed_object_ids.update(item.target.object_id for item in plan.process_executions)
         for patch in plan.live_session_process_role_patches:
             allowed_object_ids.add(patch.target.object_id)
+            if patch.macos_shell is not None:
+                allowed_object_ids.add(patch.macos_shell.object_id)
             for process in (
                 patch.winlogon_plan,
                 patch.explorer_plan,
@@ -4992,13 +5133,22 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared deferred-session session dependent lost its session identity"
                 )
-        elif type(lifecycle_ticket) is ProcessMaterializationPlan and event.event_type not in {
-            EventKind.PROCESS_CREATE,
-            EventKind.SYSTEM_PROCESS_CREATE,
-        }:
-            raise EventContractError(
-                "Prepared deferred-session process dependent has an unsupported event kind"
+        elif type(lifecycle_ticket) is ProcessMaterializationPlan:
+            expected_kinds = (
+                {EventKind.PROCESS_FORK}
+                if lifecycle_ticket.forked
+                else {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}
             )
+            if event.event_type not in expected_kinds:
+                raise EventContractError(
+                    "Prepared deferred-session process dependent changed its start provenance"
+                )
+            if lifecycle_ticket.forked:
+                from evidenceforge.events.process import process_fork_identities
+
+                parent, child = process_fork_identities(event)
+                if child != exact_identity or parent != lifecycle_ticket.parent_identity:
+                    raise EventContractError("Deferred fork lost its exact inherited parent")
         elif type(lifecycle_ticket) is ConnectionExistingSessionPatch and (
             event.event_type is not EventKind.RDP_RECONNECT
             or identity_plan.session is not exact_identity
@@ -5218,6 +5368,27 @@ class EventDispatcher:
             raise RuntimeError("event dispatcher local artifact registry is already bound")
         self.local_artifact_registry = registry
 
+    @staticmethod
+    def _process_owns_runtime_exec_content(
+        identity: object, record: LocalArtifactVersionRecord
+    ) -> bool:
+        """Match an exact loaded image or explicit shebang script, never a current path."""
+        if type(identity) is not ProcessIdentity:
+            return False
+        if record.artifact.hostname.casefold() != identity.hostname.casefold():
+            return False
+        if record.binary is not None:
+            return identity.executable_version == ProcessExecutableVersion.from_binary(
+                record.binary
+            )
+        script = identity.exec_script
+        return bool(
+            script is not None
+            and script.artifact_version_id == record.artifact.artifact_version_id
+            and script.content_id == record.content.content_id
+            and script.native_path == record.artifact.native_path
+        )
+
     def _bind_artifact_publications(
         self,
         event: OccurrenceBuilder | CanonicalOccurrence,
@@ -5256,14 +5427,38 @@ class EventDispatcher:
             if event.process is not None and event.process.username
             else (event.auth.username if event.auth is not None else "")
         )
+        operation = event.file.macos_operation if event.file is not None else None
+        rename_removals = (
+            (operation.source,)
+            + ((operation.replacement,) if operation.replacement is not None else ())
+            if operation is not None and operation.operation == "rename"
+            else ()
+        )
         file_records = []
         binary_records = []
         for token in publications:
             record = token.record
             artifact = record.artifact
+            subject = event.identity_plan.subject if event.identity_plan is not None else None
+            actor = event.identity_plan.actor if event.identity_plan is not None else None
+            retained_exec_content = bool(
+                platform == "macos"
+                and event.event_type in {"process_exec", "process_fork", "process_create"}
+                and registry is not None
+                and registry.authenticates_prepared_retention(token)
+                and any(
+                    self._process_owns_runtime_exec_content(identity, record)
+                    for identity in (
+                        (subject,) if event.event_type == "process_create" else (actor, subject)
+                    )
+                )
+            )
             if (
                 artifact.hostname.casefold() != host.hostname.casefold()
-                or artifact.principal.casefold() != principal.casefold()
+                or (
+                    artifact.principal.casefold() != principal.casefold()
+                    and not retained_exec_content
+                )
                 or artifact.platform != platform
             ):
                 raise EventContractError(
@@ -5274,17 +5469,39 @@ class EventDispatcher:
                 and canonical_native_path(event.file.path, platform)
                 == canonical_native_path(artifact.native_path, platform)
             )
+            rename_removal = token.withdraw_placement and record in rename_removals
+            if (
+                token.withdraw_placement
+                and not rename_removal
+                and (not file_match or event.event_type != "file_delete")
+            ):
+                raise EventContractError(
+                    "Prepared removal requires its exact file-delete occurrence"
+                )
             binary_match = bool(
-                event.process is not None
+                not token.withdraw_placement
+                and event.process is not None
                 and record.binary is not None
                 and canonical_native_path(event.process.image, platform)
                 == canonical_native_path(artifact.native_path, platform)
             )
-            if not file_match and not binary_match:
+            if retained_exec_content:
+                # Prior images and scripts retain content only. Even when before/after
+                # images share a path, only the target version can bind ProcessContext.
+                binary_match = bool(
+                    record.binary is not None
+                    and self._process_owns_runtime_exec_content(subject, record)
+                )
+            if (
+                not file_match
+                and not binary_match
+                and not retained_exec_content
+                and not rename_removal
+            ):
                 raise EventContractError(
                     "Prepared artifact publication path is unrelated to its canonical occurrence"
                 )
-            if file_match:
+            if file_match and not rename_removal:
                 file_records.append(record)
             if binary_match:
                 binary_records.append(record)
@@ -5304,6 +5521,32 @@ class EventDispatcher:
                 platform,
             )
         if event.file is not None and file_record is not None:
+            if operation is not None:
+                operation.__post_init__()
+                expected_record = (
+                    operation.target if operation.operation == "rename" else operation.source
+                )
+                expected_kind, expected_action = {
+                    "create": ("file_create", "create"),
+                    "close": ("file_close", "close"),
+                    "rename": ("file_rename", "rename"),
+                    "unlink": ("file_delete", "delete"),
+                }[operation.operation]
+                if (
+                    file_record != expected_record
+                    or operation.observed_at != event.timestamp
+                    or event.event_type != expected_kind
+                    or event.file.action != expected_action
+                    or event.file.previous_path
+                    != (
+                        operation.source.artifact.native_path
+                        if operation.operation == "rename"
+                        else None
+                    )
+                ):
+                    raise EventContractError(
+                        "Native file operation changed its canonical file binding"
+                    )
             if event.file.artifact_identity not in (None, file_record.artifact):
                 raise EventContractError(
                     "File artifact identity conflicts with its exact retained publication"
@@ -5312,18 +5555,26 @@ class EventDispatcher:
                 raise EventContractError(
                     "File content identity conflicts with its exact retained publication"
                 )
+            if event.file.macos_metadata not in (None, file_record.macos_file):
+                raise EventContractError(
+                    "File stat metadata conflicts with its exact retained publication"
+                )
             if attach:
                 event.file.artifact_identity = file_record.artifact
                 event.file.content_identity = file_record.content
+                event.file.macos_metadata = file_record.macos_file
             elif (
                 event.file.artifact_identity != file_record.artifact
                 or event.file.content_identity != file_record.content
+                or event.file.macos_metadata != file_record.macos_file
             ):
                 raise EventContractError(
                     "Sealed file occurrence lacks its exact prepared artifact/content identity"
                 )
         elif event.file is not None and (
-            event.file.artifact_identity is not None or event.file.content_identity is not None
+            event.file.artifact_identity is not None
+            or event.file.content_identity is not None
+            or event.file.macos_metadata is not None
         ):
             raise EventContractError(
                 "File artifact/content identity has no exact retained or prepared version"
@@ -5371,7 +5622,40 @@ class EventDispatcher:
         platform = cast(Platform, platform_name)
         principal = process.username or (event.auth.username if event.auth is not None else "")
         resolved = prepared_binary
-        if resolved is None:
+        loaded_identity = None
+        if platform in {"macos", "windows"}:
+            identities = event.identity_plan
+            candidates = (identities.subject, identities.actor) if identities is not None else ()
+            loaded_identity = next(
+                (
+                    identity
+                    for identity in candidates
+                    if isinstance(identity, ProcessIdentity)
+                    and identity.hostname == host.hostname
+                    and identity.pid == process.pid
+                    and identity.image == process.image
+                    and (process.start_time is None or identity.started_at == process.start_time)
+                ),
+                None,
+            )
+            if loaded_identity is None and process.start_time is not None:
+                candidate = self.state_manager.get_process_identity_at(
+                    host.hostname, process.pid, event.timestamp
+                )
+                if (
+                    candidate is not None
+                    and candidate.started_at == process.start_time
+                    and candidate.image == process.image
+                ):
+                    loaded_identity = candidate
+        if loaded_identity is not None and loaded_identity.executable_version is not None:
+            version = loaded_identity.executable_version
+            if resolved is not None:
+                if ProcessExecutableVersion.from_binary(resolved) != version:
+                    raise EventContractError("Prepared binary conflicts with the loaded executable")
+            else:
+                resolved = self.resolve_loaded_process_binary_identity(loaded_identity)
+        elif resolved is None:
             resolved = self.resolve_process_binary_identity(
                 host.hostname,
                 principal,
@@ -5394,6 +5678,27 @@ class EventDispatcher:
                 f"{host.hostname!r} and {process.image!r}"
             )
         return resolved.identity_kind
+
+    def resolve_loaded_process_binary_identity(
+        self, identity: ProcessIdentity
+    ) -> ProcessBinaryIdentity:
+        """Resolve an execution's exact loaded version without current-path substitution."""
+        version = identity.executable_version
+        if version is None:
+            raise EventContractError("Loaded executable resolution requires an exact version")
+        resolved: ProcessBinaryIdentity | None = None
+        if version.identity_kind == "installed_release":
+            if self.deployment_registry is not None:
+                resolved = self.deployment_registry.binary_release_by_content_id(version.content_id)
+        elif self.local_artifact_registry is not None:
+            record = self.local_artifact_registry.resolve_version(version.artifact_version_id)
+            if record is not None:
+                if record.artifact.hostname.casefold() != identity.hostname.casefold():
+                    raise EventContractError("Loaded executable belongs to another host")
+                resolved = record.binary
+        if resolved is None or ProcessExecutableVersion.from_binary(resolved) != version:
+            raise EventContractError("Loaded executable has no exact retained content version")
+        return resolved
 
     def resolve_process_binary_identity(
         self,
@@ -5534,6 +5839,7 @@ class EventDispatcher:
         else:
             from evidenceforge.generation.lifecycle_authority import (
                 LifecyclePreparedNetworkReceipt,
+                LifecycleProcessServiceCompositeReceipt,
             )
             from evidenceforge.generation.network_runtime import (
                 PreparedNetworkTransactionRoot,
@@ -5587,12 +5893,29 @@ class EventDispatcher:
                         materialization_receipt,
                     )
                     if isinstance(plan, ProcessTerminationMaterializationPlan)
+                    else authority.authenticates_process_service_composite_receipt(
+                        plan, materialization_receipt
+                    )
+                    if type(materialization_receipt) is LifecycleProcessServiceCompositeReceipt
+                    and type(plan) is ProcessMaterializationPlan
                     else authority.authenticates_materialization_receipt(
                         plan,
                         materialization_receipt,
                     )
                 )
                 plan_version = plan.expected_version
+            from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
+
+            if type(materialization_receipt) in {
+                PosixGroupServiceClosureReceipt,
+                LifecycleProcessServiceCompositeReceipt,
+            } and (
+                materialization_receipt.source_timing_receipt
+                is not (timing_preparation.receipt if timing_preparation is not None else None)
+            ):
+                raise EventContractError(
+                    "Service composite receipt does not own this source timing"
+                )
             if prepared._expected_state_version != plan_version or not receipt_authentic:
                 raise EventContractError(
                     "Authority receipt does not authenticate the prepared dispatch plan"
@@ -5898,13 +6221,16 @@ class EventDispatcher:
         self,
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
+        *,
+        root_action_id: str,
     ) -> None:
         """Require all-and-only State starts/closes with causal projection ordering."""
 
         from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 
         session_starts = {plan.identity.object_id: plan.identity for plan in state_plan.sessions}
-        process_starts = {plan.identity.object_id: plan.identity for plan in state_plan.processes}
+        process_start_plans = {plan.identity.object_id: plan for plan in state_plan.processes}
+        process_starts = {key: plan.identity for key, plan in process_start_plans.items()}
         process_closes = {item.identity.object_id: item for item in state_plan.process_terminations}
         session_closes = {
             item.identity.object_id: item for item in state_plan.session_terminalizations
@@ -5917,6 +6243,22 @@ class EventDispatcher:
             *(("process", object_id) for object_id in process_closes),
             *(("session", object_id) for object_id in session_closes),
         }
+        executions = {item.target.object_id: item for item in state_plan.process_executions}
+        credential_patches = {
+            patch.target.object_id: patch
+            for patch in state_plan.process_activity_patches
+            if patch.audit_binding is not None
+            or patch.privilege_drop is not None
+            or patch.service_drop is not None
+        }
+        job_control_patches = {
+            patch.target.object_id: patch
+            for patch in state_plan.process_activity_patches
+            if patch.job_control_change is not None
+        }
+        observed_job_control: set[str] = set()
+        observed_credentials: set[str] = set()
+        observed_executions: set[str] = set()
         observed_starts: dict[tuple[str, str], int] = {}
         observed_closes: dict[tuple[str, str], int] = {}
         process_or_session_ids: set[str] = set()
@@ -5976,7 +6318,11 @@ class EventDispatcher:
                 if marker in observed_starts:
                     raise EventContractError("Action-cohort repeats a session-start projection")
                 observed_starts[marker] = position
-            elif event.event_type in {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}:
+            elif event.event_type in {
+                EventKind.PROCESS_CREATE,
+                EventKind.SYSTEM_PROCESS_CREATE,
+                EventKind.PROCESS_FORK,
+            }:
                 if type(subject) is not ProcessIdentity:
                     raise EventContractError(
                         "Action-cohort process start requires an exact process subject"
@@ -5991,9 +6337,151 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort process-start projection disagrees with its State plan"
                     )
+                start = process_start_plans[subject.object_id]
+                if start.forked != (event.event_type is EventKind.PROCESS_FORK):
+                    raise EventContractError(
+                        "Process fork provenance disagrees with its State start"
+                    )
+                if start.forked:
+                    from evidenceforge.events.process import process_fork_identities
+
+                    parent, child = process_fork_identities(event)
+                    if (
+                        start.parent_identity != parent
+                        or child != start.identity
+                        or event.process.integrity_level != start.integrity_level
+                        or event.src_host.os_category
+                        != self.state_manager._pid_os.get(parent.hostname)
+                    ):
+                        raise EventContractError(
+                            "Process fork changed its exact State parent or token"
+                        )
                 if marker in observed_starts:
                     raise EventContractError("Action-cohort repeats a process-start projection")
                 observed_starts[marker] = position
+            elif event.event_type is EventKind.PROCESS_EXEC:
+                from evidenceforge.events.process import process_exec_identities
+
+                before, after = process_exec_identities(event)
+                execution = executions.get(after.object_id)
+                if (
+                    execution is None
+                    or execution.target != before
+                    or execution.after != after
+                    or (
+                        execution.gui_session is not None
+                        and event.identity_plan.session != execution.gui_session
+                    )
+                    or after.object_id in observed_executions
+                ):
+                    raise EventContractError(
+                        "Action-cohort exec projection disagrees with its exact State transition"
+                    )
+                live_process = self.state_manager.get_process(before.hostname, before.pid)
+                staged_birth = process_start_plans.get(before.object_id)
+                expected_integrity = (
+                    staged_birth.integrity_level
+                    if staged_birth is not None
+                    else live_process.integrity_level
+                    if live_process is not None
+                    else None
+                )
+                if (
+                    expected_integrity is None
+                    or event.process.integrity_level != expected_integrity
+                    or event.src_host.os_category != self.state_manager._pid_os.get(before.hostname)
+                ):
+                    raise EventContractError(
+                        "Process exec changed its State host or integrity facts"
+                    )
+                observed_executions.add(after.object_id)
+            elif event.event_type is EventKind.PROCESS_JOB_CONTROL:
+                from evidenceforge.events.process import process_job_control_identities
+
+                before, after = process_job_control_identities(event)
+                patch = job_control_patches.get(after.object_id)
+                change = patch.job_control_change if patch is not None else None
+                live = self.state_manager.get_process(before.hostname, before.pid)
+                if (
+                    patch is None
+                    or change is None
+                    or live is None
+                    or patch.target != before
+                    or patch.job_control_actor != event.identity_plan.actor
+                    or change.before != before.job_control
+                    or change.after != after.job_control
+                    or change.changed_at != event.timestamp
+                    or event.process.integrity_level != live.integrity_level
+                    or event.src_host.os_category != self.state_manager._pid_os.get(before.hostname)
+                    or after.object_id in observed_job_control
+                ):
+                    raise EventContractError(
+                        "POSIX membership projection disagrees with its State transition"
+                    )
+                observed_job_control.add(after.object_id)
+            elif event.event_type in {
+                EventKind.PROCESS_AUDIT_BIND,
+                EventKind.PROCESS_PRIVILEGE_DROP,
+                EventKind.PROCESS_SERVICE_DROP,
+            }:
+                from evidenceforge.events.process import process_credential_identities
+
+                before, after = process_credential_identities(event)
+                patch = credential_patches.get(after.object_id)
+                change = (
+                    (
+                        patch.audit_binding
+                        if event.event_type is EventKind.PROCESS_AUDIT_BIND
+                        else patch.privilege_drop
+                        if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP
+                        else patch.service_drop
+                    )
+                    if patch is not None
+                    else None
+                )
+                live = self.state_manager.get_process(before.hostname, before.pid)
+                expected_integrity = (
+                    change.after_integrity
+                    if event.event_type
+                    in {EventKind.PROCESS_PRIVILEGE_DROP, EventKind.PROCESS_SERVICE_DROP}
+                    and change is not None
+                    else live.integrity_level
+                    if live is not None
+                    else None
+                )
+                expected_principal = (
+                    change.after_principal
+                    if event.event_type
+                    in {EventKind.PROCESS_PRIVILEGE_DROP, EventKind.PROCESS_SERVICE_DROP}
+                    and change is not None
+                    else before.principal
+                )
+                if (
+                    patch is None
+                    or change is None
+                    or live is None
+                    or patch.target != before
+                    or change.before != before.credentials
+                    or change.after != after.credentials
+                    or after.principal != expected_principal
+                    or (
+                        patch.service_drop is not None
+                        and patch.service_drop.gui_session is not None
+                        and (
+                            event.identity_plan.session != patch.service_drop.gui_session
+                            or before.logon_id != patch.service_drop.before_logon_id
+                            or after.logon_id != patch.service_drop.after_logon_id
+                        )
+                    )
+                    or patch.activity_time != event.timestamp
+                    or event.process.integrity_level != expected_integrity
+                    or self.state_manager._pid_os.get(before.hostname) != "macos"
+                    or after.object_id in observed_credentials
+                ):
+                    raise EventContractError(
+                        "Action-cohort credential projection disagrees with its exact State transition"
+                    )
+                observed_credentials.add(after.object_id)
             elif event.event_type is EventKind.PROCESS_TERMINATE:
                 if type(subject) is not ProcessIdentity:
                     raise EventContractError(
@@ -6005,10 +6493,67 @@ class EventDispatcher:
                     expected is None
                     or subject != expected.identity
                     or event.timestamp != expected.end_time
+                    or event.process is None
+                    or event.process.exit_outcome != expected.exit_outcome
                 ):
                     raise EventContractError(
                         "Action-cohort process-close projection disagrees with its State plan"
                     )
+                if root_action_id.startswith("process-exit:"):
+                    from evidenceforge.events.process import process_exit_identity
+
+                    try:
+                        identity = process_exit_identity(event)
+                    except ValueError as exc:
+                        raise EventContractError(str(exc)) from exc
+                    live = self.state_manager.get_process(identity.hostname, identity.pid)
+                    if (
+                        live is None
+                        or event.process.integrity_level != live.integrity_level
+                        or event.src_host.os_category
+                        != self.state_manager._pid_os.get(identity.hostname)
+                    ):
+                        raise EventContractError(
+                            "POSIX exit projection disagrees with its live State process"
+                        )
+                if root_action_id.startswith("ssh-close:") and event.src_host is not None:
+                    platform = self.state_manager._pid_os.get(subject.hostname)
+                    if event.src_host.os_category != platform:
+                        raise EventContractError("SSH process close crossed its modeled platform")
+                    receiver_terminal = root_action_id.endswith(":receiver-terminate")
+                    receiver_descendant = ":receiver-descendant:" in root_action_id
+                    if platform == "macos":
+                        from evidenceforge.events.process import process_exit_identity
+
+                        try:
+                            process_exit_identity(event)
+                        except ValueError as exc:
+                            raise EventContractError(str(exc)) from exc
+                        live = self.state_manager.get_process(subject.hostname, subject.pid)
+                        if live is None or event.process.integrity_level != live.integrity_level:
+                            raise EventContractError("Mac SSH exit lost its live process integrity")
+                    if platform == "macos" and (receiver_terminal or receiver_descendant):
+                        live_session = self.state_manager.get_session(subject.logon_id)
+                        expected_session = self.state_manager.get_session_identity(subject.logon_id)
+                        credentials = subject.credentials
+                        if (
+                            live_session is None
+                            or live_session.auth_protocol != "ssh"
+                            or live_session.audit_origin is None
+                            or identity_plan.session != expected_session
+                            or credentials is None
+                            or credentials.audit_uid != live_session.audit_origin.audit_uid
+                            or credentials.audit_session_id
+                            != live_session.audit_origin.audit_session_id
+                            or not live_session.transport_pid
+                            or receiver_terminal != (subject.pid == live_session.transport_pid)
+                            or (receiver_terminal and credentials.effective_uid != 0)
+                            or event.syslog is not None
+                            or event.auth is not None
+                        ):
+                            raise EventContractError(
+                                "Mac SSH process close lost its authenticated receiver/session owner"
+                            )
                 if marker in observed_closes:
                     raise EventContractError("Action-cohort repeats a process-close projection")
                 observed_closes[marker] = position
@@ -6027,6 +6572,23 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort session-close projection disagrees with its State plan"
                     )
+                if root_action_id.startswith("ssh-close:") and event.dst_host is not None:
+                    if event.dst_host.os_category != self.state_manager._pid_os.get(
+                        subject.hostname
+                    ):
+                        raise EventContractError(
+                            "SSH logout disagrees with its modeled platform owner"
+                        )
+                    live_session = self.state_manager.get_session(subject.logon_id)
+                    if event.dst_host.os_category == "macos" and (
+                        live_session is None
+                        or live_session.auth_protocol != "ssh"
+                        or live_session.audit_origin is None
+                        or event.syslog is not None
+                    ):
+                        raise EventContractError(
+                            "Mac SSH logout disagrees with its live platform/session owner"
+                        )
                 if marker in observed_closes:
                     raise EventContractError("Action-cohort repeats a session-close projection")
                 observed_closes[marker] = position
@@ -6050,6 +6612,18 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort projection closes a State member before its start"
                 )
+
+        if observed_job_control != job_control_patches.keys():
+            raise EventContractError(
+                "POSIX membership projections must cover every State transition"
+            )
+        if observed_credentials != credential_patches.keys():
+            raise EventContractError(
+                "Action-cohort credential transitions lack exact source members"
+            )
+
+        if observed_executions != executions.keys():
+            raise EventContractError("Action-cohort exec transitions lack exact source members")
 
         process_by_host_pid = {
             (plan.identity.hostname, plan.identity.pid): plan.identity
@@ -6098,9 +6672,25 @@ class EventDispatcher:
                     )
 
         allowed_ids = {
+            *(
+                patch.service_drop.gui_session.object_id
+                for patch in state_plan.process_activity_patches
+                if patch.service_drop is not None and patch.service_drop.gui_session is not None
+            ),
+            *(
+                patch.job_control_actor.object_id
+                for patch in state_plan.process_activity_patches
+                if patch.job_control_actor is not None
+            ),
             *(identity.object_id for identity in session_starts.values()),
             *(identity.object_id for identity in process_starts.values()),
             *(item.identity.object_id for item in state_plan.process_terminations),
+            *(item.target.object_id for item in state_plan.process_executions),
+            *(
+                item.gui_session.object_id
+                for item in state_plan.process_executions
+                if item.gui_session is not None
+            ),
             *(item.identity.object_id for item in state_plan.session_terminalizations),
             *(
                 self._action_cohort_target_identity(patch.target).object_id
@@ -6136,7 +6726,56 @@ class EventDispatcher:
             raise EventContractError(
                 "Action-cohort projection references a process/session outside its State plan"
             )
-        if not patch_target_ids.issubset(process_or_session_ids):
+        for dispatch in dispatches:
+            authentication = dispatch._occurrence.macos_ssh_authentication
+            if authentication is None:
+                continue
+            session = self.state_manager.get_session(authentication.session.logon_id)
+            bindings = [
+                patch
+                for patch in state_plan.process_activity_patches
+                if patch.target == authentication.writer
+                and patch.audit_binding is not None
+                and patch.audit_binding.bound_at == authentication.authenticated_at
+            ]
+            if (
+                len(bindings) != 1
+                or session is None
+                or self.state_manager.get_session_identity(session.logon_id)
+                != authentication.session
+                or session.audit_origin != bindings[0].audit_binding.origin
+                or session.transport_pid != authentication.writer.pid
+                or session.source_ip != authentication.source_ip
+                or session.source_port != authentication.source_port
+            ):
+                raise EventContractError(
+                    "Mac SSH authentication requires its exact receiver audit-binding cohort"
+                )
+        # Adoption is a canonical consequence of the exact parent exit, not a
+        # separately invented source observation. State authenticates both owners.
+        adoption_ids: set[str] = set()
+        for patch in state_plan.process_activity_patches:
+            change = patch.parentage_change
+            if change is None:
+                continue
+            prior = change.before.current
+            assert prior is not None
+            closing = next(
+                (
+                    item
+                    for item in state_plan.process_terminations
+                    if item.identity.object_id == prior.object_id
+                ),
+                None,
+            )
+            if (
+                closing is None
+                or closing.end_time != change.changed_at
+                or ("process", prior.object_id) not in observed_closes
+            ):
+                raise EventContractError("Parent adoption lacks its exact canonical parent exit")
+            adoption_ids.add(patch.target.object_id)
+        if not (patch_target_ids - adoption_ids).issubset(process_or_session_ids):
             raise EventContractError(
                 "Action-cohort State patch target has no exact canonical member binding"
             )
@@ -6226,6 +6865,12 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort live-session role patch has no exact identity member"
                 )
+            if patch.macos_shell is not None and not any(
+                execution.after == patch.macos_shell for execution in state_plan.process_executions
+            ):
+                raise EventContractError(
+                    "Action-cohort Mac shell role has no exact execution member"
+                )
             staged_role_ids = {
                 process.identity.object_id
                 for process in (
@@ -6241,6 +6886,8 @@ class EventDispatcher:
                 )
         for patch in state_plan.process_activity_patches:
             identity = self._action_cohort_target_identity(patch.target)
+            if identity.object_id in adoption_ids:
+                continue
             if not has_canonical_member_at(
                 exact_identity_members(identity),
                 patch.activity_time,
@@ -6675,6 +7322,12 @@ class EventDispatcher:
         if len(owned_keys) != sum(plan.occurrence_count for plan in owned_effect_plans):
             raise EventContractError("Action-cohort owned effect plans repeat an exact ordinal")
         bootstrap_kinds = {
+            EventKind.PROCESS_JOB_CONTROL,
+            EventKind.PROCESS_AUDIT_BIND,
+            EventKind.PROCESS_PRIVILEGE_DROP,
+            EventKind.PROCESS_SERVICE_DROP,
+            EventKind.PROCESS_FORK,
+            EventKind.PROCESS_EXEC,
             EventKind.LOGON,
             EventKind.MACHINE_LOGON,
             EventKind.SSH_SESSION,
@@ -6722,7 +7375,7 @@ class EventDispatcher:
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
-        lifecycle_request: LifecycleActionCohortRequest,
+        lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest,
         audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...],
         effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...],
         external_effect_links: tuple[ActionCohortExternalEffectLink, ...],
@@ -6783,7 +7436,8 @@ class EventDispatcher:
     def _action_cohort_nested_token_digest(
         *,
         timing_preparation: SourceTimingPreparation,
-        lifecycle_token: LifecycleActionCohortAdmissionToken,
+        lifecycle_token: LifecycleActionCohortAdmissionToken
+        | LifecycleServiceClosureAdmissionToken,
         audit_preparation: PreparedExecutionEffectAuditCommit,
         intent_token: IntentExecutionBatchToken | None,
     ) -> str:
@@ -6909,7 +7563,6 @@ class EventDispatcher:
             LocalArtifactPublicationGroupReceipt,
         )
         from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
-        from evidenceforge.generation.lifecycle_registry import LifecycleActionCohortReceipt
         from evidenceforge.generation.source_timing import SourceTimingPreparationReceipt
         from evidenceforge.generation.state_manager import ActionCohortMaterializationResult
 
@@ -6927,12 +7580,39 @@ class EventDispatcher:
             or audit_claimed is None
             or timing_claimed is not record.source_timing_preparation
             or type(state_result) is not ActionCohortMaterializationResult
-            or type(lifecycle_receipt) is not LifecycleActionCohortReceipt
+            or lifecycle_receipt is None
             or type(audit_receipt) is not ExecutionEffectAuditCommitReceipt
             or type(timing_receipt) is not SourceTimingPreparationReceipt
         ):
             return False
         try:
+            self._validate_action_cohort_es_closures(record)
+            if record.es_closure_requests:
+                if (
+                    record.es_closures_claimed is None
+                    or record.es_closures_claimed.expected_result is not record.es_closures_result
+                    or record.es_closures_claimed.publication_token != record.es_closures_token
+                    or record.es_closures_claimed.committed
+                ):
+                    return False
+            elif (
+                record.es_closures_claimed is not None
+                or record.es_closures_result
+                or record.es_closures_token
+            ):
+                return False
+            if record.es_delivery is not None:
+                self._validate_action_cohort_es_delivery(record)
+                if (
+                    record.es_claimed is None
+                    or self._es_delivery_result(record.es_claimed)
+                    != self._es_delivery_result(record.es_delivery)
+                    or record.es_claimed.publication_token != record.es_publication_token
+                    or record.es_claimed.committed
+                ):
+                    return False
+            elif record.es_claimed is not None or record.es_publication_token:
+                return False
             if (
                 state_claimed.expected_result is not state_result
                 or type(record.expected_state_result_publication_token) is not str
@@ -6944,12 +7624,7 @@ class EventDispatcher:
                     preparation=state_claimed,
                 )
                 or lifecycle_claimed.expected_receipt is not lifecycle_receipt
-                or not cast(
-                    "GeneratorLifecycleAuthority", self._lifecycle_authority
-                ).registry.authenticates_expected_action_cohort_receipt(
-                    lifecycle_receipt,
-                    state_publication_token=record.state_plan.publication_token,
-                )
+                or not self._action_cohort_lifecycle_result_authenticates(record, expected=True)
                 or audit_claimed.expected_receipt is not audit_receipt
                 or not record.execution_effect_audit.authenticates_expected_action_cohort_receipt(
                     audit_receipt,
@@ -7007,8 +7682,19 @@ class EventDispatcher:
                 and recovery.receipt is receipt
                 and recovery.result is result
                 and recovery.batch is record.exact_publication_batch
-                and len(outcomes) == 1
+                and (
+                    len(outcomes) == 1
+                    or record.exact_projection_kind in {"macos_exit_group", "macos_process_chain"}
+                )
                 and recovery.outcome is outcomes[0]
+                and (
+                    record.exact_projection_kind not in {"macos_exit_group", "macos_process_chain"}
+                    or (
+                        recovery.outcomes is outcomes
+                        and recovery.member_identifiers is record.exact_member_identifiers
+                        and len(recovery.member_identifiers) == len(outcomes)
+                    )
+                )
                 and recovery.occurrence_ids == record.member_occurrence_ids
                 and recovery.member_integrity_digest == record.member_integrity_digest
                 and recovery.identifiers == record.exact_prepared_identifiers
@@ -7058,7 +7744,10 @@ class EventDispatcher:
         """Allocate and authenticate every nested and outer result before yielding."""
 
         state_claimed = cast("PreparedActionCohortMaterialization", record.state_claimed)
-        lifecycle_claimed = cast("PreparedLifecycleActionCohort", record.lifecycle_claimed)
+        lifecycle_claimed = cast(
+            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
+            record.lifecycle_claimed,
+        )
         audit_claimed = cast("PreparedExecutionEffectAuditCommit", record.audit_claimed)
         timing_claimed = cast("SourceTimingPreparation", record.timing_claimed)
         record.expected_state_result = state_claimed.expected_result
@@ -7111,6 +7800,10 @@ class EventDispatcher:
             ),
             ("timing", timing_receipt._integrity),
         )
+        if record.es_delivery is not None:
+            nested_publication_tokens += (("es_collector", record.es_publication_token),)
+        if record.es_closure_requests:
+            nested_publication_tokens += (("es_closures", record.es_closures_token),)
         receipt = ActionCohortPublicationReceipt(
             dispatcher_id=self._action_cohort_dispatcher_id,
             receipt_id=secrets.token_hex(16),
@@ -7143,7 +7836,10 @@ class EventDispatcher:
         record.publication_result = result
         if record.exact_projection:
             exact_batch = record.exact_publication_batch
-            if exact_batch is None or len(outcomes) != 1:
+            if exact_batch is None or (
+                len(outcomes) != 1
+                and record.exact_projection_kind not in {"macos_exit_group", "macos_process_chain"}
+            ):
                 raise EventContractError("Exact action-cohort recovery preallocation is malformed")
             record.exact_recovery = _ExactProjectionRecoveryRecord(
                 kind="action_cohort",
@@ -7154,6 +7850,10 @@ class EventDispatcher:
                 occurrence_ids=record.member_occurrence_ids,
                 member_integrity_digest=record.member_integrity_digest,
                 identifiers=record.exact_prepared_identifiers,
+                outcomes=outcomes
+                if record.exact_projection_kind in {"macos_exit_group", "macos_process_chain"}
+                else (),
+                member_identifiers=record.exact_member_identifiers,
                 owner_record=record,
             )
         if not self._action_cohort_expected_publications_authenticate(record):
@@ -7167,11 +7867,19 @@ class EventDispatcher:
     ) -> None:
         """Cross every owner's one-shot final-auth boundary before primitive mutation."""
 
+        if record.es_closures_claimed is not None:
+            record.es_closures_claimed.certify_composite_commit(record.es_closures_result)
         cast("PreparedActionCohortMaterialization", record.state_claimed).certify_composite_commit(
             cast("ActionCohortMaterializationResult", record.expected_state_result)
         )
-        cast("PreparedLifecycleActionCohort", record.lifecycle_claimed).certify_composite_commit(
-            cast("LifecycleActionCohortReceipt", record.expected_lifecycle_receipt)
+        cast(
+            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
+            record.lifecycle_claimed,
+        ).certify_composite_commit(
+            cast(
+                "LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt",
+                record.expected_lifecycle_receipt,
+            )
         )
         cast("PreparedExecutionEffectAuditCommit", record.audit_claimed).certify_composite_commit(
             cast("ExecutionEffectAuditCommitReceipt", record.expected_audit_receipt)
@@ -7309,10 +8017,17 @@ class EventDispatcher:
         """Fail closed before rendering unless the concrete sink has exact admission."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
         from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
         from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 
         if format_name == "ecar" and type(emitter) is EcarEmitter:
+            return
+        if (
+            format_name == "macos_unified_log"
+            and type(emitter) is MacosUnifiedLogEmitter
+            and emitter.supports_exact_projection_publication is True
+        ):
             return
         if (
             format_name == "windows_event_security"
@@ -7409,6 +8124,7 @@ class EventDispatcher:
 
         if event.event_type is EventKind.PROCESS_TERMINATE:
             source_terminal = record.root_action_id.endswith(":source-terminate")
+            macos_exit = event.src_host is not None and event.src_host.os_category == "macos"
             receiver_terminal = record.root_action_id.endswith(":receiver-terminate")
             descendant_marker = ":receiver-descendant:"
             descendant_owner, descendant_separator, descendant_object_id = (
@@ -7443,12 +8159,19 @@ class EventDispatcher:
                 or type(event.src_host) is not HostContext
                 or event.dst_host is not None
                 or type(event.process) is not ProcessContext
-                or type(event.auth) is not AuthContext
+                or (event.auth is not None if macos_exit else type(event.auth) is not AuthContext)
             ):
                 raise EventContractError(
                     "Exact SSH process termination changed its singleton State/event shape"
                 )
             identity = identity_plan.subject
+            if macos_exit:
+                from evidenceforge.events.process import process_exit_identity
+
+                try:
+                    process_exit_identity(event)
+                except ValueError as exc:
+                    raise EventContractError(str(exc)) from exc
             termination = plan.process_terminations[0]
             session_patch_identity = (
                 EventDispatcher._action_cohort_target_identity(
@@ -7475,9 +8198,27 @@ class EventDispatcher:
                     source_terminal
                     and executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}
                 )
-                or (receiver_terminal and executable != "sshd")
+                or (
+                    receiver_terminal
+                    and event.src_host.os_category != "macos"
+                    and executable != "sshd"
+                )
                 or (receiver_terminal and identity.principal.casefold() != "root")
-                or (receiver_descendant_terminal and event.src_host.os_category != "linux")
+                or (
+                    receiver_descendant_terminal
+                    and event.src_host.os_category not in {"linux", "macos"}
+                )
+                or (
+                    (receiver_terminal or receiver_descendant_terminal)
+                    and event.src_host.os_category == "macos"
+                    and (
+                        identity.credentials is None
+                        or identity_plan.session is None
+                        or identity_plan.session.session_kind != "ssh"
+                        or event.auth is not None
+                        or event.syslog is not None
+                    )
+                )
                 or event.src_host.hostname != identity.hostname
                 or event.process.pid != identity.pid
                 or event.process.parent_pid not in {0, identity.parent_pid}
@@ -7485,8 +8226,8 @@ class EventDispatcher:
                 or event.process.username != identity.principal
                 or event.process.logon_id != identity.logon_id
                 or event.process.start_time != identity.started_at
-                or event.auth.username != identity.principal
-                or event.auth.logon_id != identity.logon_id
+                or (event.auth is not None and event.auth.username != identity.principal)
+                or (event.auth is not None and event.auth.logon_id != identity.logon_id)
                 or lifecycle.group_id != identity.lifecycle_group_id
                 or lifecycle.canonical_start != identity.started_at
                 or lifecycle.parent_group_id != (identity.parent_lifecycle_group_id or None)
@@ -7508,10 +8249,13 @@ class EventDispatcher:
                 or identity_plan.session != identity_plan.subject
                 or event.src_host is not None
                 or type(event.dst_host) is not HostContext
-                or event.dst_host.os_category != "linux"
+                or event.dst_host.os_category not in {"linux", "macos"}
                 or type(event.auth) is not AuthContext
-                or event.syslog is None
-                or event.syslog.app_name != "sshd"
+                or (
+                    event.dst_host.os_category == "linux"
+                    and (event.syslog is None or event.syslog.app_name != "sshd")
+                )
+                or (event.dst_host.os_category == "macos" and event.syslog is not None)
             ):
                 raise EventContractError("Exact SSH logout changed its singleton State/event shape")
             identity = identity_plan.subject
@@ -7539,13 +8283,213 @@ class EventDispatcher:
 
         raise EventContractError("Exact SSH terminal projection event kind is unsupported")
 
+    def _require_multi_process_projection(self, record: _PreparedActionCohortBatchRecord) -> str:
+        """Authenticate an exact terminal group or a closed ordered Mac process cohort."""
+        from evidenceforge.events.process import (
+            process_exec_identities,
+            process_exit_identity,
+            process_fork_identities,
+        )
+        from evidenceforge.generation.actions.command_effects import FileEffectIntent
+
+        file_effects = bool(record.effect_member_bindings)
+        if not record.root_action_id.startswith("macos-process-cohort:") and not file_effects:
+            return self._require_macos_exit_group_projection(record)
+        plan = record.state_plan
+        if (
+            (
+                not file_effects
+                and record.root_action_id != f"macos-process-cohort:{plan.semantic_id}"
+            )
+            or any(
+                (
+                    plan.sessions,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches if not file_effects else (),
+                    plan.session_activity_patches if not file_effects else (),
+                    plan.session_terminalizations,
+                    plan._smb_connection_finalization,
+                    plan._smb_file_mutation_terminalization,
+                )
+            )
+            or not plan.process_executions
+            or any(
+                not item.forked
+                and not any(
+                    execution.target == item.identity
+                    and execution.gui_session is not None
+                    and item._allocator_patch.macos_anonymous_audit_session is not None
+                    for execution in plan.process_executions
+                )
+                for item in plan.processes
+            )
+        ):
+            raise EventContractError("Exact Mac process cohort changed its ordered owners")
+        phases = {
+            EventKind.PROCESS_CREATE,
+            EventKind.PROCESS_FORK,
+            EventKind.PROCESS_EXEC,
+            EventKind.PROCESS_TERMINATE,
+        }
+        process_projections = tuple(
+            item for item in record.trusted_projections if item.occurrence.event_type in phases
+        )
+        dependent_members = tuple(
+            (member, projection)
+            for member, projection in zip(
+                record.dispatches, record.trusted_projections, strict=True
+            )
+            if projection.occurrence.event_type not in phases
+        )
+        if file_effects:
+            if (
+                len(plan.processes) != 1
+                or not plan.processes[0].forked
+                or len(plan.process_executions) != 1
+                or plan.process_terminations
+                or plan.process_executions[0].gui_session is not None
+                or len(record.audit_entries) != 1
+                or any(
+                    not isinstance(node.intent, FileEffectIntent)
+                    for entry in record.audit_entries
+                    for node in entry.plan.nodes
+                )
+                or any(
+                    binding.member._occurrence.effect_provenance is None
+                    or binding.member._occurrence.effect_provenance.root_action_id
+                    != record.root_action_id
+                    for binding in record.effect_member_bindings
+                )
+                or record.external_effect_links
+                or record.owned_effect_plans
+                or not dependent_members
+                or {id(binding.member) for binding in record.effect_member_bindings}
+                != {id(member) for member, _ in dependent_members}
+                or record.trusted_projections[: len(process_projections)] != process_projections
+            ):
+                raise EventContractError(
+                    "Exact Mac file-effect chain lost its closed process/effect ownership"
+                )
+            after = plan.process_executions[0].after
+            if (
+                len(plan.process_activity_patches) != 1
+                or plan.process_activity_patches[0].target != after
+                or plan.process_activity_patches[0].activity_time
+                < max(projection.occurrence.timestamp for _, projection in dependent_members)
+            ):
+                raise EventContractError(
+                    "Exact Mac file effects lost their executed process frontier"
+                )
+            if len(plan.session_activity_patches) != 1 or (
+                plan.session_activity_patches[0].target.hostname != after.hostname
+                or plan.session_activity_patches[0].target.logon_id != after.logon_id
+                or plan.session_activity_patches[0].activity_time
+                < max(projection.occurrence.timestamp for _, projection in dependent_members)
+            ):
+                raise EventContractError(
+                    "Exact Mac file effects lost their owning session frontier"
+                )
+            for _, projection in dependent_members:
+                event = projection.occurrence
+                if (
+                    event.file is None
+                    or event.registry is not None
+                    or event.src_host is None
+                    or event.src_host.os_category != "macos"
+                    or event.src_host.hostname != after.hostname
+                    or event.identity_plan.actor != after
+                    or event.timestamp < after.execution_started_at
+                    or event.effect_provenance is None
+                ):
+                    raise EventContractError(
+                        "Exact Mac file effect changed its executed actor, host or time"
+                    )
+        elif dependent_members:
+            raise EventContractError("Exact Mac process cohort cannot contain unowned dependents")
+        expected = (
+            [
+                (
+                    item.identity.started_at,
+                    0,
+                    EventKind.PROCESS_FORK if item.forked else EventKind.PROCESS_CREATE,
+                    (item.parent_identity, item.identity),
+                )
+                for item in plan.processes
+            ]
+            + [
+                (
+                    item.after.execution_started_at,
+                    1,
+                    EventKind.PROCESS_EXEC,
+                    (item.target, item.after),
+                )
+                for item in plan.process_executions
+            ]
+            + [
+                (item.end_time, 2, EventKind.PROCESS_TERMINATE, (item.identity,))
+                for item in plan.process_terminations
+            ]
+        )
+        expected.sort(key=lambda item: item[:2])
+        if len(expected) != len(process_projections):
+            raise EventContractError(
+                "Exact Mac process cohort must project every canonical phase once"
+            )
+        for projection, (at, _, kind, identities) in zip(
+            process_projections, expected, strict=True
+        ):
+            event = projection.occurrence
+            if (
+                event.timestamp != at
+                or event.event_type is not kind
+                or event.src_host is None
+                or event.src_host.os_category != "macos"
+            ):
+                raise EventContractError(
+                    "Exact Mac process cohort changed event order, host or phase"
+                )
+            actual = (
+                process_fork_identities(event)
+                if kind is EventKind.PROCESS_FORK
+                else (event.identity_plan.actor, event.identity_plan.subject)
+                if kind is EventKind.PROCESS_CREATE
+                else process_exec_identities(event)
+                if kind is EventKind.PROCESS_EXEC
+                else (process_exit_identity(event),)
+            )
+            if actual != identities:
+                raise EventContractError("Exact Mac process cohort changed an execution identity")
+        return "macos_process_chain"
+
     def _exact_action_cohort_projection_kind(
         self,
         record: _PreparedActionCohortBatchRecord,
     ) -> str:
         """Return the authenticated closed semantic kind for exact cohort projection."""
 
+        if len(record.trusted_projections) > 1:
+            return self._require_multi_process_projection(record)
         projection = record.trusted_projections[0]
+        if (
+            projection.occurrence.file is not None
+            and projection.occurrence.file.macos_operation is not None
+        ):
+            return self._require_macos_file_projection(record)
+        if record.root_action_id.startswith("process-exit:"):
+            return self._require_posix_exit_projection(record)
+        if projection.occurrence.event_type is EventKind.PROCESS_JOB_CONTROL:
+            return self._require_process_job_control_projection(record)
+        if projection.occurrence.event_type in {
+            EventKind.PROCESS_AUDIT_BIND,
+            EventKind.PROCESS_PRIVILEGE_DROP,
+            EventKind.PROCESS_SERVICE_DROP,
+        }:
+            return self._require_process_credential_projection(record)
+        if projection.occurrence.event_type is EventKind.PROCESS_FORK:
+            return self._require_posix_fork_projection(record)
+        if projection.occurrence.event_type is EventKind.PROCESS_EXEC:
+            return self._require_posix_exec_projection(record)
         try:
             self._require_type_five_projection(projection)
         except EventContractError:
@@ -7557,6 +8501,360 @@ class EventDispatcher:
                 except EventContractError:
                     return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_macos_file_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Admit one explicit filesystem operation and its sole live process frontier."""
+        from evidenceforge.events.contracts import EffectOccurrenceKind, EffectOccurrenceOwner
+
+        event = record.trusted_projections[0].occurrence
+        plan = record.state_plan
+        actor = event.identity_plan.actor if event.identity_plan is not None else None
+        operation = event.file.macos_operation if event.file is not None else None
+        if (
+            len(record.dispatches) != 1
+            or operation is None
+            or type(actor) is not ProcessIdentity
+            or event.src_host is None
+            or event.src_host.os_category != "macos"
+            or event.src_host.hostname != actor.hostname
+            or event.dst_host is not None
+            or event.process is None
+            or event.process.pid != actor.pid
+            or event.process.image != actor.image
+            or event.process.username != actor.principal
+            or event.file.pid != actor.pid
+            or event.timestamp < actor.execution_started_at
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != actor
+            or plan.process_activity_patches[0].activity_time != event.timestamp
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+            or record.effect_member_bindings
+            or record.external_effect_links
+            or len(record.owned_effect_plans) != 1
+            or record.artifact_registry is None
+            or not record.artifact_publications
+        ):
+            raise EventContractError(
+                "Exact Mac file operation changed its singleton canonical owner"
+            )
+        effect = record.owned_effect_plans[0]
+        if (
+            effect.owner is not EffectOccurrenceOwner.MACOS_FILESYSTEM
+            or effect.kind is not EffectOccurrenceKind.FILE
+            or effect.root_action_id != record.root_action_id
+            or effect.occurrence_count != 1
+            or event.effect_provenance != effect.provenance(0)
+        ):
+            raise EventContractError("Exact Mac file operation lost its bounded effect provenance")
+        operation.__post_init__()
+        change = plan.process_activity_patches[0].filesystem_change
+        if change is not None:
+            import posixpath
+
+            change.__post_init__()
+            if (
+                change.after.native_path != posixpath.dirname(operation.source.artifact.native_path)
+                or change.after.metadata.volume_id != operation.source.macos_file.volume_id
+                or change.after.metadata.device != operation.source.macos_file.device
+                or change.allocation is not None
+                and (
+                    operation.operation != "create"
+                    or change.allocation[2] != operation.source.macos_file.inode
+                )
+                or operation.parent is not None
+                and operation.parent not in (change.before, change.after)
+            ):
+                raise EventContractError(
+                    "Filesystem state patch drifted from its exact file operation"
+                )
+        return "macos_filesystem"
+
+    @staticmethod
+    def _require_process_job_control_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one membership change with its exact authenticated source member."""
+        from evidenceforge.events.process import process_job_control_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact process membership projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_job_control_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id
+            != f"process-job-control:{after.execution_id}:{event.timestamp.isoformat()}"
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != before
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError(
+                "Exact process membership projection changed its singleton owner"
+            )
+        return "process_job_control"
+
+    @staticmethod
+    def _require_process_credential_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one credential change with its exact authenticated source member."""
+        from evidenceforge.events.process import process_credential_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact process credential projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_credential_identities(event)
+        plan = record.state_plan
+        authentication = event.macos_ssh_authentication
+        session_activity = plan.session_activity_patches
+        if authentication is not None and (
+            len(session_activity) != 1
+            or session_activity[0].target != authentication.session
+            or session_activity[0].activity_time != event.timestamp
+        ):
+            raise EventContractError("Exact SSH authentication lost its session activity owner")
+        if (
+            record.root_action_id != f"{event.event_type}:{after.execution_id}"
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != before
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches if authentication is None else (),
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError(
+                "Exact process credential projection changed its singleton owner"
+            )
+        return "process_credentials"
+
+    @staticmethod
+    def _require_posix_fork_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one authenticated fork and no unrelated mutation or source member."""
+        from evidenceforge.events.process import process_fork_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX fork projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        parent, child = process_fork_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"process-fork:{child.object_id}"
+            or len(plan.processes) != 1
+            or not plan.processes[0].forked
+            or plan.processes[0].identity != child
+            or plan.processes[0].parent_identity != parent
+            or any(
+                (
+                    plan.sessions,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX fork projection changed its singleton owner")
+        return "posix_fork"
+
+    @staticmethod
+    def _require_macos_exit_group_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Admit a bounded Mac terminal set with only matching child adoptions."""
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+        plan = record.state_plan
+        if (
+            not record.root_action_id.startswith("process-exit-group:")
+            or not 2 <= len(record.trusted_projections) <= 256
+            or len(record.dispatches) != len(record.trusted_projections)
+            or len(plan.process_terminations) != len(record.trusted_projections)
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact Mac exit group changed its bounded terminal shape")
+        endings = {item.identity.object_id: item for item in plan.process_terminations}
+        seen: set[str] = set()
+        hostname: str | None = None
+        for projection in record.trusted_projections:
+            event = projection.occurrence
+            try:
+                identity = process_exit_identity(event)
+            except ValueError as exc:
+                raise EventContractError(str(exc)) from exc
+            termination = endings.get(identity.object_id)
+            if (
+                event.src_host.os_category != "macos"
+                or (hostname is not None and hostname != identity.hostname)
+                or identity.object_id in seen
+                or termination is None
+                or type(termination.target) is not ProcessTerminationMaterializationPlan
+                or termination.identity != identity
+                or termination.end_time != event.timestamp
+                or termination.exit_outcome != event.process.exit_outcome
+            ):
+                raise EventContractError("Exact Mac exit group lost an exact terminal member")
+            hostname = identity.hostname
+            seen.add(identity.object_id)
+        for patch in plan.process_activity_patches:
+            change = patch.parentage_change
+            parent = (
+                endings.get(change.before.current.object_id)
+                if change is not None and change.before.current is not None
+                else None
+            )
+            if (
+                parent is None
+                or patch.target.object_id in seen
+                or patch.target.hostname != hostname
+                or change.changed_at != parent.end_time
+                or patch.activity_time != parent.end_time
+            ):
+                raise EventContractError(
+                    "Exact Mac exit group only permits surviving-child adoption"
+                )
+        return "macos_exit_group"
+
+    @staticmethod
+    def _require_posix_exit_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one existing process close with no unrelated State mutation."""
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX exit projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        try:
+            identity = process_exit_identity(event)
+        except ValueError as exc:
+            raise EventContractError(str(exc)) from exc
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"process-exit:{identity.object_id}"
+            or len(plan.process_terminations) != 1
+            or type(plan.process_terminations[0].target)
+            is not ProcessTerminationMaterializationPlan
+            or plan.process_terminations[0].identity != identity
+            or plan.process_terminations[0].end_time != event.timestamp
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX exit projection changed its singleton owner")
+        for patch in plan.process_activity_patches:
+            change = patch.parentage_change
+            if (
+                event.src_host.os_category != "macos"
+                or change is None
+                or change.before.current is None
+                or change.before.current.object_id != identity.object_id
+                or change.changed_at != event.timestamp
+                or patch.activity_time != event.timestamp
+                or patch.target.object_id == identity.object_id
+            ):
+                raise EventContractError("Exact POSIX exit only permits its Mac child adoptions")
+        return "posix_exit"
+
+    @staticmethod
+    def _require_posix_exec_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one exact image replacement without unrelated State mutations."""
+
+        from evidenceforge.events.process import process_exec_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX exec projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_exec_identities(event)
+        plan = record.state_plan
+        roles = plan.live_session_process_role_patches
+        if roles and (
+            len(roles) != 1
+            or roles[0].macos_shell != after
+            or roles[0].target != event.identity_plan.session
+            or roles[0].winlogon_plan is not None
+            or roles[0].explorer_plan is not None
+            or roles[0].process_tree_root_plan is not None
+        ):
+            raise EventContractError("Exact POSIX exec changed its Mac SSH shell role owner")
+        if (
+            record.root_action_id != f"process-exec:{after.execution_id}"
+            or len(plan.process_executions) != 1
+            or plan.process_executions[0].target != before
+            or plan.process_executions[0].after != after
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches,
+                    plan.session_activity_patches,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX exec projection changed its singleton owner")
+        return "posix_exec"
 
     def _require_linux_sudo_terminal_projection(
         self,
@@ -7838,8 +9136,21 @@ class EventDispatcher:
                 and identity.principal.casefold() == "system"
                 and has_exact_session_activity
             )
+            is_rdp_target_system_smss = bool(
+                executable == "smss.exe"
+                and identity.principal.casefold() == "system"
+                and type(session_identity) is SessionIdentity
+                and session_identity.session_kind == "rdp"
+                and session_identity.hostname == identity.hostname
+                and has_exact_session_activity
+            )
             if (
-                not (is_rdp_target_member or is_rdp_source_mstsc or is_rdp_target_system_winlogon)
+                not (
+                    is_rdp_target_member
+                    or is_rdp_source_mstsc
+                    or is_rdp_target_system_winlogon
+                    or is_rdp_target_system_smss
+                )
                 or termination.identity != identity
                 or termination.end_time != event.timestamp
                 or event.src_host.hostname != identity.hostname
@@ -7854,7 +9165,10 @@ class EventDispatcher:
                     identity_plan.session is not None
                     and (
                         identity_plan.session.hostname != identity.hostname
-                        or identity_plan.session.logon_id != identity.logon_id
+                        or (
+                            identity_plan.session.logon_id != identity.logon_id
+                            and not is_rdp_target_system_smss
+                        )
                     )
                 )
                 or lifecycle.group_id != identity.lifecycle_group_id
@@ -7910,20 +9224,27 @@ class EventDispatcher:
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
-        """Require concrete exact eCAR/Syslog sinks or one suppressed warm-up."""
+        """Require authenticated endpoint sinks for each selected SSH close source."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+        from evidenceforge.generation.emitters.windows import (
+            WindowsEventEmitter,
+            _supports_windows_exact_projection_publication,
+        )
 
         if self._ssh_terminal_projection_is_exact_omission(projection):
             return ()
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
+            "windows_event_security": WindowsEventEmitter,
+            "windows_event_sysmon": SysmonEventEmitter,
         }
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
-        target_counts = {"ecar": 0, "syslog": 0}
+        target_counts = dict.fromkeys(exact_types_by_format, 0)
         for format_name, emitter in self._exact_projection_targets(projection):
             emitter_type = type(emitter)
             expected_type = exact_types_by_format.get(format_name)
@@ -7934,10 +9255,12 @@ class EventDispatcher:
             )
             supported = expected_type is emitter_type and (
                 marker is True
-                if emitter_type is EcarEmitter
+                if emitter_type in {EcarEmitter, WindowsEventEmitter}
                 else type(marker) is property
                 and getattr(emitter, "supports_exact_projection_publication", None) is True
             )
+            if supported and emitter_type is WindowsEventEmitter:
+                supported = _supports_windows_exact_projection_publication(emitter)
             if not supported:
                 raise EventContractError(
                     f"Exact SSH terminal target {format_name!r} is unsupported before State"
@@ -7946,14 +9269,11 @@ class EventDispatcher:
             if id(emitter) not in participant_ids:
                 participant_ids.add(id(emitter))
                 participants.append(emitter)
-        if target_counts["ecar"] > 1:
-            raise EventContractError(
-                "Exact SSH terminal projection permits at most one eCAR target"
-            )
-        if target_counts["syslog"] > 1:
-            raise EventContractError(
-                "Exact SSH terminal projection permits at most one Syslog target"
-            )
+        for format_name, count in target_counts.items():
+            if count > 1:
+                raise EventContractError(
+                    f"Exact SSH terminal projection permits at most one {format_name} target"
+                )
         if not participants:
             raise EventContractError(
                 "Exact SSH terminal projection requires one durable source target"
@@ -7968,6 +9288,8 @@ class EventDispatcher:
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 
         if self._projection_is_exact_warmup_suppressed(projection):
             return True
@@ -7976,6 +9298,8 @@ class EventDispatcher:
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
+            "windows_event_security": WindowsEventEmitter,
+            "windows_event_sysmon": SysmonEventEmitter,
         }
         if any(
             type(item) is not tuple
@@ -8053,18 +9377,35 @@ class EventDispatcher:
             or self._projection_is_exact_observation_suppressed(projection)
         )
 
-    def _linux_sudo_terminal_exact_projection_participants(
+    def _single_ecar_exact_projection_participants(
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
         """Require one built-in eCAR sink or an authenticated exact omission."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
 
-        if self._linux_sudo_terminal_projection_is_exact_omission(projection):
+        if self._ecar_projection_is_exact_omission(projection):
             return ()
         participants = self._exact_projection_participants(projection)
         targets = self._exact_projection_targets(projection)
+        if projection.occurrence.macos_ssh_authentication is not None:
+            allowed = {"ecar": EcarEmitter, "macos_unified_log": MacosUnifiedLogEmitter}
+            if (
+                projection.occurrence.event_type is not EventKind.PROCESS_AUDIT_BIND
+                or not 1 <= len(targets) <= 2
+                or len({name for name, _emitter in targets}) != len(targets)
+                or any(type(emitter) is not allowed.get(name) for name, emitter in targets)
+                or len(participants) != len(targets)
+                or any(
+                    not any(item is emitter for item in participants) for _name, emitter in targets
+                )
+            ):
+                raise EventContractError(
+                    "Exact SSH authentication requires built-in eCAR/ULF targets"
+                )
+            return participants
         if (
             len(targets) != 1
             or targets[0][0] != "ecar"
@@ -8072,33 +9413,41 @@ class EventDispatcher:
             or len(participants) != 1
             or participants[0] is not targets[0][1]
         ):
-            raise EventContractError(
-                "Exact Linux sudo terminal projection requires one built-in eCAR target"
-            )
+            raise EventContractError("Exact eCAR projection requires one built-in eCAR target")
         return participants
 
-    def _linux_sudo_terminal_projection_is_exact_omission(
+    def _ecar_projection_is_exact_omission(
         self,
         projection: _PreparedProjection,
     ) -> bool:
-        """Authenticate a sudo terminal omitted by warm-up, filtering, or no eCAR sink."""
+        """Authenticate an eCAR occurrence omitted by warm-up, filtering, or no sink."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
+
+        allowed = {"ecar": EcarEmitter}
+        if (
+            projection.occurrence.event_type is EventKind.PROCESS_AUDIT_BIND
+            and projection.occurrence.macos_ssh_authentication is not None
+        ):
+            allowed["macos_unified_log"] = MacosUnifiedLogEmitter
 
         if self._projection_is_exact_warmup_suppressed(projection):
             return True
         if self._exact_projection_targets(projection):
             return False
         if any(
-            type(item) is not tuple or len(item) != 2 or item[0] != "ecar" or item[1] != "filtered"
+            type(item) is not tuple
+            or len(item) != 2
+            or item[0] not in allowed
+            or item[1] != "filtered"
             for item in projection.initial_statuses
         ):
             return False
         if projection.mode == "legacy":
             return all(
                 type(target) is _LegacyProjectionTarget
-                and target.format_name == "ecar"
-                and type(target.emitter) is EcarEmitter
+                and type(target.emitter) is allowed.get(target.format_name)
                 and target.status in {"dropped", "out_of_window"}
                 and target.occurrence is None
                 for target in projection.legacy_targets
@@ -8106,8 +9455,7 @@ class EventDispatcher:
         if projection.mode == "compiled":
             return all(
                 type(target) is _ProjectionTarget
-                and target.format_name == "ecar"
-                and type(target.emitter) is EcarEmitter
+                and type(target.emitter) is allowed.get(target.format_name)
                 and self._action_cohort_compiled_projection_status(
                     projection.occurrence,
                     target,
@@ -8117,6 +9465,113 @@ class EventDispatcher:
             )
         return False
 
+    def _validate_exact_process_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
+        """Authenticate exact Mac image/script retention and bound file-effect publication."""
+        from evidenceforge.events.process import process_exec_identities, process_fork_identities
+
+        publications = record.artifact_publications
+        if record.exact_projection_kind == "macos_process_chain":
+            registry = record.artifact_registry
+            if registry is None or not 1 <= len(publications) <= 256:
+                raise EventContractError(
+                    "Exact Mac process cohort requires bounded retained artifacts"
+                )
+            for token in publications:
+                file_publication = bool(
+                    record.effect_member_bindings
+                    and registry.authenticates_prepared_publication(token)
+                    and any(
+                        any(item is token for item in member._artifact_publications)
+                        and any(
+                            binding.member is member for binding in record.effect_member_bindings
+                        )
+                        and projection.occurrence.timestamp == token.observed_at
+                        and projection.occurrence.event_type
+                        in (
+                            {EventKind.FILE_DELETE}
+                            if token.withdraw_placement
+                            else {EventKind.FILE_CREATE, EventKind.FILE_MODIFY}
+                        )
+                        and projection.occurrence.file is not None
+                        and projection.occurrence.file.artifact_identity == token.record.artifact
+                        and projection.occurrence.file.content_identity == token.record.content
+                        and projection.occurrence.file.macos_metadata == token.record.macos_file
+                        for member, projection in zip(
+                            record.dispatches, record.trusted_projections, strict=True
+                        )
+                    )
+                )
+                if file_publication:
+                    continue
+
+                def owns_retention(
+                    projection: _PreparedProjection, retained: LocalArtifactPublishToken = token
+                ) -> bool:
+                    occurrence = projection.occurrence
+                    if occurrence.event_type is EventKind.PROCESS_FORK:
+                        identities = process_fork_identities(occurrence)
+                        anchors = (occurrence.timestamp,)
+                    elif occurrence.event_type is EventKind.PROCESS_EXEC:
+                        identities = process_exec_identities(occurrence)
+                        # The exact target image may be retained when its child
+                        # is admitted, before that child's first exec. Bind this
+                        # earlier anchor to the identical fork identity, never
+                        # to an unrelated cohort member or a later replacement.
+                        anchors = (
+                            occurrence.timestamp,
+                            *(
+                                member.occurrence.timestamp
+                                for member in record.trusted_projections
+                                if member.occurrence.event_type is EventKind.PROCESS_FORK
+                                and process_fork_identities(member.occurrence)[1] == identities[0]
+                            ),
+                        )
+                    else:
+                        return False
+                    return retained.observed_at in anchors and any(
+                        self._process_owns_runtime_exec_content(identity, retained.record)
+                        for identity in identities
+                    )
+
+                if not registry.authenticates_prepared_retention(token) or not any(
+                    owns_retention(projection) for projection in record.trusted_projections
+                ):
+                    raise EventContractError(
+                        "Exact Mac process cohort lost authenticated image, script or file content"
+                    )
+            return
+        occurrence = record.trusted_projections[0].occurrence
+        registry = record.artifact_registry
+        if (
+            record.exact_projection_kind not in {"posix_exec", "posix_fork"}
+            or not 1
+            <= len(publications)
+            <= (2 if record.exact_projection_kind == "posix_fork" else 4)
+            or registry is None
+            or occurrence.src_host is None
+            or occurrence.src_host.os_category != "macos"
+        ):
+            raise EventContractError(
+                "Exact artifact participation requires bounded Mac exec or fork content"
+            )
+        before, after = (
+            process_fork_identities(occurrence)
+            if record.exact_projection_kind == "posix_fork"
+            else process_exec_identities(occurrence)
+        )
+        for token in publications:
+            if (
+                not registry.authenticates_prepared_retention(token)
+                or token.observed_at != occurrence.timestamp
+                or not any(
+                    self._process_owns_runtime_exec_content(identity, token.record)
+                    for identity in (before, after)
+                )
+            ):
+                raise EventContractError(
+                    "Exact process retention requires its authenticated existing image or script"
+                )
+
     def _initialize_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -8124,6 +9579,29 @@ class EventDispatcher:
     ) -> None:
         """Validate one closed State-backed member and issue its private exact batch."""
 
+        if record.exact_projection and len(record.trusted_projections) > 1:
+            kind = self._require_multi_process_projection(record)
+            if record.artifact_publications:
+                record.exact_projection_kind = kind
+                self._validate_exact_process_retention(record)
+            if (
+                (record.effect_member_bindings and kind != "macos_process_chain")
+                or record.external_effect_links
+                or record.owned_effect_plans
+                or (record.published_provenances and not record.effect_member_bindings)
+            ):
+                raise EventContractError(
+                    "Exact Mac exit group cannot carry unrelated effect owners"
+                )
+            for projection in record.trusted_projections:
+                self._single_ecar_exact_projection_participants(projection)
+            record.exact_projection_kind = kind
+            record.exact_all_suppressed = all(
+                self._ecar_projection_is_exact_omission(item) for item in record.trusted_projections
+            )
+            cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
+            record.exact_publication_batch = cleanup_record.exact_publication_batch
+            return
         if (
             not record.exact_projection
             or len(record.trusted_projections) != 1
@@ -8135,20 +9613,41 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         record.exact_projection_kind = exact_kind
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
+        if exact_kind == "macos_filesystem":
+            self._single_ecar_exact_projection_participants(projection)
+            record.exact_all_suppressed = self._ecar_projection_is_exact_omission(projection)
+            cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
+            record.exact_publication_batch = cleanup_record.exact_publication_batch
+            return
+        terminal_kind = exact_kind in {
+            "posix_exec",
+            "posix_fork",
+            "posix_exit",
+            "process_credentials",
+            "process_job_control",
+        } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
-                self._linux_sudo_terminal_projection_is_exact_omission(projection)
-                if exact_kind.startswith("linux_sudo_")
+                self._ecar_projection_is_exact_omission(projection)
+                if exact_kind
+                in {
+                    "posix_exec",
+                    "posix_fork",
+                    "posix_exit",
+                    "process_credentials",
+                    "process_job_control",
+                }
+                or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
             )
         )
+        if record.artifact_publications:
+            self._validate_exact_process_retention(record)
         if (
-            record.artifact_publications
-            or record.effect_member_bindings
+            record.effect_member_bindings
             or record.external_effect_links
             or record.owned_effect_plans
             or record.published_provenances
@@ -8164,37 +9663,155 @@ class EventDispatcher:
             self._ssh_terminal_exact_projection_participants(projection)
         elif exact_kind.startswith("rdp_"):
             self._rdp_terminal_exact_projection_participants(projection)
-        elif exact_kind.startswith("linux_sudo_"):
-            self._linux_sudo_terminal_exact_projection_participants(projection)
+        elif exact_kind in {
+            "posix_exec",
+            "posix_fork",
+            "posix_exit",
+            "process_credentials",
+            "process_job_control",
+        } or exact_kind.startswith("linux_sudo_"):
+            self._single_ecar_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
         record.exact_publication_batch = cleanup_record.exact_publication_batch
+
+    @staticmethod
+    def _es_native_rows(record: _PreparedActionCohortBatchRecord) -> tuple[str, ...]:
+        """Select frozen native rows or unsequenced source-ingress snapshots."""
+        if record.es_ingress is not None:
+            record.es_ingress.owner.validate(record.es_ingress, record.state_plan.publication_token)
+            return record.es_ingress.encoded
+        if record.es_native_sink is None:
+            return ()
+        from evidenceforge.generation.macos_es_native_sink import validate_es_native_sink
+
+        validate_es_native_sink(record.es_native_sink)
+        if record.es_delivery is None or record.es_native_projection is None:
+            raise EventContractError("Native sink lost its authenticated frozen delivery")
+        observations = (
+            record.es_delivery.observations
+            if type(record.es_delivery) is ESDeliveryBatchPreparation
+            else (record.es_delivery.observation,)
+        )
+        if type(record.es_delivery) is ESDeliveryBatchPreparation:
+            assert record.es_registry is not None
+            lines = record.es_registry.retained_native_batch_projection(
+                record.es_delivery, canonical_token=record.state_plan.publication_token
+            )
+            if lines is None:
+                raise EventContractError("Native sink lost its frozen batch")
+        else:
+            lines = (record.es_native_projection,)
+        if len(lines) != len(observations):
+            raise EventContractError("Native sink changed its exact delivery row count")
+        return tuple(
+            line
+            for line, observation in zip(lines, observations, strict=True)
+            if line is not None and observation.status in {"visible", "delayed"}
+        )
+
+    @staticmethod
+    def _stage_es_native_rows(record: _PreparedActionCohortBatchRecord) -> None:
+        """Stage native rows into the same exact journal attempt as sibling sources."""
+        if record.es_ingress is not None:
+            for line in EventDispatcher._es_native_rows(record):
+                record.es_ingress.sink.write(line)
+        elif record.es_native_sink is not None:
+            for line in EventDispatcher._es_native_rows(record):
+                record.es_native_sink.write(line)
 
     def _prepare_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
     ) -> None:
         """Freeze exact sink rows outside every dispatcher and member lock."""
+        from evidenceforge.generation.emitters.base import exact_publication_staged_row_count
 
         batch = record.exact_publication_batch
+        if batch is not None and record.exact_projection_kind in {
+            "macos_exit_group",
+            "macos_process_chain",
+        }:
+            self._require_multi_process_projection(record)
+            participants: list[object] = []
+            for projection in record.trusted_projections:
+                for participant in self._single_ecar_exact_projection_participants(projection):
+                    if not any(existing is participant for existing in participants):
+                        participants.append(participant)
+            if record.es_native_sink is not None:
+                participants.append(record.es_native_sink)
+            if record.es_ingress is not None:
+                participants.append(record.es_ingress.sink)
+            batch.reserve_participants(tuple(participants))
+
+            def prepare_members() -> tuple[tuple[tuple[str, str], ...], ...]:
+                identifiers: list[tuple[tuple[str, str], ...]] = []
+                for projection in record.trusted_projections:
+                    before = exact_publication_staged_row_count()
+                    member = self._validate_exact_projection_identifiers(
+                        tuple(sorted(self._publish_action_cohort_projection(projection).items()))
+                    )
+                    omitted = self._ecar_projection_is_exact_omission(projection)
+                    count = exact_publication_staged_row_count() - before
+                    if (omitted and (count != 0 or member)) or (not omitted and count <= 0):
+                        raise EventContractError(
+                            "Exact Mac exit group changed a member's row shape"
+                        )
+                    identifiers.append(member)
+                self._stage_es_native_rows(record)
+                return tuple(identifiers)
+
+            prepared = batch.prepare(prepare_members)
+            if type(prepared) is not tuple or len(prepared) != len(record.trusted_projections):
+                raise EventContractError("Exact Mac exit group lost its ordered source results")
+            record.exact_member_identifiers = tuple(
+                self._validate_exact_projection_identifiers(member) for member in prepared
+            )
+            if record.exact_all_suppressed is not (
+                all(
+                    self._ecar_projection_is_exact_omission(item)
+                    for item in record.trusted_projections
+                )
+                and not self._es_native_rows(record)
+            ):
+                raise EventContractError("Exact Mac exit group changed its collection shape")
+            record.exact_prepared_row_count = batch.prepared_row_count
+            return
         if batch is None or len(record.trusted_projections) != 1:
             raise EventContractError("Exact action-cohort batch was not issued")
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         if exact_kind != record.exact_projection_kind:
             raise EventContractError("Exact action-cohort projection kind changed before rendering")
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
+        terminal_kind = exact_kind in {
+            "posix_exec",
+            "posix_fork",
+            "posix_exit",
+            "process_credentials",
+            "process_job_control",
+            "macos_filesystem",
+        } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
             and (
-                self._linux_sudo_terminal_projection_is_exact_omission(projection)
-                if exact_kind.startswith("linux_sudo_")
+                self._ecar_projection_is_exact_omission(projection)
+                if exact_kind
+                in {
+                    "posix_exec",
+                    "posix_fork",
+                    "posix_exit",
+                    "process_credentials",
+                    "process_job_control",
+                    "macos_filesystem",
+                }
+                or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
             )
         )
+        exact_all_suppressed = exact_all_suppressed and not self._es_native_rows(record)
         if exact_all_suppressed is not record.exact_all_suppressed:
             raise EventContractError("Exact terminal warm-up suppression changed before rendering")
         participants = (
@@ -8204,14 +9821,31 @@ class EventDispatcher:
             if exact_kind.startswith("ssh_")
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
-            else self._linux_sudo_terminal_exact_projection_participants(projection)
-            if exact_kind.startswith("linux_sudo_")
+            else self._single_ecar_exact_projection_participants(projection)
+            if exact_kind
+            in {
+                "posix_exec",
+                "posix_fork",
+                "posix_exit",
+                "process_credentials",
+                "process_job_control",
+                "macos_filesystem",
+            }
+            or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
+        if record.es_native_sink is not None:
+            participants = (*participants, record.es_native_sink)
+        if record.es_ingress is not None:
+            participants = (*participants, record.es_ingress.sink)
         batch.reserve_participants(cast(tuple[object, ...], participants))
-        prepared_result = batch.prepare(
-            lambda: tuple(sorted(self._publish_action_cohort_projection(projection).items()))
-        )
+
+        def prepare_single() -> tuple[tuple[str, str], ...]:
+            identifiers = tuple(sorted(self._publish_action_cohort_projection(projection).items()))
+            self._stage_es_native_rows(record)
+            return identifiers
+
+        prepared_result = batch.prepare(prepare_single)
         record.exact_prepared_identifiers = self._validate_exact_projection_identifiers(
             prepared_result
         )
@@ -8437,18 +10071,30 @@ class EventDispatcher:
         expected: object,
         terminal_authenticates: Callable[[], bool],
         label: str,
+        deferred_interrupts: list[BaseException] | None = None,
+        retry_uncommitted: Callable[[], bool] | None = None,
     ) -> None:
-        """Adopt only an exact terminal receipt after a canonical lost return."""
+        """Adopt an exact terminal receipt, optionally deferring user interruption."""
 
         try:
             returned = operation()
-        except BaseException:
+        except BaseException as error:
             try:
                 adopted = terminal_authenticates()
             except BaseException:
                 adopted = False
             if not adopted:
-                raise
+                if retry_uncommitted is None or not retry_uncommitted():
+                    raise
+                EventDispatcher._commit_exact_expected_owner(
+                    operation,
+                    expected=expected,
+                    terminal_authenticates=terminal_authenticates,
+                    label=label,
+                    deferred_interrupts=deferred_interrupts,
+                )
+            if deferred_interrupts is not None and not isinstance(error, Exception):
+                deferred_interrupts.append(error)
             return
         try:
             authentic = terminal_authenticates()
@@ -8776,6 +10422,85 @@ class EventDispatcher:
         *,
         owned_effect_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
         exact_projection: bool = False,
+        service_closure: ActionCohortServiceClosure | None = None,
+        es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None,
+        es_collector_process: ProcessIdentity | None = None,
+        es_native_sink: ExternalSortedLineWriter | None = None,
+        es_ingress: PreparedESIngress | None = None,
+    ) -> PreparedActionCohortBatch:
+        """Select native observations of exact canonical process cohorts before publication."""
+        from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+
+        options = dict(
+            owned_effect_plans=owned_effect_plans,
+            exact_projection=exact_projection,
+            service_closure=service_closure,
+            es_delivery=es_delivery,
+            es_collector_process=es_collector_process,
+            es_native_sink=es_native_sink,
+            es_ingress=es_ingress,
+        )
+        if (
+            exact_projection is True
+            and es_delivery is None
+            and es_collector_process is None
+            and es_native_sink is None
+            and es_ingress is None
+            and type(state_plan) is ActionCohortMaterializationPlan
+            and type(dispatches) is tuple
+            and dispatches
+            and all(type(item) is PreparedDispatch for item in dispatches)
+        ):
+            from evidenceforge.generation.macos_es_publication import (
+                prepared_macos_es_process_publication,
+            )
+
+            with prepared_macos_es_process_publication(
+                self, state_plan, tuple(item._occurrence for item in dispatches)
+            ) as native:
+                if native is not None and native.ingress is not None:
+                    options.update(es_ingress=native.ingress)
+                elif native is not None:
+                    options.update(
+                        es_delivery=native.delivery,
+                        es_collector_process=native.collector,
+                        es_native_sink=native.sink,
+                    )
+                return self._prepare_action_cohort_batch(
+                    root_action_id,
+                    state_plan,
+                    dispatches,
+                    audit_entries,
+                    effect_member_bindings,
+                    external_effect_links,
+                    **options,
+                )
+        return self._prepare_action_cohort_batch(
+            root_action_id,
+            state_plan,
+            dispatches,
+            audit_entries,
+            effect_member_bindings,
+            external_effect_links,
+            **options,
+        )
+
+    def _prepare_action_cohort_batch(
+        self,
+        root_action_id: str,
+        state_plan: ActionCohortMaterializationPlan,
+        dispatches: tuple[PreparedDispatch, ...],
+        audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...],
+        effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...],
+        external_effect_links: tuple[ActionCohortExternalEffectLink, ...],
+        *,
+        owned_effect_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
+        exact_projection: bool = False,
+        service_closure: ActionCohortServiceClosure | None = None,
+        es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None,
+        es_collector_process: ProcessIdentity | None = None,
+        es_native_sink: ExternalSortedLineWriter | None = None,
+        es_ingress: PreparedESIngress | None = None,
     ) -> PreparedActionCohortBatch:
         """Prepare one bounded all-owner action cohort without canonical mutation."""
 
@@ -8796,6 +10521,18 @@ class EventDispatcher:
 
         if type(exact_projection) is not bool:
             raise EventContractError("Action-cohort exact projection opt-in must be an exact bool")
+        if es_native_sink is not None:
+            from evidenceforge.generation.macos_es_native_sink import validate_es_native_sink
+
+            validate_es_native_sink(es_native_sink)
+        if (
+            (es_delivery is None) != (es_collector_process is None)
+            or (es_native_sink is not None and es_delivery is None)
+            or (es_delivery is not None and not exact_projection)
+        ):
+            raise EventContractError(
+                "Native sink preparation requires exact collector and delivery ownership"
+            )
 
         if type(root_action_id) is not str or not root_action_id.strip():
             raise EventContractError("Action-cohort batch requires a non-empty root action ID")
@@ -8984,7 +10721,9 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort timing still owns unbound projection preflights"
                 )
-        self._validate_action_cohort_dispatch_coverage(state_plan, dispatches)
+        self._validate_action_cohort_dispatch_coverage(
+            state_plan, dispatches, root_action_id=root_action_id
+        )
 
         published_provenances: list[EffectOccurrenceProvenance] = []
         for prepared in dispatches:
@@ -9033,10 +10772,80 @@ class EventDispatcher:
             owned_effect_plans=owned_effect_plans,
         )
 
-        observation_deltas = tuple(
-            delta
+        if es_ingress is not None:
+            if self.macos_es_ingress is None or es_delivery is not None or not exact_projection:
+                raise EventContractError("Ordered ES ingress requires its exact source owner")
+            self.macos_es_ingress.validate(es_ingress, state_plan.publication_token)
+            expected = {
+                self._es_process_occurrence(item._occurrence)[0]: item._occurrence
+                for item in dispatches
+                if (
+                    item._occurrence.event_type
+                    in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                    or (
+                        item._occurrence.file is not None
+                        and item._occurrence.file.macos_operation is not None
+                    )
+                )
+            }
+            for row in es_ingress.rows:
+                occurrence = expected.get(row.occurrence_id)
+                if (
+                    occurrence is None
+                    or occurrence.timestamp != row.observed_at
+                    or occurrence.src_host != row.host
+                ):
+                    raise EventContractError(
+                        "ES ingress snapshot is not a member of its canonical cohort"
+                    )
+        native_observations: tuple[ESCollectorObservation, ...] = ()
+        if es_delivery is not None:
+            if type(es_delivery) is ESDeliveryPreparation:
+                native_observations = (es_delivery.observation,)
+            elif type(es_delivery) is ESDeliveryBatchPreparation:
+                native_observations = es_delivery.observations
+            else:
+                raise EventContractError("Native source reporting requires an exact delivery")
+        observation_deltas_by_member = tuple(
+            self._action_cohort_projection_observation_deltas(prepared._projection)
+            + tuple(
+                _ActionCohortObservationDelta(
+                    cluster_id=prepared._occurrence.storyline_cluster_id,
+                    source="macos_endpoint_security",
+                    status=observation.status,
+                    timestamp=observation.observed_at,
+                )
+                for observation in native_observations
+                if prepared._occurrence.storyline_cluster_id
+                and prepared._occurrence.event_type
+                in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                and observation.observed_at == prepared._occurrence.timestamp
+                and observation.occurrence_id
+                == self._es_process_occurrence(prepared._occurrence)[0]
+            )
+            + tuple(
+                _ActionCohortObservationDelta(
+                    cluster_id=prepared._occurrence.storyline_cluster_id,
+                    source="macos_endpoint_security",
+                    status=row.status,
+                    timestamp=row.observed_at,
+                )
+                for row in (es_ingress.rows if es_ingress is not None else ())
+                if prepared._occurrence.storyline_cluster_id
+                and (
+                    prepared._occurrence.event_type
+                    in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+                    or (
+                        prepared._occurrence.file is not None
+                        and prepared._occurrence.file.macos_operation is not None
+                    )
+                )
+                and row.occurrence_id == self._es_process_occurrence(prepared._occurrence)[0]
+            )
             for prepared in dispatches
-            for delta in self._action_cohort_projection_observation_deltas(prepared._projection)
+        )
+        observation_deltas = tuple(
+            delta for member in observation_deltas_by_member for delta in member
         )
         observation_digest = self._action_cohort_observation_digest(observation_deltas)
 
@@ -9048,7 +10857,9 @@ class EventDispatcher:
                     "Attributed action-cohort batch requires the bound intent ledger"
                 )
             intent_deltas: list[IntentOccurrenceDelta | IntentObservationDelta] = []
-            for prepared in dispatches:
+            for prepared, member_observations in zip(
+                dispatches, observation_deltas_by_member, strict=True
+            ):
                 intent_deltas.append(
                     IntentOccurrenceDelta(
                         authored_intent_id,
@@ -9063,13 +10874,24 @@ class EventDispatcher:
                         delta.status,
                         delta.timestamp,
                     )
-                    for delta in self._action_cohort_projection_observation_deltas(
-                        prepared._projection
-                    )
+                    for delta in member_observations
                 )
             intent_request = IntentExecutionBatchRequest(tuple(intent_deltas))
 
-        lifecycle_request = authority.action_cohort_request(state_plan)
+        if service_closure is not None:
+            if type(service_closure) is not ActionCohortServiceClosure or not exact_projection:
+                raise EventContractError("Service closure requires an exact terminal publication")
+            authority.validate_process_group_service_closure(
+                state_plan,
+                service_closure.group,
+                service_closure.request,
+                close_group=service_closure.close_group,
+            )
+            if any(item._occurrence.src_host.os_category != "macos" for item in dispatches):
+                raise EventContractError("Service terminal publication requires Mac processes")
+            lifecycle_request = service_closure.request
+        else:
+            lifecycle_request = authority.action_cohort_request(state_plan)
         retained_bytes = self._action_cohort_batch_retained_size(
             state_plan,
             dispatches,
@@ -9083,6 +10905,8 @@ class EventDispatcher:
             observation_deltas,
             intent_request,
         )
+        if es_ingress is not None:
+            retained_bytes += sum(len(row.encode("utf-8")) for row in es_ingress.encoded)
         with self._action_cohort_lock:
             if (
                 len(self._action_cohort_batches)
@@ -9141,14 +10965,20 @@ class EventDispatcher:
             self._action_cohort_retained_members += len(dispatches)
             self._action_cohort_retained_bytes += retained_bytes
 
-        lifecycle_token: LifecycleActionCohortAdmissionToken | None = None
+        lifecycle_token: (
+            LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken | None
+        ) = None
         audit_preparation: PreparedExecutionEffectAuditCommit | None = None
         intent_token: IntentExecutionBatchToken | None = None
         assigned_batch_id: int | None = None
         installed_record: _PreparedActionCohortBatchRecord | None = None
         carrier: PreparedActionCohortBatch | None = None
         try:
-            lifecycle_token = authority.prepare_action_cohort(state_plan)
+            lifecycle_token = (
+                authority.registry.prepare_service_process_closure(lifecycle_request)
+                if service_closure is not None
+                else authority.prepare_action_cohort(state_plan)
+            )
             cleanup_record.lifecycle_token = lifecycle_token
             if lifecycle_token.request != lifecycle_request:
                 raise EventContractError(
@@ -9257,6 +11087,8 @@ class EventDispatcher:
                     source_timing_preparation=timing_preparation,
                     lifecycle_request=lifecycle_request,
                     lifecycle_token=lifecycle_token,
+                    service_closure=service_closure,
+                    es_ingress=es_ingress,
                     audit_entries=audit_entries,
                     effect_member_bindings=effect_member_bindings,
                     external_effect_links=external_effect_links,
@@ -9288,6 +11120,19 @@ class EventDispatcher:
                 )
                 if exact_projection:
                     self._initialize_action_cohort_exact_projection(record, cleanup_record)
+                    if record.es_ingress is not None:
+                        record.exact_all_suppressed = False
+                    if record.exact_projection_kind in {
+                        "posix_exit",
+                        "macos_exit_group",
+                        "macos_process_chain",
+                        "posix_exec",
+                    }:
+                        closure_bytes = self._prepare_action_cohort_es_closures(record)
+                        retained_bytes += closure_bytes
+                        cleanup_record.retained_bytes += closure_bytes
+                else:
+                    self._validate_action_cohort_es_closures(record)
                 integrity = self._action_cohort_batch_integrity(carrier, record)
                 carrier._integrity_token = integrity
                 record.integrity_token = integrity
@@ -9310,6 +11155,14 @@ class EventDispatcher:
                         raise
             if installed_record is None or carrier is None:
                 raise EventContractError("Action-cohort batch installation was incomplete")
+            if es_delivery is not None:
+                assert es_collector_process is not None
+                self._bind_preparing_es_delivery(
+                    installed_record, es_delivery, es_collector_process
+                )
+                installed_record.es_native_sink = es_native_sink
+                if self._es_native_rows(installed_record):
+                    installed_record.exact_all_suppressed = False
             if exact_projection:
                 self._prepare_action_cohort_exact_projection(installed_record)
                 exact_integrity = self._action_cohort_batch_integrity(carrier, installed_record)
@@ -9452,13 +11305,13 @@ class EventDispatcher:
             record.lifecycle_cleanup_complete = True
         elif not record.lifecycle_cleanup_complete:
             try:
-                record.lifecycle_authority.registry.cancel_action_cohort(record.lifecycle_token)
+                self._cancel_action_cohort_lifecycle(
+                    record.lifecycle_authority, record.lifecycle_token
+                )
             except BaseException as exc:
                 try:
-                    still_active = record.lifecycle_authority.registry.authenticates_action_cohort_admission_token(
-                        record.lifecycle_token,
-                        request=record.lifecycle_request,
-                        state_publication_token=record.lifecycle_request.state_publication_token,
+                    still_active = self._action_cohort_lifecycle_admission_authenticates(
+                        record.lifecycle_authority, record.lifecycle_token, record.lifecycle_request
                     )
                 except BaseException:
                     still_active = True
@@ -9614,12 +11467,76 @@ class EventDispatcher:
             raise EventContractError("Action-cohort batch integrity validation failed")
         return record
 
+    @staticmethod
+    def _cancel_action_cohort_lifecycle(
+        authority: GeneratorLifecycleAuthority,
+        token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken,
+    ) -> None:
+        from evidenceforge.generation.lifecycle_registry import (
+            LifecycleServiceClosureAdmissionToken,
+        )
+
+        if type(token) is LifecycleServiceClosureAdmissionToken:
+            authority.registry.cancel_service_process_closure(token)
+        else:
+            authority.registry.cancel_action_cohort(token)
+
+    @staticmethod
+    def _action_cohort_lifecycle_admission_authenticates(
+        authority: GeneratorLifecycleAuthority,
+        token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken,
+        request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest,
+    ) -> bool:
+        from evidenceforge.generation.lifecycle_registry import (
+            LifecycleServiceProcessClosureRequest,
+        )
+
+        if type(request) is LifecycleServiceProcessClosureRequest:
+            return authority.registry.authenticates_service_closure_admission_token(
+                token, request=request
+            )
+        return authority.registry.authenticates_action_cohort_admission_token(
+            token, request=request, state_publication_token=request.state_publication_token
+        )
+
+    def _action_cohort_lifecycle_result_authenticates(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        *,
+        expected: bool,
+    ) -> bool:
+        authority = self._lifecycle_authority
+        if authority is None:
+            return False
+        registry = authority.registry
+        receipt = record.expected_lifecycle_receipt
+        if record.service_closure is not None:
+            if expected:
+                return registry.authenticates_expected_service_closure_receipt(
+                    receipt, preparation=record.lifecycle_claimed
+                )
+            return registry.authenticates_service_process_closure_receipt(
+                receipt, request=record.lifecycle_request
+            )
+        if expected:
+            return registry.authenticates_expected_action_cohort_receipt(
+                receipt, state_publication_token=record.state_plan.publication_token
+            )
+        return registry.authenticates_action_cohort_receipt(
+            receipt,
+            request=record.lifecycle_request,
+            state_publication_token=record.state_plan.publication_token,
+        )
+
     def _action_cohort_batch_record_authenticates(
         self,
         record: _PreparedActionCohortBatchRecord,
     ) -> bool:
         """Check retained owner identities and lifecycle states without graph hashing."""
 
+        if record.es_delivery is not None:
+            self._validate_action_cohort_es_delivery(record)
+        self._validate_action_cohort_es_closures(record)
         authority = self._lifecycle_authority
         if authority is None or self._execution_effect_audit is not record.execution_effect_audit:
             return False
@@ -9627,17 +11544,37 @@ class EventDispatcher:
             if (
                 record.exact_publication_batch is None
                 or record.exact_publication_batch.state != "ready"
-                or len(record.trusted_projections) != 1
+                or (
+                    len(record.trusted_projections) != 1
+                    and record.exact_projection_kind
+                    not in {"macos_exit_group", "macos_process_chain"}
+                )
             ):
                 return False
+            if record.exact_projection_kind in {"macos_exit_group", "macos_process_chain"}:
+                self._require_multi_process_projection(record)
         elif record.exact_publication_batch is not None:
             return False
         if not self.state_manager.authenticates_action_cohort_plan(record.state_plan):
             return False
         self.state_manager.validate_action_cohort_materialization(record.state_plan)
-        if authority.action_cohort_request(record.state_plan) != record.lifecycle_request:
-            return False
-        if not authority.authenticates_action_cohort_binding(
+        if record.service_closure is not None:
+            closure = record.service_closure
+            if (
+                type(closure) is not ActionCohortServiceClosure
+                or closure.request is not record.lifecycle_request
+            ):
+                return False
+            authority.validate_process_group_service_closure(
+                record.state_plan, closure.group, closure.request, close_group=closure.close_group
+            )
+            if not self._action_cohort_lifecycle_admission_authenticates(
+                authority, record.lifecycle_token, record.lifecycle_request
+            ):
+                return False
+        elif authority.action_cohort_request(
+            record.state_plan
+        ) != record.lifecycle_request or not authority.authenticates_action_cohort_binding(
             record.state_plan, record.lifecycle_token
         ):
             return False
@@ -9817,6 +11754,592 @@ class EventDispatcher:
         except BaseException:
             return False
 
+    def _prepare_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> int:
+        """Retain explicit clients whose execution terminates or is replaced."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        requests, processes = ESCollectionActionOwner(
+            self.state_manager, self.es_collectors
+        ).process_execution_closures(record.state_plan)
+        if not requests:
+            return 0
+        size = sum(len(item.model_dump_json().encode("utf-8")) for item in requests)
+        with self._action_cohort_lock:
+            if (
+                self._action_cohort_retained_bytes
+                + self._action_cohort_projection_retained_bytes
+                + size
+                > self._action_cohort_byte_capacity
+            ):
+                raise EventContractError(
+                    "Collector disconnects exceed action-cohort retained capacity"
+                )
+            self._action_cohort_retained_bytes += size
+        record.retained_bytes += size
+        record.es_closure_requests = requests
+        record.es_closure_processes = processes
+        record.es_closure_registry = self.es_collectors
+        return size
+
+    def _validate_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> None:
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        if record.exact_projection_kind not in {
+            "posix_exit",
+            "macos_exit_group",
+            "macos_process_chain",
+            "posix_exec",
+        }:
+            if (
+                record.es_closure_requests
+                or record.es_closure_processes
+                or record.es_closure_registry is not None
+            ):
+                raise EventContractError("Collector disconnects require exact process publication")
+            if record.state_plan.process_executions:
+                requests, _ = ESCollectionActionOwner(
+                    self.state_manager, self.es_collectors
+                ).process_execution_closures(record.state_plan)
+                if requests:
+                    raise EventContractError(
+                        "Collector-attached exec requires exact process publication"
+                    )
+            return
+
+        requests, processes = ESCollectionActionOwner(
+            self.state_manager, self.es_collectors
+        ).process_execution_closures(record.state_plan)
+        if (
+            requests != record.es_closure_requests
+            or processes != record.es_closure_processes
+            or (requests and record.es_closure_registry is not self.es_collectors)
+        ):
+            raise EventContractError(
+                "Process execution collector connections changed after preparation"
+            )
+
+    @staticmethod
+    def _finalize_action_cohort_es_closures(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> tuple[ESCollectorState, ...]:
+        assert record.es_closures_claimed is not None
+        record.es_closures_claimed.finalize_no_fail()
+        return record.es_closures_result
+
+    def _bind_preparing_es_delivery(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+        collector: ProcessIdentity,
+    ) -> None:
+        """Bind source ownership before the private exact journal starts rendering."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
+        claim = (
+            owner.prepared_batch_commit(delivery, collector)
+            if type(delivery) is ESDeliveryBatchPreparation
+            else owner.prepared_commit(delivery, collector)
+        )
+        with claim:
+            native = self._validate_action_cohort_es_values(
+                record, self.es_collectors, delivery, collector
+            )
+            size = len(native.encode("utf-8"))
+            with self._action_cohort_lock:
+                if (
+                    record.state != "prepared"
+                    or record.es_delivery is not None
+                    or record.exact_publication_batch is None
+                    or record.exact_publication_batch.state != "issued"
+                    or self._action_cohort_retained_bytes
+                    + self._action_cohort_projection_retained_bytes
+                    + size
+                    > self._action_cohort_byte_capacity
+                ):
+                    raise EventContractError(
+                        "Native journal binding lost its preparing owner or capacity"
+                    )
+                record.es_registry = self.es_collectors
+                record.es_delivery = delivery
+                record.es_collector_process = collector
+                record.es_native_projection = native
+                record.es_cleanup_complete = False
+                record.retained_bytes += size
+                self._action_cohort_retained_bytes += size
+
+    def bind_es_delivery_to_action_cohort(
+        self,
+        batch: PreparedActionCohortBatch,
+        *,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+        collector_process: ProcessIdentity,
+    ) -> None:
+        """Join frozen native deliveries to an exact Mac process transaction.
+
+        This binds counters and retained native bytes, not a native output sink.
+        Single fork/exec/exit or bounded exit groups; the dispatcher still owns
+        canonical state, lifecycle, artifact leases and existing source recovery.
+        Once bound, batch cancellation also owns the collector reservation.
+        """
+        if (
+            type(delivery) not in (ESDeliveryPreparation, ESDeliveryBatchPreparation)
+            or type(collector_process) is not ProcessIdentity
+        ):
+            raise EventContractError(
+                "Action-cohort ES binding requires exact delivery and collector"
+            )
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        with self._action_cohort_lock:
+            record = self._active_action_cohort_batch_locked(batch)
+            if record.es_delivery is not None:
+                raise EventContractError("Action-cohort already owns an ES delivery")
+        if not self._action_cohort_batch_record_authenticates(record):
+            raise EventContractError(
+                "Action-cohort ES binding requires an authenticated prepared batch"
+            )
+        owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
+        claim = (
+            owner.prepared_batch_commit(delivery, collector_process)
+            if type(delivery) is ESDeliveryBatchPreparation
+            else owner.prepared_commit(delivery, collector_process)
+        )
+        with claim:
+            native = self._validate_action_cohort_es_values(
+                record, self.es_collectors, delivery, collector_process
+            )
+            retained_bytes = len(native.encode("utf-8"))
+            with self._action_cohort_lock:
+                if (
+                    self._active_action_cohort_batch_locked(batch) is not record
+                    or record.es_delivery is not None
+                ):
+                    raise EventContractError("Action-cohort changed during ES binding")
+                if (
+                    self._action_cohort_retained_bytes
+                    + self._action_cohort_projection_retained_bytes
+                    + retained_bytes
+                    > self._action_cohort_byte_capacity
+                ):
+                    raise EventContractError(
+                        "Action-cohort ES native bytes exceed retained capacity"
+                    )
+                record.es_registry = self.es_collectors
+                record.es_delivery = delivery
+                record.es_collector_process = collector_process
+                record.es_native_projection = native
+                record.es_cleanup_complete = False
+                record.retained_bytes += retained_bytes
+                self._action_cohort_retained_bytes += retained_bytes
+
+    def _validate_action_cohort_es_values(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+        collector: ProcessIdentity,
+    ) -> str:
+        """Require exact occurrence, State and source-counter ownership before mutation."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        if type(delivery) is ESDeliveryBatchPreparation:
+            return self._validate_action_cohort_es_batch_values(
+                record, registry, delivery, collector
+            )
+        expected_type = {"posix_fork": 11, "posix_exec": 9, "posix_exit": 15}.get(
+            record.exact_projection_kind
+        )
+        # A fork-only source may observe the birth in an atomic fork/exec
+        # command. The canonical exec still belongs to this exact journal; it
+        # does not authorize a native exec projection or consume its counter.
+        fork_only_chain = (
+            record.exact_projection_kind == "macos_process_chain"
+            and len(record.member_occurrences) == 2
+            and record.member_occurrences[0].event_type is EventKind.PROCESS_FORK
+            and record.member_occurrences[1].event_type is EventKind.PROCESS_EXEC
+            and len(record.state_plan.processes) == 1
+            and len(record.state_plan.process_executions) == 1
+            and not record.state_plan.process_terminations
+        )
+        if fork_only_chain:
+            self._require_multi_process_projection(record)
+            connection = registry.connection(delivery.observation.source_instance)
+            if connection is None or {item.event_type for item in connection.event_counters} != {
+                11
+            }:
+                raise EventContractError(
+                    "A partial native process chain requires a fork-only client"
+                )
+            expected_type = 11
+        gui_exec_chain = (
+            record.exact_projection_kind == "macos_process_chain"
+            and len(record.member_occurrences) == 2
+            and record.member_occurrences[0].event_type is EventKind.PROCESS_CREATE
+            and record.member_occurrences[1].event_type is EventKind.PROCESS_EXEC
+            and len(record.state_plan.processes) == 1
+            and len(record.state_plan.process_executions) == 1
+            and record.state_plan.process_executions[0].gui_session is not None
+            and not record.state_plan.process_terminations
+        )
+        if gui_exec_chain:
+            self._require_multi_process_projection(record)
+            expected_type = 9
+        if (
+            registry is not self.es_collectors
+            or not record.exact_projection
+            or expected_type is None
+            or (len(record.member_occurrences) != 1 and not fork_only_chain and not gui_exec_chain)
+            or not registry.authenticates_pending_delivery(delivery)
+        ):
+            raise EventContractError(
+                "ES binding requires one exact Mac fork, exec or exit delivery"
+            )
+        event = record.member_occurrences[1 if gui_exec_chain else 0]
+        observation = delivery.observation
+        if (
+            event.src_host is None
+            or event.src_host.os_category != "macos"
+            or observation.hostname != event.src_host.hostname
+            or observation.occurrence_id
+            != (
+                self._es_process_occurrence(event)[0]
+                if fork_only_chain or gui_exec_chain
+                else record.root_action_id
+            )
+            or observation.event_type != expected_type
+            or observation.observed_at != event.timestamp
+            or collector.hostname != observation.hostname
+        ):
+            raise EventContractError(
+                "ES binding disagrees with its exact canonical process occurrence"
+            )
+        owner = ESCollectionActionOwner(self.state_manager, registry)
+        owner.validate_observing_cohort(
+            record.state_plan, collector, observed_at=observation.observed_at
+        )
+        expected_collector = owner._live_process(collector, observation.observed_at)
+        if observation.collector_process != expected_collector:
+            raise EventContractError("ES binding lost its exact collector execution")
+        native = registry.retained_native_projection(delivery)
+        if native is None:
+            if self._counter_only_es_delivery(registry, delivery):
+                return ""
+            raise EventContractError(
+                "ES binding requires frozen native bytes before canonical publication"
+            )
+        native = registry.retained_native_projection(
+            delivery, canonical_token=record.state_plan.publication_token
+        )
+        self._validate_action_cohort_es_file_placements(
+            record, (native,), events=(event,), observations=(observation,)
+        )
+        return native
+
+    @staticmethod
+    def _counter_only_es_delivery(
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+    ) -> bool:
+        """Allow no native bytes only for nonexported observations of the bounded v11 source.
+
+        The ordinary collector claim authenticates counters and exact occurrence
+        IDs. No source bytes or native metadata are asserted in this case. State
+        and the full canonical cohort are still authenticated by the caller.
+        """
+        observations = (
+            delivery.observations
+            if type(delivery) is ESDeliveryBatchPreparation
+            else (delivery.observation,)
+        )
+        if not observations or any(
+            observation.status in {"visible", "delayed"} for observation in observations
+        ):
+            return False
+        connection = registry.connection(observations[0].source_instance)
+        if connection is None or connection.source_profile is None:
+            return False
+        from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
+            load_macos_endpoint_security_profile,
+        )
+
+        profile = load_macos_endpoint_security_profile(
+            profile_id=connection.source_profile.profile_id
+        )
+        return (
+            profile is not None
+            and profile.message_version == connection.source_profile.message_version == 11
+        )
+
+    @staticmethod
+    def _es_process_occurrence(event: CanonicalOccurrence) -> tuple[str, int]:
+        """Use the canonical process transition's exact native occurrence key."""
+        from evidenceforge.events.process import (
+            process_exec_identities,
+            process_exit_identity,
+            process_fork_identities,
+        )
+
+        if event.file is not None and event.file.macos_operation is not None:
+            from evidenceforge.generation.macos_es_file_publication import file_occurrence
+
+            return file_occurrence(event)
+        if event.event_type is EventKind.PROCESS_FORK:
+            _, identity = process_fork_identities(event)
+            return f"process-fork:{identity.object_id}", 11
+        if event.event_type is EventKind.PROCESS_EXEC:
+            _, identity = process_exec_identities(event)
+            return f"process-exec:{identity.execution_id}", 9
+        identity = process_exit_identity(event)
+        return f"process-exit:{identity.object_id}", 15
+
+    def _validate_action_cohort_es_batch_values(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryBatchPreparation,
+        collector: ProcessIdentity,
+    ) -> str:
+        """Match every available frozen delivery to its exact canonical cohort member."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        owner = ESCollectionActionOwner(self.state_manager, registry)
+        boundary = owner.observing_execution_boundary(record.state_plan, collector)
+        events = tuple(
+            event
+            for event in record.member_occurrences
+            if event.event_type
+            in {EventKind.PROCESS_FORK, EventKind.PROCESS_EXEC, EventKind.PROCESS_TERMINATE}
+            and (boundary is None or event.timestamp < boundary)
+        )
+        if (
+            registry is not self.es_collectors
+            or not record.exact_projection
+            or record.exact_projection_kind not in {"macos_exit_group", "macos_process_chain"}
+            or not registry.authenticates_pending_batch(delivery)
+            or len(delivery.observations) != len(events)
+        ):
+            raise EventContractError(
+                "ES batch binding requires one exact Mac process cohort or terminal group"
+            )
+        self._require_multi_process_projection(record)
+        for event, observation in zip(events, delivery.observations, strict=True):
+            occurrence_id, event_type = self._es_process_occurrence(event)
+            identity = event.identity_plan.subject
+            owner.validate_observing_cohort(
+                record.state_plan, collector, observed_at=observation.observed_at
+            )
+            if (
+                observation.hostname != identity.hostname
+                or collector.hostname != identity.hostname
+                or observation.occurrence_id != occurrence_id
+                or observation.event_type != event_type
+                or observation.observed_at != event.timestamp
+                or observation.collector_process != owner._live_process(collector, event.timestamp)
+            ):
+                raise EventContractError("ES batch binding disagrees with its canonical member")
+        native = registry.retained_native_batch_projection(delivery)
+        if native is None:
+            if self._counter_only_es_delivery(registry, delivery):
+                return ""
+            raise EventContractError("ES batch binding requires every frozen native row")
+        native = registry.retained_native_batch_projection(
+            delivery, canonical_token=record.state_plan.publication_token
+        )
+        self._validate_action_cohort_es_file_placements(
+            record, native, events=events, observations=delivery.observations
+        )
+        return "".join(line for line in native if line is not None)
+
+    def _validate_action_cohort_es_file_placements(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        native: tuple[str | None, ...],
+        *,
+        events: tuple[CanonicalOccurrence, ...] | None = None,
+        observations: tuple[ESCollectorObservation, ...],
+    ) -> None:
+        """Validate native counters, execution identity, outcomes and file placements.
+
+        Rendered rows do not trigger actions. Their authenticated projection is
+        checked before binding and again before canonical publication.
+        """
+        from evidenceforge.events.process import (
+            process_exec_identities,
+            process_exit_identity,
+            process_fork_identities,
+        )
+        from evidenceforge.formats.macos_endpoint_security import (
+            ESAuditToken,
+            ESExecEvent,
+            ESExit,
+            ESExitEvent,
+            ESForkEvent,
+            decode_endpoint_security_record,
+        )
+        from evidenceforge.generation.macos_endpoint_security import (
+            project_runtime_es_exec_script,
+            validate_runtime_es_executable_snapshot,
+        )
+
+        try:
+            for event, line, observation in zip(
+                record.member_occurrences if events is None else events,
+                native,
+                observations,
+                strict=True,
+            ):
+                if line is None:
+                    if observation.status in {"visible", "delayed"}:
+                        raise ValueError("Visible ES occurrence has no native record")
+                    continue
+                parsed = decode_endpoint_security_record(line)
+                if (
+                    parsed.event_type != observation.event_type
+                    or parsed.seq_num != observation.seq_num
+                    or parsed.global_seq_num != observation.global_seq_num
+                    or parsed.time
+                    != event.timestamp.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z"
+                ):
+                    raise ValueError(
+                        "Native delivery header changed its canonical counters or event time"
+                    )
+                connection = self.es_collectors.connection(observation.source_instance)
+                if connection is not None and connection.source_profile is not None:
+                    from evidenceforge.generation.timing.macos import MachTimebase
+
+                    source = connection.source_profile
+                    clock = self.state_manager.get_macos_boot_clock(
+                        observation.hostname,
+                        timebase=MachTimebase(
+                            source.timebase_numerator, source.timebase_denominator
+                        ),
+                    )
+                    coverage = self.es_collectors.complete_membership_coverage(observation.hostname)
+                    if (
+                        parsed.version != source.message_version
+                        or parsed.mach_time != clock.ticks_at(observation.observed_at)
+                        or clock.boot_time != source.boot_time
+                        or clock.boot_uuid != source.boot_uuid
+                        or coverage is None
+                        or not coverage.known_from <= observation.observed_at < coverage.known_until
+                    ):
+                        raise ValueError(
+                            "Native source profile changed its wire, clock or inventory window"
+                        )
+                if event.event_type is EventKind.PROCESS_FORK:
+                    _, child = process_fork_identities(event)
+                    birth = next(
+                        item for item in record.state_plan.processes if item.identity == child
+                    )
+                    parent = birth._payload.parent_identity
+                    if parent is None or type(parsed.event) is not ESForkEvent:
+                        raise ValueError("Native fork placement lacks its exact process owners")
+                    views = ((parent, parsed.process), (birth.identity, parsed.event.fork.child))
+                elif event.event_type is EventKind.PROCESS_EXEC:
+                    _, after = process_exec_identities(event)
+                    execution = next(
+                        item for item in record.state_plan.process_executions if item.after == after
+                    )
+                    if type(parsed.event) is not ESExecEvent:
+                        raise ValueError("Native exec placement lacks its exact process owners")
+                    views = (
+                        (execution.target, parsed.process),
+                        (execution.after, parsed.event.exec.target),
+                    )
+                    if parsed.event.exec.script != project_runtime_es_exec_script(
+                        self.local_artifact_registry, execution.after
+                    ):
+                        raise ValueError("Native script placement changed after preparation")
+                else:
+                    if type(parsed.event) is not ESExitEvent:
+                        raise ValueError("Native exit placement lacks its exact process owner")
+                    identity = process_exit_identity(event)
+                    terminal = next(
+                        item
+                        for item in record.state_plan.process_terminations
+                        if item.identity == identity
+                    )
+                    if (
+                        terminal.exit_outcome is None
+                        or parsed.event.exit != ESExit.from_process_exit(terminal.exit_outcome)
+                    ):
+                        raise ValueError(
+                            "Native exit result changed its canonical terminal outcome"
+                        )
+                    views = ((identity, parsed.process),)
+                for process, snapshot in views:
+                    token = ESAuditToken.from_process_identity(process)
+                    expected_token = token.as_native_array() if parsed.version == 10 else token
+                    if snapshot.audit_token != expected_token:
+                        raise ValueError(
+                            "Native process token changed its exact canonical execution"
+                        )
+                    validate_runtime_es_executable_snapshot(
+                        self.local_artifact_registry, process, event.timestamp, snapshot
+                    )
+        except (ValueError, StateError) as error:
+            raise EventContractError(f"Native file placement validation failed: {error}") from error
+
+    @staticmethod
+    def _es_delivery_result(
+        delivery: ESDeliveryPreparation
+        | ESDeliveryBatchPreparation
+        | PreparedESDeliveryCommit
+        | PreparedESDeliveryBatchCommit,
+    ) -> ESCollectorObservation | tuple[ESCollectorObservation, ...]:
+        """Return the exact result object retained by one authenticated reservation."""
+        if type(delivery) in (ESDeliveryBatchPreparation, PreparedESDeliveryBatchCommit):
+            return delivery.observations
+        return delivery.observation
+
+    @staticmethod
+    def _completed_action_cohort_es_delivery(record: _PreparedActionCohortBatchRecord) -> bool:
+        assert record.es_registry is not None and record.es_delivery is not None
+        completed = (
+            record.es_registry.completed_batch(record.es_delivery)
+            if type(record.es_delivery) is ESDeliveryBatchPreparation
+            else record.es_registry.completed_observation(record.es_delivery)
+        )
+        return completed is EventDispatcher._es_delivery_result(record.es_delivery)
+
+    @staticmethod
+    def _owns_action_cohort_es_delivery(record: _PreparedActionCohortBatchRecord) -> bool:
+        assert record.es_registry is not None and record.es_delivery is not None
+        return (
+            record.es_registry.owns_pending_batch(record.es_delivery)
+            if type(record.es_delivery) is ESDeliveryBatchPreparation
+            else record.es_registry.owns_pending_delivery(record.es_delivery)
+        )
+
+    def _validate_action_cohort_es_delivery(self, record: _PreparedActionCohortBatchRecord) -> None:
+        if (
+            record.es_registry is None
+            or record.es_delivery is None
+            or record.es_collector_process is None
+        ):
+            raise EventContractError("Action-cohort ES binding lost its retained owners")
+        native = self._validate_action_cohort_es_values(
+            record, record.es_registry, record.es_delivery, record.es_collector_process
+        )
+        if native != record.es_native_projection:
+            raise EventContractError("Action-cohort ES native bytes changed after binding")
+        if record.es_native_sink is not None:
+            self._es_native_rows(record)
+            if (
+                record.exact_publication_batch is None
+                or not record.exact_publication_batch._has_participant(record.es_native_sink)
+            ):
+                raise EventContractError("Native sink changed its exact journal participant")
+
+    @staticmethod
+    def _finalize_action_cohort_es_delivery(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> ESCollectorObservation | tuple[ESCollectorObservation, ...]:
+        assert record.es_claimed is not None and record.es_delivery is not None
+        record.es_claimed.finalize_no_fail()
+        return EventDispatcher._es_delivery_result(record.es_delivery)
+
     def _active_claimed_action_cohort_locked(
         self,
         capability: PreparedActionCohortCapability,
@@ -9913,9 +12436,18 @@ class EventDispatcher:
                 )
                 state_claimed = state_context.__enter__()
                 entered.append(cast(AbstractContextManager[object], state_context))
-                lifecycle_context = authority.registry.claimed_action_cohort(record.lifecycle_token)
+                lifecycle_context = (
+                    authority.registry.claimed_service_process_closure(record.lifecycle_token)
+                    if record.service_closure is not None
+                    else authority.registry.claimed_action_cohort(record.lifecycle_token)
+                )
                 lifecycle_claimed = lifecycle_context.__enter__()
                 entered.append(cast(AbstractContextManager[object], lifecycle_context))
+                if record.service_closure is not None and any(
+                    effective != record.state_plan.process_terminations[0].end_time
+                    for _, effective in lifecycle_claimed.effective_times
+                ):
+                    raise EventContractError("Service terminal cohort precedes a lifecycle hold")
                 audit_context = record.execution_effect_audit.claimed_action_cohort(
                     record.audit_preparation
                 )
@@ -9926,6 +12458,13 @@ class EventDispatcher:
                     intent_context = record.intent_ledger.claimed_batch(record.intent_token)
                     intent_claimed = intent_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], intent_context))
+                if record.es_delivery is not None and self.local_artifact_registry is not None:
+                    placement_context = (
+                        self.local_artifact_registry.claimed_placement_observations()
+                    )
+                    placement_context.__enter__()
+                    entered.append(cast(AbstractContextManager[object], placement_context))
+
                 artifact_claimed: LocalArtifactPreparedGroupCommit | None = None
                 if record.artifact_registry is not None and record.artifact_publications:
                     artifact_context = record.artifact_registry.prepared_publication_group(
@@ -9933,6 +12472,58 @@ class EventDispatcher:
                     )
                     artifact_claimed = artifact_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], artifact_context))
+                    if record.exact_projection_kind == "macos_filesystem":
+                        record.artifact_registry.validate_macos_file_operation(
+                            artifact_claimed, record.member_occurrences[0].file.macos_operation
+                        )
+
+                if record.es_delivery is not None:
+                    from evidenceforge.generation.actions.es_collection import (
+                        ESCollectionActionOwner,
+                    )
+
+                    self._validate_action_cohort_es_delivery(record)
+                    es_owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
+                    es_context = (
+                        es_owner.prepared_batch_commit(
+                            record.es_delivery, record.es_collector_process
+                        )
+                        if type(record.es_delivery) is ESDeliveryBatchPreparation
+                        else es_owner.prepared_commit(
+                            record.es_delivery, record.es_collector_process
+                        )
+                    )
+                    record.es_claimed = es_context.__enter__()
+                    entered.append(cast(AbstractContextManager[object], es_context))
+                    record.es_publication_token = record.es_claimed.publication_token
+
+                if record.es_closure_requests:
+                    from evidenceforge.generation.actions.es_collection import (
+                        ESCollectionActionOwner,
+                    )
+
+                    es_closures = ESCollectionActionOwner(
+                        self.state_manager, self.es_collectors
+                    ).prepared_closures(
+                        record.es_closure_requests,
+                        record.es_closure_processes,
+                        after_deliveries=(record.es_claimed,)
+                        if record.es_claimed is not None
+                        and any(
+                            item.before.source_instance
+                            == (
+                                record.es_delivery.observations[0].source_instance
+                                if type(record.es_delivery) is ESDeliveryBatchPreparation
+                                else record.es_delivery.observation.source_instance
+                            )
+                            for item in record.es_closure_requests
+                        )
+                        else (),
+                    )
+                    record.es_closures_claimed = es_closures.__enter__()
+                    entered.append(cast(AbstractContextManager[object], es_closures))
+                    record.es_closures_result = record.es_closures_claimed.expected_result
+                    record.es_closures_token = record.es_closures_claimed.publication_token
 
                 record.claim_thread_id = get_ident()
                 record.timing_claimed = timing_claimed
@@ -10071,6 +12662,7 @@ class EventDispatcher:
         if not all(
             (
                 record.members_cleanup_complete,
+                record.es_cleanup_complete,
                 record.artifact_cleanup_complete,
                 record.intent_cleanup_complete,
                 record.audit_cleanup_complete,
@@ -10256,19 +12848,12 @@ class EventDispatcher:
                         prepared._consumed = True
 
                     if record.exact_recovery is not None:
-                        if (
-                            record.artifact_claimed is not None
-                            or record.expected_artifact_receipt is not None
-                        ):
-                            raise EventContractError(
-                                "Exact Type-5 projection unexpectedly retained an artifact owner"
-                            )
                         state_claimed = cast(
                             "PreparedActionCohortMaterialization",
                             record.state_claimed,
                         )
                         lifecycle_claimed = cast(
-                            "PreparedLifecycleActionCohort",
+                            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
                             record.lifecycle_claimed,
                         )
                         audit_claimed = cast(
@@ -10276,7 +12861,7 @@ class EventDispatcher:
                             record.audit_claimed,
                         )
                         lifecycle_receipt = cast(
-                            "LifecycleActionCohortReceipt",
+                            "LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt",
                             record.expected_lifecycle_receipt,
                         )
                         audit_receipt = cast(
@@ -10295,24 +12880,60 @@ class EventDispatcher:
                             "ActionCohortMaterializationResult",
                             record.expected_state_result,
                         )
-                        authority = cast("GeneratorLifecycleAuthority", self._lifecycle_authority)
 
                         # Provisional State remains reversible. An exception here exits every
                         # claim before another canonical owner commits, so State rolls back.
                         state_claimed.apply_provisional()
+                        if record.es_claimed is not None:
+                            record.es_claimed.apply_provisional()
+                        if record.es_closures_claimed is not None:
+                            record.es_closures_claimed.apply_provisional()
+                        if record.artifact_claimed is not None:
+                            artifact_claimed = record.artifact_claimed
+                            artifact_receipt = record.expected_artifact_receipt
+                            artifact_registry = record.artifact_registry
+                            assert artifact_receipt is not None and artifact_registry is not None
+                            self._commit_exact_expected_owner(
+                                (
+                                    lambda: artifact_registry.commit_macos_file_operation(
+                                        artifact_claimed,
+                                        record.member_occurrences[0].file.macos_operation,
+                                    )
+                                )
+                                if record.exact_projection_kind == "macos_filesystem"
+                                else artifact_claimed.commit_no_fail,
+                                expected=artifact_receipt,
+                                terminal_authenticates=lambda: bool(
+                                    artifact_claimed.committed
+                                    and artifact_claimed.receipt is artifact_receipt
+                                    and artifact_registry.authenticates_publication_group_receipt(
+                                        artifact_receipt,
+                                        publication_tokens=artifact_claimed.publication_tokens,
+                                    )
+                                ),
+                                label="Exact exec retained-image owner",
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
+                            )
+                            record.artifact_cleanup_status[:] = [True] * len(
+                                record.artifact_cleanup_status
+                            )
+                            record.artifact_cleanup_complete = True
                         self._commit_exact_expected_owner(
                             lifecycle_claimed.commit_no_fail,
                             expected=lifecycle_receipt,
                             terminal_authenticates=lambda: bool(
                                 lifecycle_claimed.committed
                                 and lifecycle_claimed.receipt is lifecycle_receipt
-                                and authority.registry.authenticates_action_cohort_receipt(
-                                    lifecycle_receipt,
-                                    request=record.lifecycle_request,
-                                    state_publication_token=record.state_plan.publication_token,
+                                and self._action_cohort_lifecycle_result_authenticates(
+                                    record, expected=False
                                 )
                             ),
                             label="Exact action-cohort lifecycle owner",
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         self._commit_exact_expected_owner(
                             audit_claimed.commit_no_fail,
@@ -10330,6 +12951,12 @@ class EventDispatcher:
                                 )
                             ),
                             label="Exact action-cohort audit owner",
+                            retry_uncommitted=(lambda: not audit_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         if record.intent_claimed is not None:
                             intent_claimed = record.intent_claimed
@@ -10350,6 +12977,12 @@ class EventDispatcher:
                                     )
                                 ),
                                 label="Exact action-cohort intent owner",
+                                retry_uncommitted=(lambda: not intent_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
                             )
                         self._commit_exact_expected_owner(
                             timing_claimed.commit_no_fail,
@@ -10362,12 +12995,22 @@ class EventDispatcher:
                                 )
                             ),
                             label="Exact action-cohort source-timing owner",
+                            retry_uncommitted=(lambda: not timing_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         try:
                             self._commit_action_cohort_dispatcher_ledgers_no_fail(record)
-                        except BaseException:
+                        except BaseException as error:
                             if not record.observation_committed:
                                 raise
+                            if record.service_closure is not None and not isinstance(
+                                error, Exception
+                            ):
+                                record.canonical_interrupts.append(error)
                         if not record.observation_committed:
                             raise EventContractError(
                                 "Exact action-cohort dispatcher ledgers did not commit"
@@ -10379,7 +13022,46 @@ class EventDispatcher:
                                 state_claimed.committed and state_claimed._result is state_result
                             ),
                             label="Exact action-cohort State owner",
+                            retry_uncommitted=(lambda: not state_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
+                        if record.es_claimed is not None:
+                            self._commit_exact_expected_owner(
+                                lambda: self._finalize_action_cohort_es_delivery(record),
+                                expected=self._es_delivery_result(record.es_delivery),
+                                terminal_authenticates=lambda: (
+                                    self._completed_action_cohort_es_delivery(record)
+                                ),
+                                label="Exact action-cohort ES collector owner",
+                                retry_uncommitted=(lambda: not record.es_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
+                            )
+                            record.es_cleanup_complete = True
+                        if record.es_closures_claimed is not None:
+                            self._commit_exact_expected_owner(
+                                lambda: self._finalize_action_cohort_es_closures(record),
+                                expected=record.es_closures_result,
+                                terminal_authenticates=lambda: bool(
+                                    record.es_closures_claimed.committed
+                                    and record.es_closures_claimed.expected_result
+                                    is record.es_closures_result
+                                ),
+                                label="Exact action-cohort collector disconnects",
+                                retry_uncommitted=(lambda: not record.es_closures_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
+                            )
                     else:
                         # Runtime artifacts publish first through their reversible group owner.
                         # Every later owner has crossed its composite certification fence, so a
@@ -10400,7 +13082,7 @@ class EventDispatcher:
                             record.state_claimed,
                         ).apply_provisional()
                         cast(
-                            "PreparedLifecycleActionCohort",
+                            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
                             record.lifecycle_claimed,
                         ).commit_no_fail()
                         cast(
@@ -10438,6 +13120,14 @@ class EventDispatcher:
                                 self._action_cohort_committed_receipts -= 1
                         self._action_cohort_committed_receipts += 1
 
+        if record.canonical_interrupts:
+            interruption = record.canonical_interrupts[0]
+            interruption.action_cohort_receipt = receipt
+            interruption.action_cohort_result = result
+            interruption.add_note(
+                "Service terminal cohort committed; exact source rows remain recoverable."
+            )
+            raise interruption
         if record.exact_recovery is not None:
             return cast(
                 ActionCohortPublicationResult,
@@ -10620,6 +13310,21 @@ class EventDispatcher:
                     for prepared in owner.dispatches
                 )
             )
+            uncollected_ssh_terminal = bool(
+                type(owner) is _PreparedDeferredSessionPublicationRecord
+                and owner.exact_recovery is record
+                and not owner.all_suppressed
+                and owner.prepared_target_proofs is record.target_proofs
+                and owner.prepared_identifiers is record.member_identifiers
+                and record.target_proofs == ()
+                and record.batch.commit_cursor == 0
+                and all(member == () for member in record.member_identifiers)
+                and self._is_ssh_receiver_projection_cohort(owner.dispatches)
+                and all(
+                    not self._deferred_session_exact_target_slices(prepared._projection)
+                    for prepared in owner.dispatches
+                )
+            )
             positive_target_terminal = bool(
                 type(owner) is _PreparedDeferredSessionPublicationRecord
                 and owner.exact_recovery is record
@@ -10637,7 +13342,9 @@ class EventDispatcher:
                 and result.identifiers is record.member_identifiers
                 and receipt.occurrence_ids == record.occurrence_ids
                 and receipt.target_proof_digest == self._prepared_dispatch_owner_token
-                and (positive_target_terminal or all_suppressed_terminal)
+                and (
+                    positive_target_terminal or all_suppressed_terminal or uncollected_ssh_terminal
+                )
                 and receipt.member_integrity_digest == record.member_integrity_digest
                 and len(outcomes) == len(record.occurrence_ids)
                 and len(record.member_identifiers) == len(record.occurrence_ids)
@@ -10649,6 +13356,38 @@ class EventDispatcher:
                     and member_outcome.error is None
                     for member_outcome, occurrence_id, identifiers in zip(
                         outcomes,
+                        record.occurrence_ids,
+                        record.member_identifiers,
+                        strict=True,
+                    )
+                )
+            )
+        if record.kind == "action_cohort" and record.outcomes:
+            owner = record.owner_record
+            return bool(
+                type(owner) is _PreparedActionCohortBatchRecord
+                and owner.exact_projection_kind in {"macos_exit_group", "macos_process_chain"}
+                and owner.exact_recovery is record
+                and owner.exact_publication_batch is record.batch
+                and owner.exact_member_identifiers is record.member_identifiers
+                and owner.exact_prepared_row_count == record.batch.commit_cursor
+                and record.batch.released
+                and type(receipt) is ActionCohortPublicationReceipt
+                and type(result) is ActionCohortPublicationResult
+                and result.receipt is receipt
+                and result.projections is record.outcomes
+                and receipt.occurrence_ids == record.occurrence_ids
+                and receipt.member_integrity_digest == record.member_integrity_digest
+                and len(record.outcomes)
+                == len(record.member_identifiers)
+                == len(record.occurrence_ids)
+                and all(
+                    item.occurrence_id == occurrence
+                    and item.status == "succeeded"
+                    and item.identifiers == identifiers
+                    and item.error is None
+                    for item, occurrence, identifiers in zip(
+                        record.outcomes,
                         record.occurrence_ids,
                         record.member_identifiers,
                         strict=True,
@@ -10823,7 +13562,7 @@ class EventDispatcher:
             self._exact_projection_active_recoveries += 1
 
         outcome = record.outcome
-        outcomes = record.outcomes if record.kind == "deferred_session" else (outcome,)
+        outcomes = record.outcomes or (outcome,)
 
         def update_deferred_outcomes(
             *,
@@ -10903,8 +13642,9 @@ class EventDispatcher:
             if record.kind == "deferred_session":
                 update_deferred_outcomes()
             else:
-                object.__setattr__(outcome, "_status", "started")
-                object.__setattr__(outcome, "_error", None)
+                for member in outcomes:
+                    object.__setattr__(member, "_status", "started")
+                    object.__setattr__(member, "_error", None)
             if record.batch.state not in {"committed", "releasing"}:
                 try:
                     record.batch.commit()
@@ -10913,16 +13653,19 @@ class EventDispatcher:
                         if record.kind == "deferred_session":
                             update_deferred_outcomes(failure=failure)
                         else:
-                            object.__setattr__(outcome, "_status", "recoverable")
-                            object.__setattr__(outcome, "_error", failure)
+                            for member in outcomes:
+                                object.__setattr__(member, "_status", "recoverable")
+                                object.__setattr__(member, "_error", failure)
                         self._annotate_exact_projection_failure(failure, record)
                         raise
             if record.kind == "deferred_session":
                 update_deferred_outcomes()
             else:
-                object.__setattr__(outcome, "_identifiers", record.identifiers)
-                object.__setattr__(outcome, "_status", "succeeded")
-                object.__setattr__(outcome, "_error", None)
+                identifiers = record.member_identifiers or (record.identifiers,)
+                for member, values in zip(outcomes, identifiers, strict=True):
+                    object.__setattr__(member, "_identifiers", values)
+                    object.__setattr__(member, "_status", "succeeded")
+                    object.__setattr__(member, "_error", None)
             try:
                 record.batch.release_no_fail()
             except BaseException as failure:
@@ -10933,8 +13676,9 @@ class EventDispatcher:
                             release_pending=True,
                         )
                     else:
-                        object.__setattr__(outcome, "_status", "release_pending")
-                        object.__setattr__(outcome, "_error", failure)
+                        for member in outcomes:
+                            object.__setattr__(member, "_status", "release_pending")
+                            object.__setattr__(member, "_error", failure)
                     self._annotate_exact_projection_failure(failure, record)
                     raise
             if record.kind == "deferred_session":
@@ -11065,6 +13809,23 @@ class EventDispatcher:
         """Attempt every trusted cleanup and return failures without short-circuiting."""
 
         failures: list[BaseException] = []
+        if not record.es_cleanup_complete:
+            try:
+                if record.es_registry is None or record.es_delivery is None:
+                    raise EventContractError("Action-cohort ES cleanup lost its exact owner")
+                if self._owns_action_cohort_es_delivery(record):
+                    if type(record.es_delivery) is ESDeliveryBatchPreparation:
+                        record.es_registry.cancel_batch(record.es_delivery)
+                    else:
+                        record.es_registry.cancel(record.es_delivery)
+                record.es_cleanup_complete = True
+            except BaseException as exc:
+                if record.es_registry is not None and not self._owns_action_cohort_es_delivery(
+                    record
+                ):
+                    record.es_cleanup_complete = True
+                else:
+                    failures.append(exc)
         exact_batch = record.exact_publication_batch
         if exact_batch is None:
             record.exact_cleanup_complete = True
@@ -11138,13 +13899,11 @@ class EventDispatcher:
             record.lifecycle_cleanup_complete = True
         elif not record.lifecycle_cleanup_complete:
             try:
-                authority.registry.cancel_action_cohort(record.lifecycle_token)
+                self._cancel_action_cohort_lifecycle(authority, record.lifecycle_token)
             except BaseException as exc:
                 try:
-                    still_active = authority.registry.authenticates_action_cohort_admission_token(
-                        record.lifecycle_token,
-                        request=record.lifecycle_request,
-                        state_publication_token=record.state_plan.publication_token,
+                    still_active = self._action_cohort_lifecycle_admission_authenticates(
+                        authority, record.lifecycle_token, record.lifecycle_request
                     )
                 except BaseException:
                     still_active = True
@@ -11635,6 +14394,82 @@ class EventDispatcher:
             identifiers_by_member.append(tuple(sorted(member_identifiers.items())))
         return tuple(identifiers_by_member), tuple(proofs)
 
+    def _freeze_deferred_session_with_native(
+        self, record: _PreparedDeferredSessionPublicationRecord
+    ) -> tuple[
+        tuple[tuple[tuple[str, str], ...], ...], tuple[DeferredSessionExactTargetProof, ...]
+    ]:
+        """Stage native occurrence ingress in the same exact sibling-source attempt."""
+        result = self._freeze_deferred_session_exact_projection(record.dispatches)
+        ingress = record.es_ingress
+        if ingress is not None:
+            ingress.owner.validate(ingress, record.root.state_plan.batch.publication_token)
+            for line in ingress.encoded:
+                ingress.sink.write(line)
+        return result
+
+    def _deferred_session_regular_row_facts(
+        self,
+        record: _PreparedDeferredSessionPublicationRecord,
+        facts: tuple[tuple[str, str, int], ...],
+    ) -> tuple[tuple[str, str, int], ...]:
+        """Authenticate the exact native tail before validating ordinary source proofs."""
+        ingress = record.es_ingress
+        if ingress is None:
+            return facts
+        if ingress.owner is not self.macos_es_ingress:
+            raise EventContractError("Deferred native ingress changed its source owner")
+        ingress.owner.validate(ingress, record.root.state_plan.batch.publication_token)
+        count = len(ingress.encoded)
+        if (
+            not count
+            or len(facts) < count
+            or tuple(row[0] for row in facts[-count:]) != ingress.encoded
+        ):
+            raise EventContractError("Deferred native ingress changed its exact staged rows")
+        return facts[:-count]
+
+    def _is_ssh_receiver_projection_cohort(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> bool:
+        """Recognize the already-authenticated transport/receiver/session cohort.
+
+        Root ownership and every dependent State member are validated before the
+        projection proof is built. This narrow arm permits collection omission;
+        any selected visible sink must still produce an authenticated positive row.
+        """
+        if len(dispatches) != 3:
+            return False
+        transport, process, session = (member._occurrence for member in dispatches)
+        host = session.dst_host
+        return bool(
+            transport.event_type is EventKind.CONNECTION
+            and process.event_type in {EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
+            and session.event_type is EventKind.SSH_SESSION
+            and host is not None
+            and host.os_category in {"linux", "macos"}
+            and (
+                host.os_category == "macos"
+                or (
+                    process.event_type is EventKind.SYSTEM_PROCESS_CREATE
+                    and "ecar" not in self.emitters
+                    and not any(
+                        self._projection_is_exact_warmup_suppressed(member._projection)
+                        for member in dispatches
+                    )
+                )
+            )
+            and process.src_host is not None
+            and process.src_host.os_category == host.os_category
+            and process.src_host.hostname == host.hostname
+            and transport.dst_host is not None
+            and transport.dst_host.hostname == host.hostname
+            and process.process is not None
+            and session.auth is not None
+            and process.process.logon_id == session.auth.logon_id
+        )
+
     def _validate_deferred_session_target_proofs(
         self,
         dispatches: tuple[PreparedDispatch, ...],
@@ -11684,7 +14519,11 @@ class EventDispatcher:
                 "Deferred-session exact projection target proof cardinality changed"
             )
         proven_members = {proof.member_ordinal for proof in proofs}
-        if proven_members != set(range(len(dispatches))):
+        ssh_receiver = self._is_ssh_receiver_projection_cohort(dispatches)
+        required_members = (
+            {target[0] for target in expected} if ssh_receiver else set(range(len(dispatches)))
+        )
+        if proven_members != required_members:
             raise EventContractError(
                 "Deferred-session publication requires a positive exact target for every member"
             )
@@ -11829,8 +14668,10 @@ class EventDispatcher:
             ) in expected
             if member_ordinal == 0
         )
-        if any(member_ordinal > 0 for member_ordinal, *_rest in expected) and not (
-            transport_targets
+        if (
+            not ssh_receiver
+            and any(member_ordinal > 0 for member_ordinal, *_rest in expected)
+            and not (transport_targets)
         ):
             raise EventContractError(
                 "Deferred-session visible dependents require exact transport evidence"
@@ -11862,6 +14703,8 @@ class EventDispatcher:
         )
         for proof in proofs:
             if proof.member_ordinal == 0 or proof.format_name != "ecar":
+                continue
+            if not transport_ecar_keys and ssh_receiver:
                 continue
             if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
                 raise EventContractError(
@@ -12042,12 +14885,27 @@ class EventDispatcher:
             raise EventContractError(
                 "Deferred-session binary transport uses an unsupported source platform"
             )
-        resolved_binary = self.resolve_process_binary_identity(
-            host.hostname,
-            process.username,
-            process.image,
-            cast(Platform, platform_name),
+        resolved_binary = (
+            self.resolve_loaded_process_binary_identity(actor)
+            if actor.executable_version is not None
+            else self.resolve_process_binary_identity(
+                host.hostname,
+                process.username,
+                process.image,
+                cast(Platform, platform_name),
+            )
         )
+        # Runtime records are decoded from the bounded artifact store on lookup,
+        # unlike interned installed releases. Authenticate their complete value
+        # against the exact State-owned loaded version, not Python object identity.
+        matching_binary = resolved_binary is binary
+        if (
+            actor.executable_version is not None
+            and actor.executable_version.identity_kind == "local_artifact"
+            and type(resolved_binary) is LocalArtifactBinaryIdentity
+            and type(binary) is LocalArtifactBinaryIdentity
+        ):
+            matching_binary = resolved_binary == binary
         matching_activity = tuple(
             patch
             for patch in state_plan.process_activity
@@ -12088,7 +14946,7 @@ class EventDispatcher:
             or lifecycle.parent_group_id is not None
             or binary is None
             or prepared._binary_identity_kind != getattr(binary, "identity_kind", None)
-            or resolved_binary is not binary
+            or not matching_binary
         ):
             raise EventContractError(
                 "Deferred-session binary transport actor is not the exact live root-owned process"
@@ -12100,11 +14958,11 @@ class EventDispatcher:
 
         state_plan = getattr(root, "state_plan", None)
         batch = getattr(state_plan, "batch", None)
-        if batch is None:
+        if state_plan is None:
             return ()
         return (
-            *((batch.session,) if batch.session is not None else ()),
-            *batch.processes,
+            *((batch.session,) if batch is not None and batch.session is not None else ()),
+            *(batch.processes if batch is not None else ()),
             *(
                 (state_plan.existing_session_patch,)
                 if state_plan.existing_session_patch is not None
@@ -12363,7 +15221,13 @@ class EventDispatcher:
                         )
                     if (
                         dependent_event.event_type
-                        not in {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}
+                        not in {
+                            EventKind.PROCESS_CREATE,
+                            EventKind.SYSTEM_PROCESS_CREATE,
+                            EventKind.PROCESS_FORK,
+                        }
+                        or dependent_plan.forked
+                        != (dependent_event.event_type is EventKind.PROCESS_FORK)
                         or process is None
                         or process.pid != process_identity.pid
                         or process.parent_pid != process_identity.parent_pid
@@ -12426,6 +15290,23 @@ class EventDispatcher:
             for prepared in dispatches
         )
 
+        es_ingress = None
+        native_forks = tuple(
+            prepared._occurrence
+            for prepared in dispatches
+            if prepared._occurrence.event_type is EventKind.PROCESS_FORK
+        )
+        if native_forks:
+            from evidenceforge.generation.macos_es_publication import (
+                prepared_macos_es_process_publication,
+            )
+
+            with prepared_macos_es_process_publication(
+                self, root.state_plan.batch, native_forks
+            ) as native:
+                if native is not None:
+                    es_ingress = native.ingress
+
         retained_bytes = len(
             repr(
                 (
@@ -12442,6 +15323,8 @@ class EventDispatcher:
                 )
             ).encode("utf-8")
         )
+        if es_ingress is not None:
+            retained_bytes += sum(len(line.encode()) for line in es_ingress.encoded)
         with self._deferred_session_publication_lock:
             if (
                 len(self._deferred_session_publication_batches)
@@ -12484,6 +15367,7 @@ class EventDispatcher:
                 all_suppressed=all_suppressed,
                 retained_bytes=retained_bytes,
                 integrity_token="",
+                es_ingress=es_ingress,
                 state="freezing",
                 active_thread_id=get_ident(),
             )
@@ -12541,16 +15425,19 @@ class EventDispatcher:
         try:
             participants = self._deferred_session_exact_projection_participants(dispatches)
             exact_batch = self._exact_publication_authority.issue_batch()
-            exact_batch.reserve_participants(cast(tuple[object, ...], participants))
+            exact_participants: tuple[object, ...] = participants
+            if record.es_ingress is not None:
+                exact_participants += (record.es_ingress.sink,)
+            exact_batch.reserve_participants(exact_participants)
             prepared_identifiers, prepared_target_proofs = (
                 self._deferred_session_prepared_projection_shape(
-                    exact_batch.prepare(
-                        lambda: self._freeze_deferred_session_exact_projection(dispatches)
-                    ),
+                    exact_batch.prepare(lambda: self._freeze_deferred_session_with_native(record)),
                     member_count=len(dispatches),
                 )
             )
-            prepared_row_facts = exact_batch._prepared_row_facts()
+            prepared_row_facts = self._deferred_session_regular_row_facts(
+                record, exact_batch._prepared_row_facts()
+            )
             if all_suppressed:
                 self._validate_deferred_session_all_suppressed_projection(
                     dispatches,
@@ -12808,7 +15695,9 @@ class EventDispatcher:
             if exact_batch is None or exact_batch.state != "ready":
                 raise EventContractError("Deferred-session exact source projection is not ready")
             exact_batch._require_authority()
-            prepared_row_facts = exact_batch._prepared_row_facts()
+            prepared_row_facts = self._deferred_session_regular_row_facts(
+                record, exact_batch._prepared_row_facts()
+            )
             if record.all_suppressed:
                 self._validate_deferred_session_all_suppressed_projection(
                     record.dispatches,
@@ -13706,6 +16595,16 @@ class EventDispatcher:
         # The immutable result returned to the caller remains intact. The batch record has
         # already been detached from every dispatcher registry, so its back-reference is only
         # retired retry scaffolding and would otherwise require a cyclic-GC scan to disappear.
+        capability = record.capability_ref() if record.capability_ref is not None else None
+        if capability is not None:
+            if (
+                record.capability_id != id(capability)
+                or capability.receipt is not recovery.receipt
+                or capability.result is not recovery.result
+                or not capability.committed
+            ):
+                raise EventContractError("Exact projection completion lost its claimed capability")
+            capability._completed_projection_result = recovery.result
         record.exact_recovery = None
 
     def _complete_deferred_session_owner_tail(
@@ -15125,8 +18024,16 @@ class EventDispatcher:
             "system_process_create",
             "process_terminate",
             "process_access",
+            "process_fork",
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
             "create_remote_thread",
             "bash_command",
+            "zsh_command",
+            "macos_policy_refusal",
         }:
             required |= CollectionCapability.PROCESS
         if event_type in {
@@ -15135,9 +18042,15 @@ class EventDispatcher:
             "logoff",
             "failed_logon",
             "ssh_session",
-        }:
+        } or (format_name == "macos_unified_log" and event.macos_ssh_authentication is not None):
             required |= CollectionCapability.AUTHENTICATION
-        if event_type in {"logon", "machine_logon", "logoff", "ssh_session"}:
+        if event_type in {
+            "logon",
+            "machine_logon",
+            "logoff",
+            "ssh_session",
+            "macos_workspace_request",
+        } or (format_name == "macos_unified_log" and event.macos_ssh_authentication is not None):
             required |= CollectionCapability.SESSION
         if event.file is not None or event_type.startswith("smb_file_"):
             required |= CollectionCapability.FILE
@@ -15741,7 +18654,12 @@ class EventDispatcher:
                 observed_time = event.source_timing.finalized_times.get(key)
                 if observed_time is not None:
                     return observed_time
-        if event.event_type in {"process_create", "system_process_create", "process_terminate"}:
+        if event.event_type in {
+            "process_create",
+            "system_process_create",
+            "process_fork",
+            "process_terminate",
+        }:
             host = event.src_host or event.dst_host
             if host is not None and event.source_timing is not None:
                 lifecycle = "terminate" if event.event_type == "process_terminate" else "create"

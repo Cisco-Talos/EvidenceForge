@@ -58,6 +58,30 @@ def _family(
 
 _FAMILIES = (
     _family(
+        "activity/macos_endpoint_security_profiles.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Bounded modeled Mac ES fork admission and explicit collector subscription.",
+    ),
+    _family(
+        "activity/macos_execution_metadata.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Synthetic Mac launch environment, working directories, image slices and terminal devices.",
+    ),
+    _family(
+        "activity/macos_installed_files.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Synthetic installed Mac file sizes, allocation and pre-window provisioning policy.",
+    ),
+    _family(
+        "activity/macos_unified_log_profiles.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Experimental native Mac log vocabulary, modeled callsites and explicit timebase.",
+    ),
+    _family(
         "personas/*.yaml",
         "persona-deep-merge",
         "config-personas.md",
@@ -206,6 +230,18 @@ _FAMILIES = (
         "append-list",
         "config-apps-processes.md",
         "Process-to-network correlation mappings.",
+    ),
+    _family(
+        "activity/process_output_profiles.yaml",
+        "keyed-entry",
+        "config-apps-processes.md",
+        "Logical file-size distributions for command-owned archive outputs.",
+    ),
+    _family(
+        "activity/runtime_executable_profiles.yaml",
+        "keyed-entry",
+        "config-apps-processes.md",
+        "Fallback executable content-size distributions by platform.",
     ),
     _family(
         "activity/proxy_phase_profiles.yaml",

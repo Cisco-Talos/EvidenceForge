@@ -330,6 +330,53 @@ def test_compiled_storage_file_ids_use_full_width_digest_entropy() -> None:
     assert sibling != first
 
 
+@pytest.mark.parametrize("os_name", ["macOS 26", "Darwin 25", "Mac OS X"])
+def test_mac_local_file_sets_reuse_storage_without_exposing_a_server(
+    scenarios_dir: Path, os_name: str
+) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["systems"][0].update(os=os_name, architecture="arm64")
+    data["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "mac-documents",
+                "system": "TEST-01",
+                "root": "/Users/test_user/Documents",
+                "preset": "homes",
+                "population": "small",
+                "seed_files": [{"ref": "notes", "path": "Planning/Notes.txt", "size_bytes": 512}],
+            }
+        ]
+    }
+    scenario = Scenario(**data)
+    first = StorageWorldModel.compile(scenario)
+    second = StorageWorldModel.compile(Scenario(**deepcopy(data)))
+    assert first.file_set("mac-documents") == second.file_set("mac-documents")
+    assert first.file_set("mac-documents").root == "/Users/test_user/Documents"
+    assert first.select_file_set("mac-documents", file_ref="notes")[0].size_bytes == 512
+    assert not any(share.system == "TEST-01" for share in first.shares)
+    validator = ScenarioValidator(scenario)
+    validator._validate_storage()
+    assert not [issue for issue in validator.issues if issue.severity == "error"]
+
+    invalid = deepcopy(data)
+    invalid["environment"]["storage"]["file_sets"][0]["root"] = r"C:\Users\test_user"
+    with pytest.raises(ValueError, match="does not match macos"):
+        StorageWorldModel.compile(Scenario(**invalid))
+
+
+def test_mac_storage_classification_does_not_admit_mac_smb_serving(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["systems"][0].update(
+        os="macOS 26", roles=["file_server"], services=["smb_server"]
+    )
+    world = StorageWorldModel.compile(Scenario(**data))
+    assert not any(share.system == "TEST-01" for share in world.shares)
+    data["environment"]["storage"] = {"servers": [{"system": "TEST-01"}]}
+    with pytest.raises(ValueError, match="servers must run Windows or Linux"):
+        StorageWorldModel.compile(Scenario(**data))
+
+
 def test_share_can_export_the_exact_same_host_file_set(scenarios_dir: Path) -> None:
     data = _storage_scenario_data(scenarios_dir)
     data["environment"]["storage"] = {
@@ -1471,3 +1518,29 @@ def test_smb_validator_checks_external_parent_and_deduplicates_migration_warning
     assert "2 successful SMB connection event(s)" in warnings[0].message
     assert len(external_errors) == 1
     assert "parent storyline system" in external_errors[0].message
+
+
+@pytest.mark.parametrize(
+    "root,expected",
+    [
+        ("/Users/alex/Documents", "/Users/alex/Documents/Drafts/source.txt"),
+        ("/home/alex/Documents", "/home/alex/Documents/Drafts/source.txt"),
+        (r"C:\Users\alex\Documents", r"C:\Users\alex\Documents\Drafts\source.txt"),
+    ],
+)
+def test_file_set_upload_preserves_source_path_when_destination_is_renamed(
+    root: str, expected: str
+) -> None:
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.request = SimpleNamespace(
+        spec=SmbActivityEventSpec(
+            operation="copy",
+            source={"type": "client", "file_set": "documents", "file_ref": "source"},
+            destination={"type": "share", "share": "FS.team", "path": r"Reports\renamed.txt"},
+        )
+    )
+    bundle.world = SimpleNamespace(file_set=lambda _name: SimpleNamespace(root=root))
+    bundle._client_source_by_destination_path = {
+        r"reports\renamed.txt": SimpleNamespace(path=r"Drafts\source.txt")
+    }
+    assert bundle._local_path(r"Reports\renamed.txt") == expected

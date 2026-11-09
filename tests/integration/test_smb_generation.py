@@ -273,7 +273,7 @@ def test_batched_client_file_set_upload_preserves_identity_paths_and_direction(
         record["objectID"] for record in server_writes
     )
     expected_content = {
-        FileContentIdentity(
+        file.path: FileContentIdentity(
             file_object_id=file.file_id,
             version=file.version,
             size_bytes=file.size_bytes,
@@ -282,8 +282,16 @@ def test_batched_client_file_set_upload_preserves_identity_paths_and_direction(
         ).digests.sha256.lower()
         for file in source_files
     }
-    assert {record["sha256"] for record in zeek_files} == expected_content
-    assert all(record["md5"] and record["sha1"] for record in zeek_files)
+    assert len(zeek_files) == len(expected_content)
+    for record in zeek_files:
+        canonical_path = record["filename"].split("\\", 1)[1]
+        assert canonical_path in expected_content
+        assert record["seen_bytes"] + record["missing_bytes"] == record["total_bytes"]
+        if record["missing_bytes"] == 0:
+            assert record["sha256"] == expected_content[canonical_path]
+            assert record["md5"] and record["sha1"]
+        else:
+            assert not {"md5", "sha1", "sha256", "analyzers"}.intersection(record)
     expected_principal_by_host = {
         hostname: username for username, hostname, _ip, _file_set in clients
     }
@@ -341,7 +349,13 @@ def test_semantic_smb_read_projects_correlated_sparse_evidence(
     ground_truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
     manifest = json.loads((tmp_path / "STORAGE_MANIFEST.json").read_text(encoding="utf-8"))
 
-    assert any(record["service"] == "Finance" for record in mappings)
+    assert any(
+        record["path"] == r"\\FS-01\Finance" and record["share_type"] == "DISK"
+        for record in mappings
+    )
+    assert all(
+        "service" not in record and "native_file_system" not in record for record in mappings
+    )
     assert [record["action"] for record in semantic_actions] == [
         "SMB::FILE_OPEN",
         "SMB::FILE_READ",
@@ -779,10 +793,10 @@ def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operation
 
     endpoint_records = _json_records(tmp_path, "ecar.json")
     mappings = _json_records(tmp_path, "smb_mapping.json")
-    assert any(record.get("service") == "Finance" for record in mappings)
-    assert {
-        record["native_file_system"] for record in mappings if record["service"] == "Finance"
-    } == {"ReFS"}
+    assert any(str(record.get("path", "")).endswith(r"FS-01\Finance") for record in mappings)
+    assert all(
+        "service" not in record and "native_file_system" not in record for record in mappings
+    )
     assert not any(
         record.get("name") == "forecast.xlsx"
         for record in _json_records(tmp_path, "smb_files.json")

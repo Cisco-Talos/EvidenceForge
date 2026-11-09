@@ -72,6 +72,7 @@ EVENT_REFERENCE_BY_TYPE = {
             "account_deleted",
             "group_member_added",
             "service_installed",
+            "macos_launch_item",
             "scheduled_task_created",
             "log_cleared",
             "create_remote_thread",

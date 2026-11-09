@@ -165,7 +165,13 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
             if missing:
                 console.print(f"  [yellow]{host}[/yellow]: missing formats: {', '.join(missing)}")
             elif verbose:
-                console.print(f"  {host}: all expected formats present")
+                console.print(f"  {host}: no missing required formats")
+            if verbose:
+                inactive = info.get("inactive_conditional_formats", [])
+                if inactive:
+                    console.print(f"    Conditional sources without rows: {', '.join(inactive)}")
+                for note in info.get("coverage_notes", []):
+                    console.print(f"    {note}")
 
     # Verbose: sample failures per sub-score
     if verbose:

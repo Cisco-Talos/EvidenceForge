@@ -64,4 +64,4 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, t
     assert len(report["pillars"]) == 4
     assert all(pillar["score"] is not None for pillar in report["pillars"])
     parseability = next(p for p in report["pillars"] if p["name"] == "Parseability")
-    assert all(s["score"] == 100 for s in parseability["sub_scores"])
+    assert all(s["score"] == 100 for s in parseability["sub_scores"]), parseability

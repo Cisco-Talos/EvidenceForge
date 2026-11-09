@@ -27,6 +27,48 @@ applications:
   - id: chrome
     display_name: "Google Chrome"
     platforms:
+      macos:
+        image_path: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+        executable_format: mach_o
+        # Public vendor templates, confirmed by fixed reference comparisons.
+        # Content hashes/UUIDs remain synthetic release-owned identities.
+        code_signature:
+          signing_id: com.google.Chrome
+          team_id: EQHXZ8M8AV
+          entitlements:
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.developer.associated-domains.applinks.read-write: true
+            com.apple.developer.web-browser.public-key-credential: true
+            com.apple.application-identifier: EQHXZ8M8AV.com.google.Chrome
+            keychain-access-groups:
+              - EQHXZ8M8AV.com.google.common.folsom
+              - EQHXZ8M8AV.com.google.Chrome.devicetrust
+              - EQHXZ8M8AV.com.google.Chrome.secure-payment-confirmation
+              - EQHXZ8M8AV.com.google.Chrome.unexportable-keys
+              - EQHXZ8M8AV.com.google.Chrome.webauthn
+              - EQHXZ8M8AV.com.google.Chrome.webauthn-uvk
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --new-window {internal_url}'
+        # The native producer adds its canonical sandbox-pipe argument.
+        children:
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)" --type=renderer'
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=gpu-process'
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
       windows:
         image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
         deployment:
@@ -99,6 +141,33 @@ applications:
   - id: firefox
     display_name: "Mozilla Firefox"
     platforms:
+      macos:
+        image_path: /Applications/Firefox.app/Contents/MacOS/firefox
+        executable_format: mach_o
+        code_signature:
+          signing_id: org.mozilla.firefox
+          team_id: 43AQ936H96
+          entitlements:
+            com.apple.application-identifier: 43AQ936H96.org.mozilla.firefox
+            com.apple.developer.web-browser.public-key-credential: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.smartcard: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: firefox
+          version: '158.0'
+          build: '158.0'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Firefox.app/Contents/MacOS/firefox" -new-window {internal_url}'
       windows:
         image_path: 'C:\Program Files\Mozilla Firefox\firefox.exe'
         deployment:
@@ -170,6 +239,122 @@ applications:
     display_name: "Microsoft Outlook"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.Outlook
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.Outlook
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoftonline.com
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.microsoft.com
+            - applinks:outlook-sdf.office.com
+            - applinks:outlook.office.com
+            - applinks:outlook-sdf.office365.com
+            - applinks:outlook.office365.com
+            - applinks:outlook.cloud.microsoft
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.developer.ubiquity-kvstore-identifier: UBF8T346G9.com.microsoft.Outlook
+            com.apple.developer.usernotifications.communication: true
+            com.apple.developer.usernotifications.time-sensitive: true
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.Office
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.group.com.microsoft.shared
+            - UBF8T346G9.OfficeOsfWebHost
+            com.apple.security.assets.movies.read-only: true
+            com.apple.security.assets.music.read-only: true
+            com.apple.security.assets.pictures.read-only: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.security.print: true
+            com.apple.security.smartcard: true
+            com.apple.security.temporary-exception.apple-events:
+            - com.microsoft.lync
+            - com.microsoft.skypeforbusiness
+            - com.cisco.jabber
+            - cisco-systems.spark
+            - microsoft/com.microsoft.alertsdaemon
+            - com.microsoft.autoupdate2
+            - com.microsoft.entourage.databasedaemon
+            - com.microsoft.outlook.database_daemon
+            - com.microsoft.entourage.databaseutility
+            - com.microsoft.outlook.databasedaemon
+            - com.microsoft.outlook.databaseutility
+            - com.microsoft.entourage
+            - com.microsoft.outlook
+            - com.microsoft.errorreporting
+            - com.microsoft.excel
+            - com.microsoft.communicator
+            - microsoft/com.microsoft.messengerdaemon
+            - microsoft/com.microsoft.messenger
+            - com.microsoft.messenger
+            - com.microsoft.entourage.officereminders
+            - com.microsoft.outlook.officereminders
+            - com.microsoft.setupassistant
+            - com.microsoft.powerpoint
+            - com.microsoft.entourage.syncservices12
+            - com.microsoft.syncservicesagent
+            - com.microsoft.word
+            - com.microsoft.myday
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Preferences/com.microsoft.office.licensingV2.plist
+            - /Library/Logs/Microsoft/
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Application Support/Microsoft/
+            - /Library/Caches/TemporaryItems/msoclip/
+            - /Documents/Microsoft User Data/
+            - /Documents/Microsoft-Benutzerdaten/
+            - /Documents/Datos de usuario de Microsoft/
+            - /Documents/Données utilisateurs Microsoft/
+            - /Documents/Microsoft användardata/
+            - /Documents/Microsoft ユーザー データ/
+            - /Documents/Dati utente Microsoft/
+            - /Documents/Dane użytkownika produktów firmy Microsoft/
+            - /Documents/Данные пользователя Майкрософт/
+            - /Documents/Microsoft 用户数据/
+            - /Documents/Microsoft 使用者資料/
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.microsoft.office.licensingV2.helper.port
+            - com.apple.GSSCred
+            com.apple.security.temporary-exception.sbpl:
+            - "\n (allow authorization-right-obtain (right-name \"com.apple.KerberosAgent\")) "
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.apple.ncprefs
+            - com.apple.notificationcenterui
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.microsoft.autoupdate2
+            - com.microsoft.office
+            - com.microsoft.shared
+            - com.cisco.WebEx Productivity Tools
+            - com.cisco.Cisco Webex Meetings
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: outlook
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE'
         deployment:
@@ -206,6 +391,85 @@ applications:
   - id: word
     display_name: "Microsoft Word"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.Word
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.Word
+            com.apple.developer.aps-environment: production
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoftonline.com
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.microsoft.com
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.Office
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.group.com.microsoft.shared
+            - UBF8T346G9.OfficeOsfWebHost
+            - UBF8T346G9.OfficeOneDriveSyncIntegration
+            - UBF8T346G9.OfficeWordWidget
+            com.apple.security.assets.movies.read-only: true
+            com.apple.security.assets.music.read-only: true
+            com.apple.security.assets.pictures.read-only: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.files.bookmarks.app-scope: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.security.print: true
+            com.apple.security.scripting-targets:
+              com.apple.mail:
+              - com.apple.mail.compose
+            com.apple.security.temporary-exception.apple-events:
+            - com.microsoft.outlook
+            - com.microsoft.lync
+            - com.microsoft.skypeforbusiness
+            - com.filemaker.client.pro12
+            - com.thomsonresearchsoft.endnote
+            - com.dessci.mathtype
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Preferences/com.microsoft.office.licensingV2.plist
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.microsoft.office.licensingV2.helper.port
+            com.apple.security.temporary-exception.sbpl:
+            - '(allow file-read* file-write* (require-all (vnode-type REGULAR-FILE) (regex #"(^|/)~\$[^/]+$"))
+              )'
+            - (deny file-write* (subpath (string-append (param "_HOME") "/Library/Application Scripts"))
+              (subpath (string-append (param "_HOME") "/Library/LaunchAgents")) )
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.ThomsonResearchSoft.EndNote
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.microsoft.autoupdate2
+            - com.microsoft.office
+            - com.microsoft.shared
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: word
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
         deployment:
@@ -242,6 +506,82 @@ applications:
   - id: excel
     display_name: "Microsoft Excel"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.Excel
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.Excel
+            com.apple.developer.aps-environment: production
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoftonline.com
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.microsoft.com
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.Office
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.group.com.microsoft.shared
+            - UBF8T346G9.OfficeOsfWebHost
+            - UBF8T346G9.OfficeOneDriveSyncIntegration
+            - UBF8T346G9.OfficeExcelWidget
+            com.apple.security.assets.movies.read-only: true
+            com.apple.security.assets.music.read-only: true
+            com.apple.security.assets.pictures.read-write: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.files.bookmarks.app-scope: true
+            com.apple.security.files.bookmarks.document-scope: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.photos-library: true
+            com.apple.security.print: true
+            com.apple.security.scripting-targets:
+              com.apple.mail:
+              - com.apple.mail.compose
+            com.apple.security.temporary-exception.apple-events:
+            - com.microsoft.outlook
+            - com.microsoft.solver
+            - com.filemaker.client.pro12
+            - com.microsoft.query
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Preferences/com.microsoft.office.licensingV2.plist
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Application Support/Microsoft/
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.microsoft.office.licensingV2.helper.port
+            com.apple.security.temporary-exception.sbpl:
+            - '(allow file-read* file-write* (require-all (vnode-type REGULAR-FILE) (regex #"(^|/)~\$[^/]+$"))
+              )'
+            - (deny file-write* (subpath (string-append (param "_HOME") "/Library/Application Scripts")) (subpath
+              (string-append (param "_HOME") "/Library/LaunchAgents")) )
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.microsoft.autoupdate2
+            - com.microsoft.office
+            - com.microsoft.shared
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: excel
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
         deployment:
@@ -275,6 +615,51 @@ applications:
   - id: edge
     display_name: "Microsoft Edge"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.edgemac
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.edgemac
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoft.com
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.partner.microsoftonline.cn
+            com.apple.developer.associated-domains.applinks.read-write: true
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.developer.web-browser.public-key-credential: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.com.microsoft.edgemac.widgets
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            keychain-access-groups:
+            - UBF8T346G9.com.google.common.folsom
+            - UBF8T346G9.com.microsoft.edgemac.devicetrust
+            - UBF8T346G9.com.microsoft.edgemac.secure-payment-confirmation
+            - UBF8T346G9.com.microsoft.edgemac.unexportable-keys
+            - UBF8T346G9.com.microsoft.edgemac.webauthn
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+            - UBF8T346G9.com.microsoft.edgemac.webauthn-uvk
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: edge
+          version: 155.0.4283.45,6b10bfa6-9f61-4b45-8508-31f5cdc70657
+          build: 155.0.4283.45,6b10bfa6-9f61-4b45-8508-31f5cdc70657
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" --new-window {internal_url}'
       windows:
         image_path: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
         deployment:
@@ -313,6 +698,85 @@ applications:
     display_name: "Microsoft Teams"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.teams2
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.teams2
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoft.com
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.partner.microsoftonline.cn
+            com.apple.developer.team-identifier: UBF8T346G9
+            com.apple.developer.usernotifications.communication: true
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - UBF8T346G9.ms
+            - UBF8T346G9.com.microsoft.teams
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.group.com.microsoft.shared
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.microphone: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.files.bookmarks.app-scope: true
+            com.apple.security.files.downloads.read-write: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.network.client: true
+            com.apple.security.network.server: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.print: true
+            com.apple.security.temporary-exception.sbpl:
+            - (allow mach-lookup (global-name "com.apple.mdmclient.daemon.unrestricted"))
+            - (allow mach-lookup (global-name "com.apple.ReportCrash"))
+            - (allow ipc-posix-sem* (ipc-posix-name-prefix "/Smartscreen-anaheim"))
+            - (allow mach-register mach-lookup (global-name-prefix "com.microsoft.edgemac.mojo"))
+            - (allow mach-register mach-lookup (global-name-prefix "org.chromium.crashpad.child_port_handshake"))
+            - (allow mach-register mach-lookup (global-name-prefix "com.microsoft.teams2.helper.local.MachPortRendezvousServer"))
+            - (allow mach-register mach-lookup (global-name-prefix "com.microsoft.teams2.helper.MachPortRendezvousServer"))
+            - (allow mach-register mach-lookup (global-name-prefix "mach.streamrender"))
+            - (allow file-read* file-write* (subpath "/dev/fd"))
+            - (allow file-read* file-write* (subpath "/private/var/folders"))
+            - (allow file-read* file-write* (subpath "/usr/local/var/run/lldpd.socket"))
+            - (allow file-read* (subpath "/Library/Logs/DiagnosticReports"))
+            - (allow file-read* (subpath "/Library/Logs/Microsoft/MSTeams"))
+            - (allow file-read* (home-subpath "/Library/Logs/DiagnosticReports"))
+            - (allow user-preference-read (preference-domain "com.apple.mdmclient"))
+            - (allow user-preference-read (preference-domain "com.apple.SystemConfiguration"))
+            - (allow user-preference* (preference-domain "com.microsoft.teams2.defaults"))
+            - (allow user-preference* (preference-domain "com.microsoft.teams2.helper"))
+            - (allow user-preference* (preference-domain "com.microsoft.autoupdate2"))
+            - (allow user-preference-read (preference-domain "com.microsoft.office"))
+            - (allow user-preference-read (preference-domain "com.microsoft.teams"))
+            - (allow network* (remote unix))
+            - (allow network-outbound (subpath "/usr/local/var/run/lldpd.socket"))
+            - (allow process-exec* (literal "/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app/Contents/MacOS/msupdate"))
+            - (allow mach-lookup (global-name "com.microsoft.update.xpc"))
+            - (allow distributed-notification-post)
+            - (allow job-creation)
+            - (allow iokit-open (iokit-registry-entry-class-prefix "AppleSMC"))
+            - (allow file-read-metadata (literal "/Library/Caches/com.microsoft.autoupdate.helper/Clones.noindex"))
+            - (allow file-read-xattr file-write-xattr (xattr "com.apple.quarantine"))
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: teams
+          version: 26261.303.5165.1465
+          build: 26261.303.5165.1465
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe'
         deployment:
@@ -339,6 +803,42 @@ applications:
     display_name: "Microsoft OneDrive"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/OneDrive.app/Contents/MacOS/OneDrive
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.OneDrive
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.application-identifier: UBF8T346G9.com.microsoft.OneDrive
+            com.apple.developer.associated-domains:
+            - webcredentials:login.microsoft.com
+            - webcredentials:login.microsoftonline.us
+            - webcredentials:login.partner.microsoftonline.cn
+            - webcredentials:login.windows-ppe.net
+            com.apple.developer.usernotifications.communication: true
+            com.apple.security.app-sandbox: false
+            com.apple.security.application-groups:
+            - UBF8T346G9.com.microsoft.entrabroker
+            - UBF8T346G9.OneDriveSyncClientSuite
+            - UBF8T346G9.com.microsoft.oneauth
+            - UBF8T346G9.OneDriveStandaloneSuite
+            - UBF8T346G9.OfficeOneDriveSyncIntegration
+            - UBF8T346G9.Kfm
+            - UBF8T346G9.ms
+            keychain-access-groups:
+            - UBF8T346G9.com.microsoft.identity.universalstorage
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: onedrive
+          version: 26.173.0906.0008
+          build: 26.173.0906.0008
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/OneDrive.app/Contents/MacOS/OneDrive"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe'
         deployment:
@@ -363,6 +863,30 @@ applications:
   - id: acrobat
     display_name: "Adobe Acrobat"
     platforms:
+      macos:
+        image_path: '/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat'
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.adobe.Acrobat.Pro
+          team_id: JQ525L2MZD
+          entitlements:
+            com.apple.security.application-groups:
+            - JQ525L2MZD.com.adobe.NGL
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-executable-page-protection: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.photos-library: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: catalog
+          release_policy: unspecified
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat"'
       windows:
         image_path: 'C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe'
         deployment:
@@ -385,6 +909,25 @@ applications:
   - id: 7zip
     display_name: "7-Zip"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: 7zz
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/7zz
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: 7zip
+          version: '26.04'
+          build: '26.04'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/7zz i
       windows:
         image_path: 'C:\Program Files\7-Zip\7zFM.exe'
         deployment:
@@ -408,6 +951,38 @@ applications:
   - id: vscode
     display_name: "Visual Studio Code"
     platforms:
+      macos:
+        singleton_per_session: true
+        image_path: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.VSCode
+          team_id: UBF8T346G9
+          entitlements:
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+        children:
+        - '"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper" --type=gpu-process'
+        - '"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
+        - '"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper" --type=utility --utility-sub-type=node.mojom.NodeService'
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: vscode
+          version: 1.143.0
+          build: 1.143.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Visual Studio Code.app/Contents/MacOS/Code" /Users/{username}/Projects/{project}'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Microsoft VS Code\Code.exe'
         deployment:
@@ -461,6 +1036,35 @@ applications:
   - id: intellij
     display_name: "IntelliJ IDEA"
     platforms:
+      macos:
+        # Provisional research/model template; not an installed-app measurement.
+        # See catalog-native-metadata.md and the all-platform P2 catalog audit.
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.jetbrains.intellij
+          team_id: 2ZEFAR8TH3
+          entitlements:
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-library-validation: true
+        singleton_per_session: true
+        image_path: /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: intellij
+          version: 2026.2.3,262.10968.63
+          build: 2026.2.3,262.10968.63
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/IntelliJ IDEA.app/Contents/MacOS/idea" /Users/{username}/Projects/{project}'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe'
         deployment:
@@ -482,6 +1086,32 @@ applications:
   - id: sublimetext
     display_name: "Sublime Text"
     platforms:
+      macos:
+        # Provisional research/model template; not an installed-app measurement.
+        # See catalog-native-metadata.md and the all-platform P2 catalog audit.
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.sublimetext.4
+          team_id: Z6D26JE4Y4
+          entitlements: {} # selected empty model, not measured absence
+        singleton_per_session: true
+        image_path: /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: sublimetext
+          version: '4215'
+          build: '4215'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Sublime Text.app/Contents/MacOS/sublime_text" /Users/{username}/Projects/{project}/README.md'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Sublime Text\sublime_text.exe'
         deployment:
@@ -504,6 +1134,31 @@ applications:
   - id: msbuild
     display_name: "MSBuild"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: dotnet-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements:
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.debugger: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.get-task-allow: true
+        image_path: /opt/homebrew/opt/dotnet/libexec/dotnet
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: dotnet
+          version: 10.0.401
+          build: 10.0.401
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -version
+        - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -help
       windows:
         image_path: 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe'
         deployment:
@@ -525,6 +1180,31 @@ applications:
   - id: dotnet
     display_name: ".NET CLI"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: dotnet-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements:
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.debugger: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.get-task-allow: true
+        image_path: /opt/homebrew/opt/dotnet/libexec/dotnet
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dotnet
+          version: 10.0.401
+          build: 10.0.401
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/dotnet/libexec/dotnet --info
+        - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
       windows:
         image_path: 'C:\Program Files\dotnet\dotnet.exe'
         deployment:
@@ -547,6 +1227,31 @@ applications:
   - id: nodejs
     display_name: "Node.js"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: node-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/node
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: nodejs
+          version: 26.12.0
+          build: 26.12.0
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/bin/node --version
+        - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\nodejs\node.exe'
         deployment:
@@ -570,6 +1275,29 @@ applications:
   - id: thunderbird
     display_name: "Mozilla Thunderbird"
     platforms:
+      macos:
+        # Provisional research/model template; not an installed-app measurement.
+        # See catalog-native-metadata.md and the all-platform P2 catalog audit.
+        executable_format: mach_o
+        code_signature:
+          signing_id: org.mozilla.thunderbird
+          team_id: 43AQ936H96
+          entitlements:
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-library-validation: true
+        image_path: /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: thunderbird
+          version: '158.0'
+          build: '158.0'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Thunderbird.app/Contents/MacOS/thunderbird"'
       linux:
         image_path: "/usr/bin/thunderbird"
         deployment:
@@ -586,6 +1314,31 @@ applications:
   - id: git
     display_name: "Git"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: git-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/git
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: git
+          version: 2.56.0
+          build: 2.56.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} status
+        - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} log --oneline -5
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Git\cmd\git.exe'
         deployment:
@@ -621,6 +1374,28 @@ applications:
   - id: docker
     display_name: "Docker"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: docker
+          team_id: 9BNSXJN65R
+          entitlements:
+            com.apple.security.application-groups:
+            - group.com.docker
+        image_path: /Applications/Docker.app/Contents/Resources/bin/docker
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: docker
+          version: 4.95.0,242831
+          build: 4.95.0,242831
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Docker.app/Contents/Resources/bin/docker" ps'
+        - '"/Applications/Docker.app/Contents/Resources/bin/docker" images'
       windows:
         image_path: 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
         deployment:
@@ -655,6 +1430,26 @@ applications:
   - id: kubectl
     display_name: "Kubernetes CLI"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: a.out
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/kubectl
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: kubectl
+          version: 1.37.1
+          build: 1.37.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/kubectl get pods
+        - /opt/homebrew/bin/kubectl get deployments
       windows:
         image_path: 'C:\Program Files\kubectl\kubectl.exe'
         deployment:
@@ -690,6 +1485,24 @@ applications:
   - id: ssh
     display_name: "OpenSSH Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/ssh
+        executable_format: mach_o
+        code_signature:
+          signing_id: ssh-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: ssh
+          version: 10.6p1
+          build: 10.6p1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/ssh -V
       windows:
         image_path: 'C:\Windows\System32\OpenSSH\ssh.exe'
         deployment:
@@ -722,6 +1535,21 @@ applications:
   - id: curl
     display_name: "curl"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/curl/bin/curl
+        executable_format: mach_o
+        code_signature: {signing_id: 'curl-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: curl
+          version: 8.23.0
+          build: 8.23.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/curl/bin/curl --head {internal_url}
       linux:
         image_path: "/usr/bin/curl"
         deployment:
@@ -740,6 +1568,25 @@ applications:
   - id: pytest
     display_name: "pytest"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: Python-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: python3
+          version: 3.14.8
+          build: 3.14.8
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pytest --version
       linux:
         image_path: "/usr/bin/python3"
         deployment:
@@ -759,6 +1606,30 @@ applications:
   - id: vim
     display_name: "Vim"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: vim-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/vim
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: vim
+          version: 9.2.1150
+          build: 9.2.1150
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/vim /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/vim"
         deployment:
@@ -774,6 +1645,29 @@ applications:
   - id: nano
     display_name: "GNU nano"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/nano
+        executable_format: mach_o
+        code_signature:
+          signing_id: nano-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: nano
+          version: '9.2'
+          build: '9.2'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/nano /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/nano"
         deployment:
@@ -789,6 +1683,30 @@ applications:
   - id: emacs
     display_name: "GNU Emacs"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: emacs-31-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/emacs
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: emacs
+          version: '31.1'
+          build: '31.1'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/emacs -nw /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/emacs"
         deployment:
@@ -805,6 +1723,30 @@ applications:
   - id: make
     display_name: "GNU Make"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: make
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/gmake
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: make
+          version: 4.4.1
+          build: 4.4.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/gmake -C /Users/{username}/Projects/{project} test
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/make"
         deployment:
@@ -821,6 +1763,25 @@ applications:
   - id: gcc
     display_name: "GCC"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: xgcc
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/gcc-16
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: gcc
+          version: 16.2.0
+          build: 16.2.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/gcc-16 --version
       linux:
         image_path: "/usr/bin/gcc"
         deployment:
@@ -837,6 +1798,26 @@ applications:
   - id: npm
     display_name: "npm"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: node-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/node
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: nodejs
+          version: 26.12.0
+          build: 26.12.0
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js --version
+        - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js config get prefix
       windows:
         image_path: 'C:\Program Files\nodejs\npm.cmd'
         deployment:
@@ -868,6 +1849,30 @@ applications:
   - id: cargo
     display_name: "Rust Cargo"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: cargo-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/cargo
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: cargo
+          version: 1.99.0
+          build: 1.99.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/cargo check --manifest-path /Users/{username}/Projects/{project}/Cargo.toml
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Users\{username}\.cargo\bin\cargo.exe'
         deployment:
@@ -902,6 +1907,26 @@ applications:
   - id: pip
     display_name: "pip"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: Python-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: python3
+          version: 3.14.8
+          build: 3.14.8
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip --version
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip list --format=columns
       linux:
         image_path: "/usr/bin/python3"
         deployment:
@@ -920,6 +1945,24 @@ applications:
   - id: sqlcmd
     display_name: "SQL Server Command Line"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/sqlcmd
+        executable_format: mach_o
+        code_signature: {signing_id: a.out, team_id: null, entitlements: absent}
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: sqlcmd
+          version: 1.10.0
+          build: 1.10.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/sqlcmd -S {db_server} -Q "SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       windows:
         image_path: 'C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe'
         deployment:
@@ -964,6 +2007,26 @@ applications:
   - id: powershell_query
     display_name: "PowerShell (Query)"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        code_signature:
+          signing_id: apphost
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/opt/powershell/libexec/pwsh
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: powershell
+          version: 7.6.6
+          build: 7.6.6
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
+        - /opt/homebrew/opt/powershell/libexec/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
       windows:
         image_path: 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
         deployment:
@@ -988,6 +2051,24 @@ applications:
   - id: mysql
     display_name: "MySQL Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/mysql-client/bin/mysql
+        executable_format: mach_o
+        code_signature: {signing_id: 'mysql-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: mysql
+          version: 26.7.0
+          build: 26.7.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/mysql-client/bin/mysql --host={db_server} --execute="SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       linux:
         image_path: "/usr/bin/mysql"
         deployment:
@@ -1003,6 +2084,24 @@ applications:
   - id: psql
     display_name: "PostgreSQL Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/libpq/bin/psql
+        executable_format: mach_o
+        code_signature: {signing_id: 'psql-55554944{macho_uuid_hex}', team_id: null, entitlements: absent}
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: psql
+          version: '18.6'
+          build: '18.6'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/libpq/bin/psql -h {db_server} -c "SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       windows:
         image_path: 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
         deployment:
@@ -1033,6 +2132,28 @@ applications:
   - id: redis_cli
     display_name: "Redis CLI"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: redis-cli-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/bin/redis-cli
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: redis-cli
+          version: 8.10.2
+          build: 8.10.2
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/redis-cli -h {db_server} PING
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       linux:
         image_path: "/usr/bin/redis-cli"
         deployment:
@@ -1057,6 +2178,32 @@ applications:
     display_name: "Slack"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Slack.app/Contents/MacOS/Slack
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.tinyspeck.slackmacgap
+          team_id: BQR82RBBHL
+          entitlements:
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.bluetooth: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.print: true
+            com.apple.security.device.usb: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: slack
+          version: 4.52.178
+          build: 4.52.178
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Slack.app/Contents/MacOS/Slack"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\slack\Slack.exe'
         deployment:
@@ -1102,6 +2249,35 @@ applications:
     display_name: "Zoom Meetings"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/zoom.us.app/Contents/MacOS/zoom.us
+        executable_format: mach_o
+        code_signature:
+          signing_id: us.zoom.xos
+          team_id: BJ4HAAB9B3
+          entitlements:
+            com.apple.application-identifier: BJ4HAAB9B3.us.zoom.xos
+            com.apple.developer.associated-domains:
+            - webcredentials:devep-int.zoomdev.us
+            - webcredentials:zoom.us
+            com.apple.developer.team-identifier: BJ4HAAB9B3
+            com.apple.security.application-groups:
+            - BJ4HAAB9B3.ZoomClient3rd
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.calendars: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: zoom
+          version: 7.2.2.88465
+          build: 7.2.2.88465
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/zoom.us.app/Contents/MacOS/zoom.us"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe'
         available_from: 2024-02-26
@@ -1148,6 +2324,46 @@ applications:
     display_name: "Cisco Webex"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Webex.app/Contents/MacOS/Webex
+        executable_format: mach_o
+        code_signature:
+          signing_id: Cisco-Systems.Spark
+          team_id: DE8Y96K9QP
+          entitlements:
+            com.apple.application-identifier: DE8Y96K9QP.Cisco-Systems.Spark
+            com.apple.developer.associated-domains:
+            - applinks:alpha.webex.com
+            - applinks:convergedats.webex.com
+            - applinks:co-ats.webex.com
+            - applinks:co.webex.com
+            - applinks:cisco.webex.com
+            - applinks:acecloud.webex.com
+            - applinks:cisco-collab.webex.com
+            - applinks:drive.webex.com
+            - applinks:appleincsso.webex.com
+            - applinks:appleinc.webex.com
+            - applinks:appletestci.webex.com
+            com.apple.developer.networking.custom-protocol: true
+            com.apple.developer.team-identifier: DE8Y96K9QP
+            com.apple.developer.usernotifications.communication: true
+            com.apple.security.automation.apple-events: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.calendars: true
+            keychain-access-groups:
+            - DE8Y96K9QP.Cisco-Systems.Spark
+        available_from: '2026-10-16'
+        deployment:
+          kind: managed
+          product_id: webex
+          version: 46.10.0.36042
+          build: '36042'
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - /Applications/Webex.app/Contents/MacOS/Webex
       windows:
         image_path: 'C:\Program Files\Cisco Spark\Webex.exe'
         available_from: 2024-03-12
@@ -1190,6 +2406,32 @@ applications:
     display_name: "Dropbox"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Dropbox.app/Contents/MacOS/Dropbox
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.getdropbox.dropbox
+          team_id: G7HH3F8CAK
+          entitlements:
+            com.apple.application-identifier: G7HH3F8CAK.com.getdropbox.dropbox
+            com.apple.security.application-groups:
+            - G7HH3F8CAK.com.getdropbox.dropbox.sync
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.personal-information.photos-library: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dropbox
+          version: 274.4.4905
+          build: 274.4.4905
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Dropbox.app/Contents/MacOS/Dropbox"'
       windows:
         image_path: 'C:\Program Files (x86)\Dropbox\Client\Dropbox.exe'
         deployment:
@@ -1230,6 +2472,32 @@ applications:
     display_name: "Google Drive for Desktop"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Google Drive.app/Contents/MacOS/Google Drive
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.google.drivefs
+          team_id: EQHXZ8M8AV
+          entitlements:
+            com.apple.application-identifier: EQHXZ8M8AV.com.google.drivefs
+            com.apple.security.application-groups:
+            - EQHXZ8M8AV.group.com.google.drivefs
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.personal-information.photos-library: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: google_drive_desktop
+          version: 132.0.0
+          build: 132.0.0
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - '"/Applications/Google Drive.app/Contents/MacOS/Google Drive"'
       windows:
         image_path: 'C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe'
         deployment:
@@ -1268,6 +2536,40 @@ applications:
     display_name: "Citrix Workspace"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.citrix.receiver.nomas
+          team_id: S272Y5R93J
+          entitlements:
+            com.apple.application-identifier: S272Y5R93J.com.citrix.receiver.nomas
+            com.apple.developer.aps-environment: production
+            com.apple.developer.team-identifier: S272Y5R93J
+            com.apple.security.application-groups:
+            - S272Y5R93J.group.com.citrix.shared
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.location: true
+            keychain-access-groups:
+            - S272Y5R93J.com.citrix.clkeychain.access
+            - S272Y5R93J.com.citrix.mdx
+            - S272Y5R93J.com.citrix.workspace.firstparty
+            - S272Y5R93J.com.citrix.workspace.appsagent
+            - S272Y5R93J.com.citrix.cllease
+            - S272Y5R93J.com.citrix.aadSSO
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: citrix_workspace
+          version: 26.09.0.17
+          build: 26.09.0.17
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - '"/Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace"'
       windows:
         image_path: 'C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe'
         deployment:
@@ -1336,6 +2638,23 @@ applications:
             release_policy: host_build
           - path: 'C:\Windows\System32\ws2_32.dll'
             release_policy: host_build
+      macos:
+        available_from: "2026-10-16"
+        image_path: "/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.cisco.secureclient.gui
+          team_id: DE8Y96K9QP
+          entitlements: {}
+        deployment:
+          kind: managed
+          product_id: cisco-secure-client-ui
+          version: "5.1.16"
+          build: "1663"
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, help_desk, default]
     system_types: [workstation]
@@ -1346,6 +2665,34 @@ applications:
     compatibility_option: globalprotect
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.paloaltonetworks.GlobalProtect.client
+          team_id: PXPZ95SK77
+          entitlements:
+            com.apple.developer.team-identifier: PXPZ95SK77
+            com.apple.developer.system-extension.install: true
+            keychain-access-groups:
+            - PXPZ95SK77.com.paloaltonetworks.GlobalProtect
+            com.apple.application-identifier: PXPZ95SK77.com.paloaltonetworks.GlobalProtect.client
+            com.apple.security.application-groups:
+            - PXPZ95SK77.com.paloaltonetworks.GlobalProtect.client
+            com.apple.developer.networking.networkextension:
+            - app-proxy-provider-systemextension
+            - content-filter-provider-systemextension
+            - dns-proxy-systemextension
+        available_from: '2026-10-16'
+        deployment:
+          kind: managed
+          product_id: globalprotect
+          version: 6.3.3
+          build: c711
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
       windows:
         image_path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe'
         deployment:
@@ -1453,6 +2800,26 @@ applications:
   - id: tableau_desktop
     display_name: "Tableau Desktop"
     platforms:
+      macos:
+        image_path: '/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau'
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.tableausoftware.tableaudesktop
+          team_id: QJ4XPRK37C
+          entitlements:
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.disable-library-validation: false
+            com.apple.security.get-task-allow: false
+        available_from: '2026-10-16'
+        deployment:
+          kind: managed
+          product_id: tableau_desktop
+          version: '2026.1'
+          build: '20261.26.0226.1626'
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau"'
       windows:
         image_path: 'C:\Program Files\Tableau\Tableau 2024.1\bin\tableau.exe'
         deployment:
@@ -1489,6 +2856,29 @@ applications:
   - id: postman
     display_name: "Postman"
     platforms:
+      macos:
+        # Provisional research/model template; not an installed-app measurement.
+        # See catalog-native-metadata.md and the all-platform P2 catalog audit.
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.postmanlabs.mac
+          team_id: H7H8Q7M5CK
+          entitlements:
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+        singleton_per_session: true
+        image_path: /Applications/Postman.app/Contents/MacOS/Postman
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: postman
+          version: 12.32.3
+          build: 12.32.3
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Postman.app/Contents/MacOS/Postman"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Postman\Postman.exe'
         available_from: 2024-03-01
@@ -1534,6 +2924,33 @@ applications:
   - id: dbeaver
     display_name: "DBeaver"
     platforms:
+      macos:
+        singleton_per_session: true
+        image_path: /Applications/DBeaver.app/Contents/MacOS/dbeaver
+        executable_format: mach_o
+        code_signature:
+          signing_id: org.jkiss.dbeaver.core.product
+          team_id: 42B6MDKMW8
+          entitlements:
+            com.apple.security.cs.allow-dyld-environment-variables: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.cs.allow-unsigned-executable-memory: true
+            com.apple.security.cs.debugger: true
+            com.apple.security.cs.disable-executable-page-protection: true
+            com.apple.security.cs.disable-library-validation: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.microphone: true
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dbeaver
+          version: 26.2.2
+          build: 26.2.2
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/DBeaver.app/Contents/MacOS/dbeaver"'
       windows:
         image_path: 'C:\Program Files\DBeaver\dbeaver.exe'
         deployment:
@@ -1646,6 +3063,30 @@ applications:
   - id: ldapsearch
     display_name: "LDAP Search"
     platforms:
+      macos:
+        # Installed reference: November 7; runtime validation remains modeled.
+        executable_format: mach_o
+        code_signature:
+          signing_id: ldapsearch-55554944{macho_uuid_hex}
+          team_id: null
+          entitlements: absent
+        image_path: /opt/homebrew/opt/openldap/bin/ldapsearch
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: ldapsearch
+          version: 2.7.1
+          build: 2.7.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/openldap/bin/ldapsearch -x -H ldap://{dc_server} -b "{base_dn}" "(objectClass=person)"
+        command_parameter_pools:
+          dc_server:
+          - directory.example.test
+          base_dn:
+          - dc=example,dc=test
       linux:
         image_path: "/usr/bin/ldapsearch"
         deployment:
@@ -1886,3 +3327,1902 @@ applications:
     categories: [query]
     personas: [sysadmin, help_desk, security_analyst]
     system_types: [server, domain_controller, workstation]
+
+  # macOS system and workstation applications; deployment remains catalog-driven.
+  # Activated only by the frozen native source policy, never persona noise.
+  - id: macos-eslogger
+    display_name: macOS Endpoint Security Collector
+    platforms:
+      macos:
+        image_path: /usr/bin/eslogger
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+          - /usr/bin/eslogger fork exec exit create close rename unlink
+    categories: [macos_collector]
+    personas: []
+    system_types: [workstation]
+  # Explicit SSH bundle actor; never selected as independent baseline noise.
+  - id: macos-ssh
+    display_name: macOS OpenSSH Client
+    platforms:
+      macos:
+        image_path: /usr/bin/ssh
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.ssh
+          team_id: null
+          # Apple OpenSSH Entitlements/ssh.entitlements, independently matched
+          # against the fixed installed vendor binary. Native integer export
+          # remains outside the current generation profile until reviewed.
+          entitlements:
+            keychain-access-groups: [com.apple.ssh.passphrases]
+            com.apple.private.amfi.version-restriction: 1
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/bin/ssh {username}@{ssh_target}
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  # Receiver vocabulary only; activation requires the owning SSH lifecycle.
+  - id: macos-sshd-keygen-wrapper
+    display_name: macOS SSH Startup Wrapper
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-keygen-wrapper
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-keygen-wrapper
+          team_id: null
+          entitlements:
+            com.apple.keystore.class.wku: true
+            com.apple.private.security.storage.ssh: true
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - sshd-keygen-wrapper
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd
+    display_name: macOS OpenSSH Inetd Receiver
+    platforms:
+      macos:
+        image_path: /usr/sbin/sshd
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd
+          team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/sbin/sshd -i
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd-session
+    display_name: macOS OpenSSH Session Process
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-session
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-session
+          team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
+            com.apple.private.xpc.launchd.reboot-pivot-root: true
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/libexec/sshd-session -i -R
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd-auth
+    display_name: macOS OpenSSH Authentication Helper
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-auth
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-auth
+          team_id: null
+          entitlements:
+            com.apple.private.security.clear-library-validation: true
+            com.apple.private.endpoint-security.submit.openssh: true
+            com.apple.private.xpc.launchd.reboot-pivot-root: true
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/libexec/sshd-auth -i -R
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-launchd
+    display_name: launchd
+    platforms:
+      macos:
+        image_path: /sbin/launchd
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.xpc.launchd
+          team_id: null
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /sbin/launchd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-loginwindow
+    display_name: loginwindow
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-logind
+    display_name: logind
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/logind
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/logind
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-syspolicyd
+    display_name: syspolicyd
+    platforms:
+      macos:
+        image_path: /usr/libexec/syspolicyd
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/syspolicyd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-tccd
+    display_name: tccd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-smd
+    display_name: smd
+    platforms:
+      macos:
+        image_path: /usr/libexec/smd
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/smd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-mds
+    display_name: mds
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-safari
+    display_name: safari
+    platforms:
+      macos:
+        image_path: /Applications/Safari.app/Contents/MacOS/Safari
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.Safari
+          team_id: null
+          entitlements:
+            adi-client: '2463478364'
+            com.apple.PairingManager.Read: true
+            com.apple.PairingManager.RemovePeer: true
+            com.apple.PairingManager.Write: true
+            com.apple.accounts.appleaccount.fullaccess: true
+            com.apple.appattest.spi: true
+            com.apple.appleaccount.identity.read: true
+            com.apple.application-identifier: com.apple.Safari
+            com.apple.assistant.dictation.prerecorded: true
+            com.apple.authentication-services.access-credential-identities: true
+            com.apple.authentication-services.allow-authentication-request-any-rpid: true
+            com.apple.authkit.client.internal: true
+            com.apple.authkit.client.private: true
+            com.apple.bluetooth.internal: true
+            com.apple.chrono.invalidate-timelines: true
+            com.apple.chronoservices: true
+            com.apple.coreduetd.allow: true
+            com.apple.coreduetd.context: true
+            com.apple.coreduetd.people: true
+            com.apple.developer.aps-environment: production
+            com.apple.developer.copresence: true
+            com.apple.developer.group-session: true
+            com.apple.developer.group-session.urlactivity: true
+            com.apple.developer.icloud-container-environment: Production
+            com.apple.developer.icloud-extended-share-access:
+            - InProcessShareOwnerParticipantInfo
+            com.apple.developer.icloud-services:
+            - CloudKit
+            com.apple.developer.identity-document-services.web-presentment-controller: true
+            com.apple.developer.maps: true
+            com.apple.dock.add-item: true
+            com.apple.duet.activityscheduler.allow: true
+            com.apple.features.all-access: true
+            com.apple.finance.private: true
+            com.apple.generativeexperiences.availabilityService: true
+            com.apple.generativeexperiences.summarization: true
+            com.apple.keystore.sik.access: true
+            com.apple.launchservices.changeurlschemehandler: true
+            com.apple.locationd.effective_bundle: true
+            com.apple.mobileactivationd.bridge: true
+            com.apple.mobileactivationd.spi: true
+            com.apple.modelmanager.inference: true
+            com.apple.passes.add: true
+            com.apple.payment.all-access: true
+            com.apple.private.CoreAuthentication.SPI: true
+            com.apple.private.LocalAuthentication.CallerName: true
+            com.apple.private.RemoteServiceDiscovery.allow-sandbox: true
+            com.apple.private.RemoteServiceDiscovery.device-admin: true
+            com.apple.private.Safari.History: true
+            com.apple.private.Safari.PasswordBreachHelper: true
+            com.apple.private.SkyLight.secureCursor: true
+            com.apple.private.accounts.allaccounts: true
+            com.apple.private.app-sandbox.unquarantine: true
+            com.apple.private.appintents-bundle-absolute-paths:
+            - /System/Library/PrivateFrameworks/SafariSwift.framework
+            - /AppleInternal/Library/Frameworks/ContextStagingIntents.framework
+            com.apple.private.appleaccount.app-hidden-from-icloud-settings: true
+            com.apple.private.appleevents.allowedtosend:
+              com.apple.private.appleevents.allowed.aevt.oapp: true
+              com.apple.private.appleevents.allowed.mail.shpd: true
+              com.apple.private.appleevents.allowed.mail.shra: true
+              com.apple.private.appleevents.allowed.mail.shwa: true
+              com.apple.private.appleevents.allowed.mail.swae: true
+              com.apple.private.appleevents.allowed.note.open: true
+            com.apple.private.applemediaservices: true
+            com.apple.private.appstorecomponents: true
+            com.apple.private.appstorecomponents.media-client-id: com.apple.searchui
+            com.apple.private.appstorecomponents.media-client-version: '1'
+            com.apple.private.appstorecomponents.media-clients:
+              SafariExtensions:
+                id: com.apple.Safari.Extensions
+                version: '1'
+            com.apple.private.aps-connection-initiate: true
+            com.apple.private.assets.accessible-asset-types:
+            - com.apple.MobileAsset.CoreSuggestions
+            - com.apple.MobileAsset.DesktopPicture
+            - com.apple.MobileAsset.SafariBackgroundImage
+            - com.apple.MobileAsset.UAF.SafariBrowsingAssistant
+            - com.apple.MobileAsset.UAF.FM.Overrides
+            - com.apple.MobileAsset.UAF.FM.GenerativeModels
+            com.apple.private.assets.bypass-asset-types-check: true
+            com.apple.private.associated-domains: true
+            com.apple.private.biome.client-identifier: com.apple.Safari
+            com.apple.private.biome.read-write:
+            - App.WebApp.InFocus
+            - App.WebUsage
+            - Discoverability.Signals
+            - Discoverability.Usage
+            - Safari.AutoPlay
+            - Safari.WebPagePerformance
+            - Safari.Navigations
+            - Safari.PageLoad
+            - Safari.WindowProxy
+            - Safari.MemoryFootprint
+            - Unilog.SafariSearch.Stage
+            - Safari.WebsitesBlockingQuit
+            - Safari.Browsing.Assistant
+            - Passwords.ChangePasswordForMe
+            - Passwords.SecurityRecommendations
+            - GenerativeModels.GenerativeFunctions.Instrumentation
+            - GenerativeModels.GenerativeFunctions.Events
+            - GenerativeModels.GenerativeFunctions.ModelIO
+            com.apple.private.can-import-browsing-data-to-Safari: true
+            com.apple.private.can-interact-with-any-Safari-extension: true
+            com.apple.private.can-load-any-content-blocker: true
+            com.apple.private.canModifyAppLinkPermissions: true
+            com.apple.private.cloudkit.systemService: true
+            com.apple.private.commerce:
+            - Accounts
+            com.apple.private.copresence: true
+            com.apple.private.copresence.stable-app-identifier: com.apple.Safari
+            com.apple.private.coreservices.canmaplsdatabase: true
+            com.apple.private.coreservices.definesExtensionPoint: true
+            com.apple.private.coreservices.lsuseractivityd.bestappsuggestion: true
+            com.apple.private.dmd.policy: true
+            com.apple.private.dprivacyd.allow: true
+            com.apple.private.email: true
+            com.apple.private.extension-host.safari-content-blocker: true
+            com.apple.private.extension-host.safari-extension: true
+            com.apple.private.feedback.drafting: true
+            com.apple.private.hid.client.event-dispatch.internal: true
+            com.apple.private.iaaccounts: true
+            com.apple.private.imcore.imagent: true
+            com.apple.private.in-app-payments: true
+            com.apple.private.intelligenceplatform.client-identifier: com.apple.safari
+            com.apple.private.intelligenceplatform.use-cases:
+              SafariUsageDonation:
+                Streams:
+                  Unilog.SafariSearch.Stage:
+                    mode: read-write
+              com.apple.aiml.unilog.healthTelemetry:
+                Streams:
+                  Unilog.HealthTelemetry:
+                    mode: read-write
+            com.apple.private.interstellar.data-access: '*'
+            com.apple.private.keychain.inet_expansion_fields: true
+            com.apple.private.keychain.kcsharing.client: true
+            com.apple.private.launchservices.allowopenwithanyhandler: true
+            com.apple.private.launchservices.changedefaulthandlers:
+            - http
+            - https
+            - public.html
+            com.apple.private.launchservices.templateapp.creation: true
+            com.apple.private.managed-settings.effective-read: true
+            com.apple.private.networkserviceproxy: true
+            com.apple.private.octagon: true
+            com.apple.private.osanalytics.defaults.allow: true
+            com.apple.private.parsec.default-client: com.apple.Safari
+            com.apple.private.rsr-cryptex-access: true
+            com.apple.private.safari.automatic-password-change: true
+            com.apple.private.safari.can-use-bookmarks-sync-agent: true
+            com.apple.private.safari.can-use-history-push-agent: true
+            com.apple.private.safari.can-use-launch-agent: true
+            com.apple.private.safari.can-use-sandbox-broker: true
+            com.apple.private.safari.can-use-search-helper: true
+            com.apple.private.safari.safebrowsing.useallproviders: true
+            com.apple.private.screen-time: true
+            com.apple.private.screen-time-settings: true
+            com.apple.private.screencapturekit.sharingsession: true
+            com.apple.private.security.restricted-application-groups:
+            - group.com.apple.tipsnext
+            com.apple.private.security.storage.MobileAssetGenerativeModels: true
+            com.apple.private.security.storage.Safari: true
+            com.apple.private.security.storage.WebDriver: true
+            com.apple.private.security.storage.cookies: true
+            com.apple.private.security.storage.os_eligibility.readonly: true
+            com.apple.private.security.user-intent-authority: true
+            com.apple.private.sociallayer.highlights: true
+            com.apple.private.softwareupdated.OSUpdate: true
+            com.apple.private.subscriptionservice.internal: true
+            com.apple.private.suggestions.events: true
+            com.apple.private.suggestions.urls: true
+            com.apple.private.tcc.allow:
+            - kTCCServiceAddressBook
+            - kTCCServiceCamera
+            - kTCCServiceListenEvent
+            - kTCCServiceMicrophone
+            - kTCCServiceScreenCapture
+            - kTCCServiceSystemPolicyDownloadsFolder
+            - kTCCServiceCalendar
+            - kTCCServiceSystemPolicyAppData
+            - kTCCServiceAppleEvents
+            com.apple.private.tcc.allow-prompting:
+            - kTCCServiceSpeechRecognition
+            com.apple.private.translation: true
+            com.apple.private.ubiquity-additional-kvstore-identifiers:
+            - com.apple.tipsd
+            com.apple.private.usage-tracking: true
+            com.apple.private.usernotifications.bundle-identifiers:
+            - com.apple.Passwords
+            com.apple.private.webinspector.remote-inspection-debugger: true
+            com.apple.private.webkit.webpush: true
+            com.apple.privatecloudcompute.bundleIdentifierOverride: true
+            com.apple.privatecloudcompute.knownRateLimits: true
+            com.apple.proactive.PersonalizationPortrait.NamedEntity.readOnly: true
+            com.apple.rootless.storage.Safari: true
+            com.apple.rootless.storage.SafariFamily: true
+            com.apple.rootless.storage.remotemanagementd: true
+            com.apple.runningboard.assertions.webkit: true
+            com.apple.sage.summarization: true
+            com.apple.security.app-sandbox: true
+            com.apple.security.application-groups:
+            - group.com.apple.tipsnext
+            com.apple.security.attestation.access: true
+            com.apple.security.device.camera: true
+            com.apple.security.device.microphone: true
+            com.apple.security.device.usb: true
+            com.apple.security.exception.files.absolute-path.read-only:
+            - /private/var/db/assetsubscriptiond/
+            com.apple.security.exception.mach-lookup.global-name:
+            - com.apple.coreduetd.knowledge
+            - com.apple.feedbackd.centralized-feedback
+            - com.apple.AuthenticationServices.AuthenticationServicesAgent.CredentialUpdate
+            com.apple.security.exception.shared-preference.read-only:
+            - com.apple.UnifiedAssetFramework
+            com.apple.security.exception.shared-preference.read-write:
+            - com.apple.Passwords
+            com.apple.security.files.bookmarks.app-scope: true
+            com.apple.security.files.user-selected.read-write: true
+            com.apple.security.hardened-process: true
+            com.apple.security.hardened-process.checked-allocations: true
+            com.apple.security.hardened-process.checked-allocations.soft-mode: true
+            com.apple.security.network.client: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.calendars: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.print: true
+            com.apple.security.temporary-exception.apple-events:
+            - com.apple.MobileSMS
+            com.apple.security.temporary-exception.files.absolute-path.read-only:
+            - /Library/Apple/System/Library/
+            - /private/var/db/com.apple.countryd/
+            - /private/var/db/os_eligibility/
+            - /AppleInternal/Library/Application Support/Safari/
+            com.apple.security.temporary-exception.files.home-relative-path.read-only:
+            - /Library/Trial/
+            - /Library/UnifiedAssetFramework/
+            - /Library/Safari/PasswordBreachStore.plist
+            com.apple.security.temporary-exception.files.home-relative-path.read-write:
+            - /Library/Caches/com.apple.Safari/
+            - /Library/Cookies/
+            - /Library/Safari/
+            - /Library/Safari Shared Data/
+            - /Library/WebDriver/
+            - /Library/Containers/com.apple.news/Data/
+            - /Applications/
+            - /Library/Containers/com.apple.Safari.WebApp/
+            com.apple.security.temporary-exception.iokit-user-client-class:
+            - AppleKeyStoreUserClient
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.apple.analyticsd
+            - com.apple.AppSSO.service-xpc
+            - com.apple.biometrickitd
+            - com.apple.commerce
+            - com.apple.cookied
+            - com.apple.CrashReporterSupportHelper
+            - com.apple.dprivacyd
+            - com.apple.imagent.desktop.auth
+            - com.apple.internal.safaricyclerd
+            - com.apple.libquitd
+            - com.apple.locationd.desktop.synchronous
+            - com.apple.LORemoteUIPinService
+            - com.apple.networkserviceproxy
+            - com.apple.nsurlstorage-cache
+            - com.apple.parsecd
+            - com.apple.passd.account
+            - com.apple.passd.in-app-payment
+            - com.apple.passd.library
+            - com.apple.passd.payment
+            - com.apple.passd.payment-continuity
+            - com.apple.PerformanceAnalysis.animationperfd
+            - com.apple.PIPAgent
+            - com.apple.remoted
+            - com.apple.Safari.SafeBrowsing.Service
+            - com.apple.SafariBookmarksSyncAgent
+            - com.apple.SafariCloudHistoryPushAgent
+            - com.apple.SafariLaunchAgent
+            - com.apple.SafariNotificationAgent
+            - com.apple.security.syspolicy
+            - com.apple.SharedWebCredentials
+            - com.apple.spotlight.SearchAgent
+            - com.apple.usymptomsd
+            - com.apple.UsageTrackingAgent
+            - com.apple.UsageTrackingAgent.private
+            - com.apple.ScreenTimeSettingsAgent.private
+            - com.apple.VideoSubscriberAccount.videosubscriptionsd
+            - com.apple.webinspector
+            - com.apple.webinspector.debugger
+            - com.apple.dmd.policy
+            - com.apple.AuthenticationServicesCore.AuthenticationServicesAgent
+            - com.apple.AuthenticationServices.AutoFill
+            - com.apple.email.maild
+            - com.apple.translationd
+            - com.apple.cdp.daemon
+            - com.apple.duetactivityscheduler
+            - com.apple.proactive.PersonalizationPortrait.SocialHighlight
+            - com.apple.sociallayerd
+            - com.apple.generativeexperiences.availabilityService
+            - com.apple.coreservices.lsbestappsuggestionmanager.xpc
+            - com.apple.suggestd.urls
+            - com.apple.security.octagon
+            - com.apple.synapse.contentlinkingd
+            - com.apple.synapse.link-context-service
+            - com.apple.appstorecomponentsd.xpc
+            - com.apple.ind.cloudfeatures
+            - com.apple.ak.privateemail.xpc
+            - com.apple.group-activities.conversationmanagerhost
+            - com.apple.copresence.conversationmanagerhost
+            - com.apple.replaykit.sharingsession.notification
+            - com.apple.replaykit.sharingsession
+            - com.apple.Safari.History.Service
+            - com.apple.SharePlay.GroupSessionService
+            - com.apple.webprivacyd
+            - com.apple.chronoservices
+            - com.apple.biome.access.user
+            - com.apple.trial.status
+            - com.apple.financed.service.financestore
+            - com.apple.WalletBlastDoorService
+            - com.apple.ManagedSettingsAgent
+            - com.apple.ManagedSettingsAgent.publisher
+            - com.apple.generativeexperiences.summarization
+            - com.apple.sage.summarization
+            - com.apple.siri.uaf.service
+            - com.apple.mobileasset.autoasset
+            - com.apple.mobileassetd.v2
+            - com.apple.system.opendirectoryd.api
+            - com.apple.siri.uaf.subscription.service
+            - com.apple.ak.signinwithapple.xpc
+            - com.apple.AuthenticationServicesCore.AuthenticationServicesAgent.CredentialExchange
+            - com.apple.AutoUnlock.AuthenticationHintsProvider
+            - com.apple.aa.identity.xpc
+            - com.apple.Safari.PasswordBreachHelper
+            - com.apple.security.kcsharing
+            - com.apple.coreduetd.people.user
+            - com.apple.familycircle.agent
+            - com.apple.sharing.airdrop.service
+            - com.apple.privatecloudcompute
+            - com.apple.mdmclient.daemon.unrestricted
+            - com.apple.softwareupdated.OSUpdate
+            - com.apple.softwareupdated
+            - com.apple.siriactionsd.xpc
+            - com.apple.campo
+            com.apple.security.temporary-exception.sbpl:
+            - (allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (home-subpath
+              "/Library/Cookies")))
+            - (allow mach-issue-extension (require-all (extension-class "com.apple.webkit.extension.mach")))
+            - (allow file-write-create (home-literal "/Library/Caches/com.apple.Safari"))
+            - (allow file-write-create (home-literal "/Library/Cookies"))
+            - (allow file-write-create (home-literal "/Library/Safari Shared Data"))
+            - (allow file-write-create (home-literal "/Library/Web Driver"))
+            - (allow generic-issue-extension (extension-class-regex (regex-quote "com.apple.webkit.microphone")))
+            - (allow generic-issue-extension (extension-class-regex (regex-quote "com.apple.webkit.camera")))
+            - (allow qtn-user)
+            - '(with-filter (extension "com.apple.safari.develop-menu") (allow network-outbound (literal "/private/var/run/usbmuxd"))
+              (allow file-issue-extension (extension-class "com.apple.app-sandbox.read")) (allow network-outbound
+              (regex #"com\.apple\.webinspectord_sim\.socket$")) (allow mach-lookup (global-name-regex #"^com\.apple\.CoreSimulator\.LaunchHost.*")
+              (global-name #"com.apple.CoreSimulator.simdiskimaged")))'
+            - (allow file-read* (subpath "/Library/Managed Preferences"))
+            - '(allow file-read* (regex #"\.pltsuite$"))'
+            - '(allow file-read* (regex #"\.app(/.*)?$"))'
+            - (allow file-write-xattr (xattr "com.apple.quarantine"))
+            - (allow file-read-data (home-path-ancestors "/Library/Safari/Bookmarks.plist"))
+            - (allow authorization-right-obtain (right-name "com.apple.Safari.parental-controls"))
+            - (allow file-read* file-write* (require-any (home-literal "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2")
+              (home-literal "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2-shm") (home-literal
+              "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2-wal") (home-literal "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2-lock")
+              (home-literal "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2-journal")))
+            - (allow distributed-notification-post)
+            - (allow user-preference-read (preference-domain "com.apple.gms.availability"))
+            - (allow user-preference-read (preference-domain "com.apple.newscore"))
+            - (allow user-preference-read user-preference-write (preference-domain "com.apple.news"))
+            - (allow file-read* (home-literal "/Library/Trial"))
+            - (allow iokit-issue-extension (require-all (extension-class "com.apple.webkit.extension.iokit")))
+            - (allow file-read* file-write* (home-literal "/Library/Preferences/com.apple.Safari.SafeBrowsing.plist"))
+            - (allow user-preference-read (preference-domain "com.apple.SafariUserAccountUpdater"))
+            - '(allow file-write* (regex #"\.app(/.*)?$"))'
+            - (allow user-preference-read user-preference-write (preference-domain-prefix "com.apple.Safari.WebApp"))
+            - (allow user-preference-read (preference-domain "com.apple.mdmclient"))
+            - (allow user-preference-read (preference-domain "com.apple.SoftwareUpdate"))
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.apple.newscore
+            - com.apple.WebInspector
+            - com.apple.CoreGraphics
+            - com.apple.WebDriver
+            - com.apple.SocialLayer
+            - com.apple.messages.EnhancedLinkSecurity
+            - com.apple.Safari.SandboxBroker
+            - com.apple.suggestions
+            com.apple.security.temporary-exception.shared-preference.read-write:
+            - com.apple.SafariBookmarksSyncAgent
+            - com.apple.siri.generativeassistantsettings
+            - com.apple.news
+            - com.apple.AppStoreComponents
+            - com.apple.Passwords
+            - com.apple.AuthenticationServices.Developer
+            com.apple.sharing.DeviceDiscovery: true
+            com.apple.sharing.Services: true
+            com.apple.shortcuts.trigger-editing: true
+            com.apple.symptom_analytics.configure: true
+            com.apple.symptom_diagnostics.report: true
+            com.apple.synapse.allowLinkContextRequests: true
+            com.apple.trial.client:
+            - 342
+            com.apple.trial.status.deployment-environment.allow:
+            - 2
+            fairplay-client: '511712240'
+            keychain-access-groups:
+            - com.apple.cfnetwork
+            - com.apple.safari.credit-cards
+            - com.apple.safari.history
+            - com.apple.Safari.local
+            - com.apple.ProtectedCloudStorage
+            - com.apple.webinspector
+            - com.apple.passd
+            - com.apple.sharing.safaripasswordsharing
+            - com.apple.Safari.WBSDevice
+            - com.apple.webkit.webauthn
+            - lockdown-identities
+            - com.apple.cfnetwork.testing
+            - com.apple.password-manager
+            - com.apple.password-manager.testing
+            - com.apple.webkit.webauthn.testing
+            - com.apple.password-manager.website-metadata
+            - com.apple.password-manager.website-metadata.testing
+            - com.apple.Passwords.LocalState
+            - com.apple.Passwords.LocalState.testing
+            - com.apple.sharing.safaripasswordsharing.testing
+            - com.apple.password-manager.personal
+            - com.apple.password-manager.personal.testing
+            - com.apple.cfnetwork-recently-deleted
+            - com.apple.cfnetwork-recently-deleted.testing
+            - com.apple.password-manager-recently-deleted
+            - com.apple.password-manager-recently-deleted.testing
+            - com.apple.webkit.webauthn-recently-deleted
+            - com.apple.webkit.webauthn-recently-deleted.testing
+            - com.apple.password-manager.personal-recently-deleted
+            - com.apple.password-manager.personal-recently-deleted.testing
+            - com.apple.password-manager.generated-passwords
+            - com.apple.password-manager.generated-passwords.testing
+            - com.apple.password-manager.password-evaluations
+            - com.apple.password-manager.password-evaluations.testing
+            - com.apple.password-manager.automatic-security-upgrades
+            - com.apple.password-manager.automatic-security-upgrades.testing
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /Applications/Safari.app/Contents/MacOS/Safari
+    categories:
+    - browser
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-finder
+    display_name: finder
+    singleton_per_session: true
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.finder
+          team_id: null
+          entitlements:
+            com.apple.accounts.appleaccount.fullaccess: true
+            com.apple.amp.devices.client: true
+            com.apple.application-identifier: RD13622867.com.apple.finder
+            com.apple.authkit.client.private: true
+            com.apple.bluetooth.system: true
+            com.apple.campo-client: true
+            com.apple.developer.associated-domains: []
+            com.apple.developer.icloud-extended-share-access:
+            - InProcessShareOwnerParticipantInfo
+            com.apple.developer.ubiquity-kvstore-identifier: com.apple.finder
+            com.apple.dock.add-item: true
+            com.apple.feedbackd.remote-evaluation: true
+            com.apple.filederivatives.derive: true
+            com.apple.fileprovider.acl-read: true
+            com.apple.fileprovider.enumerate: true
+            com.apple.fileprovider.extension-host: true
+            com.apple.fileprovider.fetch-url: true
+            com.apple.imdpersistence.IMDPersistenceAgent-Syndication: true
+            com.apple.internal.fileprovider.sync-root-management: true
+            com.apple.launchservices.changeurlschemehandler: true
+            com.apple.private.ArchiveService.XPC: true
+            com.apple.private.AuthorizationServices:
+            - com.apple.security.assessment.update
+            com.apple.private.CloudSharing.SPI: true
+            com.apple.private.IMCore.share-extension-recipient-access: true
+            com.apple.private.MobileContainerManager.allowed: true
+            com.apple.private.MobileContainerManager.lookup:
+              appData: true
+              appGroup:
+              - group.com.apple.FileProvider.DomainCaching
+              pluginData: true
+            com.apple.private.MobileContainerManager.otherIdLookup: true
+            com.apple.private.MobileContainerManager.unrestrictedPersona: true
+            com.apple.private.SmartNameSuggestions.Service: true
+            com.apple.private.accounts.allaccounts: true
+            com.apple.private.admin.writeconfig.enable-sharing: true
+            com.apple.private.airdrop.discovery: true
+            com.apple.private.airdrop.settings: true
+            com.apple.private.apfs.get-graft-info: true
+            com.apple.private.appleaccount.app-hidden-from-icloud-settings: true
+            com.apple.private.applemediaservices: true
+            com.apple.private.application-service-browse: true
+            com.apple.private.backupd.session: Finder
+            com.apple.private.biome.writer:
+            - Discoverability.Signals
+            com.apple.private.canmodifysharepoints: true
+            com.apple.private.clouddocs.can-infer-session-from-url: true
+            com.apple.private.clouddocs.rfa-notification-handling: true
+            com.apple.private.communicationsfilter: true
+            com.apple.private.contactsui: true
+            com.apple.private.coreservices.canaccessanysharedfilelist: read-write
+            com.apple.private.coreservices.canmanagebackgroundtasks: true
+            com.apple.private.coreservices.useractivityd.sharedpasteboard: true
+            com.apple.private.corespotlight.internal: true
+            com.apple.private.corespotlight.search.internal: true
+            com.apple.private.diskarbitrationd.disk_set_adoption: true
+            com.apple.private.dmd.policy: true
+            com.apple.private.driverkit.driver-access:
+            - com.apple.private.wifi.driverkit
+            com.apple.private.ecosystem.unsupportedapplicationlist: true
+            com.apple.private.fileprovider.launch-items-permissions-repair: true
+            com.apple.private.foundation.filecoordination-debug: true
+            com.apple.private.hid.client.event-dispatch.internal: true
+            com.apple.private.iaaccounts: true
+            com.apple.private.ind.client: true
+            com.apple.private.interstellar.data-access: collaborations
+            com.apple.private.launchservices.allowedtosetlauncheraudittoken: true
+            com.apple.private.launchservices.changedefaulthandlers:
+            - '*'
+            com.apple.private.launchservices.changeurlschemehandler: true
+            com.apple.private.launchservices.disclaimroleasparentapplication: true
+            com.apple.private.librarian.can-get-application-info: true
+            com.apple.private.librarian.container-proxy: true
+            com.apple.private.managedclient.configurationprofiles: true
+            com.apple.private.metadata.exattrs: true
+            com.apple.private.network.socket-delegate: true
+            com.apple.private.persona.adopt.any: true
+            com.apple.private.personas.propagate: true
+            com.apple.private.pluginkit.persona: System
+            com.apple.private.screen-time: true
+            com.apple.private.screen-time-settings: true
+            com.apple.private.screencapturekit.noprompt: true
+            com.apple.private.screencapturekit.sharingsessionsystemui: true
+            com.apple.private.security.restricted-application-groups:
+            - group.com.apple.sharingd
+            com.apple.private.security.storage.mobilesync: true
+            com.apple.private.security.user-intent-authority: true
+            com.apple.private.skylight.plugin-power: true
+            com.apple.private.sociallayer.highlights: true
+            com.apple.private.spotlight.search.internal: true
+            com.apple.private.storagekitd.destructive: true
+            com.apple.private.swc.system-app: true
+            com.apple.private.syspolicy.gatekeeper-block-bypass: true
+            com.apple.private.syspolicy.gatekeeper-override: true
+            com.apple.private.system-extension.app-manager: true
+            com.apple.private.tcc.allow:
+            - kTCCServiceScreenCapture
+            - kTCCServiceSystemPolicyAllFiles
+            - kTCCServiceAddressBook
+            - kTCCServiceCalendar
+            - kTCCServiceReminders
+            - kTCCServicePostEvent
+            - kTCCServiceAppleEvents
+            - kTCCServiceSystemPolicyRemovableVolumes
+            - kTCCServiceAccessibility
+            com.apple.private.tcc.manager.access.delete:
+            - kTCCServiceUbiquity
+            com.apple.private.tcc.manager.access.modify:
+            - kTCCServiceUbiquity
+            com.apple.private.tcc.manager.access.read:
+            - kTCCServiceAll
+            com.apple.private.tcc.manager.check-by-audit-token:
+            - kTCCServiceUbiquity
+            com.apple.private.widget-observer: true
+            com.apple.private.windowmanager.desktopwindowowner: true
+            com.apple.security.application-groups:
+            - group.com.apple.sharingd
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.temporary-exception.iokit-user-client-class:
+            - IO80211APIUserClient
+            - IOUserUserClient
+            com.apple.security.temporary-exception.mach-lookup.global-name:
+            - com.apple.campo
+            - com.apple.filesystems.fskitd
+            - com.apple.storagekitd
+            - com.apple.AppleMediaServicesUIDynamicService
+            - com.apple.imdpersistence.IMDPersistenceAgent
+            - com.apple.bluetooth.xpc
+            - com.apple.FileDerivativeService
+            - com.apple.widget-observation
+            - com.apple.spotlight.CSExattrCryptoService
+            - com.apple.sharing.airdrop.service
+            - com.apple.ScreenTimeSettingsAgent.private
+            - com.apple.feedbackd.centralized-feedback
+            com.apple.security.temporary-exception.shared-preference.read-only:
+            - com.apple.SocialLayer
+            com.apple.sharing.airdrop.service: true
+            com.apple.shortcuts.contextual-actions-client: true
+            com.apple.spotlight.documentunderstanding.entitledattributes: true
+            com.apple.spotlight.entitledattributes: true
+            com.apple.usermanagerd.persona.fetch: true
+            com.apple.wifi.priority.id: finder
+            com.apple.wifi.priority.internal: true
+            com.apple.wifi.set_power: true
+            com.apple.wlan.authentication: true
+            keychain-access-groups:
+            - com.apple.sharing.appleidauthentication
+            - com.apple.sharing.safaripasswordsharing
+            - com.apple.finder
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+    categories:
+    - user_app
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-terminal
+    display_name: terminal
+    platforms:
+      macos:
+        singleton_per_session: true
+        image_path: /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.Terminal
+          team_id: null
+          # Verified Apple-shipped macOS 27 signing metadata, not captured log values.
+          entitlements:
+            com.apple.private.CFPasteboard.get-paste-source: true
+            com.apple.private.kernel.global-proc-info: true
+            com.apple.private.quarantine.control-add: true
+            com.apple.private.responsibility.set-to-other: true
+            com.apple.private.responsibility.set-to-self: true
+            com.apple.private.tcc.allow-prompting: [kTCCServiceAll]
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+    categories:
+    - code
+    - macos_terminal
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-iterm2
+    display_name: iTerm2
+    platforms:
+      macos:
+        singleton_per_session: true
+        available_from: 2026-10-15
+        image_path: /Applications/iTerm.app/Contents/MacOS/iTerm2
+        executable_format: mach_o
+        # Verified vendor-signed main image; helper identities remain independent.
+        # Native startup still requires its actual helper/credential/FD chain.
+        code_signature:
+          signing_id: com.googlecode.iterm2
+          team_id: H7V7XYVQ7D
+          entitlements:
+            com.apple.application-identifier: H7V7XYVQ7D.com.googlecode.iterm2
+            com.apple.developer.team-identifier: H7V7XYVQ7D
+            com.apple.security.application-groups: [H7V7XYVQ7D.iTerm]
+            com.apple.security.automation.apple-events: true
+            com.apple.security.cs.allow-jit: true
+            com.apple.security.device.audio-input: true
+            com.apple.security.device.camera: true
+            com.apple.security.personal-information.addressbook: true
+            com.apple.security.personal-information.calendars: true
+            com.apple.security.personal-information.location: true
+            com.apple.security.personal-information.photos-library: true
+            keychain-access-groups: [H7V7XYVQ7D.com.googlecode.iterm2]
+        deployment:
+          kind: managed
+          version: 3.7.6
+          build: 3.7.6
+          scope: machine
+          product_id: iterm2
+          architectures:
+          - arm64
+        command_templates:
+        - /Applications/iTerm.app/Contents/MacOS/iTerm2
+    categories:
+    - code
+    - macos_terminal
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  # Independently signed helpers are placements of the same vendor release.
+  # The support cache is explicitly pre-existing; no in-window copy is inferred.
+  - id: macos-iterm2-server
+    display_name: iTerm2 session server
+    installed_with: macos-iterm2
+    platforms:
+      macos:
+        available_from: 2026-10-15
+        image_path: /Users/{username}/Library/Application Support/iTerm2/iTermServer-3.7.6
+        executable_format: mach_o
+        code_signature:
+          signing_id: iTermServer
+          team_id: H7V7XYVQ7D
+          entitlements: {}
+        deployment:
+          kind: managed
+          product_id: iterm2
+          version: 3.7.6
+          build: 3.7.6
+          scope: user
+          architectures: [arm64]
+        command_templates:
+        - "'/Users/{username}/Library/Application Support/iTerm2/iTermServer-3.7.6'"
+    categories: [terminal_helper]
+    personas: []
+    system_types: [workstation]
+  - id: macos-iterm2-shell-launcher
+    display_name: iTerm2 shell launcher
+    installed_with: macos-iterm2
+    platforms:
+      macos:
+        available_from: 2026-10-15
+        image_path: /Applications/iTerm.app/Contents/MacOS/ShellLauncher
+        executable_format: mach_o
+        code_signature:
+          signing_id: ShellLauncher
+          team_id: H7V7XYVQ7D
+          entitlements:
+            com.apple.application-identifier: H7V7XYVQ7D.
+        deployment:
+          kind: managed
+          product_id: iterm2
+          version: 3.7.6
+          build: 3.7.6
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - /Applications/iTerm.app/Contents/MacOS/ShellLauncher
+    categories: [terminal_helper]
+    personas: []
+    system_types: [workstation]
+  - id: macos-zsh
+    display_name: zsh
+    platforms:
+      macos:
+        image_path: /bin/zsh
+        executable_format: mach_o
+        # Apple XNU signing-identity vocabulary; Microsoft Defender's public
+        # /bin/zsh example confirms this identifier and an empty team ID.
+        code_signature:
+          signing_id: com.apple.zsh
+          team_id: null
+          entitlements: absent # explicit bounded model; no host binary inspection
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - "/bin/zsh -c 'id; groups'"
+        - "/bin/zsh -c 'ls -la ~/Library/LaunchAgents'"
+    categories:
+    - code
+    - suspicious_cli
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+
+  - id: macos-login
+    display_name: macOS terminal login
+    platforms:
+      macos:
+        image_path: /usr/bin/login
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.login
+          team_id: null
+          # Verified Apple-shipped macOS 27 signing metadata; setuid execution
+          # and startup descriptors still require their canonical producer.
+          entitlements:
+            com.apple.private.endpoint-security.submit.login: true
+            com.apple.private.security.clear-library-validation: true
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: ["/usr/bin/login -fp {username}"]
+    categories: [macos_session]
+    personas: [developer, sysadmin, analyst, security_analyst, default]
+    system_types: [workstation]
+
+  # The reviewed Apple launcher Boolean template. First-activation publication
+  # still needs its canonical fork/exec/credential chain; metadata alone is insufficient.
+  - id: macos-xpcproxy
+    display_name: macOS GUI launcher
+    platforms:
+      macos:
+        image_path: /usr/libexec/xpcproxy
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.xpc.proxy
+          team_id: null
+          entitlements:
+            com.apple.private.coreservices.canmanagebackgroundtasks: true
+            com.apple.private.exclaves.conclave-spawn: true
+            com.apple.private.security.storage.driverkitd: true
+            com.apple.private.shared-region.config: true
+            com.apple.private.spawn-driver: true
+            com.apple.private.spawn-panic-crash-behavior: true
+            com.apple.private.spawn-subsystem-root: true
+            com.apple.private.xpc.is.xpcproxy: true
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: [/usr/libexec/xpcproxy]
+    categories: [macos_session]
+    personas: []
+    system_types: [workstation]
+
+  # Invented reference workload with declared ad-hoc signing and no entitlements.
+  # Not automatically assigned to real personas or used as another app's fallback.
+  - id: macos-reference-app
+    display_name: EvidenceForge reference app
+    platforms:
+      macos:
+        image_path: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+        executable_format: mach_o
+        code_signature:
+          signing_id: org.evidenceforge.Reference
+          team_id: null
+          entitlements: absent
+        deployment:
+          kind: catalog
+          product_id: eforge-reference
+          release_policy: unspecified
+          scope: machine
+          architectures: [arm64]
+        command_templates: [/Applications/EForgeReference.app/Contents/MacOS/EForgeReference]
+    categories: [code]
+    personas: []
+    system_types: [workstation]
+
+  - id: macos-bash
+    display_name: macOS Bash shell
+    platforms:
+      macos:
+        image_path: /bin/bash
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.bash, team_id: null, entitlements: absent}
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: ["/bin/bash -l"]
+    categories: [macos_session]
+    personas: [developer, sysadmin, analyst, security_analyst, default]
+    system_types: [workstation]
+
+  # Installed command vocabulary, without automatic baseline activation.
+  # Host-build identities and Mach-O UUIDs are modeled, not captured binaries.
+  # Signing and absent entitlements below are explicit synthetic binary facts.
+  # They do not assert the entitlement inventory of every installed Apple build.
+  # Fixed-output static inspection confirmed these two Apple signing identifiers,
+  # absent entitlements and arm64e slices. Runtime outcomes remain selected model
+  # policy, not measurements of their execution. See catalog-native-metadata.md.
+  - id: macos-sh
+    display_name: macOS POSIX shell
+    platforms:
+      macos:
+        image_path: /bin/sh
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.sh, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/sh]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sleep
+    display_name: macOS sleep
+    platforms:
+      macos:
+        image_path: /bin/sleep
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.sleep, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/sleep 600]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-true
+    display_name: macOS true
+    platforms:
+      macos:
+        image_path: /usr/bin/true
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.true, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/true]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-id
+    display_name: macOS id
+    platforms:
+      macos:
+        image_path: /usr/bin/id
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.id, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/id]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sw-vers
+    display_name: macOS version query
+    platforms:
+      macos:
+        image_path: /usr/bin/sw_vers
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.sw_vers, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/sw_vers]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-uname
+    display_name: macOS system query
+    platforms:
+      macos:
+        image_path: /usr/bin/uname
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.uname, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/uname, /usr/bin/uname -a, /usr/bin/uname -sr, /usr/bin/uname -m]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ifconfig
+    display_name: macOS interface query
+    platforms:
+      macos:
+        image_path: /sbin/ifconfig
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.ifconfig, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/sbin/ifconfig -a]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ps
+    display_name: macOS process query
+    platforms:
+      macos:
+        image_path: /bin/ps
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.ps, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/ps aux]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-dscl
+    display_name: macOS directory query
+    platforms:
+      macos:
+        image_path: /usr/bin/dscl
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.dscl, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/dscl . -list /Users]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-pwd
+    display_name: macOS working directory query
+    platforms:
+      macos:
+        image_path: /bin/pwd
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.pwd, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/pwd]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ls
+    display_name: macOS directory listing
+    platforms:
+      macos:
+        image_path: /bin/ls
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.ls, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ["/bin/ls -la /Users/{username}/Documents"]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-cat
+    display_name: macOS file content reader
+    platforms:
+      macos:
+        image_path: /bin/cat
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.cat, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/bin/cat "{file_path}"']
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-tee
+    display_name: macOS file writer
+    platforms:
+      macos:
+        image_path: /usr/bin/tee
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.tee, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/usr/bin/tee "{file_path}"']
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-du
+    display_name: macOS directory size query
+    platforms:
+      macos:
+        image_path: /usr/bin/du
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.du, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-df
+    display_name: macOS filesystem space query
+    platforms:
+      macos:
+        image_path: /bin/df
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.df, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/df -h]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-find
+    display_name: macOS file query
+    platforms:
+      macos:
+        image_path: /usr/bin/find
+        executable_format: mach_o
+        code_signature: {signing_id: com.apple.find, team_id: null, entitlements: absent}
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"']
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+
+  # Native service identities. Only macos_resident entries seed one shared root
+  # inventory member before collection. Other service categories imply no launch.
+  # Resident inventory asserts neither observed startup nor native exec qualification.
+  - id: macos-dock
+    display_name: Dock
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-windowserver
+    display_name: WindowServer
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-apsd
+    display_name: apsd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-cfprefsd
+    display_name: cfprefsd
+    platforms:
+      macos:
+        image_path: /usr/sbin/cfprefsd
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.cfprefsd
+          team_id: null
+          entitlements:
+            com.apple.private.MobileContainerManager.otherIdLookup: true
+            com.apple.private.amfi.version-restriction: 1
+            com.apple.private.security.storage.CoreRoutine: true
+            com.apple.private.security.storage.preferences: true
+            com.apple.private.trust-ubiquity-kvstore-identifier: true
+            com.apple.private.vfs.allow-low-space-writes: true
+            com.apple.private.xpc.launchd.ios-system-session: true
+            com.apple.security.enterprise-volume-access: true
+            com.apple.security.hardened-process: true
+            com.apple.security.hardened-process.checked-allocations: true
+            com.apple.security.system-groups: [systemgroup.com.apple.cfpreferences.managed]
+            platform-application: true
+            seatbelt-profiles: [cfprefsd]
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/cfprefsd daemon
+    categories:
+    - macos_service
+    - macos_resident
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-configd
+    display_name: configd
+    platforms:
+      macos:
+        image_path: /usr/libexec/configd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/configd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-coreaudiod
+    display_name: coreaudiod
+    platforms:
+      macos:
+        image_path: /usr/sbin/coreaudiod
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/coreaudiod
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-corespotlightd
+    display_name: corespotlightd
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-distnoted
+    display_name: distnoted
+    platforms:
+      macos:
+        image_path: /usr/sbin/distnoted
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/distnoted
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-installd
+    display_name: installd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-launchservicesd
+    display_name: launchservicesd
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/launchservicesd
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.launchservicesd
+          team_id: null
+          entitlements:
+            com.apple.private.backgroundtaskmanagement.manage: true
+            com.apple.private.kernel.setpriority-darwin-role: true
+            com.apple.private.runningboard.roles: true
+            com.apple.private.tcc.allow: [kTCCServiceSystemPolicyAllFiles]
+            com.apple.private.xpc.launchd.job-manager: [com.apple.launchservices.launchservicesd]
+            com.apple.runningboard.assertions.launchservices: true
+            com.apple.runningboard.process-state: true
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/launchservicesd
+    categories:
+    - macos_service
+    - macos_resident
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-mdnsresponder
+    display_name: mDNSResponder
+    platforms:
+      macos:
+        image_path: /usr/sbin/mDNSResponder
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/mDNSResponder
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-mdworker_shared
+    display_name: mdworker_shared
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-nsurlsessiond
+    display_name: nsurlsessiond
+    platforms:
+      macos:
+        image_path: /usr/libexec/nsurlsessiond
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/nsurlsessiond
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-runningboardd
+    display_name: runningboardd
+    platforms:
+      macos:
+        image_path: /usr/libexec/runningboardd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/runningboardd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-securityd
+    display_name: securityd
+    platforms:
+      macos:
+        image_path: /usr/sbin/securityd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/securityd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-sharingd
+    display_name: sharingd
+    platforms:
+      macos:
+        image_path: /usr/libexec/sharingd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/sharingd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-trustd
+    display_name: trustd
+    platforms:
+      macos:
+        image_path: /usr/libexec/trustd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/trustd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-usernoted
+    display_name: usernoted
+    platforms:
+      macos:
+        image_path: /usr/sbin/usernoted
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/usernoted
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+
+  - id: macos-launchctl
+    display_name: macOS Launch Control
+    platforms:
+      macos:
+        image_path: /bin/launchctl
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /bin/launchctl list
+    categories: [macos_administration]
+    personas: []
+    system_types: [workstation]
+
+  - id: macos-plutil
+    display_name: macOS Property List Utility
+    platforms:
+      macos:
+        image_path: /usr/bin/plutil
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/bin/plutil -help
+    categories: [macos_administration]
+    personas: []
+    system_types: [workstation]
+
+  # Independently signed placements within the same Chrome installation/release.
+  # Operational GPU and network roles can share the generic helper executable.
+  - id: macos-chrome-renderer
+    display_name: Google Chrome renderer helper
+    installed_with: chrome
+    platforms:
+      macos:
+        available_from: '2026-10-15'
+        image_path: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.google.Chrome.helper.renderer
+          team_id: EQHXZ8M8AV
+          entitlements: {com.apple.security.cs.allow-jit: true}
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)" --type=renderer'
+    categories: [browser_helper]
+    personas: []
+    system_types: [workstation]
+  - id: macos-chrome-helper
+    display_name: Google Chrome generic helper
+    installed_with: chrome
+    platforms:
+      macos:
+        available_from: '2026-10-15'
+        image_path: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.google.Chrome.helper
+          team_id: EQHXZ8M8AV
+          entitlements: absent
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
+    categories: [browser_helper]
+    personas: []
+    system_types: [workstation]
+
+  # Qualified shared-process, GPU and network roles use the generic helper.
+  # Renderer/extension host layouts remain separately gated.
+  - id: macos-vscode-helper
+    display_name: Visual Studio Code generic helper
+    installed_with: vscode
+    platforms:
+      macos:
+        available_from: '2026-10-15'
+        image_path: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.microsoft.VSCode.helper
+          team_id: UBF8T346G9
+          entitlements: {com.apple.security.cs.allow-jit: true}
+        deployment:
+          kind: managed
+          product_id: vscode
+          version: 1.143.0
+          build: 1.143.0
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - '"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper" --type=utility --utility-sub-type=node.mojom.NodeService'
+    categories: [browser_helper]
+    personas: []
+    system_types: [workstation]

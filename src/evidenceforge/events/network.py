@@ -83,6 +83,32 @@ def normalize_zeek_history(conn_state: str, history: str) -> str:
     return history
 
 
+def tcp_history_packet_minima(history: str) -> tuple[int, int]:
+    """Return conservative directional packet bounds from observed TCP history.
+
+    Zeek's SYN/SYNACK, FIN, RST, multi-flag, data and empty-ACK branches
+    are exclusive. Ancillary checksum/retransmission/gap annotations can
+    describe the same packet, so they do not add to this lower bound.
+    """
+    observed = frozenset(history)
+    return len(observed & frozenset("SHADFRIQ")), len(observed & frozenset("shadfriq"))
+
+
+def validate_tcp_history_packets(history: str, orig_packets: int, resp_packets: int) -> None:
+    """Reject observed history categories that cannot fit their packet ledger."""
+    for direction, minimum, packets in zip(
+        ("originator", "responder"),
+        tcp_history_packet_minima(history),
+        (orig_packets, resp_packets),
+        strict=True,
+    ):
+        if packets < minimum:
+            raise ValueError(
+                f"TCP {direction} history requires at least {minimum} observed packets; "
+                f"ledger contains {packets}"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class SignaturePredicate:
     """Canonical preconditions for attaching one IDS signature to a transport."""
@@ -255,6 +281,24 @@ class FileSensorObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class TcpStreamExtent:
+    """Sequence-derived payload extent, separate from captured packet volume.
+
+    A missing directional value means the source has no modeled complete boundary
+    proof. It does not mean that the direction transferred zero bytes.
+    """
+
+    orig_bytes: int | None = None
+    resp_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        """Reject negative or non-integral known sequence extents."""
+        for value in (self.orig_bytes, self.resp_bytes):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("Known TCP stream extents require non-negative integers")
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSensorObservation:
     """Frozen view of one canonical transaction at one network sensor."""
 
@@ -281,6 +325,7 @@ class NetworkSensorObservation:
     nat: NatSensorObservation | None = None
     source_times: tuple[tuple[str, datetime], ...] = ()
     source_durations: tuple[tuple[str, float], ...] = ()
+    tcp_stream: TcpStreamExtent | None = None
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""
@@ -289,6 +334,20 @@ class NetworkSensorObservation:
             raise ValueError("Network sensor observations require a sensor identity")
         if not self.connection_uid:
             raise ValueError("Network sensor observations require a connection UID")
+        if self.tuple_view.protocol == "tcp":
+            validate_tcp_history_packets(
+                self.history, self.traffic.orig.packets, self.traffic.resp.packets
+            )
+        if self.tcp_stream is not None:
+            if type(self.tcp_stream) is not TcpStreamExtent or self.tuple_view.protocol != "tcp":
+                raise ValueError("TCP stream extent requires a typed TCP observation")
+            self.tcp_stream.__post_init__()
+            for extent, captured in (
+                (self.tcp_stream.orig_bytes, self.traffic.orig.payload_bytes),
+                (self.tcp_stream.resp_bytes, self.traffic.resp.payload_bytes),
+            ):
+                if extent is not None and extent < captured:
+                    raise ValueError("TCP stream extent cannot be smaller than captured payload")
         if (
             self.observed_close_time is not None
             and self.observed_close_time < self.observed_start_time

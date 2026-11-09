@@ -7,6 +7,45 @@
 # generic agents, server roles, package-manager destinations, or OS families
 # without copying this whole file.
 
+# Browser instance ownership is separate from header identity. These are modeled
+# default user-data roots; explicit directories override them. Profiles within a
+# Chromium user-data root share its browser process.
+browser_profile_roots:
+  chrome:
+    macos: /Users/{username}/Library/Application Support/Google/Chrome
+    windows: 'C:\Users\{username}\AppData\Local\Google\Chrome\User Data'
+    linux: /home/{username}/.config/google-chrome
+  edge:
+    macos: /Users/{username}/Library/Application Support/Microsoft Edge
+    windows: 'C:\Users\{username}\AppData\Local\Microsoft\Edge\User Data'
+    linux: /home/{username}/.config/microsoft-edge
+  firefox:
+    macos: /Users/{username}/Library/Application Support/Firefox/Profiles
+    windows: 'C:\Users\{username}\AppData\Roaming\Mozilla\Firefox\Profiles'
+    linux: /home/{username}/.mozilla/firefox
+  safari:
+    macos: /Users/{username}/Library/Safari
+  opera:
+    macos: /Users/{username}/Library/Application Support/com.operasoftware.Opera
+    windows: 'C:\Users\{username}\AppData\Roaming\Opera Software\Opera Stable'
+    linux: /home/{username}/.config/opera
+
+browser_process_families:
+  chrome:
+    - chrome.exe
+    - chrome
+    - google-chrome
+    - google chrome
+    - chromium
+    - chromium-browser
+    - google chrome helper
+    - google chrome helper (renderer)
+    - google chrome helper (gpu)
+  edge: [msedge.exe, microsoft-edge, edge, microsoft edge]
+  firefox: [firefox.exe, firefox]
+  safari: [safari]
+  opera: [opera.exe, opera]
+
 domain_overrides:
   windows_update:
     os_keywords: ["windows"]
@@ -136,9 +175,13 @@ workstation:
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
-    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
-    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+
+  macos:
+    # Reduced OS tokens are browser presentation, not the binary architecture.
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:158.0) Gecko/20100101 Firefox/158.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 
   linux:
     - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

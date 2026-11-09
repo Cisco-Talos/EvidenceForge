@@ -1,0 +1,60 @@
+{
+  "baseline_loop": 48,
+  "before": {
+    "totals": {
+      "tcp_observations": 15032,
+      "gap_marked_observations": 1386,
+      "exclusive_history_packet_bound_failures": 312,
+      "conservative_three_category_failures": 13
+    },
+    "sensors": {
+      "zeek-db": {
+        "tcp_observations": 357,
+        "gap_marked_observations": 44,
+        "exclusive_history_packet_bound_failures": 9,
+        "conservative_three_category_failures": 2
+      },
+      "zeek-core": {
+        "tcp_observations": 6715,
+        "gap_marked_observations": 669,
+        "exclusive_history_packet_bound_failures": 163,
+        "conservative_three_category_failures": 3
+      },
+      "zeek-dmz": {
+        "tcp_observations": 7960,
+        "gap_marked_observations": 673,
+        "exclusive_history_packet_bound_failures": 140,
+        "conservative_three_category_failures": 8
+      }
+    }
+  },
+  "after": {
+    "totals": {
+      "tcp_observations": 14754,
+      "gap_marked_observations": 1131,
+      "exclusive_history_packet_bound_failures": 0,
+      "conservative_three_category_failures": 0
+    },
+    "sensors": {
+      "zeek-db": {
+        "tcp_observations": 378,
+        "gap_marked_observations": 44,
+        "exclusive_history_packet_bound_failures": 0,
+        "conservative_three_category_failures": 0
+      },
+      "zeek-core": {
+        "tcp_observations": 6644,
+        "gap_marked_observations": 546,
+        "exclusive_history_packet_bound_failures": 0,
+        "conservative_three_category_failures": 0
+      },
+      "zeek-dmz": {
+        "tcp_observations": 7732,
+        "gap_marked_observations": 541,
+        "exclusive_history_packet_bound_failures": 0,
+        "conservative_three_category_failures": 0
+      }
+    }
+  },
+  "qualification": "Pinned upstream exclusive packet categories supply a conservative count lower bound. Ancillary C/T/G/etc annotations ignored. Positive gap count proves capture was not globally disabled. Counts include sensor overlap."
+}

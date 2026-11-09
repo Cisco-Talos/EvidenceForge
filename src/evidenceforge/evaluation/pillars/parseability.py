@@ -41,6 +41,7 @@ from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.validation_routes import (
     ARTIFACT_VALIDATORS,
+    NATIVE_CODEC_VALIDATORS,
     get_validation_route,
     require_evaluated,
 )
@@ -133,6 +134,8 @@ class ParseabilityScorer(DimensionScorer):
                         )
                         for message in record.parse_errors
                     ]
+                elif route.kind == "native_codec":
+                    selected["schema"] = NATIVE_CODEC_VALIDATORS[route.validator](record)
                 elif route.kind == "artifact":
                     selected["schema"] = ARTIFACT_VALIDATORS[route.validator](record)
                 else:
@@ -286,7 +289,14 @@ def _normalize_for_validation(
                 normalized["ts"] = float(ts)
             except ValueError:
                 pass
-    if format_name in ("web_access", "proxy_access", "syslog", "snort_alert", "bash_history"):
+    if format_name in (
+        "web_access",
+        "proxy_access",
+        "syslog",
+        "snort_alert",
+        "bash_history",
+        "zsh_history",
+    ):
         if parsed_timestamp is not None:
             normalized["timestamp"] = parsed_timestamp
     if format_name == "windows_event_security":

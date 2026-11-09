@@ -19,54 +19,63 @@ from evidenceforge.generation.timing import (
     TimingRuntime,
 )
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
-TCP_CONN_STATE_DISTRIBUTION = [
-    # Normal completions (SF) — ~62% total (real: 55-75%)
-    ("SF", 21, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
-    ("SF", 11, "ShADaDadfF"),  # Multiple data exchanges before FIN
-    ("SF", 6, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
-    ("SF", 5, "ShADadfFa"),  # FIN-ACK with trailing ACK
-    ("SF", 5, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
-    ("SF", 4, "ShADadFf"),  # Originator FIN first (client closes)
-    ("SF", 4, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
-    ("SF", 3, "ShADadTFf"),  # Retransmit then FIN
-    ("SF", 2, "ShADaDadFf"),  # Multi data then client closes
-    ("SF", 1, "ShADaDaTtdfF"),  # Multi data with retransmissions
-    # Connection attempts (S0) — ~14% (timeouts, unreachable hosts, scanning)
-    ("S0", 9, "S"),  # Single SYN, no reply
-    ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
-    # Partial handshakes (S1) — ~3%
-    ("S1", 2, "Sh"),  # SYN-ACK seen, no termination observed
-    ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
-    # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
-    ("REJ", 3, "Sr"),  # RST from responder immediately
-    ("REJ", 2, "Srr"),  # Multiple RSTs from responder
-    # Reset by originator (RSTO) — ~8% (client aborts, load balancer health checks)
-    ("RSTO", 4, "ShADaR"),  # Data exchange then originator RST
-    ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
-    ("RSTO", 2, "ShAR"),  # Quick RST after handshake
-    # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
-    ("RSTR", 3, "ShADadr"),  # Data exchange then responder RST
-    ("RSTR", 2, "ShAdr"),  # Partial data then responder RST
-    # Half-closed states — ~2% (one side closed, other didn't respond)
-    ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
-    ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
-    # Midstream (OTH) — ~1% (partial captures, asymmetric routing, NAT state loss)
-    ("OTH", 1, "DAd"),  # Midstream bidirectional data/ACK (handshake not observed)
-]
 
-UDP_CONN_STATE_DISTRIBUTION = [
-    ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
-    ("SF", 8, "DdDd"),  # Multi-packet exchange
-    ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 4, "DDd"),  # Retransmitted query before response
-    ("S0", 12, "D"),  # Originator only, no response (timeout)
-    ("S0", 6, "DD"),  # Retransmitted datagram, no response
-    ("OTH", 6, "Dd"),  # Midstream UDP exchange
-    ("OTH", 4, "DdDd"),  # Midstream multi-packet exchange
-]
+def confirmed_service_for_payload(
+    service: str,
+    *,
+    protocol: str,
+    history: str,
+    orig_bytes: int,
+    resp_bytes: int,
+    missed_bytes: int,
+) -> str:
+    """Separate requested service intent from a supported analyzer confirmation."""
+    from evidenceforge.generation.activity.network_params import protocol_confirmation_config
+
+    if not service or protocol == "icmp":
+        return service
+    if orig_bytes + resp_bytes == 0:
+        return ""
+    if protocol != "tcp" or "S" not in history or "h" not in history or missed_bytes > 0:
+        return service
+    requirements = protocol_confirmation_config().payload_directions.get(service, [])
+    available = {"orig": orig_bytes, "resp": resp_bytes}
+    return service if all(available[direction] > 0 for direction in requirements) else ""
+
+
+def connection_state_distribution(protocol: str) -> list[tuple[str, int, str]]:
+    """Read validated transport histories from the active configuration scope."""
+    from evidenceforge.config.schemas import TransportHistoryEntry
+    from evidenceforge.generation.activity.network_params import load_network_params
+
+    rows = load_network_params()["transport_histories"][protocol]
+    return [
+        (entry.state, entry.weight, entry.history)
+        for row in rows
+        for entry in (TransportHistoryEntry.model_validate(row),)
+    ]
+
+
+def native_connection_history(history: str) -> str:
+    """Encode each once-only directional class at its first observation."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for marker in history:
+        if marker in "aAdDiIqQ":
+            if marker in seen:
+                continue
+            seen.add(marker)
+        result.append(marker)
+    return "".join(result)
+
+
+# Compatibility exports; production selection reads the active configuration.
+TCP_CONN_STATE_DISTRIBUTION = connection_state_distribution("tcp")
+UDP_CONN_STATE_DISTRIBUTION = connection_state_distribution("udp")
 
 _TCP_CONN_ENTRIES = TCP_CONN_STATE_DISTRIBUTION
 
@@ -85,9 +94,14 @@ _UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
 
 def _tcp_success_history(rng: random.Random) -> str:
     """Choose a plausible Zeek history string for a completed TCP connection."""
+    entries = [
+        (history, weight)
+        for state, weight, history in connection_state_distribution("tcp")
+        if state == "SF"
+    ]
     return rng.choices(
-        [history for history, _weight in _TCP_SUCCESS_HISTORY_ENTRIES],
-        weights=_TCP_SUCCESS_HISTORY_WEIGHTS,
+        [history for history, _weight in entries],
+        weights=[weight for _history, weight in entries],
         k=1,
     )[0]
 
@@ -231,6 +245,20 @@ def _tcp_payload_bytes_consistent_with_history(
     return normalized_orig, normalized_resp
 
 
+def _tcp_history_consistent_with_payload(
+    history: str | None, orig_bytes: int | None, resp_bytes: int | None
+) -> str | None:
+    """Remove data observations when canonical directional payload is explicitly zero."""
+    if not history or history == "-":
+        return history
+    absent_markers = ""
+    if orig_bytes is not None and orig_bytes <= 0:
+        absent_markers += "DT"
+    if resp_bytes is not None and resp_bytes <= 0:
+        absent_markers += "dt"
+    return "".join(marker for marker in history if marker not in absent_markers)
+
+
 def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
     """Return whether responder payload requires prior originator payload."""
     normalized_service = (service or "").strip().lower()
@@ -314,8 +342,14 @@ def _align_tcp_network_payload_with_history(
         net.resp_bytes,
         net.history,
     )
+    history = _tcp_history_consistent_with_payload(net.history, orig_bytes, resp_bytes)
+    history_changed = history != net.history
+    if history_changed:
+        net.history = history
     if not changed and orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
-        return False
+        # Collapsed native history is not an exhaustive packet list. Keep the
+        # physical budget and its independent randomized ACK/options texture.
+        return history_changed
 
     net.orig_bytes = orig_bytes
     net.resp_bytes = resp_bytes
@@ -325,8 +359,18 @@ def _align_tcp_network_payload_with_history(
         net.history,
         rng,
     )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    net.orig_ip_bytes = _tcp_ip_byte_count(
+        net.orig_bytes,
+        net.orig_pkts,
+        rng,
+        retransmitted="T" in (net.history or ""),
+    )
+    net.resp_ip_bytes = _tcp_ip_byte_count(
+        net.resp_bytes,
+        net.resp_pkts,
+        rng,
+        retransmitted="t" in (net.history or ""),
+    )
     return True
 
 
@@ -357,8 +401,18 @@ def _preserve_explicit_tcp_payload_overrides(
         net.history,
         rng,
     )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    net.orig_ip_bytes = _tcp_ip_byte_count(
+        net.orig_bytes,
+        net.orig_pkts,
+        rng,
+        retransmitted="T" in (net.history or ""),
+    )
+    net.resp_ip_bytes = _tcp_ip_byte_count(
+        net.resp_bytes,
+        net.resp_pkts,
+        rng,
+        retransmitted="t" in (net.history or ""),
+    )
     return True
 
 
@@ -368,14 +422,33 @@ def _tcp_ip_byte_count(
     rng: random.Random,
     *,
     overhead_override: int | None = None,
+    retransmitted: bool = False,
 ) -> int:
     """Return MTU-bounded TCP IP-byte accounting with header texture."""
     if packet_count <= 0:
         return 0
-    payload = payload_bytes or 0
+    unique_payload = payload_bytes or 0
+    repeated_payload = (
+        min(
+            unique_payload,
+            _tcp_effective_mss_bytes(
+                random.Random(_stable_seed(f"tcp-retransmission-wire:{rng.getstate()}"))
+            ),
+        )
+        if retransmitted and unique_payload > 0
+        else 0
+    )
+    payload = unique_payload + repeated_payload
     mtu_ceiling = packet_count * 1500
+    # IPv4/TCP headers occupy whole 32-bit words. Clamping the IP total
+    # to the MTU ceiling independently of an odd payload invents fractional
+    # header words; bound only the optional header contribution instead.
+    header_capacity = ((mtu_ceiling - payload) // 4) * 4
+    if header_capacity < packet_count * 40:
+        raise ValueError("TCP packet count cannot contain payload and minimum IP/TCP headers")
     if overhead_override is not None:
-        return min(payload + packet_count * overhead_override, mtu_ceiling)
+        header_bytes = min(packet_count * overhead_override, header_capacity)
+        return payload + (header_bytes // 4) * 4
     overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
     option_extra = 0
     if packet_count > 1:
@@ -386,7 +459,8 @@ def _tcp_ip_byte_count(
         )
         max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
         option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
-    return min(payload + packet_count * overhead + option_extra, mtu_ceiling)
+    header_bytes = min(packet_count * overhead + option_extra, header_capacity)
+    return payload + (header_bytes // 4) * 4
 
 
 def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:

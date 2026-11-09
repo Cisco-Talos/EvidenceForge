@@ -133,6 +133,7 @@ EXPECTED_CHATGPT_REFERENCES = {
 EXPECTED_CHATGPT_REFERENCES = {
     name: refs
     | {"references/record-validation.md"}
+    | ({"references/evidence-endpoint-macos.md"} if name != "pack" else set())
     | ({"references/artifact-lifecycle.md"} if name != "config" else set())
     for name, refs in EXPECTED_CHATGPT_REFERENCES.items()
 }
@@ -500,6 +501,7 @@ class TestInstallChatGPTSkills:
             set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == EXPECTED_CHATGPT_REFERENCES["generate"]
         )
         assert set(_CHATGPT_REFERENCES_BY_SKILL["validate"]) == {
+            "references/evidence-endpoint-macos.md",
             "references/artifact-lifecycle.md",
             "references/record-validation.md",
             "references/project-context.md",

@@ -208,15 +208,15 @@ def test_success_response_size_is_stable_for_same_resource():
     assert first != sibling
 
 
-def test_static_response_size_is_stable_across_virtual_hosts():
+def test_static_response_size_is_owned_by_site_and_stable_within_site():
     first = response_size_for_status(200, "portal.example.com", "/assets/main.css")
     second = response_size_for_status(200, "www.example.net", "/assets/main.css")
     cache_busted = response_size_for_status(200, "www.example.net", "/assets/main.css?v=2")
     dynamic_first = response_size_for_status(200, "portal.example.com", "/api/v1/events")
     dynamic_second = response_size_for_status(200, "www.example.net", "/api/v1/events")
 
-    assert first == second
-    assert first == cache_busted
+    assert first != second
+    assert second == cache_busted
     assert dynamic_first != dynamic_second
 
 
@@ -348,3 +348,66 @@ def test_health_endpoint_response_sizes_are_small_and_stable():
     assert first == second
     assert 42 <= first <= 720
     assert 18 <= status <= 180
+
+
+@pytest.mark.parametrize("path", ["/favicon.ico", "/assets/img/logo.svg", "/assets/main.css"])
+def test_unrelated_sites_do_not_share_default_resource_size_or_content(path: str) -> None:
+    from evidenceforge.generation.actions.file_transfer import _http_content_seed_material
+
+    first = response_size_for_status(200, "a.example", path)
+    second = response_size_for_status(200, "b.example", path)
+    assert first != second
+    assert first == response_size_for_status(200, "A.EXAMPLE.", path)
+    assert _http_content_seed_material(
+        "a.example", path, first, "image/svg+xml"
+    ) != _http_content_seed_material("b.example", path, second, "image/svg+xml")
+
+
+def test_explicit_common_font_has_shared_size_and_content_identity() -> None:
+    from evidenceforge.generation.actions.file_transfer import _http_content_seed_material
+
+    path = "/assets/fonts/inter-var.woff2"
+    a = response_size_for_status(200, "a.example", path)
+    b = response_size_for_status(200, "b.example", path)
+    assert a == b
+    assert _http_content_seed_material(
+        "a.example", path, a, "font/woff2"
+    ) == _http_content_seed_material("b.example", path, b, "font/woff2")
+
+
+def test_shared_resource_aliases_reuse_bytes_and_paths_remain_case_sensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.activity import http_content
+
+    monkeypatch.setattr(
+        http_content,
+        "load_http_file_profiles",
+        lambda: {"shared_resources": {"/a/font.woff2": "font-v1", "/b/font.woff2": "font-v1"}},
+    )
+    assert response_size_for_status(200, "one", "/a/font.woff2") == response_size_for_status(
+        200, "two", "/b/font.woff2"
+    )
+    assert http_content.http_response_resource_identity(
+        "one", "/Logo.svg"
+    ) != http_content.http_response_resource_identity("one", "/logo.svg")
+    assert http_content.http_response_resource_identity(
+        "one", "/api?q=1"
+    ) != http_content.http_response_resource_identity("one", "/api?q=2")
+
+
+@pytest.mark.parametrize(
+    "resources", [{"relative": "v1"}, {"/asset#fragment": "v1"}, {"/font.woff2": ""}]
+)
+def test_shared_resource_config_requires_explicit_path_and_identity(
+    resources: dict[str, str],
+) -> None:
+    from pydantic import ValidationError
+
+    from evidenceforge.config.schemas import HttpFileProfilesConfig
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    with pytest.raises(ValidationError, match="shared_resources"):
+        HttpFileProfilesConfig.model_validate(
+            {**load_http_file_profiles(), "shared_resources": resources}
+        )

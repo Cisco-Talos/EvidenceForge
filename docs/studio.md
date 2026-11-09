@@ -4,11 +4,17 @@ EvidenceForge Studio is a desktop workspace for authoring scenarios and packs, v
 generating logs, and reviewing evaluations. Existing CLI and native chat-skill workflows are still
 supported. Studio is a supplement, not a replacement.
 
-**The published Studio installer currently supports macOS only.** It targets Apple Silicon;
-Linux ARM64 and x86_64 preview AppImage builders target Ubuntu 24.04. Linux x64 acceptance,
-Windows, and Intel macOS installers have not been accepted. Engine and CLI platform support is
-unchanged. The alpha field-test target is macOS 26; native local checks also ran on macOS 27.0.1.
-Although the configured deployment floor is macOS 13, older systems have not been accepted.
+Studio installers are available for **Apple Silicon macOS** and **Ubuntu 24.04 Linux
+ARM64/x86_64**. Windows and Intel macOS installers are not enabled; other Linux distributions
+and desktop environments remain outside the accepted baseline. macOS field testing covers
+macOS 26 and 27.0.1; the configured macOS 13 deployment floor is not acceptance of older hosts.
+See [release platforms and validation](releases.md).
+
+These are the computers that run Studio. They are independent of the Windows, Linux or
+experimental macOS 27 arm64 systems being simulated. See the
+[platform/log matrix](../README.md#supported-log-formats) and [Mac guide](macos.md).
+This guide follows the current source tree; features added since a published installer require
+a newer build. Release notes define the installed version's capabilities.
 
 The app bundles Python, the EvidenceForge engine, runtime dependencies, catalogs, templates,
 and authoring skills. You do not need a source checkout, a separate Python installation, uv,
@@ -21,11 +27,12 @@ viewing work without Codex.
 ### macOS installation
 
 1. Open [GitHub Releases](https://github.com/Cisco-Talos/EvidenceForge/releases) and select
-   `v2.2.0a1`. Download `EvidenceForge-Studio-2.2.0a1-aarch64.dmg` and its `.dmg.sha256` file.
+   `v2.2.0a4` (or the release you intend to use). Download its
+   `EvidenceForge-Studio-2.2.0a4-aarch64.dmg` and its `.dmg.sha256` file.
 2. In the download folder, verify the image with:
 
    ```sh
-   shasum -a 256 -c EvidenceForge-Studio-2.2.0a1-aarch64.dmg.sha256
+   shasum -a 256 -c EvidenceForge-Studio-2.2.0a4-aarch64.dmg.sha256
    ```
 
 3. Open the DMG and drag **EvidenceForge Studio.app** to **Applications**.
@@ -38,27 +45,25 @@ First launch expands the private bundled runtime; later launches reuse it. The a
 terminal and downloads no additional runtime. Application updates are manual; see
 [updates and runtime retention](#updates-and-runtime-retention).
 
-### Linux AppImage (local previews)
+### Linux AppImage installation
 
-The `2.2.0a2` previews are built natively on Ubuntu 24.04 for ARM64 and x86_64. It includes a private Python
-runtime, the engine/CLI, resources and skills; the source checkout and its virtual environment
-are not needed to run the AppImage. It is not a published GitHub release.
-
-Choose `aarch64` for an ARM64 desktop or `x86_64` for an x64 desktop; the images are not
-interchangeable. The examples below use ARM64; substitute `x86_64` in every filename on x64.
-Manual x64 acceptance is required before publication. Keep the AppImage and its adjacent checksum file in a
-folder you intend to retain, then open a terminal in that folder:
+Download the AppImage and adjacent `.sha256` from the same
+[GitHub Release](https://github.com/Cisco-Talos/EvidenceForge/releases). Choose `aarch64`
+for an ARM64 desktop or `x86_64` for an x64 desktop; the images are not interchangeable.
+The published `2.2.0a4` filenames are shown below for ARM64; substitute your selected version
+and architecture in every filename. Locally built previews add `-test` and are separate from
+published release assets.
 
 ```sh
-chmod +x EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage
-sha256sum -c EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage.sha256
-./EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage
+sha256sum -c EvidenceForge-Studio-2.2.0a4-aarch64.AppImage.sha256
+chmod +x EvidenceForge-Studio-2.2.0a4-aarch64.AppImage
+./EvidenceForge-Studio-2.2.0a4-aarch64.AppImage
 ```
 
 The builder baseline is glibc 2.39. Compatibility with other distributions is pending native
 acceptance; building against newer libraries can exclude older hosts. Ordinary AppImage launch
 uses FUSE 2 (`libfuse2t64` on Ubuntu 24.04). If FUSE is unavailable, use
-`./EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage --appimage-extract-and-run`.
+`./EvidenceForge-Studio-2.2.0a4-aarch64.AppImage --appimage-extract-and-run`.
 See [Tauri's AppImage limitations](https://v2.tauri.app/distribute/appimage/#limitations) and
 [AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
 
@@ -86,8 +91,9 @@ once to refresh the managed launcher. A pre-existing custom launcher without the
 do not create this registration.
 
 The AppImage also bundles GStreamer plugins required by WebKitGTK. If startup reports
-`GStreamer element appsink not found` despite working system plugins, use a rebuilt preview:
-the initial local `2.2.0a2` AppImage omitted those plugins. VM graphics warnings such as
+`GStreamer element appsink not found` despite working system plugins, use a verified current
+build. The initial local `2.2.0a2` preview omitted those plugins; published builders now verify
+them. VM graphics warnings such as
 `VMware: No 3D enabled` also occurred with the working source app; they alone do not establish
 that Studio failed to launch.
 
@@ -227,6 +233,10 @@ source declarations, merge decisions, and the composed environment. **Choose pac
 conversation request for you to review and send. Optional project-shared and scenario-private
 configuration contexts are selected explicitly and are disabled by default. They also work
 through the CLI; see [configuration contexts](reference/configuration-contexts.md).
+Environment loads on first expansion and retains its inspection when collapsed and reopened
+within the scenario workspace. Changed scenario/dependency/configuration inputs or **Refresh
+environment** trigger a new inspection. Progress and the last check time appear in the section
+header; refresh failures remain inline.
 
 ### Drafts and local releases
 
@@ -309,6 +319,18 @@ Before a large run, open **Runs → Forecast** and refresh it to check current m
 Forecasts show estimated output size, peak memory/disk requirements, and warnings. They are
 cached across restarts; they do not replace validation or reserve capacity for other jobs.
 
+Clicking **Validate** shows a spinner and temporarily hides earlier findings.
+When the check finishes, the findings return and the check time updates even if the
+findings are unchanged. If validation cannot finish, the failure message appears inline
+with any previous results labeled separately.
+
+Pack validation and Environment refresh use the same spinner and check-time feedback.
+Library refresh keeps the list visible and confirms completion. Resource-forecast and
+log refreshes retain the previous estimate or preview, label it while updating, and
+show failures inline. Import review and optional prepared-scenario validation hide
+superseded findings while checking; reviews show **Ready to import** or **Needs attention**.
+A failed review refresh requires a fresh review before confirming import.
+
 Queued generation captures self-contained resolved inputs, including exact packs, includes,
 selected overlays, and embedded corpora. Later authoring affects new runs only. **Regenerate**
 uses the current scenario; checkpoint resume continues the original captured run. Checkpoint
@@ -328,6 +350,21 @@ can result from an error or interruption. Studio cannot infer a cause when the p
 left no error message. Validation checks the inputs; it cannot guarantee that the
 installed runtime will finish generation. Preserve partial output and use **Resume**
 when offered, or **Regenerate** for a new run after correcting the reported problem.
+
+### Mac coverage in evaluations
+
+For bundles containing a saved native Mac census, expand **macOS process coverage** in the
+evaluation scorecard. It shows each host's requested collection policy, fork/exec published
+versus expected counts, known exit publication and unknown outcomes. Start completeness is
+separate from exit completeness; historical reports without exit accounting show **Unmeasured**.
+Reports without a census say it is unavailable. These source-tree controls require a build
+containing the Mac coverage changes; they do not retrofit missing facts into old reports.
+
+A general evaluation PASS does not replace this census, prove every real background helper is
+modeled or prove complete filesystem capture. Inspect native ES/ULF/history files in the run's
+file browser and consult [Mac scope and limits](macos.md) when interpreting them. Unsupported
+complete-start requests need a qualified launch/metadata path; reducing the policy to partial
+changes the requested guarantee rather than repairing the missing evidence.
 
 Closing a window applies the configured job and authoring-turn policies. **Continue in
 background** lets app-owned work proceed; reopening Studio reconnects to it. **Checkpoint and

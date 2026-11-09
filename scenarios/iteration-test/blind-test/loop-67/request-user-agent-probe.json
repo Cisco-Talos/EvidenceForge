@@ -1,0 +1,97 @@
+{
+  "baseline_loop": 55,
+  "before": {
+    "sensors": {
+      "zeek-db": {
+        "unique_matches": 7,
+        "ua_disagreements": 0
+      },
+      "zeek-core": {
+        "unique_matches": 1718,
+        "ua_disagreements": 56
+      },
+      "zeek-dmz": {
+        "unique_matches": 1575,
+        "ua_disagreements": 47
+      }
+    },
+    "distinct_proxy_rows": 56,
+    "examples": [
+      {
+        "sensor": "zeek-core",
+        "line": 2,
+        "proxy_line": 2,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 44,
+        "proxy_line": 75,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 72,
+        "proxy_line": 111,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 117,
+        "proxy_line": 200,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 138,
+        "proxy_line": 226,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 206,
+        "proxy_line": 332,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 294,
+        "proxy_line": 493,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+      },
+      {
+        "sensor": "zeek-core",
+        "line": 347,
+        "proxy_line": 517,
+        "http_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "proxy_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+      }
+    ]
+  },
+  "after": {
+    "sensors": {
+      "zeek-db": {
+        "unique_matches": 16,
+        "ua_disagreements": 0
+      },
+      "zeek-core": {
+        "unique_matches": 1749,
+        "ua_disagreements": 0
+      },
+      "zeek-dmz": {
+        "unique_matches": 1601,
+        "ua_disagreements": 0
+      }
+    },
+    "distinct_proxy_rows": 0,
+    "examples": []
+  },
+  "qualification": "Unique client/UTCsecond/method/full target joins on client-to-proxy leg; proxy lacks source port, so not packet-level proof. Sensor repeats deduplicated."
+}

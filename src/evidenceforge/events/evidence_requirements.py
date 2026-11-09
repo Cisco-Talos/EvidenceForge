@@ -98,8 +98,11 @@ def _event_contract(
     capabilities: CollectionCapability,
     suggestion: str,
     source_scope: EvidenceSourceScope = EvidenceSourceScope.TARGET_HOST,
+    companion_kinds: tuple[EventKind, ...] = (),
 ) -> BehaviorEvidenceContract:
     consumers = EVENT_KIND_CONTRACTS[event_kind].emitter_consumers
+    for companion_kind in companion_kinds:
+        consumers |= EVENT_KIND_CONTRACTS[companion_kind].emitter_consumers
     return BehaviorEvidenceContract(
         behavior_id=behavior_id,
         label=label,
@@ -113,6 +116,29 @@ def _event_contract(
         unreachable_severity=EvidenceReachabilitySeverity.WARNING,
         suggestion=suggestion,
     )
+
+
+MACOS_POLICY_REFUSAL_EVIDENCE = _event_contract(
+    behavior_id="macos_authored_policy_refusal",
+    label="Mac app-policy refusal",
+    event_kind=EventKind.MACOS_POLICY_REFUSAL,
+    capabilities=CollectionCapability.PROCESS,
+    suggestion="Enable macos_unified_log collection on the authored Mac host for this explicit refusal.",
+)
+
+
+MACOS_HISTORY_SPILLAGE_EVIDENCE = BehaviorEvidenceContract(
+    behavior_id="macos_authored_history_spillage",
+    label="Mac zsh_history exposure",
+    alternatives=(
+        EvidenceProjectionAlternative(
+            formats=frozenset({"zsh_history"}), capabilities=CollectionCapability.PROCESS
+        ),
+    ),
+    source_scope=EvidenceSourceScope.TARGET_HOST,
+    unreachable_severity=EvidenceReachabilitySeverity.ERROR,
+    suggestion="Enable zsh_history collection on the authored Mac host; another host or Bash source cannot carry this exposure.",
+)
 
 
 PERSISTENT_WINDOWS_SMB_EVIDENCE = BehaviorEvidenceContract(
@@ -167,6 +193,14 @@ def _host_event_contracts() -> dict[str, BehaviorEvidenceContract]:
             event_kind=EventKind.PROCESS_CREATE,
             capabilities=CollectionCapability.PROCESS,
             suggestion=process_guidance,
+        ),
+        "ssh_session": _event_contract(
+            behavior_id="authored_ssh_session",
+            label="authored SSH authentication/session evidence",
+            event_kind=EventKind.SSH_SESSION,
+            companion_kinds=(EventKind.SYSLOG,),
+            capabilities=CollectionCapability.SESSION,
+            suggestion="Enable ecar on the receiver, or syslog for a Linux SSH receiver.",
         ),
         "create_remote_thread": _event_contract(
             behavior_id="authored_remote_thread",
@@ -256,6 +290,25 @@ def _host_event_contracts() -> dict[str, BehaviorEvidenceContract]:
     }
 
 
+MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
+    {
+        operation: _event_contract(
+            behavior_id=f"authored_macos_job_{operation}",
+            label=f"authored Mac job {operation}",
+            event_kind=event_kind,
+            capabilities=capability,
+            suggestion="Enable ecar endpoint collection on the modeled Mac.",
+        )
+        for operation, event_kind, capability in (
+            ("write", EventKind.FILE_CREATE, CollectionCapability.FILE),
+            ("remove", EventKind.FILE_DELETE, CollectionCapability.FILE),
+            ("activate", EventKind.PROCESS_CREATE, CollectionCapability.PROCESS),
+            ("exit", EventKind.PROCESS_TERMINATE, CollectionCapability.PROCESS),
+        )
+    }
+)
+
+
 AUTHORED_EVENT_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
     _host_event_contracts()
 )
@@ -263,6 +316,11 @@ AUTHORED_EVENT_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = Mapp
 BEHAVIOR_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
     {
         PERSISTENT_WINDOWS_SMB_EVIDENCE.behavior_id: PERSISTENT_WINDOWS_SMB_EVIDENCE,
+        MACOS_POLICY_REFUSAL_EVIDENCE.behavior_id: MACOS_POLICY_REFUSAL_EVIDENCE,
+        **{
+            contract.behavior_id: contract
+            for contract in MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values()
+        },
         **{
             contract.behavior_id: contract
             for contract in AUTHORED_EVENT_EVIDENCE_CONTRACTS.values()
@@ -273,6 +331,8 @@ BEHAVIOR_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingPro
 
 __all__ = [
     "AUTHORED_EVENT_EVIDENCE_CONTRACTS",
+    "MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS",
+    "MACOS_POLICY_REFUSAL_EVIDENCE",
     "BEHAVIOR_EVIDENCE_CONTRACTS",
     "PERSISTENT_WINDOWS_SMB_EVIDENCE",
     "PERSISTENT_WINDOWS_SMB_TARGET_FORMATS",

@@ -219,6 +219,8 @@ class HttpChannelReuse:
     src_port: int
     trans_depth: int
     canonical_request_time: datetime
+    request_stream_offset: int = 0
+    response_stream_offset: int = 0
 
     def __post_init__(self) -> None:
         """Normalize the returned request time."""
@@ -341,6 +343,8 @@ def http_channel_sidecar_result_digest(
             result.src_port,
             result.trans_depth,
             result.canonical_request_time,
+            result.request_stream_offset,
+            result.response_stream_offset,
         )
     return hashlib.sha256(
         repr(("http-channel-sidecar-result-v1", semantic_result)).encode()
@@ -1338,6 +1342,8 @@ class HttpApplicationChannelManager:
                 src_port=transport.src_port,
                 trans_depth=snapshot.reserved_operations + 1,
                 canonical_request_time=ordered_request,
+                request_stream_offset=snapshot.reserved_initiator_bytes,
+                response_stream_offset=snapshot.reserved_responder_bytes,
             )
 
         application_token = self._registry.prepare_completed_operation(reservation)

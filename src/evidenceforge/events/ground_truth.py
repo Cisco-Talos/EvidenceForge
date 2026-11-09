@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
@@ -109,6 +110,11 @@ class GroundTruthAttributesBase(BaseModel):
 
 class ProcessAttributes(GroundTruthAttributesBase):
     """Process event attributes."""
+
+    native_process_model: Literal["aggregate_birth", "fork_exec", "gui_exec"] | None = None
+    refused_target_pid: int | None = Field(default=None, gt=0, lt=100000)
+    refusal_cause: Literal["unclassified"] | None = None
+    execution_stage: Literal["unclassified"] | None = None
 
 
 class LogonAttributes(GroundTruthAttributesBase):
@@ -555,6 +561,22 @@ class AdversarialPayloadGroundTruthEvent(GroundTruthEventBase):
         return self
 
 
+class MacosLaunchItemAttributes(GroundTruthAttributesBase):
+    """Completed system-job stage; registration does not imply execution."""
+
+    native_process_model: Literal["launchd_exec"] | None = None
+    launchd_operation: Literal["write", "bootstrap", "activate", "exit", "unload", "remove"]
+    launchd_label: str
+    actor_object_id: str | None = None
+    process_object_ids: list[str] = Field(default_factory=list)
+    file_path: str | None = None
+
+
+class MacosLaunchItemGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["macos_launch_item"]
+    attributes: MacosLaunchItemAttributes
+
+
 class RawGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["raw"]
     attributes: RawAttributes
@@ -592,6 +614,7 @@ GroundTruthEvent = Annotated[
     | WorkstationUnlockGroundTruthEvent
     | SpillageGroundTruthEvent
     | AdversarialPayloadGroundTruthEvent
+    | MacosLaunchItemGroundTruthEvent
     | RawGroundTruthEvent,
     Field(discriminator="kind"),
 ]
@@ -918,6 +941,7 @@ class GroundTruthDocument(BaseModel):
     observation_profile: str
     collection_window: dict[str, str | None]
     source_evidence_status: dict[str, dict[str, dict[str, int]]] = Field(default_factory=dict)
+    macos_native_coverage: MacosNativeCoverage | None = None
     ids_evaluation: IdsEvaluationSummary | None = None
     storyline_steps: list[GroundTruthStep] = Field(default_factory=list)
     red_herring_steps: list[GroundTruthStep] = Field(default_factory=list)

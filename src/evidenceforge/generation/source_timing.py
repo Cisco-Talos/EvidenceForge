@@ -60,7 +60,7 @@ _PROCESS_CREATE_SOURCE_KEYS = {
     "source.sysmon_process_create",
     "source.ecar_process_create",
 }
-_PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create"}
+_PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create", "process_fork"}
 _PROCESS_END_EVENT_TYPES = {"process_terminate"}
 _SESSION_CLOSURE_SOURCE_KEYS = {
     "ecar": "source.ecar_session_logout",
@@ -278,6 +278,18 @@ PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES: tuple[SourceTimingIndexFamilySpec, ...]
     SourceTimingIndexFamilySpec(
         "runtime_process_create",
         "family/source_instance/process_object_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "runtime_process_execution",
+        "family/source_instance/execution_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
+        "runtime_process_credentials",
+        "family/source_instance/execution_id/principal/credentials",
         "datetime",
         "lifecycle+48h",
     ),
@@ -1214,6 +1226,12 @@ class SourceTimingPlanner:
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_process_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_process_execution_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_process_credential_times = _SourceTimingCache(
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_cross_source_sysmon_create_times = _SourceTimingCache(
@@ -2245,6 +2263,8 @@ class SourceTimingPlanner:
         return (
             ("ecar_process_create", self._ecar_process_create_times),
             ("runtime_process_create", self._runtime_process_create_times),
+            ("runtime_process_execution", self._runtime_process_execution_times),
+            ("runtime_process_credentials", self._runtime_process_credential_times),
             (
                 "runtime_cross_source_sysmon_create",
                 self._runtime_cross_source_sysmon_create_times,
@@ -2335,6 +2355,25 @@ class SourceTimingPlanner:
         if family in {"runtime_process_create", "process_dependent_create"}:
             return (
                 ("ecar", source_instance, object_id),
+                timestamp,
+                lifecycle_deadline,
+            )
+        if family == "runtime_process_execution":
+            return (("ecar", source_instance, f"{object_id}:exec:1"), timestamp, lifecycle_deadline)
+        if family == "runtime_process_credentials":
+            return (
+                (
+                    "ecar",
+                    source_instance,
+                    f"{object_id}:exec:0",
+                    "casey",
+                    501,
+                    501,
+                    20,
+                    20,
+                    501,
+                    100_000,
+                ),
                 timestamp,
                 lifecycle_deadline,
             )
@@ -3460,6 +3499,11 @@ class SourceTimingPlanner:
         plan = self._ensure_plan(event)
         if format_name is not None:
             plan.observation_delays[source_instance or format_name] = observation_delay
+        if format_name == "macos_unified_log":
+            native_time = self.source_time(event, "source.macos_unified_log")
+            projected = native_time + observation_delay
+            plan.finalized_times["macos_unified_log.event"] = projected
+            return replace(event, timestamp=projected)
         runtime_owned = self._runtime_owns_projection(event, format_name)
         if observation_delay and not runtime_owned:
             event = replace(
@@ -4298,6 +4342,13 @@ class SourceTimingPlanner:
                         hostname=hostname,
                         preferred=native_time,
                     )
+                native_time = self._apply_process_execution_constraints(
+                    event,
+                    family=family,
+                    source_instance=instance,
+                    hostname=hostname,
+                    preferred=native_time,
+                )
                 phase_times[phase] = native_time
                 render_time = specialized[1] if specialized is not None else native_time
                 if specialized is not None and specialized_native is not None:
@@ -4338,6 +4389,133 @@ class SourceTimingPlanner:
                     phase=phase,
                     timestamp=render_time,
                 )
+
+    @staticmethod
+    def _process_credential_observation_key(
+        family: str,
+        source_instance: str,
+        identity: ProcessIdentity,
+    ) -> tuple[object, ...]:
+        credentials = identity.credentials
+        key = (
+            family,
+            source_instance,
+            identity.execution_id,
+            identity.principal,
+            *(
+                (
+                    credentials.real_uid,
+                    credentials.effective_uid,
+                    credentials.real_gid,
+                    credentials.effective_gid,
+                    credentials.audit_uid,
+                    credentials.audit_session_id,
+                )
+                if credentials is not None
+                else (None,) * 6
+            ),
+        )
+
+        if identity.job_control is not None:
+            group = identity.job_control
+            session = group.session
+            key = (
+                *key,
+                (
+                    "posix-job-control-v1",
+                    group.pgid,
+                    group.leader_object_id,
+                    group.started_at,
+                    session.sid,
+                    session.leader_object_id,
+                    session.started_at,
+                ),
+            )
+        return key
+
+    def _apply_process_execution_constraints(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Keep visible image replacement and its dependent observations in order."""
+
+        if family != "ecar" or event.identity_plan is None:
+            return preferred
+        plan = event.identity_plan
+        if event.event_type in {
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
+        }:
+            identity = plan.subject
+            floor = (
+                self._process_dependent_create_times.get(
+                    (family, source_instance, identity.object_id)
+                )
+                if isinstance(identity, ProcessIdentity)
+                else None
+            )
+            if event.event_type == "process_exec" and isinstance(identity, ProcessIdentity):
+                predecessor = plan.actor
+                predecessor_time = (
+                    self._runtime_process_execution_times.get(
+                        (family, source_instance, predecessor.execution_id)
+                    )
+                    if isinstance(predecessor, ProcessIdentity)
+                    else None
+                )
+                if predecessor_time is not None:
+                    floor = max(floor, predecessor_time) if floor is not None else predecessor_time
+        else:
+            identity = next(
+                (
+                    candidate
+                    for candidate in (plan.actor, plan.subject, plan.target)
+                    if isinstance(candidate, ProcessIdentity)
+                    and candidate.hostname.casefold() == hostname.casefold()
+                ),
+                None,
+            )
+            floor = (
+                self._runtime_process_execution_times.get(
+                    (family, source_instance, identity.execution_id)
+                )
+                if identity is not None and identity.execution_ordinal > 0
+                else None
+            )
+        if isinstance(identity, ProcessIdentity):
+            credential_floor = self._runtime_process_credential_times.get(
+                self._process_credential_observation_key(family, source_instance, identity)
+            )
+            if credential_floor is not None:
+                floor = max(floor, credential_floor) if floor is not None else credential_floor
+        rendered_precision_collision = bool(
+            event.event_type == "process_exec"
+            and floor is not None
+            and int(preferred.timestamp() * 1_000) <= int(floor.timestamp() * 1_000)
+        )
+        if floor is None or (preferred > floor and not rendered_precision_collision):
+            return preferred
+        self.timing_runtime.audit.record_repair("ecar.process.execution_order")
+        return self._sample_after_floor(
+            floor,
+            relationship_key="ecar.process.execution_order",
+            scope=TimingScope(
+                stable_id=self._endpoint_event_object_id(event, hostname, "base"),
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=identity.lifecycle_group_id,
+            ),
+            maximum_us=4_000,
+            minimum_us=1_000 if event.event_type == "process_exec" else 0,
+        )
 
     def _runtime_endpoint_event_time(
         self,
@@ -4478,6 +4656,39 @@ class SourceTimingPlanner:
     ) -> None:
         """Publish the final visible dependent frontier after all source constraints."""
 
+        if family == "ecar" and event.event_type in _PROCESS_START_EVENT_TYPES:
+            # Session/transport/execution constraints run after the preliminary
+            # birth planner. Publish the admitted birth, not its earlier sample,
+            # before another occurrence can consume this process's frontier.
+            # In a fork the actor is the parent; the subject owns this birth.
+            identity = self._subject_process_identity(event)
+            process = event.process
+            if process is None:
+                return
+            object_id, _lifecycle_id = self._process_scope_ids(
+                event,
+                identity,
+                hostname=hostname,
+                pid=process.pid,
+                started_at=identity.started_at
+                if identity
+                else process.start_time or event.timestamp,
+            )
+            key = (family, source_instance, object_id)
+            self._runtime_process_create_times[key] = timestamp
+            previous = self._process_dependent_create_times.get(key)
+            self._process_dependent_create_times[key] = (
+                max(previous, timestamp) if previous is not None else timestamp
+            )
+            if identity is not None:
+                self._ecar_process_create_times[identity.object_id] = timestamp
+            self._ensure_plan(event).finalized_times[
+                ecar_process_render_key("create", hostname)
+            ] = timestamp
+            self._record_process_create_dependency(
+                event, family, source_instance, object_id, timestamp
+            )
+            return
         if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
             return
         scope = self._runtime_endpoint_process_scope(
@@ -4489,6 +4700,23 @@ class SourceTimingPlanner:
         if scope is None:
             return
         process_object_id, _lifecycle_id, _pid, _started_at = scope
+        if family == "ecar" and event.event_type == "process_exec":
+            identity = event.identity_plan.subject if event.identity_plan is not None else None
+            if isinstance(identity, ProcessIdentity):
+                self._runtime_process_execution_times[
+                    (family, source_instance, identity.execution_id)
+                ] = timestamp
+        if family == "ecar" and event.event_type in {
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
+        }:
+            identity = event.identity_plan.subject if event.identity_plan is not None else None
+            if isinstance(identity, ProcessIdentity):
+                self._runtime_process_credential_times[
+                    self._process_credential_observation_key(family, source_instance, identity)
+                ] = timestamp
         key = (family, source_instance, process_object_id)
         previous = self._process_dependent_create_times.get(key)
         if previous is None or timestamp > previous:
@@ -4729,9 +4957,16 @@ class SourceTimingPlanner:
             "file_create",
             "file_modify",
             "file_delete",
+            "file_rename",
+            "file_close",
             "registry_modify",
             "image_load",
             "process_access",
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {
@@ -4760,6 +4995,16 @@ class SourceTimingPlanner:
         phase: str,
     ) -> str:
         identity = event.identity_plan
+        if (
+            event.event_type == "process_exec"
+            and identity is not None
+            and isinstance(identity.subject, ProcessIdentity)
+        ):
+            # Exec transitions share one process object but have distinct
+            # source-visible execution epochs. Repair jitter must be keyed to
+            # that epoch or every transition that meets the same lifecycle
+            # floor receives an identical timestamp.
+            return f"{identity.subject.execution_id}:{phase}"
         if identity is not None and identity.object_id:
             return f"{str(identity.object_id)}:{phase}"
         if event.occurrence_id:
@@ -4820,6 +5065,7 @@ class SourceTimingPlanner:
         return {
             "process_create": 1,
             "system_process_create": 1,
+            "process_fork": 1,
             "process_terminate": 5,
             "create_remote_thread": 8,
             "process_access": 10,
@@ -4875,9 +5121,18 @@ class SourceTimingPlanner:
                 self._admitted_ecar_remote_transports,
                 self._admitted_ecar_transport_transactions,
             )
-            if anchor is None and event.event_type == "ssh_session":
+            failed_ssh_auth = (
+                event.event_type == "failed_logon"
+                and event.auth is not None
+                and event.auth.session_kind == "ssh"
+            )
+            if anchor is None and (event.event_type == "ssh_session" or failed_ssh_auth):
                 anchor = self._ssh_transport_anchor(event)
-                relationship = "ecar.ssh_session_after_transport"
+                relationship = (
+                    "ecar.failed_ssh_auth_after_transport"
+                    if failed_ssh_auth
+                    else "ecar.ssh_session_after_transport"
+                )
             if event.auth is not None and event.auth.session_kind == "smb":
                 smb_anchor = self._smb_transport_anchor(event)
                 if smb_anchor is not None:
@@ -5846,7 +6101,7 @@ class SourceTimingPlanner:
     ) -> datetime:
         """Project canonical time through the engine-owned endpoint clock."""
 
-        if not hostname or os_category not in {"windows", "linux"}:
+        if not hostname or os_category not in {"windows", "linux", "macos"}:
             return ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
         spec = SourceClockSpec(
@@ -5945,11 +6200,14 @@ class SourceTimingPlanner:
         relationship_key: str,
         scope: TimingScope,
         maximum_us: int,
+        minimum_us: int = 0,
     ) -> datetime:
         """Sample admissible positive slack rather than clamping onto a floor."""
 
+        if minimum_us < 0 or maximum_us <= minimum_us:
+            raise ValueError("Timing repair slack requires 0 <= minimum < maximum")
         return floor + self.timing_runtime.sampler.sample_timedelta(
-            self._right_skew_distribution(0, maximum_us),
+            self._right_skew_distribution(minimum_us, maximum_us),
             relationship_key=relationship_key,
             scope=scope,
             sample_key="repair_slack",
@@ -6685,6 +6943,16 @@ class SourceTimingPlanner:
             return event
         if lifecycle.phase == "dependent":
             key = (format_name, lifecycle.group_id)
+            if format_name in {"bash_history", "zsh_history"}:
+                # History stores the submitted command's execution time. A later
+                # dispatch from another activity must not rewrite that fact to
+                # the session's most recently delivered record. Retain only the
+                # maximum frontier used to order a later session closure.
+                previous = self._latest_session_dependent_times.get(key)
+                self._latest_session_dependent_times[key] = max(
+                    event.timestamp, previous or event.timestamp
+                )
+                return event
             visible_start = self._latest_session_start_times.get(key)
             source_time = event.timestamp
             if visible_start is not None:
@@ -7697,6 +7965,12 @@ class SourceTimingPlanner:
             source_time = canonical_time - delta - micro_noise
         else:
             source_time = canonical_time + delta + micro_noise
+        if source_key == "source.macos_unified_log":
+            # Unified Log observations carry both a wall timestamp and a boot-relative
+            # Mach timestamp. The native observation already owns that clock pair;
+            # adding an independent endpoint-clock projection would make the two
+            # serialized timestamps disagree.
+            return source_time
         return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
 
     def _coherent_ecar_process_create_latency(
@@ -7779,7 +8053,7 @@ class SourceTimingPlanner:
     ) -> timedelta:
         """Return the active profile's deterministic clock adjustment for one host."""
 
-        if not hostname or os_category not in {"windows", "linux"}:
+        if not hostname or os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         projected = self._runtime_endpoint_clock_time(
             timestamp,
@@ -7800,7 +8074,7 @@ class SourceTimingPlanner:
         reference time, including timestamps that precede that reference.
         """
 
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         canonical_time = ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
@@ -7830,7 +8104,7 @@ class SourceTimingPlanner:
         later after both hosts project through independent endpoint clocks.
         """
 
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         canonical_time = ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
@@ -7867,8 +8141,8 @@ class SourceTimingPlanner:
         """
 
         canonical_time = ensure_utc(canonical_time)
-        if os_category not in {"windows", "linux"}:
-            raise ValueError("process-create source headroom requires windows or linux")
+        if os_category not in {"windows", "linux", "macos"}:
+            raise ValueError("process-create source headroom requires windows, linux, or macos")
         if type(format_names) is not tuple or any(type(name) is not str for name in format_names):
             raise TypeError("process-create source formats must be an exact tuple of strings")
         families = tuple(
@@ -7887,7 +8161,7 @@ class SourceTimingPlanner:
         if os_category != "windows" and any(
             family in {"sysmon", "windows_security"} for family in families
         ):
-            raise ValueError("Linux process-create admission cannot request Windows formats")
+            raise ValueError("Non-Windows process-create admission cannot request Windows formats")
         parent_floor = ensure_utc(parent_source_time) if parent_source_time is not None else None
         session_floor = ensure_utc(session_source_time) if session_source_time is not None else None
         clock_bound = canonical_time + self.endpoint_clock_positive_headroom(
@@ -7969,13 +8243,17 @@ class SourceTimingPlanner:
                 host = event.src_host or event.dst_host
             hostname = getattr(host, "hostname", "") or ""
             os_category = getattr(host, "os_category", "") or ""
-            if os_category not in {"windows", "linux"}:
+            if os_category not in {"windows", "linux", "macos"}:
                 return None
             return (hostname, os_category) if hostname else None
         if source_key.startswith(("source.syslog_", "source.bash_history_")):
             host = event.src_host or event.dst_host
             hostname = getattr(host, "hostname", "") or ""
             return (hostname, "linux") if hostname else None
+        if source_key == "source.macos_unified_log":
+            host = event.src_host
+            if host is not None and host.os_category == "macos":
+                return (host.hostname, "macos")
         return None
 
     def _source_micro_noise(

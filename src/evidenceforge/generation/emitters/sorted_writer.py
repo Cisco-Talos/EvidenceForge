@@ -91,6 +91,7 @@ class ExternalSortedLineWriter:
         self.merge_fan_in = merge_fan_in
         self.event_count = 0
         self._sort_key = sort_key
+        self._export_projection: Callable[[str], str] | None = None
         self._buffer: list[str] = []
         self._buffer_bytes = 0
         self._run_paths: list[Path] = []
@@ -455,6 +456,15 @@ class ExternalSortedLineWriter:
                 self._run_sequence = run_sequence
                 self._spool_dir = paths[0].parent if paths else None
 
+    def set_export_projection(self, projection: Callable[[str], str]) -> None:
+        """Bind final canonical field resolution without modifying immutable runs."""
+        with self._lock:
+            if self._export_projection == projection:
+                return
+            if self._exported_run_count:
+                raise ExactPublicationError("Cannot resolve identities after source export")
+            self._export_projection = projection
+
     def _publish_runs_unlocked(self) -> None:
         """Atomically export every admitted run without consuming journal truth."""
 
@@ -469,7 +479,7 @@ class ExternalSortedLineWriter:
         os.close(descriptor)
         merge_path = Path(raw_merge_path)
         try:
-            self._merge_runs_unlocked(self._run_paths, merge_path)
+            self._merge_runs_unlocked(self._run_paths, merge_path, export=True)
             # Windows FlushFileBuffers requires a writable handle. Keep the
             # existing read-only POSIX flush path unchanged.
             with merge_path.open("r+b" if os.name == "nt" else "rb") as stream:
@@ -679,9 +689,13 @@ class ExternalSortedLineWriter:
             for stream in streams:
                 stream.close()
 
-    def _merge_runs_unlocked(self, paths: Sequence[Path], destination: Path) -> None:
+    def _merge_runs_unlocked(
+        self, paths: Sequence[Path], destination: Path, *, export: bool = False
+    ) -> None:
         with destination.open("w", encoding="utf-8", newline="\n") as stream:
             for line in self._iter_merged_lines(paths):
+                if export and self._export_projection is not None:
+                    line = self._export_projection(line)
                 stream.write(line)
                 stream.write("\n")
 

@@ -171,6 +171,49 @@ def test_intent_reconciliation_rejects_metadata_drift(authored_scenario: Scenari
     assert any("metadata differs" in failure for failure in score.sample_failures)
 
 
+@pytest.mark.parametrize("pid", [0, -1])
+@pytest.mark.parametrize("linked", [False, True])
+def test_intent_reconciliation_rejects_false_process_success(
+    authored_scenario: Scenario, pid: int, linked: bool
+) -> None:
+    from evidenceforge.events.ground_truth import ProcessAttributes, ProcessGroundTruthEvent
+
+    authored = AuthoredIntentLedger.from_scenario(authored_scenario)
+    execution = IntentExecutionLedger(authored)
+    for intent in authored.intents:
+        execution.mark_planned(intent.intent_id)
+    ground_truth = GroundTruthGenerator(
+        authored_scenario,
+        [],
+        authored_intent_ledger=authored,
+        intent_execution_snapshot=execution.snapshot(),
+    ).build_document()
+    intent = authored.intents[0]
+    record = ProcessGroundTruthEvent(
+        record_id="invalid-process-success",
+        kind="process",
+        time=intent.authored_time,
+        actor=intent.actor,
+        system=intent.system,
+        activity=intent.activity,
+        ground_truth_section=intent.section.value,
+        emitted=True,
+        intent_id=intent.intent_id if linked else None,
+        attributes=ProcessAttributes(pid=pid),
+    )
+    ground_truth = ground_truth.model_copy(update={"events": [record]})
+    score = CausalityScorer._score_intent_reconciliation(
+        authored_scenario, EvaluationContext(ground_truth=ground_truth)
+    )
+    assert score.score is not None and score.score < 100
+    assert any("invalid PID" in failure for failure in score.sample_failures)
+    thresholds = load_thresholds()
+    criteria = _build_acceptance_criteria(
+        thresholds, _passing_pillars(thresholds, overrides={score.key: score.score})
+    )
+    assert _acceptance_verdict(criteria) is False
+
+
 def test_intent_reconciliation_rejects_reported_unexpected_intent(
     authored_scenario: Scenario,
 ) -> None:

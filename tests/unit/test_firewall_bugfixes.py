@@ -100,7 +100,7 @@ class TestEvalScorerFirewallEvents:
         )
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
-    def test_port_scan_matches_733100_threat_detection(self):
+    def test_generic_733100_threat_detection_does_not_prove_an_authored_scan(self):
         from evidenceforge.evaluation.pillars.causality import (
             CausalityScorer as SignalIntegrityScorer,
         )
@@ -117,7 +117,22 @@ class TestEvalScorerFirewallEvents:
                 "cumulative_count": 2340,
             },
         )
-        assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
+        assert scorer._record_matches(record, record.source_format, event, "port_scan") is False
+
+    def test_733100_scan_attribution_requires_the_actual_scanner(self) -> None:
+        from evidenceforge.evaluation.pillars.causality import CausalityScorer
+
+        scorer = CausalityScorer()
+        event = self._make_resolved_event("port_scan", "10.0.10.50")
+        for source, expected in [("10.0.10.50", True), ("10.0.20.1", False), ("", False)]:
+            record = ParsedRecord(
+                source_format="cisco_asa",
+                raw="invented alarm",
+                fields={"msg_id": 733100, "src_ip": source, "threat_class": "Scanning"},
+            )
+            assert (
+                scorer._record_matches(record, record.source_format, event, "port_scan") is expected
+            )
 
     def test_port_scan_matches_allowed_cisco_asa_probe_lifecycle(self):
         from evidenceforge.evaluation.pillars.causality import (
@@ -568,3 +583,43 @@ class TestEvaluateFirewallPolicy:
             )
             is True
         )
+
+
+def test_omitted_scan_source_resolves_to_host_and_explicit_override_stays_authoritative() -> None:
+    from copy import deepcopy
+    from pathlib import Path
+
+    from evidenceforge.evaluation.pillars.causality import CausalityScorer
+    from evidenceforge.evaluation.storyline import resolve_storyline
+    from evidenceforge.models.scenario import Scenario
+    from evidenceforge.utils import load_yaml
+
+    raw = load_yaml(Path("tests/fixtures/scenarios/macos-native-smoke.yaml"))
+    raw["storyline"] = [
+        {
+            "id": "scan",
+            "actor": "alex",
+            "system": "MAC-SMOKE",
+            "time": "+2m",
+            "activity": "Invented scan",
+            "events": [{"type": "port_scan", "ports": [22]}],
+        }
+    ]
+    for source in (None, "", "198.51.100.42"):
+        candidate = deepcopy(raw)
+        if source is not None:
+            candidate["storyline"][0]["events"][0]["source_ip"] = source
+        scenario = Scenario.model_validate(candidate)
+        event = resolve_storyline(scenario.storyline, scenario)[0]
+        expected = source or "192.0.2.10"
+        assert event.details["source_ip"] == event.sub_details[0]["source_ip"] == expected
+        record = ParsedRecord(
+            source_format="cisco_asa",
+            raw="invented probe",
+            fields={"msg_id": 106023, "src_ip": expected, "dst_port": 22},
+        )
+        scorer = CausalityScorer()
+        assert scorer._record_matches(record, "cisco_asa", event, "port_scan")
+        assert ("source_ip", True) in scorer._check_indicators(event, record)
+        record.fields["src_ip"] = "203.0.113.99"
+        assert ("source_ip", False) in scorer._check_indicators(event, record)

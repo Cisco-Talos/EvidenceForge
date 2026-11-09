@@ -1,0 +1,24 @@
+{
+  "retransmitted_directions": 2341,
+  "missing_positive_repeat_budget": [
+    [
+      "data/zeek-core/conn.json",
+      1270,
+      "resp",
+      4409,
+      5,
+      4609,
+      "ShADadTtFf"
+    ],
+    [
+      "data/zeek-core/conn.json",
+      4122,
+      "resp",
+      5012,
+      5,
+      5212,
+      "ShADadTtFf"
+    ]
+  ],
+  "clean_header_alignment_failures": []
+}

@@ -31,6 +31,8 @@ from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
     RuntimeServiceDeploymentIdentity,
 )
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleClosureTicket,
@@ -45,8 +47,11 @@ from evidenceforge.events.lifecycle import (
     LifecycleSingletonLeaseKey,
     LifecycleTransition,
     LogicalServiceIdentity,
+    ProcessGUIAttribution,
     ProcessLifecycleIdentity,
     ProcessLifecycleSnapshot,
+    ProcessRuntimeChange,
+    ProcessRuntimeView,
     ProcessTokenIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceInstanceLifecycleSnapshot,
@@ -60,7 +65,13 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
     TransportSessionBindingSnapshot,
 )
+from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
     IncrementalExactMap,
@@ -92,8 +103,8 @@ _RESOURCE_LEASE_EXPIRY_PAGE = 4_096
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _SESSION_TEXT_FIELD_COUNT = 8
 _SESSION_ROW_HEADER = Struct(">qQI8H")
-_SERVICE_TEXT_FIELD_COUNT = 15
-_SERVICE_ROW_HEADER = Struct(">qI15H")
+_SERVICE_TEXT_FIELD_COUNT = 16
+_SERVICE_ROW_HEADER = Struct(">qI16H")
 _TRANSPORT_TEXT_FIELD_COUNT = 12
 _TRANSPORT_ROW_HEADER = Struct(">qqHHI12H")
 _PACKED_SESSION_ROW_BYTES = 256
@@ -332,6 +343,10 @@ def _transition_digest_value(transition: LifecycleTransition) -> int:
             transition.reason,
         )
     )
+    if transition.process_change is not None:
+        payload += "\x1fprocess-runtime:" + repr(transition.process_change)
+    if transition.parentage_change is not None:
+        payload += "\x1fprocess-parentage:" + repr(transition.parentage_change)
     return int.from_bytes(sha256(payload.encode("utf-8")).digest())
 
 
@@ -644,6 +659,7 @@ def _pack_service_row(
         transition.transition_id,
         transition.action_id,
         *deployment_fields,
+        identity.launchd_job.model_dump_json() if identity.launchd_job is not None else "",
     )
     lengths = tuple(len(value.encode("utf-8")) for value in text)
     if any(length >= 1 << 16 for length in lengths):
@@ -693,6 +709,7 @@ def _decode_service_row(row: bytes | memoryview) -> _DecodedServiceRow:
         instance_id=text[7],
         started_at=_datetime_from_microseconds(started_us),
         parent_service_object_id=text[8],
+        launchd_job=LaunchdSystemJobDefinition.model_validate_json(text[15]) if text[15] else None,
     )
     return _DecodedServiceRow(
         logical_identity=logical,
@@ -792,6 +809,8 @@ class _LifecycleState:
     commits: dict[tuple[str, int], str] | None = None
     commit_deletions: int = 0
     durable_transition_ids: str | tuple[str, ...] | None = None
+    runtime_view: ProcessRuntimeView | None = None
+    parentage_change: ProcessParentageChange | None = None
 
 
 class _StartedLifecycleState:
@@ -810,6 +829,8 @@ class _StartedLifecycleState:
     latest_hold_until = None
     commits = None
     commit_deletions = 0
+    runtime_view = None
+    parentage_change = None
 
     def __init__(self, transition: LifecycleTransition, transition_digest: int) -> None:
         self.transitions = transition
@@ -1094,6 +1115,11 @@ class _ProcessEntry:
     token: ProcessTokenIdentity
     membership: LifecycleMembership
     state: _LifecycleStateRecord = field(compare=False, repr=False)
+
+    @property
+    def current_view(self) -> ProcessRuntimeView:
+        """Return the latest execution facts while preserving lifetime identity."""
+        return self.state.runtime_view or ProcessRuntimeView.initial(self.identity, self.token)
 
     @property
     def transitions(self) -> tuple[LifecycleTransition, ...]:
@@ -1831,6 +1857,7 @@ class _ServiceIndex:
         self._instances = PackedUniqueDigestMap(b"lc-svc-inst")
         self._generations = array("I")
         self._states: IncrementalExactMap[int, _LifecycleState] = IncrementalExactMap()
+        self._process_groups: IncrementalExactMap[int, PosixGroupIdentity] = IncrementalExactMap()
 
     @staticmethod
     def _logical_key(hostname: str, logical_service_id: str) -> str:
@@ -1976,6 +2003,7 @@ class _ServiceIndex:
                     raise StateError("Invalid logical-service route replacement")
                 self._logical[logical_key] = logical_replacement_handle
         self._states.pop(handle, None)
+        self._process_groups.pop(handle, None)
         self._rows.delete(handle)
         return entry
 
@@ -2034,6 +2062,7 @@ class _ServiceIndex:
         )
         rows = self._rows.metrics(estimate_bytes=estimate_bytes)
         states = self._states.metrics(estimate_bytes=estimate_bytes)
+        groups = self._process_groups.metrics(estimate_bytes=estimate_bytes)
         return IndexMetrics(
             live_entries=len(self),
             backing_entries=rows.backing_entries,
@@ -2044,16 +2073,22 @@ class _ServiceIndex:
                 sum(metric.estimated_bytes for metric in maps)
                 + rows.estimated_bytes
                 + states.estimated_bytes
+                + groups.estimated_bytes
                 + (getsizeof(self._generations) if estimate_bytes else 0)
             ),
             primary_map_entries=sum(metric.primary_map_entries for metric in maps)
-            + states.primary_map_entries,
+            + states.primary_map_entries
+            + groups.primary_map_entries,
             primary_map_backing_bytes=sum(metric.primary_map_backing_bytes for metric in maps)
-            + states.primary_map_backing_bytes,
-            primary_compaction_pending=states.primary_compaction_pending,
-            primary_compaction_rotations=states.primary_compaction_rotations,
-            primary_compaction_work=states.primary_compaction_work,
-            primary_compaction_seconds=states.primary_compaction_seconds,
+            + states.primary_map_backing_bytes
+            + groups.primary_map_backing_bytes,
+            primary_compaction_pending=states.primary_compaction_pending
+            or groups.primary_compaction_pending,
+            primary_compaction_rotations=states.primary_compaction_rotations
+            + groups.primary_compaction_rotations,
+            primary_compaction_work=states.primary_compaction_work + groups.primary_compaction_work,
+            primary_compaction_seconds=states.primary_compaction_seconds
+            + groups.primary_compaction_seconds,
         )
 
     @property
@@ -2061,9 +2096,10 @@ class _ServiceIndex:
         return self._rows.estimated_value_bytes
 
     def compact_primary(self, *, max_slots: int = _PRIMARY_COMPACTION_PAGE) -> int:
-        return self._states.compact_primary(
-            max_entries=max_slots,
-            force=not self._states,
+        first = max_slots // 2
+        work = self._states.compact_primary(max_entries=first, force=not self._states)
+        return work + self._process_groups.compact_primary(
+            max_entries=max_slots - first, force=not self._process_groups
         )
 
     def iter_entries(self) -> Iterator[_ServiceEntry]:
@@ -2906,6 +2942,13 @@ class _LifecyclePartition:
             raise StateError("Logical service and runtime instance must use the same host")
         if logical_identity.logical_service_id != identity.logical_service_id:
             raise StateError("Service instance logical identity does not match its service")
+        if (logical_identity.service_kind == "launchd") != (identity.launchd_job is not None):
+            raise StateError("Launchd service instances require exactly one loaded job definition")
+        if (
+            identity.launchd_job is not None
+            and logical_identity.canonical_name != f"system/{identity.launchd_job.label}"
+        ):
+            raise StateError("Loaded launchd label does not match its logical service")
         existing = self._services.get(identity.object_id)
         if existing is not None:
             if (
@@ -3344,6 +3387,16 @@ class _LifecyclePartition:
             raise StateError("Service/process binding service is not active")
         if service_barrier is not None:
             raise StateError("Service/process binding service already accepted a close barrier")
+        if service_identity.launchd_job is not None:
+            aggregate = self._service_processes_by_service.get(identity.service_object_id)
+            if aggregate is not None and aggregate.unclosed:
+                raise StateError("Loaded launchd job already has an active process binding")
+            if (
+                aggregate is not None
+                and aggregate.latest_closed_at is not None
+                and aggregate.latest_closed_at > identity.bound_at
+            ):
+                raise StateError("Launchd activation cannot overlap its preceding process binding")
         if not process_active:
             raise StateError("Service/process binding process is not active")
         if process_barrier is not None:
@@ -5477,7 +5530,10 @@ class _LifecyclePartition:
             )
         if process.identity.hostname.casefold() != hostname.casefold():
             raise StateError("Lifecycle resource lease cannot use a cross-host process")
-        if process.token.principal.casefold() != principal.casefold():
+        current_view = process.current_view
+        if canonical_time < current_view.changed_at:
+            raise StateError("Lifecycle resource lease precedes the current process execution")
+        if current_view.token.principal.casefold() != principal.casefold():
             raise StateError("Lifecycle resource lease principal disagrees with its process token")
         if process.membership.session_object_id != session_object_id:
             raise StateError("Lifecycle resource lease process is not a member of its session")
@@ -5491,10 +5547,10 @@ class _LifecyclePartition:
                 f"Lifecycle resource lease extends past process close barrier "
                 f"{process.close_barrier.barrier_id}"
             )
-        if require_shell and process.identity.role != "shell":
+        if require_shell and current_view.role != "shell":
             raise StateError("Lifecycle foreground lease holder must be a shell process")
         if canonical_image and self._canonical_lease_image(
-            process.identity.image
+            current_view.image
         ) != self._canonical_lease_image(canonical_image):
             raise StateError("Lifecycle singleton lease image disagrees with its process")
         return process
@@ -6241,6 +6297,11 @@ class _LifecyclePartition:
             if not claim_validated:
                 self._validate_transition_claim(transition)
             self._record_transition_commit(entry, transition)
+            if transition.process_change is not None:
+                entry.state.runtime_view = transition.process_change.after
+            if transition.parentage_change is not None:
+                assert isinstance(entry, _ProcessEntry)
+                self._commit_process_parent_adoption(entry, transition.parentage_change)
             self._insert_transition_detail(entry, transition)
             entry.state.transition_count += 1
             entry.state.transition_digest ^= self._transition_digest(transition)
@@ -6285,6 +6346,24 @@ class _LifecyclePartition:
                 0,
                 hold.acquired_at,
             )
+
+    def _commit_process_parent_adoption(
+        self, entry: _ProcessEntry, change: ProcessParentageChange
+    ) -> None:
+        """Move one prevalidated live relation, preserving birth and session ownership."""
+        old = self._live_children[entry.identity.object_id]
+        self._children_by_parent[old.parent_object_id].close(change.changed_at)
+        assert change.after.current is not None
+        parent_id = change.after.current.object_id
+        aggregate = self._children_by_parent.get(parent_id)
+        if aggregate is None:
+            aggregate = _DependentClosureAggregate()
+            self._children_by_parent[parent_id] = aggregate
+        aggregate.register()
+        self._live_children[entry.identity.object_id] = _LiveChildBinding(
+            parent_id, entry.identity.object_id
+        )
+        entry.state.parentage_change = change
 
     @staticmethod
     def _ensure_full_state(entry: _LifecycleEntry) -> _LifecycleState:
@@ -6511,6 +6590,8 @@ class _LifecyclePartition:
             hold_ledger_digest=f"{entry.state.hold_digest:064x}",
             latest_dependent_at=entry.state.latest_dependent_at,
             latest_hold_until=entry.state.latest_hold_until,
+            runtime_view=entry.state.runtime_view,
+            parentage_change=entry.state.parentage_change,
         )
 
     def _session_snapshot(self, entry: _SessionEntry) -> SessionLifecycleSnapshotView:
@@ -6574,6 +6655,7 @@ class _LifecyclePartition:
         )
         return ServiceInstanceLifecycleSnapshot(
             logical_identity=entry.logical_identity,
+            process_group=self._services._process_groups.get(entry.handle),
             identity=entry.identity,
             transitions=transitions,
             holds=holds,
@@ -7453,6 +7535,9 @@ class LifecycleServicePublicationRequest:
     transition_ordinal: int = 0
     staged_process_bindings: tuple[LifecycleServiceStagedProcessBindingMember, ...] = ()
 
+    process_group: PosixGroupIdentity | None = None
+    active_process: ProcessIdentity | None = None
+
     def __post_init__(self) -> None:
         """Reject incomplete, duplicated, or cross-service publication inputs."""
 
@@ -7464,6 +7549,57 @@ class LifecycleServicePublicationRequest:
             raise ValueError("Logical service and instance hosts must match")
         if self.logical_identity.logical_service_id != self.identity.logical_service_id:
             raise ValueError("Logical service and instance IDs must match")
+        if self.identity.launchd_job is not None and len(self.process_bindings) > 1:
+            raise ValueError("Loaded launchd job publication admits only one process binding")
+        group = self.process_group
+        active = self.active_process
+        definition = self.identity.launchd_job
+        if active is not None and (
+            type(active) is not ProcessIdentity
+            or definition is None
+            or definition.principal != "root"
+            or definition.run_at_load
+            or active.image != definition.program
+            or active.arguments != definition.arguments
+            or active.parent_pid != 1
+            or active.initial_image != "/sbin/launchd"
+            or group is None
+            or active.job_control != group
+            or self.staged_process_bindings
+            or len(self.process_bindings) != 1
+            or self.process_bindings[0].process_object_id != active.object_id
+            or self.process_bindings[0].bound_at < active.execution_started_at
+            or active.execution_ordinal != 2
+            or active.hostname != self.identity.hostname
+            or active.principal != "root"
+            or active.logon_id
+            or active.credentials is None
+            or not active.credentials.is_unattributed_root
+            or active.pid != group.pgid
+            or active.pid != group.session.sid
+            or active.object_id != group.leader_object_id
+            or active.started_at > group.started_at
+            or group.started_at > active.execution_started_at
+        ):
+            raise ValueError("Active launchd binding requires its exact native root job leader")
+        if group is not None:
+            if (
+                type(group) is not PosixGroupIdentity
+                or self.identity.launchd_job is None
+                or group.session.hostname != self.identity.hostname
+                or (active is None and len(self.staged_process_bindings) != 1)
+                or len(self.process_bindings) != 1
+                or self.process_bindings[0].process_object_id != group.leader_object_id
+                or active is None
+                and (
+                    self.staged_process_bindings[0].process_start.identity.object_id
+                    != group.leader_object_id
+                    or self.staged_process_bindings[0].process_start.identity.pid != group.pgid
+                    or self.staged_process_bindings[0].process_start.identity.started_at
+                    != group.started_at
+                )
+            ):
+                raise ValueError("Service group requires an exact staged launchd group leader")
         binding_ids = [binding.binding_id for binding in self.process_bindings]
         process_ids = [binding.process_object_id for binding in self.process_bindings]
         if len(set(binding_ids)) != len(binding_ids):
@@ -8076,12 +8212,35 @@ class LifecycleServiceProcessClosureRequest:
     binding_closures: tuple[LifecycleServiceProcessBindingClosure, ...]
     process_closures: tuple[LifecycleSubjectClosureControl, ...] = ()
     service_closures: tuple[LifecycleSubjectClosureControl, ...] = ()
+    parent_adoptions: tuple[LifecycleTransition, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject duplicates, wrong kinds, and empty closure transactions."""
 
         if not (self.binding_closures or self.process_closures or self.service_closures):
             raise ValueError("Service/process closure request cannot be empty")
+        if type(self.parent_adoptions) is not tuple or len(self.parent_adoptions) > 256:
+            raise ValueError("Service closure requires bounded parent adoptions")
+        subjects: set[str] = set()
+        closing = {
+            item.barrier.subject.object_id: item.barrier.requested_at
+            for item in self.process_closures
+        }
+        for item in self.parent_adoptions:
+            if type(item) is not LifecycleTransition or item.parentage_change is None:
+                raise ValueError("Service closure only accepts exact parent adoption transitions")
+            item.__post_init__()
+            change = item.parentage_change
+            old, new = change.before.current, change.after.current
+            assert old is not None and new is not None
+            if (
+                item.subject.object_id in subjects
+                or item.subject.object_id in closing
+                or new.object_id in closing
+                or closing.get(old.object_id) != item.canonical_time
+            ):
+                raise ValueError("Service adoption must accompany its exact parent exit")
+            subjects.add(item.subject.object_id)
         binding_ids = [item.identity.binding_id for item in self.binding_closures]
         process_ids = [item.barrier.subject.object_id for item in self.process_closures]
         service_ids = [item.barrier.subject.object_id for item in self.service_closures]
@@ -8332,12 +8491,32 @@ class _PreparedServiceCommitPlan:
     bindings: tuple[_PreparedServiceProcessBinding, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedServiceBindingClosure:
+    """Exact binding tombstone and aggregate targets prepared before terminal writes."""
+
+    partition_id: int
+    after: ServiceProcessBindingSnapshot
+    aggregates: tuple[_DependentClosureAggregate, _DependentClosureAggregate]
+    retained_until: datetime
+
+
 @dataclass(slots=True)
 class _PreparedServiceClosureCommitPlan:
     """Validated binding-first terminal writes retained by one claimed reservation."""
 
     token: LifecycleServiceClosureAdmissionToken
     already_terminal: bool = False
+    terminal_receipt: LifecycleServiceProcessClosureReceipt | None = None
+    expected_receipt: LifecycleServiceProcessClosureReceipt | None = None
+    expected_receipt_digest: str = ""
+    certified: bool = False
+    binding_plans: tuple[_PreparedServiceBindingClosure, ...] = ()
+    subject_plans: tuple[_PreparedActionCohortOperation, ...] = ()
+    adoption_entries: tuple[tuple[int, _ProcessEntry, LifecycleTransition], ...] = ()
+    route_keys: tuple[tuple[str, str], ...] = ()
+    partition_ids: tuple[int, ...] = ()
+    effective_times: tuple[tuple[LifecycleEntityRef, datetime], ...] = ()
 
 
 @dataclass(slots=True)
@@ -8399,6 +8578,18 @@ class PreparedLifecycleServicePublication:
         self._committed = True
         return self._result
 
+    def _commit_active_process_no_fail(
+        self, process: ProcessIdentity
+    ) -> LifecycleServicePublicationReceipt:
+        """Authority-only commit while the exact existing State process lane is held."""
+        if not self._active or self._committed or self._token.request.active_process != process:
+            raise StateError("Active service publication lost its exact process capability")
+        self._result = self._registry._commit_claimed_service_publication(
+            self._token, active_process=process
+        )
+        self._committed = True
+        return self._result
+
     def _commit_prevalidated_locked(
         self,
         plan: _PreparedServiceCommitPlan,
@@ -8425,15 +8616,18 @@ class PreparedLifecycleServicePublication:
 class PreparedLifecycleServiceProcessClosure:
     """One-shot no-validation commit capability for a claimed service closure."""
 
-    __slots__ = ("_active", "_committed", "_registry", "_result", "_token")
+    __slots__ = ("_active", "_committed", "_plan", "_registry", "_result", "_token", "_thread_id")
 
     def __init__(
         self,
         registry: LifecycleRegistry,
         token: LifecycleServiceClosureAdmissionToken,
+        plan: _PreparedServiceClosureCommitPlan,
     ) -> None:
+        self._thread_id = get_ident()
         self._registry = registry
         self._token = token
+        self._plan = plan
         self._active = True
         self._committed = False
         self._result: LifecycleServiceProcessClosureReceipt | None = None
@@ -8442,22 +8636,50 @@ class PreparedLifecycleServiceProcessClosure:
     def committed(self) -> bool:
         """Return whether this exact capability has committed."""
 
-        return self._committed
+        return self._plan.terminal_receipt is not None
 
     @property
     def receipt(self) -> LifecycleServiceProcessClosureReceipt | None:
         """Return the authenticated receipt after successful commit."""
 
-        return self._result
+        return self._plan.terminal_receipt
+
+    @property
+    def expected_receipt(self) -> LifecycleServiceProcessClosureReceipt:
+        """Return the preallocated result while this exact same-thread claim is active."""
+        if (
+            not self._active
+            or self._thread_id != get_ident()
+            or self._plan.expected_receipt is None
+        ):
+            raise StateError("Service closure result requires its active same-thread claim")
+        return self._plan.expected_receipt
+
+    @property
+    def effective_times(self) -> tuple[tuple[LifecycleEntityRef, datetime], ...]:
+        """Return admitted closure times, including holds and resource leases."""
+        return self._plan.effective_times
+
+    def certify_composite_commit(
+        self, expected_receipt: LifecycleServiceProcessClosureReceipt
+    ) -> None:
+        """Finish validation before a trusted composite's callback-free primitive tail."""
+        if not self._active or self._thread_id != get_ident():
+            raise StateError("Service closure certification requires its active same-thread claim")
+        self._registry._certify_service_closure(self._token, self._plan, expected_receipt)
 
     def commit_no_fail(self) -> LifecycleServiceProcessClosureReceipt:
         """Publish every prevalidated closure primitive exactly once."""
 
         if not self._active:
             raise StateError("Prepared lifecycle service closure is no longer active")
-        if self._committed:
+        if self.committed:
             raise StateError("Prepared lifecycle service closure is already committed")
-        self._result = self._registry._commit_claimed_service_closure(self._token)
+        self._result = (
+            self._registry._commit_certified_service_closure(self._token, self._plan)
+            if self._plan.certified
+            else self._registry._commit_claimed_service_closure(self._token)
+        )
         self._committed = True
         return self._result
 
@@ -8546,6 +8768,7 @@ class _ActionCohortSubjectState:
     parent_object_id: str = ""
     session_object_id: str = ""
     process_role: str = ""
+    runtime_view: ProcessRuntimeView | None = None
     close_barrier: LifecycleCloseBarrier | None = None
     closure_ticket: LifecycleClosureTicket | None = None
     closed_at: datetime | None = None
@@ -9601,6 +9824,95 @@ class LifecycleRegistry:
         )
 
     @classmethod
+    def _normalize_action_cohort_runtime_view(cls, value: object) -> ProcessRuntimeView:
+        if type(value) is not ProcessRuntimeView:
+            raise TypeError("Lifecycle process runtime view must be exact")
+        if (
+            value.gui_attribution is not None
+            and type(value.gui_attribution) is not ProcessGUIAttribution
+        ):
+            raise TypeError("Lifecycle GUI attribution must be exact")
+        return ProcessRuntimeView(
+            revision=cls._action_cohort_exact_int(value.revision, field_name="view revision"),
+            execution_ordinal=cls._action_cohort_exact_int(
+                value.execution_ordinal, field_name="execution ordinal"
+            ),
+            changed_at=cls._action_cohort_exact_datetime(value.changed_at, field_name="view time"),
+            image=cls._action_cohort_exact_text(
+                value.image, field_name="view image", allow_empty=False
+            ),
+            role=cls._action_cohort_exact_text(
+                value.role, field_name="view role", allow_empty=False
+            ),
+            token=cls._normalize_action_cohort_process_token(value.token),
+            gui_attribution=(
+                ProcessGUIAttribution(
+                    cls._normalize_action_cohort_process_token(value.gui_attribution.before),
+                    cls._normalize_action_cohort_process_token(value.gui_attribution.after),
+                    cls._action_cohort_exact_datetime(
+                        value.gui_attribution.changed_at, field_name="GUI attribution time"
+                    ),
+                    cls._action_cohort_exact_int(
+                        value.gui_attribution.revision, field_name="GUI attribution revision"
+                    ),
+                )
+                if type(value.gui_attribution) is ProcessGUIAttribution
+                else None
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_process_change(cls, value: object) -> ProcessRuntimeChange | None:
+        if value is None:
+            return None
+        if type(value) is not ProcessRuntimeChange:
+            raise TypeError("Lifecycle process runtime change must be exact")
+        return ProcessRuntimeChange(
+            before=cls._normalize_action_cohort_runtime_view(value.before),
+            after=cls._normalize_action_cohort_runtime_view(value.after),
+            kind=cls._action_cohort_exact_text(
+                value.kind, field_name="runtime change kind", allow_empty=False
+            ),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_parentage_change(
+        cls, value: object
+    ) -> ProcessParentageChange | None:
+        if value is None:
+            return None
+        if type(value) is not ProcessParentageChange:
+            raise TypeError("Lifecycle parent change must be exact")
+
+        def parentage(item: ProcessParentage) -> ProcessParentage:
+            if type(item) is not ProcessParentage:
+                raise TypeError("Lifecycle parentage must be exact")
+            refs: list[ProcessParentReference | None] = []
+            for reference in (item.original, item.current):
+                if reference is None:
+                    refs.append(None)
+                    continue
+                if type(reference) is not ProcessParentReference:
+                    raise TypeError("Lifecycle parent reference must be exact")
+                refs.append(
+                    ProcessParentReference(
+                        reference.hostname,
+                        reference.object_id,
+                        reference.pid,
+                        cls._action_cohort_exact_datetime(
+                            reference.started_at, field_name="parent birth"
+                        ),
+                    )
+                )
+            return ProcessParentage(*refs)
+
+        return ProcessParentageChange(
+            parentage(value.before),
+            parentage(value.after),
+            cls._action_cohort_exact_datetime(value.changed_at, field_name="parent adoption"),
+        )
+
+    @classmethod
     def _normalize_action_cohort_transition(cls, value: object) -> LifecycleTransition:
         if type(value) is not LifecycleTransition:
             raise TypeError("Lifecycle action cohort transition must be exact")
@@ -9636,6 +9948,8 @@ class LifecycleRegistry:
                 field_name="transition reason",
             ),
             transition_ordinal=ordinal,
+            process_change=cls._normalize_action_cohort_process_change(value.process_change),
+            parentage_change=cls._normalize_action_cohort_parentage_change(value.parentage_change),
         )
 
     @classmethod
@@ -9945,6 +10259,19 @@ class LifecycleRegistry:
                     )
             elif type(operation) is LifecycleTransition:
                 keys.append(("transition", operation.transition_id))
+                if operation.process_change is not None:
+                    keys.append(self._resource_lease_subject_key(subject))
+                if operation.parentage_change is not None:
+                    for parent in (
+                        operation.parentage_change.before.current,
+                        operation.parentage_change.after.current,
+                    ):
+                        assert parent is not None
+                        keys.append(
+                            self._closed_transport_subject_key(
+                                LifecycleEntityRef("process", parent.object_id)
+                            )
+                        )
             elif type(operation) is LifecycleHold:
                 keys.extend(
                     (
@@ -9987,6 +10314,13 @@ class LifecycleRegistry:
                     keys.append(("session", operation.membership.session_object_id))
             elif type(operation) is LifecycleTransition:
                 keys.append(("transition", operation.transition_id))
+                if operation.parentage_change is not None:
+                    for parent in (
+                        operation.parentage_change.before.current,
+                        operation.parentage_change.after.current,
+                    ):
+                        assert parent is not None
+                        keys.append(("process", parent.object_id))
             elif type(operation) is LifecycleHold:
                 keys.extend(
                     (
@@ -10026,6 +10360,17 @@ class LifecycleRegistry:
             if partition_id is None:
                 partition_id = self._subject_partition_locked(subject)
             partition_ids.add(partition_id)
+            if type(operation) is LifecycleTransition and operation.parentage_change is not None:
+                for parent in (
+                    operation.parentage_change.before.current,
+                    operation.parentage_change.after.current,
+                ):
+                    assert parent is not None
+                    partition_ids.add(
+                        self._subject_partition_locked(
+                            LifecycleEntityRef("process", parent.object_id)
+                        )
+                    )
             if type(operation) is not LifecycleProcessStartRequest:
                 continue
             parent_id = operation.identity.parent_object_id
@@ -10395,9 +10740,13 @@ class LifecycleRegistry:
         if subject.kind == "process":
             if not isinstance(entry, _ProcessEntry):
                 raise StateError("Lifecycle action cohort resolved an incompatible process")
-            parent_object_id = entry.identity.parent_object_id
+            parent_object_id = (
+                entry.state.parentage_change.after.current.object_id
+                if entry.state.parentage_change is not None
+                else entry.identity.parent_object_id
+            )
             session_object_id = entry.membership.session_object_id
-            process_role = entry.identity.role
+            process_role = entry.current_view.role
         elif subject.kind == "session":
             if not isinstance(entry, _SessionEntry):
                 raise StateError("Lifecycle action cohort resolved an incompatible session")
@@ -10413,6 +10762,7 @@ class LifecycleRegistry:
             parent_object_id=parent_object_id,
             session_object_id=session_object_id,
             process_role=process_role,
+            runtime_view=entry.current_view if isinstance(entry, _ProcessEntry) else None,
             close_barrier=entry.close_barrier,
             closure_ticket=entry.closure_ticket,
             closed_at=entry.closed_at,
@@ -10507,6 +10857,8 @@ class LifecycleRegistry:
                     partition_id=state.partition_id,
                 )
                 states[child_ref] = child
+            if subject.kind == "process" and child.parent_object_id != subject.object_id:
+                continue
             if child.closed_at is None:
                 raise StateError(
                     f"Cannot close lifecycle {subject.object_id}: {relationship} remain active"
@@ -10541,6 +10893,66 @@ class LifecycleRegistry:
                 f"Lifecycle durable commit bound exceeded for {state.subject.object_id}"
             )
 
+    def _validate_parent_adoption_locked(
+        self, operation: LifecycleTransition, state: _ActionCohortSubjectState
+    ) -> tuple[LifecycleEntityRef, LifecycleEntityRef]:
+        change = operation.parentage_change
+        assert change is not None
+        old, new = change.before.current, change.after.current
+        assert old is not None and new is not None
+        partition = self._partitions[state.partition_id]
+        child = partition._processes.get(state.subject.object_id)
+        parent = partition._processes.get(old.object_id)
+        adopter = partition._processes.get(new.object_id)
+        if child is None or parent is None or adopter is None:
+            raise StateError("Parent adoption requires exact same-host live processes")
+        original = change.before.original
+        binding = partition._live_children.get(child.identity.object_id)
+        expected_before = (
+            child.state.parentage_change.after
+            if child.state.parentage_change is not None
+            else ProcessParentage(original, original)
+        )
+        if (
+            original is None
+            or original.object_id != child.identity.parent_object_id
+            or original.hostname != child.identity.hostname
+            or original.started_at > child.identity.started_at
+            or change.before != expected_before
+            or state.parent_object_id != old.object_id
+            or binding is None
+            or binding.parent_object_id != old.object_id
+            or child.closed_at is not None
+            or child.close_barrier is not None
+            or parent.closed_at is not None
+            or parent.close_barrier is not None
+            or adopter.closed_at is not None
+            or adopter.close_barrier is not None
+            or child.identity.object_id == adopter.identity.object_id
+            or adopter.identity.pid != 1
+            or adopter.identity.parent_object_id
+            or adopter.current_view.token.principal != "root"
+            or change.changed_at < child.current_view.changed_at
+            or (
+                child.state.latest_dependent_at is not None
+                and change.changed_at < child.state.latest_dependent_at
+            )
+        ):
+            raise StateError("Parent adoption has stale or unsupported relationship ownership")
+        for reference, entry in ((old, parent), (new, adopter)):
+            if (
+                reference
+                != ProcessParentReference(
+                    entry.identity.hostname,
+                    entry.identity.object_id,
+                    entry.identity.pid,
+                    entry.identity.started_at,
+                )
+                or entry.identity.hostname != child.identity.hostname
+            ):
+                raise StateError("Parent adoption cannot substitute a parent lifetime")
+        return parent.identity.ref, adopter.identity.ref
+
     def _prepare_action_cohort_commit_locked(
         self,
         token: LifecycleActionCohortAdmissionToken,
@@ -10559,6 +10971,7 @@ class LifecycleRegistry:
         reservation_keys = list(self._action_cohort_static_reservation_keys(request))
         prepared_operations: list[_PreparedActionCohortOperation] = []
         presence: list[bool] = []
+        adoptions: dict[LifecycleEntityRef, ProcessParentageChange] = {}
 
         def state_for(subject: LifecycleEntityRef) -> _ActionCohortSubjectState:
             state = states.get(subject)
@@ -10669,6 +11082,7 @@ class LifecycleRegistry:
                         parent_object_id=identity.parent_object_id,
                         session_object_id=operation.membership.session_object_id,
                         process_role=identity.role,
+                        runtime_view=ProcessRuntimeView.initial(identity, operation.token),
                     )
                     if identity.parent_object_id:
                         parent = state_for(LifecycleEntityRef("process", identity.parent_object_id))
@@ -10741,11 +11155,42 @@ class LifecycleRegistry:
                     ):
                         raise StateError("Lifecycle dependent cannot occur after its close barrier")
                     partition._validate_transition_claim(operation)
+                    change = operation.process_change
+                    if change is not None:
+                        if state.runtime_view != change.before:
+                            raise StateError("Process runtime change lost its exact current view")
+                        if (
+                            state.latest_dependent_at is not None
+                            and operation.canonical_time < state.latest_dependent_at
+                        ):
+                            raise StateError("Process runtime change precedes dependent activity")
+                        # Runtime changes do not silently rekey or retire live resource leases.
+                        for leases in (partition._foreground_leases, partition._singleton_leases):
+                            if (
+                                next(leases.find_iter("process", operation.subject.object_id), None)
+                                is not None
+                            ):
+                                raise StateError(
+                                    "Process runtime change requires resource lease release first"
+                                )
+                        state.runtime_view = change.after
+                        state.process_role = change.after.role
                     if (
                         state.latest_dependent_at is None
                         or operation.canonical_time > state.latest_dependent_at
                     ):
                         state.latest_dependent_at = operation.canonical_time
+                if operation.parentage_change is not None:
+                    if subject in adoptions:
+                        raise StateError("Action cohort repeats parent adoption for one child")
+                    adoptions[subject] = operation.parentage_change
+                    if not already_present:
+                        _old, new = self._validate_parent_adoption_locked(operation, state)
+                        adopter = state_for(new)
+                        if adopter.closed_at is not None or adopter.close_barrier is not None:
+                            raise StateError("Adopting parent cannot be closing")
+                        state.parent_object_id = new.object_id
+                        staged_children.setdefault(new.object_id, set()).add(subject.object_id)
                 prepared_operations.append(
                     _PreparedActionCohortOperation(
                         operation=operation,
@@ -10936,6 +11381,22 @@ class LifecycleRegistry:
             )
             presence.append(False)
 
+        for change in adoptions.values():
+            old = change.before.current
+            assert old is not None
+            if (
+                state_for(LifecycleEntityRef("process", old.object_id)).closed_at
+                != change.changed_at
+            ):
+                raise StateError(
+                    "Parent adoption requires its exact parent exit in the same cohort"
+                )
+            if not any(
+                type(item) is LifecycleSubjectClosureControl
+                and item.barrier.subject == LifecycleEntityRef("process", old.object_id)
+                for item in request.operations
+            ):
+                raise StateError("Parent adoption cannot reuse an earlier parent exit")
         if any(presence) and not all(presence):
             raise StateError("Partial lifecycle action-cohort retry is not admissible")
         already_present = all(presence)
@@ -11474,6 +11935,7 @@ class LifecycleRegistry:
         )
         assert all(item is not None for item in counts)
         return ProcessLifecycleSnapshot(
+            parentage_change=cls._normalize_action_cohort_parentage_change(value.parentage_change),
             identity=cls._normalize_action_cohort_process_identity(value.identity),
             token=cls._normalize_action_cohort_process_token(value.token),
             membership=cls._normalize_action_cohort_membership(value.membership),
@@ -11498,6 +11960,9 @@ class LifecycleRegistry:
             ),
             latest_dependent_at=latest_dependent_at,
             latest_hold_until=latest_hold_until,
+            runtime_view=None
+            if value.runtime_view is None
+            else cls._normalize_action_cohort_runtime_view(value.runtime_view),
         )
 
     @classmethod
@@ -11651,9 +12116,11 @@ class LifecycleRegistry:
 
     def _action_cohort_expected_transition_snapshot(
         self,
-        snapshot: ProcessLifecycleSnapshot | SessionLifecycleSnapshot,
+        snapshot: ProcessLifecycleSnapshot
+        | SessionLifecycleSnapshot
+        | ServiceInstanceLifecycleSnapshot,
         transition: LifecycleTransition,
-    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot:
+    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot | ServiceInstanceLifecycleSnapshot:
         """Project one already-admitted transition into an immutable result snapshot."""
 
         transitions = sorted(
@@ -11675,6 +12142,14 @@ class LifecycleRegistry:
             latest_dependent_at is None or transition.canonical_time > latest_dependent_at
         ):
             latest_dependent_at = transition.canonical_time
+        if transition.parentage_change is not None:
+            if type(snapshot) is not ProcessLifecycleSnapshot:
+                raise StateError("Parent change requires a process snapshot")
+            snapshot = replace(snapshot, parentage_change=transition.parentage_change)
+        if transition.process_change is not None:
+            if type(snapshot) is not ProcessLifecycleSnapshot:
+                raise StateError("Runtime change requires a process snapshot")
+            snapshot = replace(snapshot, runtime_view=transition.process_change.after)
         return replace(
             snapshot,
             transitions=visible,
@@ -12210,6 +12685,10 @@ class LifecycleRegistry:
             assert isinstance(entry, _ProcessEntry)
             partition._record_process_closed(entry, effective_at)
             partition._live_processes -= 1
+        elif subject.kind == "service":
+            assert isinstance(entry, _ServiceEntry)
+            partition._record_service_closed(entry, effective_at)
+            partition._live_service_instances -= 1
         else:
             assert subject.kind == "session"
             partition._live_sessions -= 1
@@ -13843,6 +14322,21 @@ class LifecycleRegistry:
     ) -> _PreparedServiceCommitPlan:
         request = token.request
         identity = request.identity
+        if request.active_process is not None:
+            active = request.active_process
+            partition = self._partitions[self._partition_id(active.hostname)]
+            current = partition.get_process(active.object_id)
+            if (
+                current is None
+                or current.closed_at is not None
+                or current.close_barrier is not None
+                or current.identity.pid != active.pid
+                or current.identity.started_at != active.started_at
+                or current.current_view.image != active.image
+                or current.current_view.execution_ordinal != active.execution_ordinal
+                or current.current_view.token.principal != active.principal
+            ):
+                raise StateError("Active service binding lost its exact lifecycle execution")
         staged_processes = {
             member.process_start.identity.object_id: member.process_start.identity
             for member in request.staged_process_bindings
@@ -14156,6 +14650,10 @@ class LifecycleRegistry:
                 "service_process_binding", snapshot.identity.binding_id, plan.partition_id
             )
             bindings.append(snapshot)
+        if request.process_group is not None:
+            partition._services._process_groups[handle] = request.process_group
+            service = partition.get_service_instance(request.identity.object_id)
+            assert service is not None
         self._routes.cache_snapshot_locked("service", request.identity.object_id, service)
         binding_results = tuple(bindings)
         committed_digest = sha256(
@@ -14190,6 +14688,8 @@ class LifecycleRegistry:
     def _commit_claimed_service_publication(
         self,
         token: LifecycleServiceAdmissionToken,
+        *,
+        active_process: ProcessIdentity | None = None,
     ) -> LifecycleServicePublicationReceipt:
         """Commit one claimed service token under sorted locks and consume it once."""
 
@@ -14197,6 +14697,11 @@ class LifecycleRegistry:
             raise StateError(
                 "Staged service process publication requires a combined lifecycle start ticket"
             )
+        if (
+            token.request.active_process is not None
+            and token.request.active_process != active_process
+        ):
+            raise StateError("Active launchd publication requires its State/lifecycle authority")
 
         with self._gate.mutation():
             with self._closed_transport_preparation_lock:
@@ -14280,6 +14785,14 @@ class LifecycleRegistry:
                     ("transition", f"{item.ticket_id}:closed"),
                 )
             )
+        if request.parent_adoptions:
+            keys.extend(
+                self._action_cohort_static_reservation_keys(
+                    LifecycleActionCohortRequest(
+                        "service-adoption-key-scope", request.parent_adoptions
+                    )
+                )
+            )
         return tuple(dict.fromkeys(keys))
 
     def _service_closure_route_keys(
@@ -14307,6 +14820,14 @@ class LifecycleRegistry:
                     ("transition", f"{item.ticket_id}:closed"),
                 )
             )
+        if request.parent_adoptions:
+            keys.extend(
+                self._action_cohort_route_keys(
+                    LifecycleActionCohortRequest(
+                        "service-adoption-key-scope", request.parent_adoptions
+                    )
+                )
+            )
         return tuple(dict.fromkeys(keys))
 
     def _service_closure_partition_ids_locked(
@@ -14323,6 +14844,17 @@ class LifecycleRegistry:
             partition_ids.add(partition_id)
         for item in (*request.process_closures, *request.service_closures):
             partition_ids.add(self._subject_partition_locked(item.barrier.subject))
+        for item in request.parent_adoptions:
+            partition_ids.add(self._subject_partition_locked(item.subject))
+            change = item.parentage_change
+            assert change is not None
+            for parent_ref in (change.before.current, change.after.current):
+                assert parent_ref is not None
+                partition_ids.add(
+                    self._subject_partition_locked(
+                        LifecycleEntityRef("process", parent_ref.object_id)
+                    )
+                )
         return tuple(sorted(partition_ids))
 
     def _validate_service_closure_token(
@@ -14443,8 +14975,18 @@ class LifecycleRegistry:
         subject: LifecycleEntityRef,
         effective_at: datetime,
         planned_binding_closures: tuple[LifecycleServiceProcessBindingClosure, ...],
+        earlier_process_closures: dict[str, datetime],
+        adopted_children: dict[str, tuple[str, datetime]] | None = None,
     ) -> None:
         partition = self._partitions[partition_id]
+        earlier_process_closures = dict(earlier_process_closures)
+        earlier_process_closures.update(
+            {
+                child: at
+                for child, (parent, at) in (adopted_children or {}).items()
+                if parent == subject.object_id
+            }
+        )
         active_ids = set(
             self._active_service_binding_ids_locked(
                 partition_id,
@@ -14485,6 +15027,20 @@ class LifecycleRegistry:
             aggregate = partition._service_children_by_parent.get(subject.object_id)
             relationship = "child service instances"
         if aggregate is not None and aggregate.blocks_close_at(effective_at):
+            if (
+                subject.kind == "process"
+                and aggregate.unclosed <= len(earlier_process_closures)
+                and (
+                    aggregate.latest_closed_at is None or aggregate.latest_closed_at <= effective_at
+                )
+            ):
+                children = tuple(partition._live_children.find_iter("parent", subject.object_id))
+                if len(children) == aggregate.unclosed and all(
+                    child.child_object_id in earlier_process_closures
+                    and earlier_process_closures[child.child_object_id] <= effective_at
+                    for child in children
+                ):
+                    return
             raise StateError(
                 f"Cannot close lifecycle {subject.object_id} at {effective_at.isoformat()}: "
                 f"{relationship} remain active"
@@ -14496,6 +15052,9 @@ class LifecycleRegistry:
         *,
         partition_id: int,
         planned_binding_closures: tuple[LifecycleServiceProcessBindingClosure, ...],
+        earlier_process_closures: dict[str, datetime],
+        adopted_children: dict[str, tuple[str, datetime]] | None = None,
+        effective_times: dict[LifecycleEntityRef, datetime],
     ) -> bool:
         partition = self._partitions[partition_id]
         subject = control.barrier.subject
@@ -14533,6 +15092,9 @@ class LifecycleRegistry:
                 )
                 if actual != value:
                     raise StateError("Terminal service/process retry lost exact control state")
+            if subject.kind == "process":
+                earlier_process_closures[subject.object_id] = entry.closed_at
+            effective_times[subject] = entry.closed_at
             return True
         if entry.close_barrier is not None or entry.closure_ticket is not None:
             raise StateError("Partial service/process terminal retry is not admissible")
@@ -14556,6 +15118,8 @@ class LifecycleRegistry:
             subject=subject,
             effective_at=effective_at,
             planned_binding_closures=planned_binding_closures,
+            earlier_process_closures=earlier_process_closures,
+            adopted_children=adopted_children,
         )
         expected = self._expected_subject_closure_transitions(control, effective_at)
         for kind, semantic_id, value in (
@@ -14573,6 +15137,9 @@ class LifecycleRegistry:
                 if actual != value:
                     self._reject_exact_conflict(kind, semantic_id)
                 raise StateError("Partial service/process terminal retry is not admissible")
+        if subject.kind == "process":
+            earlier_process_closures[subject.object_id] = effective_at
+        effective_times[subject] = effective_at
         return False
 
     def _prepare_service_closure_commit_locked(
@@ -14580,7 +15147,34 @@ class LifecycleRegistry:
         token: LifecycleServiceClosureAdmissionToken,
     ) -> _PreparedServiceClosureCommitPlan:
         request = token.request
+        request.__post_init__()
         terminal: list[bool] = []
+        adopted_children: dict[str, tuple[str, datetime]] = {}
+        for operation in request.parent_adoptions:
+            partition_id = self._subject_partition_locked(operation.subject)
+            partition = self._partitions[partition_id]
+            state = self._action_cohort_existing_state_locked(
+                operation.subject, partition_id=partition_id
+            )
+            prior = self._action_cohort_validate_global_transition_locked(operation)
+            entry = partition._entry(operation.subject)
+            if prior is not None:
+                if not partition._entry_has_transition(entry, operation):
+                    raise StateError("Service adoption retry lost its exact transition")
+                terminal.append(True)
+            else:
+                partition._reject_behind_watermark(operation.canonical_time, "parent adoption")
+                partition._validate_transition_claim(operation)
+                self._validate_parent_adoption_locked(operation, state)
+                terminal.append(False)
+            change = operation.parentage_change
+            assert change is not None and change.before.current is not None
+            adopted_children[operation.subject.object_id] = (
+                change.before.current.object_id,
+                change.changed_at,
+            )
+        earlier_process_closures: dict[str, datetime] = {}
+        effective_times: dict[LifecycleEntityRef, datetime] = {}
         for item in request.binding_closures:
             partition_id = self._routes.get_locked(
                 "service_process_binding", item.identity.binding_id
@@ -14616,6 +15210,9 @@ class LifecycleRegistry:
                     item,
                     partition_id=partition_id,
                     planned_binding_closures=request.binding_closures,
+                    earlier_process_closures=earlier_process_closures,
+                    effective_times=effective_times,
+                    adopted_children=adopted_children,
                 )
             )
         for item in request.service_closures:
@@ -14625,13 +15222,20 @@ class LifecycleRegistry:
                     item,
                     partition_id=partition_id,
                     planned_binding_closures=request.binding_closures,
+                    earlier_process_closures=earlier_process_closures,
+                    effective_times=effective_times,
+                    adopted_children=adopted_children,
                 )
             )
+        for parent_id, at in adopted_children.values():
+            if effective_times.get(LifecycleEntityRef("process", parent_id)) != at:
+                raise StateError("Parent adoption cannot precede a delayed parent exit")
         if any(terminal) and not all(terminal):
             raise StateError("Partial service/process terminal retry cannot heal missing relations")
         return _PreparedServiceClosureCommitPlan(
             token=token,
             already_terminal=all(terminal),
+            effective_times=tuple(effective_times.items()),
         )
 
     def prepare_service_process_closure(
@@ -14746,6 +15350,13 @@ class LifecycleRegistry:
                         reservation.commit_plan = self._prepare_service_closure_commit_locked(
                             canonical_token
                         )
+                        expected = self._prepare_service_closure_receipt_locked(
+                            reservation.commit_plan
+                        )
+                        reservation.commit_plan.expected_receipt = expected
+                        reservation.commit_plan.expected_receipt_digest = sha256(
+                            repr(expected).encode()
+                        ).hexdigest()
                 self._validate_service_closure_token(token)
             except BaseException:
                 self._release_service_closure_reservation_locked(reservation)
@@ -14753,7 +15364,8 @@ class LifecycleRegistry:
             reservation.claimed = True
             reservation.claim_thread_id = get_ident()
             self._service_claimed_closures += 1
-        capability = PreparedLifecycleServiceProcessClosure(self, token)
+        assert reservation.commit_plan is not None
+        capability = PreparedLifecycleServiceProcessClosure(self, token, reservation.commit_plan)
         try:
             yield capability
         except BaseException:
@@ -14775,6 +15387,11 @@ class LifecycleRegistry:
                             self._release_service_closure_reservation_locked(active)
                 raise StateError("Claimed service/process closure exited without commit_no_fail")
         finally:
+            if capability.committed:
+                with self._gate.mutation(), self._closed_transport_preparation_lock:
+                    active = self._service_closure_reservations.get(token.preparation_id)
+                    if active is reservation:
+                        self._release_service_closure_reservation_locked(active)
             capability._close()
 
     def _commit_subject_closure_locked(
@@ -14797,85 +15414,307 @@ class LifecycleRegistry:
             self._routes.cache_snapshot_locked("service", snapshot.identity.object_id, snapshot)
         return snapshot
 
+    def _prepare_service_closure_receipt_locked(
+        self, plan: _PreparedServiceClosureCommitPlan
+    ) -> LifecycleServiceProcessClosureReceipt:
+        """Preallocate complete terminal snapshots before any canonical close mutation."""
+        request = plan.token.request
+        processes: dict[str, ProcessLifecycleSnapshot] = {}
+        bindings: list[ServiceProcessBindingSnapshot] = []
+        service_results: list[ServiceInstanceLifecycleSnapshot] = []
+        effective = dict(plan.effective_times)
+        if not plan.already_terminal:
+            for operation in request.parent_adoptions:
+                partition = self._partitions[self._subject_partition_locked(operation.subject)]
+                current = partition.get_process(operation.subject.object_id)
+                assert current is not None
+                projected = self._action_cohort_expected_transition_snapshot(current, operation)
+                assert type(projected) is ProcessLifecycleSnapshot
+                processes[operation.subject.object_id] = projected
+        for item in request.binding_closures:
+            partition_id = self._routes.get_locked(
+                "service_process_binding", item.identity.binding_id
+            )
+            assert type(partition_id) is int
+            current = self._partitions[partition_id].service_process_binding(
+                item.identity.binding_id
+            )
+            assert current is not None
+            bindings.append(
+                current
+                if plan.already_terminal
+                else replace(
+                    current,
+                    closed_at=item.closed_at,
+                    close_action_id=item.action_id,
+                    close_transition_ordinal=item.transition_ordinal,
+                )
+            )
+        for control in (*request.process_closures, *request.service_closures):
+            subject = control.barrier.subject
+            partition = self._partitions[self._subject_partition_locked(subject)]
+            snapshot = (
+                processes.get(subject.object_id) or partition.get_process(subject.object_id)
+                if subject.kind == "process"
+                else partition.get_service_instance(subject.object_id)
+            )
+            assert snapshot is not None
+            if not plan.already_terminal:
+                at = effective[subject]
+                ticket, requested, scheduled, closed = self._expected_subject_closure_transitions(
+                    control, at
+                )
+                snapshot = replace(
+                    snapshot, close_barrier=control.barrier, closure_ticket=ticket, closed_at=at
+                )
+                for transition in (requested, scheduled, closed):
+                    snapshot = self._action_cohort_expected_transition_snapshot(
+                        snapshot, transition
+                    )
+            if subject.kind == "process":
+                assert type(snapshot) is ProcessLifecycleSnapshot
+                processes[subject.object_id] = snapshot
+            else:
+                assert type(snapshot) is ServiceInstanceLifecycleSnapshot
+                service_results.append(snapshot)
+        binding_results = tuple(bindings)
+        process_results = tuple(
+            processes[item.barrier.subject.object_id] for item in request.process_closures
+        )
+        services = tuple(service_results)
+        digest = sha256(
+            repr((request, binding_results, process_results, services)).encode()
+        ).hexdigest()
+        return LifecycleServiceProcessClosureReceipt(
+            request=request,
+            bindings=binding_results,
+            processes=process_results,
+            services=services,
+            registry_id=self._service_registry_id,
+            plan_digest=plan.token.plan_digest,
+            committed_digest=digest,
+            _integrity=self._service_receipt_integrity(
+                kind="closure", plan_digest=plan.token.plan_digest, committed_digest=digest
+            ),
+        )
+
+    def authenticates_expected_service_closure_receipt(
+        self,
+        receipt: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        """Authenticate a preallocated service result within its exact active claim."""
+        if (
+            type(preparation) is not PreparedLifecycleServiceProcessClosure
+            or type(receipt) is not LifecycleServiceProcessClosureReceipt
+            or preparation._registry is not self
+            or not preparation._active
+            or preparation._thread_id != get_ident()
+        ):
+            return False
+        with self._closed_transport_preparation_lock:
+            try:
+                active = self._active_service_closure_reservation_locked(preparation._token)
+            except StateError:
+                return False
+            plan = preparation._plan
+            return bool(
+                active.claimed
+                and active.claim_thread_id == get_ident()
+                and active.commit_plan is plan
+                and plan.terminal_receipt is None
+                and plan.expected_receipt is receipt
+                and sha256(repr(receipt).encode()).hexdigest() == plan.expected_receipt_digest
+            )
+
+    def _certify_service_closure(
+        self,
+        token: LifecycleServiceClosureAdmissionToken,
+        plan: _PreparedServiceClosureCommitPlan,
+        expected: LifecycleServiceProcessClosureReceipt,
+    ) -> None:
+        """Validate exact retained facts and preallocate every service-close operand."""
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            active = self._active_service_closure_reservation_locked(token)
+            if (
+                not active.claimed
+                or active.claim_thread_id != get_ident()
+                or active.commit_plan is not plan
+                or plan.certified
+                or plan.terminal_receipt is not None
+                or expected is not plan.expected_receipt
+                or self._watermark != active.canonical_token.expected_watermark
+                or sha256(repr(expected).encode()).hexdigest() != plan.expected_receipt_digest
+            ):
+                raise StateError("Service closure certification lost its exact uncommitted result")
+            route_keys = self._service_closure_route_keys(active.canonical_token.request)
+            with self._routes.locked(route_keys):
+                partition_ids = self._service_closure_partition_ids_locked(
+                    active.canonical_token.request
+                )
+                with self._locked_partition_ids(partition_ids):
+                    fresh = self._prepare_service_closure_commit_locked(active.canonical_token)
+                    if self._prepare_service_closure_receipt_locked(fresh) != expected:
+                        raise StateError("Service closure result changed before certification")
+                    bindings: list[_PreparedServiceBindingClosure] = []
+                    subjects: list[_PreparedActionCohortOperation] = []
+                    adoptions: list[tuple[int, _ProcessEntry, LifecycleTransition]] = []
+                    aggregates: dict[int, tuple[_DependentClosureAggregate, int]] = {}
+                    if not plan.already_terminal:
+                        for item in expected.bindings:
+                            partition_id = self._routes.get_locked(
+                                "service_process_binding", item.identity.binding_id
+                            )
+                            assert type(partition_id) is int and item.closed_at is not None
+                            partition = self._partitions[partition_id]
+                            owners = (
+                                partition._service_processes_by_service.get(
+                                    item.identity.service_object_id
+                                ),
+                                partition._service_bindings_by_process.get(
+                                    item.identity.process_object_id
+                                ),
+                            )
+                            for aggregate in owners:
+                                if type(aggregate) is not _DependentClosureAggregate:
+                                    raise StateError("Service closure lost a binding aggregate")
+                                count = aggregates.get(id(aggregate), (aggregate, 0))[1] + 1
+                                aggregates[id(aggregate)] = (aggregate, count)
+                            bindings.append(
+                                _PreparedServiceBindingClosure(
+                                    partition_id,
+                                    item,
+                                    owners,
+                                    item.closed_at + partition._closed_retention,
+                                )
+                            )
+                        if any(owner.unclosed < count for owner, count in aggregates.values()):
+                            raise StateError("Service closure binding aggregate would underflow")
+                        for operation in plan.token.request.parent_adoptions:
+                            partition_id = self._subject_partition_locked(operation.subject)
+                            entry = self._partitions[partition_id]._entry(operation.subject)
+                            assert isinstance(entry, _ProcessEntry)
+                            adoptions.append((partition_id, entry, operation))
+                        effective = dict(plan.effective_times)
+                        for control in (
+                            *plan.token.request.process_closures,
+                            *plan.token.request.service_closures,
+                        ):
+                            subject = control.barrier.subject
+                            at = effective[subject]
+                            ticket, requested, scheduled, closed = (
+                                self._expected_subject_closure_transitions(control, at)
+                            )
+                            subjects.append(
+                                _PreparedActionCohortOperation(
+                                    operation=control,
+                                    partition_id=self._subject_partition_locked(subject),
+                                    effective_at=at,
+                                    closure_ticket=ticket,
+                                    closure_transitions=(requested, scheduled, closed),
+                                )
+                            )
+                    plan.binding_plans = tuple(bindings)
+                    plan.subject_plans = tuple(subjects)
+                    plan.adoption_entries = tuple(adoptions)
+                    plan.route_keys = route_keys
+                    plan.partition_ids = partition_ids
+                    plan.certified = True
+
+    def _commit_certified_service_closure_primitives_locked(
+        self, plan: _PreparedServiceClosureCommitPlan
+    ) -> None:
+        """Apply only certified adoption, binding and terminal operands."""
+        for partition_id, entry, operation in plan.adoption_entries:
+            self._routes.invalidate_subject_snapshot_locked(operation.subject)
+            self._partitions[partition_id]._append_transition(
+                entry, operation, claim_validated=True
+            )
+            self._routes.set_locked("transition", operation.transition_id, operation)
+        for item in plan.binding_plans:
+            partition = self._partitions[item.partition_id]
+            at = item.after.closed_at
+            assert at is not None
+            for aggregate in item.aggregates:
+                aggregate.unclosed -= 1
+                if aggregate.latest_closed_at is None or at > aggregate.latest_closed_at:
+                    aggregate.latest_closed_at = at
+            binding_id = item.after.identity.binding_id
+            partition._service_process_bindings.pop(binding_id)
+            partition._service_process_tombstones[binding_id] = item.after
+            handle = partition._service_process_tombstones.handle_for(binding_id)
+            partition._service_process_tombstone_deadlines.set(handle, item.retained_until)
+            partition._active_service_process_bindings -= 1
+        for prepared in plan.subject_plans:
+            self._commit_action_cohort_closure_locked(prepared)
+        assert plan.expected_receipt is not None
+        for service in plan.expected_receipt.services:
+            self._routes.cache_snapshot_locked("service", service.identity.object_id, service)
+
+    def _commit_certified_service_closure(
+        self, token: LifecycleServiceClosureAdmissionToken, plan: _PreparedServiceClosureCommitPlan
+    ) -> LifecycleServiceProcessClosureReceipt:
+        """Consume the same-thread certified reservation without repeating admission."""
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            active = self._service_closure_reservations.get(plan.token.preparation_id)
+            if (
+                active is None
+                or active.token is not token
+                or active.commit_plan is not plan
+                or active.claim_thread_id != get_ident()
+                or not plan.certified
+                or plan.terminal_receipt is not None
+            ):
+                raise StateError("Certified service closure requires its exact active claim")
+            with (
+                self._routes.locked(plan.route_keys),
+                self._locked_partition_ids(plan.partition_ids),
+            ):
+                receipt = self._service_closure_receipt_locked(plan)
+            self._release_service_closure_reservation_locked(active)
+            return receipt
+
     def _service_closure_receipt_locked(
         self,
         plan: _PreparedServiceClosureCommitPlan,
     ) -> LifecycleServiceProcessClosureReceipt:
         request = plan.token.request
-        bindings: list[ServiceProcessBindingSnapshot] = []
-        processes: list[ProcessLifecycleSnapshot] = []
-        services: list[ServiceInstanceLifecycleSnapshot] = []
-        if not plan.already_terminal:
+        if plan.certified:
+            self._commit_certified_service_closure_primitives_locked(plan)
+        elif not plan.already_terminal:
+            for operation in request.parent_adoptions:
+                partition_id = self._subject_partition_locked(operation.subject)
+                partition = self._partitions[partition_id]
+                self._routes.invalidate_subject_snapshot_locked(operation.subject)
+                partition._append_transition(
+                    partition._entry(operation.subject), operation, claim_validated=True
+                )
+                self._routes.set_locked("transition", operation.transition_id, operation)
             for item in request.binding_closures:
                 partition_id = self._routes.get_locked(
                     "service_process_binding", item.identity.binding_id
                 )
                 assert isinstance(partition_id, int)
-                bindings.append(
-                    self._partitions[partition_id].close_service_process_binding(
-                        item.identity.binding_id,
-                        expected_identity=item.identity,
-                        closed_at=item.closed_at,
-                        action_id=item.action_id,
-                        transition_ordinal=item.transition_ordinal,
-                    )
+                self._partitions[partition_id].close_service_process_binding(
+                    item.identity.binding_id,
+                    expected_identity=item.identity,
+                    closed_at=item.closed_at,
+                    action_id=item.action_id,
+                    transition_ordinal=item.transition_ordinal,
                 )
             for item in request.process_closures:
                 partition_id = self._subject_partition_locked(item.barrier.subject)
                 result = self._commit_subject_closure_locked(item, partition_id)
                 assert isinstance(result, ProcessLifecycleSnapshot)
-                processes.append(result)
             for item in request.service_closures:
                 partition_id = self._subject_partition_locked(item.barrier.subject)
                 result = self._commit_subject_closure_locked(item, partition_id)
                 assert isinstance(result, ServiceInstanceLifecycleSnapshot)
-                services.append(result)
-        else:
-            for item in request.binding_closures:
-                partition_id = self._routes.get_locked(
-                    "service_process_binding", item.identity.binding_id
-                )
-                assert isinstance(partition_id, int)
-                snapshot = self._partitions[partition_id].service_process_binding(
-                    item.identity.binding_id
-                )
-                assert snapshot is not None
-                bindings.append(snapshot)
-            for item in request.process_closures:
-                partition_id = self._subject_partition_locked(item.barrier.subject)
-                snapshot = self._partitions[partition_id].get_process(
-                    item.barrier.subject.object_id
-                )
-                assert snapshot is not None
-                processes.append(snapshot)
-            for item in request.service_closures:
-                partition_id = self._subject_partition_locked(item.barrier.subject)
-                snapshot = self._partitions[partition_id].get_service_instance(
-                    item.barrier.subject.object_id
-                )
-                assert snapshot is not None
-                services.append(snapshot)
-        binding_results = tuple(bindings)
-        process_results = tuple(processes)
-        service_results = tuple(services)
-        committed_digest = sha256(
-            repr((request, binding_results, process_results, service_results)).encode()
-        ).hexdigest()
-        receipt = LifecycleServiceProcessClosureReceipt(
-            request=request,
-            bindings=binding_results,
-            processes=process_results,
-            services=service_results,
-            registry_id=self._service_registry_id,
-            plan_digest=plan.token.plan_digest,
-            committed_digest=committed_digest,
-            _integrity=self._service_receipt_integrity(
-                kind="closure",
-                plan_digest=plan.token.plan_digest,
-                committed_digest=committed_digest,
-            ),
-        )
+        receipt = plan.expected_receipt
+        assert receipt is not None
         self._service_closure_receipts[id(receipt)] = receipt
+        plan.terminal_receipt = receipt
         return receipt
 
     def _commit_claimed_service_closure(
@@ -14900,6 +15739,13 @@ class LifecycleRegistry:
                 partition_ids = self._service_closure_partition_ids_locked(canonical_token.request)
                 with self._locked_partition_ids(partition_ids):
                     self._validate_service_closure_token(token)
+                    if (
+                        type(commit_plan.expected_receipt)
+                        is not LifecycleServiceProcessClosureReceipt
+                        or sha256(repr(commit_plan.expected_receipt).encode()).hexdigest()
+                        != commit_plan.expected_receipt_digest
+                    ):
+                        raise StateError("Service closure expected result changed before commit")
                     receipt = self._service_closure_receipt_locked(commit_plan)
             with self._closed_transport_preparation_lock:
                 active = self._service_closure_reservations.get(token.preparation_id)

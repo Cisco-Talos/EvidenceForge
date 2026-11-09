@@ -25,6 +25,7 @@
 import random
 from collections.abc import Callable
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import HttpContext
@@ -56,6 +57,45 @@ class _CollectorEmitter:
         """Record one event."""
 
         self.events.append(event)
+
+
+def test_browser_session_preserves_generated_user_agent_provenance() -> None:
+    bundle = BrowserSessionActionBundle(
+        request=BrowserSessionRequest(
+            src_ip="10.0.0.5",
+            dst_ip="93.184.216.34",
+            time=datetime(2026, 11, 2, tzinfo=UTC),
+            hostname="portal.example.com",
+            dst_port=443,
+            source_os="windows",
+            user_agent="Mozilla/5.0 Chrome/119.0.0.0",
+            user_agent_is_generated_default=True,
+        ),
+        executor=SimpleNamespace(),
+        rng=random.Random(7),
+    )
+    context = bundle._http_context(
+        req=BrowsingRequest(
+            time_offset_ms=0,
+            hostname="portal.example.com",
+            path="/",
+            method="GET",
+            content_type="text/html",
+            referrer="",
+            trans_depth=1,
+            is_page_load=True,
+            response_body_len=100,
+            request_body_len=0,
+            status_code=200,
+        ),
+        req_hostname="portal.example.com",
+        group={"request_count": 1, "request_body_len": 0, "response_body_len": 100},
+        trans_depth=1,
+        first_in_group=True,
+    )
+
+    assert context.user_agent == "Mozilla/5.0 Chrome/119.0.0.0"
+    assert context.user_agent_is_generated_default
 
 
 def _activity_generator_with_collectors() -> tuple[

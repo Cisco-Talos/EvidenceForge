@@ -9,6 +9,7 @@
 
 import math
 import random
+import re
 from collections import Counter
 
 from evidenceforge.generation.actions.network_transaction_planner import (
@@ -224,12 +225,12 @@ class TestSslRealism:
 
     def test_established_ssl_histories_include_server_hello(self):
         """Zeek ssl.log established handshakes should include ServerHello."""
-        allowed_codes = set("^HCSVTXKRNYGFWUAZIBDEOPMJLQ")
+        allowed_codes = set("CsxknGtIi")
 
-        assert all("S" in history for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all("s" in history for history in _SSL_HIST_SUCCESS_VALUES)
         assert all(set(history) <= allowed_codes for history in _SSL_HIST_SUCCESS_VALUES)
         assert all(
-            "S"
+            "s"
             in _choose_ssl_history(
                 random.Random(seed),
                 tls_version="TLSv13" if seed % 2 else "TLSv12",
@@ -287,10 +288,11 @@ class TestSslRealism:
             for seed in range(100)
         }
 
-        assert tls12_resumed == {"CSIFIFD"}
-        assert all("X" in history for history in tls12_full)
-        assert tls13_resumed == {"CSD"}
-        assert tls13_full == {"CSD", "CSDD", "CSDDD"}
+        assert tls12_resumed == {"CsiI"}
+        assert all("x" in history for history in tls12_full)
+        assert all("k" in history for history in tls12_full)
+        assert tls13_resumed == {"Cs"}
+        assert tls13_full == {"Cs"}
         assert all(not set(history) & {"O", "X", "Y", "F", "T"} for history in tls13_full)
 
     def test_tls12_cipher_aes128_dominates(self):
@@ -350,6 +352,17 @@ class TestProxyUaOsMatch:
         windows_uas = " ".join(_proxy_ua_pool("workstation", "windows"))
         assert "Windows NT" in windows_uas
         assert "Chrome" in windows_uas
+
+    def test_windows_browser_versions_match_modeled_workstation_binaries(self):
+        windows_uas = _proxy_ua_pool("workstation", "windows")
+        browser_versions = {
+            (family, major)
+            for user_agent in windows_uas
+            for family, version in re.findall(r"\b(Chrome|Firefox|Edg)/(\d+)", user_agent)
+            for major in (version,)
+        }
+
+        assert browser_versions == {("Chrome", "120"), ("Firefox", "121"), ("Edg", "120")}
 
     def test_linux_pool_differs_from_windows(self):
         assert set(_proxy_ua_pool("workstation", "linux")) != set(

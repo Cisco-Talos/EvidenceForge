@@ -369,7 +369,11 @@ class IncrementalCheckpointController:
                 raise CheckpointError(
                     f"checkpoint has no head for participant {participant.checkpoint_owner!r}"
                 )
-            if head.schema_version != participant.checkpoint_schema_version:
+            compatible_heads = getattr(participant, "checkpoint_compatible_head_versions", ())
+            if head.schema_version not in (
+                participant.checkpoint_schema_version,
+                *compatible_heads,
+            ):
                 raise CheckpointError(
                     f"checkpoint participant {participant.checkpoint_owner!r} schema is "
                     f"{head.schema_version!r}; runtime requires "
@@ -383,11 +387,13 @@ class IncrementalCheckpointController:
                 ),
                 key=lambda reference: reference.owner_ordinal,
             )
+            compatible_segments = getattr(participant, "checkpoint_compatible_segment_versions", ())
             incompatible_segments = sorted(
                 {
                     reference.schema_version
                     for reference in references
-                    if reference.schema_version != participant.checkpoint_schema_version
+                    if reference.schema_version
+                    not in (participant.checkpoint_schema_version, *compatible_segments)
                 }
             )
             if incompatible_segments:

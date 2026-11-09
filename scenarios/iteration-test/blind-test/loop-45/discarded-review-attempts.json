@@ -1,0 +1,26 @@
+{
+  "loop": 45,
+  "discarded_attempts": [
+    {
+      "agent": "loop45_threat",
+      "reason": "Read repository TODO before neutral briefing, exposing prior-finding summaries",
+      "evidence_data_read": false,
+      "scored_report_produced": false,
+      "replacement": "loop45_threat_clean"
+    },
+    {
+      "agent": "loop45_network",
+      "reason": "Read repository TODO before neutral briefing, exposing prior-finding summaries",
+      "evidence_data_read": false,
+      "scored_report_produced": false,
+      "replacement": "loop45_network_clean"
+    }
+  ],
+  "valid_reviewer_set": [
+    "loop45_threat_clean",
+    "loop45_detection",
+    "loop45_network_clean",
+    "loop45_host_clean"
+  ],
+  "controls": "Parent session memory requirement explicitly already fulfilled; delegated data-only reviewers must not perform project-memory reads. Inherited generic harness instructions remain a declared limitation, not origin evidence."
+}

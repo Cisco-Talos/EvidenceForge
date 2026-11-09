@@ -102,8 +102,10 @@ def handle_logon(
         )
         source_ip = "-"
     else:
+        macos_local = _get_os_category(system.os) == "macos" and spec.logon_type == 2
         source_ip = (
             spec.source_ip
+            or ("-" if macos_local else None)
             or self.public_identity_registry.bind(
                 "external_logon",
                 f"storyline-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
@@ -116,6 +118,7 @@ def handle_logon(
             logon_type=spec.logon_type,
             source_ip=source_ip,
             session_end_plan=session_end_plan,
+            **({"allow_local_session_reuse": False} if macos_local else {}),
         )
     # Protect storyline-created sessions from baseline logoff
     session = self.state_manager.get_session(logon_id)
@@ -145,6 +148,7 @@ def handle_failed_logon(
     malicious_event = context.malicious_event
     source_ip = (
         spec.source_ip
+        or ("-" if _get_os_category(system.os) == "macos" and spec.logon_type == 2 else None)
         or self.public_identity_registry.bind(
             "failed_logon",
             f"storyline-failed-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
@@ -179,6 +183,21 @@ def handle_logoff(
     if paired_close is not None:
         logon_id, session_end_plan = paired_close
         target_session = self.state_manager.get_session(logon_id)
+        if target_session is None:
+            # A later activity in this hour can already drain the exact RDP
+            # lifecycle owner. Reuse its canonical completion, never emit a
+            # second close or accept an unrelated/early-ended session.
+            identity = self.state_manager.get_session_identity(logon_id)
+            if (
+                identity is not None
+                and identity.hostname == system.hostname
+                and identity.session_kind == "rdp"
+                and self.state_manager.get_session_end_plan(logon_id) == session_end_plan
+                and self.state_manager.get_session_end_time(logon_id)
+                == session_end_plan.canonical_end
+            ):
+                context.malicious_event["logon_id"] = logon_id
+                return context.malicious_event
         if target_session is None or target_session.system != system.hostname:
             raise StateError(
                 f"Explicit storyline logoff {session_end_plan.storyline_event_id} "
@@ -206,6 +225,8 @@ def handle_logoff(
                 logon_id,
                 from_storyline=True,
             )
+        else:
+            context.malicious_event["skipped_reason"] = "no_matching_session"
 
     return context.malicious_event
 
@@ -257,6 +278,7 @@ def handle_ssh_session(
             required_until=session_required_until,
             session_end_plan=session_end_plan,
             ids_alerts=authored_ids_alerts,
+            **({"ssh_pty": True} if spec.pty else {}),
         )
     else:
         source_ip = spec.source_ip or system.ip
@@ -276,6 +298,7 @@ def handle_ssh_session(
             emit_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=authored_ids_alerts,
+            **({"pty": True} if spec.pty else {}),
         )
         result = SimpleNamespace(network_uid=uid)
     if getattr(result, "session", None) is not None:

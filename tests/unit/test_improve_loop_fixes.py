@@ -302,6 +302,7 @@ class TestSessionKindMatching:
         wm = WorldModel(scenario, "corp.local")
         state = StateManager()
         ag = Mock()
+        ag._network_transaction_runtime = None
 
         def create_session(*, session_kind, logon_type, time, source_ip):
             state.set_current_time(time)

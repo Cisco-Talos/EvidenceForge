@@ -10,6 +10,7 @@ import math
 import ntpath
 import posixpath
 import random
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationTransportPlan,
 )
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.content_identity import FileContentIdentity
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, FileContentIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     FileContext,
@@ -40,7 +41,12 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortProjection,
     PreparedPersistentSmbSourcePublication,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -48,12 +54,15 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     PersistentSmbApplicationIntent,
     PersistentSmbRootIntent,
 )
+from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.smb_profiles import (
     client_auth_options,
     client_process_for_operation,
@@ -136,6 +145,7 @@ from evidenceforge.models.scenario import (
 )
 from evidenceforge.models.state import SmbFileState
 from evidenceforge.utils.ids import generate_stable_zeek_uid
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc, parse_duration
 
@@ -604,7 +614,7 @@ class SmbActivityActionBundle:
         effective_gid = preparation.effective_gid
         selected = preparation.selected
         duration = preparation.duration
-        if self._server_platform(server) == "windows":
+        if self._endpoint_platform(server) == "windows":
             if not 1 <= len(selected) <= _MAX_PERSISTENT_SMB_OPERATIONS:
                 raise ValueError("Persistent SMB production requires 1..64 file operations")
             target_formats = self.executor.dispatcher.persistent_smb_configured_projection_targets()
@@ -705,6 +715,20 @@ class SmbActivityActionBundle:
                         source_pid=-1,
                         source_image="",
                     )
+                    if (
+                        client_process_preparation.disposition == "materialize"
+                        and client_process_preparation.os_category == "macos"
+                        and client_system is not None
+                    ):
+                        client_process_preparation = self._materialize_macos_smb_client_process(
+                            client_process_preparation,
+                            client_system=client_system,
+                        )
+                        member_budget = (
+                            5
+                            + len(selected) * operation_member_count
+                            + int(client_process_preparation.disposition == "materialize")
+                        )
                 terminal_continuation = continuation_authority.reserve_claimed(
                     action_id=self.anchor.stable_id,
                     action_binding_digest=terminal_binding_digest,
@@ -980,7 +1004,7 @@ class SmbActivityActionBundle:
                 server=server.hostname,
                 share=share.name,
                 path=first_path,
-                client_path=self._client_path(first_path, share),
+                client_path=self._operation_client_path(first_path, share),
                 local_path=self._local_path(first_path),
                 source_path=source_path,
                 destination_path=destination_path,
@@ -1040,7 +1064,10 @@ class SmbActivityActionBundle:
             preserve_explicit_payload=True,
             suppress_application_side_effects=True,
             suppress_source_pid_inference=(
-                (self.client_access == "cifs_mount" and not self.request.client_logon_id)
+                (
+                    self.client_access in {"cifs_mount", "macos_mount"}
+                    and not self.request.client_logon_id
+                )
                 or (process_plan is not None and transport_pid <= 0)
             ),
             parent_action_group_id=self.anchor.stable_id,
@@ -1106,7 +1133,7 @@ class SmbActivityActionBundle:
             auth_time.isoformat(),
         )
         remote_authentication_plan = None
-        if self._server_platform(server) == "linux":
+        if self._endpoint_platform(server) == "linux":
             remote_authentication_plan = RemoteAuthenticationPlan(
                 stable_id=f"smb-remote-auth-{self.anchor.stable_id}",
                 source_hostname=client_system.hostname if client_system is not None else "",
@@ -1168,7 +1195,7 @@ class SmbActivityActionBundle:
         auth = AuthContext(
             username=self.smb_principal,
             user_sid=self.executor._get_sid(self.smb_principal),
-            logon_id=logon_id if self._server_platform(server) == "windows" else "",
+            logon_id=logon_id if self._endpoint_platform(server) == "windows" else "",
             logon_type=3,
             source_ip=client_ip,
             source_port=source_port,
@@ -1290,7 +1317,18 @@ class SmbActivityActionBundle:
                     server=server,
                     client=client_system,
                     auth=auth,
-                    process=(process if self.request.client_logon_id else None),
+                    process=(
+                        process
+                        if self.request.client_logon_id
+                        or (
+                            self.client_access == "macos_mount"
+                            and process_plan is not None
+                            and process is not None
+                            and process_plan.actor_pid > 0
+                            and process.pid == process_plan.actor_pid
+                        )
+                        else None
+                    ),
                     timestamp=current_lease.started_at,
                 )
                 operation_truth.append(truth)
@@ -1332,10 +1370,38 @@ class SmbActivityActionBundle:
                 process_plan.actor_pid,
             )
             if (
+                termination_time is None
+                and running_process is not None
+                and self.client_access == "macos_mount"
+            ):
+                # The operation owns this actor's lifetime; do not borrow Linux
+                # command lifetimes or leave the actor alive after its dependents.
+                seed = _stable_seed(
+                    "smb-operation-client-close:"
+                    f"{self.anchor.stable_id}:{client_system.hostname}:"
+                    f"{process_plan.actor_pid}:{close_time.isoformat()}"
+                )
+                termination_time = close_time + timedelta(milliseconds=250 + seed % 2751)
+                self.executor._remember_foreground_process_finalizer(
+                    system=client_system,
+                    user=self.request.actor,
+                    pid=process_plan.actor_pid,
+                    process_name=running_process.image,
+                    logon_id=running_process.logon_id,
+                    termination_time=termination_time,
+                )
+            if (
                 termination_time is not None
                 and running_process is not None
                 and self.executor._is_within_scenario_window(termination_time)
             ):
+                completion = self._completed_smb_client_exit(
+                    client_system,
+                    process_plan.actor_pid,
+                    close_time,
+                    termination_time,
+                    tuple(operation_truth),
+                )
                 self.executor.generate_process_termination(
                     user=self.request.actor,
                     system=client_system,
@@ -1343,6 +1409,11 @@ class SmbActivityActionBundle:
                     pid=process_plan.actor_pid,
                     process_name=running_process.image,
                     logon_id=running_process.logon_id,
+                    **(
+                        {"exit_outcome": completion[1], "expected_process": completion[0]}
+                        if completion is not None
+                        else {}
+                    ),
                 )
         return SmbActivityResult(
             session_id=first_lease.session_id,
@@ -1517,10 +1588,11 @@ class SmbActivityActionBundle:
 
         if client_system is None:
             return PersistentSmbClientProcessPreparation.none()
-        os_category = self._server_platform(client_system)
+        os_category = self._endpoint_platform(client_system)
         access_mode = {
             "windows_native": "explorer",
             "cifs_mount": "mounted",
+            "macos_mount": "mounted",
             "smbclient": "direct",
         }.get(self.client_access)
         profile = select_client_profile(
@@ -1610,6 +1682,8 @@ class SmbActivityActionBundle:
                 parent_object_id=(parent_identity.object_id if parent_identity is not None else ""),
                 image=identity.image,
                 command_line=identity.command_line,
+                credentials=identity.credentials if os_category == "macos" else None,
+                executable_version=identity.executable_version if os_category == "macos" else None,
                 username=identity.principal,
                 logon_id=identity.logon_id,
                 session_object_id=session_identity.object_id,
@@ -1621,7 +1695,7 @@ class SmbActivityActionBundle:
                 integrity_level=preferred.integrity_level or "Medium",
                 access_mode=profile.access_mode,
                 path_style=profile.path_style,
-                transport_attribution="process",
+                transport_attribution="none" if os_category == "macos" else "process",
                 lifecycle="resident",
             )
 
@@ -1642,7 +1716,7 @@ class SmbActivityActionBundle:
             server=server.hostname,
             share=share.name,
             path=first_path,
-            client_path=self._client_path(first_path, share),
+            client_path=self._operation_client_path(first_path, share),
             local_path=local_operand,
             source_path=source_path,
             destination_path=destination_path,
@@ -1721,6 +1795,8 @@ class SmbActivityActionBundle:
                 parent_object_id=(parent_identity.object_id if parent_identity is not None else ""),
                 image=identity.image,
                 command_line=identity.command_line,
+                credentials=identity.credentials if os_category == "macos" else None,
+                executable_version=identity.executable_version if os_category == "macos" else None,
                 username=identity.principal,
                 logon_id=identity.logon_id,
                 session_object_id=session_identity.object_id,
@@ -1733,7 +1809,9 @@ class SmbActivityActionBundle:
                 access_mode=profile.access_mode,
                 path_style=profile.path_style,
                 transport_attribution=(
-                    "process" if profile.transport_attribution == "process" else "kernel"
+                    profile.transport_attribution
+                    if os_category == "macos"
+                    else ("process" if profile.transport_attribution == "process" else "kernel")
                 ),
                 lifecycle=rendered.lifecycle,
             )
@@ -1769,6 +1847,19 @@ class SmbActivityActionBundle:
             if parent_pid > 0
             else None
         )
+        credentials: PosixProcessCredentials | None = None
+        executable_version: ProcessExecutableVersion | None = None
+        if os_category == "macos":
+            credentials = self.executor._process_credentials(
+                client_system, rendered.username, parent_pid, started_at
+            )
+            binary = self.executor.dispatcher.resolve_process_binary_identity(
+                client_system.hostname, rendered.username, rendered.image, "macos"
+            )
+            # Operation profiles select installed OS tools. New runtime-backed
+            # launches still need an artifact-retention participant of their own.
+            if type(binary) is BinaryReleaseIdentity:
+                executable_version = ProcessExecutableVersion.from_binary(binary)
         return PersistentSmbClientProcessPreparation(
             disposition="materialize",
             hostname=client_system.hostname,
@@ -1778,6 +1869,8 @@ class SmbActivityActionBundle:
             parent_object_id=parent_identity.object_id if parent_identity is not None else "",
             image=rendered.image,
             command_line=rendered.command_line,
+            credentials=credentials,
+            executable_version=executable_version,
             username=rendered.username,
             logon_id=session.logon_id,
             session_object_id=session_identity.object_id,
@@ -1795,9 +1888,114 @@ class SmbActivityActionBundle:
             access_mode=profile.access_mode,
             path_style=profile.path_style,
             transport_attribution=(
-                "process" if profile.transport_attribution == "process" else "kernel"
+                profile.transport_attribution
+                if os_category == "macos"
+                else ("process" if profile.transport_attribution == "process" else "kernel")
             ),
             lifecycle=rendered.lifecycle,
+        )
+
+    def _materialize_macos_smb_client_process(
+        self,
+        preparation: PersistentSmbClientProcessPreparation,
+        *,
+        client_system: System,
+    ) -> PersistentSmbClientProcessPreparation:
+        """Delegate mounted Mac helper startup to the canonical process lifecycle."""
+
+        if (
+            preparation.disposition != "materialize"
+            or preparation.os_category != "macos"
+            or preparation.hostname != client_system.hostname
+            or preparation.started_at is None
+        ):
+            raise StateError("Mounted Mac SMB startup requires its exact process recipe")
+        arguments = literal_shell_child_arguments(preparation.image, preparation.command_line)
+        if arguments is None:
+            raise StateError("Mounted Mac SMB helper requires a literal executable argv")
+        canonical_command_line = shlex.join(arguments)
+        existing: tuple[ProcessIdentity, Any] | None = None
+        for candidate in self.executor.state_manager.get_processes_on_system(
+            client_system.hostname
+        ):
+            identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                candidate.pid,
+            )
+            if (
+                identity is not None
+                and identity.lifecycle_group_id == preparation.lifecycle_group_id
+            ):
+                existing = identity, candidate
+                break
+        if existing is None:
+            pid = self.executor.generate_process(
+                user=self.request.actor,
+                system=client_system,
+                time=preparation.started_at,
+                logon_id=preparation.logon_id,
+                process_name=preparation.image,
+                command_line=canonical_command_line,
+                parent_pid=preparation.parent_pid,
+                suppress_command_file_effect=True,
+                allow_existing_browser_reuse=False,
+                allow_browser_launch_spacing=False,
+                concurrency_group_id=preparation.lifecycle_group_id,
+                lifecycle_group_id=preparation.lifecycle_group_id,
+                require_exact_parent=True,
+                preserve_requested_time=True,
+                arguments=arguments,
+            )
+            if pid <= 0:
+                raise StateError(
+                    "Mounted Mac SMB helper could not publish its canonical process lifecycle"
+                )
+            identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                pid,
+            )
+            process = self.executor.state_manager.get_process(
+                client_system.hostname,
+                pid,
+            )
+            if identity is None or process is None:
+                raise StateError("Mounted Mac SMB helper lost its published process identity")
+        else:
+            identity, process = existing
+        if (
+            identity.hostname != preparation.hostname
+            or identity.image != preparation.image
+            or identity.command_line != canonical_command_line
+            or identity.principal != preparation.username
+            or identity.logon_id != preparation.logon_id
+            or identity.parent_pid != preparation.parent_pid
+            or identity.lifecycle_group_id != preparation.lifecycle_group_id
+            or identity.started_at > ensure_utc(self.request.time)
+        ):
+            raise StateError("Mounted Mac SMB helper changed its canonical process intent")
+        parent = self.executor.state_manager.get_process_identity(
+            identity.hostname,
+            identity.parent_pid,
+        )
+        session = self.executor.state_manager.get_session_identity(identity.logon_id)
+        if session is None:
+            raise StateError("Mounted Mac SMB helper lost its owning local session")
+        return replace(
+            preparation,
+            disposition="reuse",
+            process_object_id=identity.object_id,
+            pid=identity.pid,
+            command_line=identity.command_line,
+            parent_pid=identity.parent_pid,
+            parent_object_id=parent.object_id if parent is not None else "",
+            session_object_id=session.object_id,
+            session_id=session.session_id,
+            logon_type=preparation.logon_type,
+            started_at=identity.started_at,
+            lifecycle_group_id=identity.lifecycle_group_id,
+            integrity_level=process.integrity_level or preparation.integrity_level,
+            credentials=identity.credentials,
+            executable_version=identity.executable_version,
         )
 
     def _append_persistent_smb_file_operation(
@@ -3002,6 +3200,7 @@ class SmbActivityActionBundle:
             or client_identity.principal != client_process_preparation.username
             or client_identity.logon_id != client_process_preparation.logon_id
             or client_identity.started_at != client_process_preparation.started_at
+            or not client_process_preparation.matches_process_metadata(client_identity)
             or (
                 client_process_preparation.disposition == "reuse"
                 and client_identity.object_id != client_process_preparation.process_object_id
@@ -4210,6 +4409,40 @@ class SmbActivityActionBundle:
                 "Persistent SMB connection acknowledgement did not retire its exact owner"
             )
 
+    def _completed_smb_client_exit(
+        self,
+        system: System,
+        pid: int,
+        completed_at: datetime,
+        termination_time: datetime,
+        operations: tuple[dict[str, Any], ...],
+    ) -> tuple[ProcessIdentity, PosixProcessExit] | None:
+        """Carry the successful operation owner's nominal natural helper result.
+
+        Unknown and failed operations retain unknown process results. The exact
+        process close service owns identity validation and native publication.
+        """
+        if (
+            self._endpoint_platform(system) != "macos"
+            or not operations
+            or any(operation.get("outcome") != "success" for operation in operations)
+            or ensure_utc(termination_time) <= ensure_utc(completed_at)
+        ):
+            return None
+        process = self.executor.state_manager.get_process_identity(system.hostname, pid)
+        if process is None:
+            return None
+        session = self.executor.state_manager.get_session(process.logon_id)
+        deadlines = (
+            self.executor.state_manager.get_session_end_time(process.logon_id),
+            session.network_close_time if session is not None else None,
+        )
+        if any(
+            ensure_utc(termination_time) >= ensure_utc(end) for end in deadlines if end is not None
+        ):
+            return None
+        return process, PosixProcessExit(exit_code=0)
+
     def _terminate_persistent_smb_operation_client(
         self,
         facts: _PersistentSmbTerminalFacts,
@@ -4263,6 +4496,13 @@ class SmbActivityActionBundle:
         )
         if not self.executor._is_within_scenario_window(termination_time):
             return
+        completion = self._completed_smb_client_exit(
+            self.request.parent_system,
+            pid,
+            facts.activity_result.completed_at,
+            termination_time,
+            facts.activity_result.operations,
+        )
         self.executor.generate_process_termination(
             user=self.request.actor,
             system=self.request.parent_system,
@@ -4270,6 +4510,11 @@ class SmbActivityActionBundle:
             pid=pid,
             process_name=running.image,
             logon_id=running.logon_id,
+            **(
+                {"exit_outcome": completion[1], "expected_process": completion[0]}
+                if completion is not None
+                else {}
+            ),
         )
 
     def _resume_persistent_windows_terminal(
@@ -4655,7 +4900,7 @@ class SmbActivityActionBundle:
         manager = getattr(self.executor, "_runtime_content_manager", None)
         if manager is None:
             return None
-        platform = self._server_platform(self.request.parent_system)
+        platform = self._endpoint_platform(self.request.parent_system)
         record = manager.resolve_record(
             self.request.parent_system.hostname,
             self.request.actor.username,
@@ -5436,30 +5681,21 @@ class SmbActivityActionBundle:
         return system
 
     @staticmethod
-    def _server_platform(system: System) -> str:
+    def _endpoint_platform(system: System) -> str:
         """Return the normalized endpoint platform used by SMB projections."""
 
-        return "windows" if "windows" in system.os.casefold() else "linux"
+        return platform_for_os(system.os)
 
     def _eligible_mappings(self, share: CompiledStorageShare) -> list[Any]:
         """Return deterministic share mappings applicable to this actor/client."""
 
-        eligible = [
-            mapping
-            for mapping in self.world.mappings
-            if mapping.share.casefold() == share.ref.casefold()
-            and (
-                not mapping.users
-                or self.request.actor.username.casefold()
-                in {user.casefold() for user in mapping.users}
+        return list(
+            self.world.applicable_mappings(
+                share.ref,
+                username=self.request.actor.username,
+                hostname=self.request.parent_system.hostname,
             )
-            and (
-                not mapping.systems
-                or self.request.parent_system.hostname.casefold()
-                in {system.casefold() for system in mapping.systems}
-            )
-        ]
-        return sorted(eligible, key=lambda mapping: mapping.id.casefold())
+        )
 
     def _selected_mapping(self, share: CompiledStorageShare) -> Any | None:
         """Resolve an explicit or unambiguous platform presentation mapping."""
@@ -5499,13 +5735,13 @@ class SmbActivityActionBundle:
             return "external"
         authored = self.request.spec.client_access
         path_style = self.request.spec.path_style
-        client_platform = self._server_platform(client)
+        client_platform = self._endpoint_platform(client)
         if authored == "auto":
             if client_platform == "windows":
                 resolved = "windows_native"
             elif self.mapping is not None and bool(getattr(self.mapping, "mount", None)):
-                resolved = "cifs_mount"
-            elif path_style == "mounted":
+                resolved = "macos_mount" if client_platform == "macos" else "cifs_mount"
+            elif path_style == "mounted" or client_platform == "macos":
                 raise ValueError(
                     "mounted SMB presentation requires an applicable storage mapping with a mount"
                 )
@@ -5514,6 +5750,8 @@ class SmbActivityActionBundle:
         else:
             resolved = authored
 
+        if client_platform == "macos" and (authored != "auto" or resolved != "macos_mount"):
+            raise ValueError("macOS SMB clients require automatic mounted access")
         if resolved == "windows_native" and client_platform != "windows":
             raise ValueError("windows_native SMB access requires a Windows client")
         if resolved in {"cifs_mount", "smbclient"} and client_platform != "linux":
@@ -5521,12 +5759,13 @@ class SmbActivityActionBundle:
         allowed_path_styles = {
             "windows_native": {"auto", "unc", "mapped"},
             "cifs_mount": {"auto", "mounted"},
+            "macos_mount": {"auto", "mounted"},
             "smbclient": {"auto", "unc"},
         }
         if path_style not in allowed_path_styles[resolved]:
             allowed = "/".join(sorted(allowed_path_styles[resolved]))
             raise ValueError(f"{resolved} SMB access requires one of these path styles: {allowed}")
-        if resolved == "cifs_mount" and (
+        if resolved in {"cifs_mount", "macos_mount"} and (
             self.mapping is None or not getattr(self.mapping, "mount", None)
         ):
             raise ValueError(
@@ -5565,7 +5804,7 @@ class SmbActivityActionBundle:
         # V1 Samba servers are domain members, so their automatic path uses
         # directory-backed Kerberos.  Windows retains its established
         # Negotiate selection; generate_logon records the concrete result.
-        return "kerberos" if self._server_platform(server) == "linux" else ""
+        return "kerberos" if self._endpoint_platform(server) == "linux" else ""
 
     def _effective_samba_identity(
         self,
@@ -5574,7 +5813,7 @@ class SmbActivityActionBundle:
     ) -> tuple[int | None, int | None]:
         """Resolve the domain principal's host-local Unix identity for Samba."""
 
-        if self._server_platform(server) != "linux":
+        if self._endpoint_platform(server) != "linux":
             return None, None
         directory = getattr(self.executor, "identity_directory", None)
         if directory is None:
@@ -5595,7 +5834,7 @@ class SmbActivityActionBundle:
 
         volume = self.world.volumes_by_ref[f"{share.system}.{share.volume}".casefold()]
         backing = volume.filesystem
-        platform = self._server_platform(server)
+        platform = self._endpoint_platform(server)
         advertised = share.smb_native_filesystem
         return {
             "filesystem": backing,
@@ -5688,11 +5927,17 @@ class SmbActivityActionBundle:
             concurrency_group_id=running.concurrency_group_id,
         )
 
+    def _operation_client_path(self, path: str, share: CompiledStorageShare) -> str:
+        """Return the actor operand matching the canonical file or directory operation."""
+        if self.client_access == "macos_mount" and self.request.spec.operation == "browse":
+            path = ntpath.dirname(path)
+        return self._client_path(path, share)
+
     def _client_path(self, path: str, share: CompiledStorageShare) -> str:
         spec = self.request.spec
         if spec.client is not None:
             return self.world.unc_path(share, path)
-        if self.client_access == "cifs_mount":
+        if self.client_access in {"cifs_mount", "macos_mount"}:
             mount = str(getattr(self.mapping, "mount", "") or "")
             if mount:
                 relative = path.replace("\\", "/")
@@ -5738,8 +5983,13 @@ class SmbActivityActionBundle:
             return ""
         if isinstance(source, SmbClientLocation) and source.file_set is not None:
             file_set = self.world.file_set(source.file_set)
-            relative_path = remote_path
-            if isinstance(destination, SmbShareLocation) and destination.directory:
+            source_file = self._client_source_by_destination_path.get(remote_path.casefold())
+            relative_path = source_file.path if source_file is not None else remote_path
+            if (
+                source_file is None
+                and isinstance(destination, SmbShareLocation)
+                and destination.directory
+            ):
                 prefix = destination.directory.rstrip("\\") + "\\"
                 if relative_path.casefold().startswith(prefix.casefold()):
                     relative_path = relative_path[len(prefix) :]
@@ -5748,12 +5998,15 @@ class SmbActivityActionBundle:
             root = file_set.root.rstrip("\\")
             native_relative = relative_path.replace("/", "\\")
             return f"{root}\\{native_relative}"
-        client_is_linux = (
-            self.client_system is not None and self._server_platform(self.client_system) == "linux"
+        client_platform = (
+            self._endpoint_platform(self.client_system)
+            if self.client_system is not None
+            else "unknown"
         )
+        client_is_posix = client_platform in {"linux", "macos"}
         basename = (
             posixpath.basename(remote_path.replace("\\", "/"))
-            if client_is_linux
+            if client_is_posix
             else ntpath.basename(remote_path)
         )
         if location.path:
@@ -5761,10 +6014,12 @@ class SmbActivityActionBundle:
                 return f"{location.path}{basename}"
             return location.path
         if location.directory:
-            separator = "/" if client_is_linux else "\\"
+            separator = "/" if client_is_posix else "\\"
             local_directory = location.directory.rstrip("/\\")
             return f"{local_directory}{separator}{basename}"
-        if client_is_linux:
+        if client_platform == "macos":
+            return posixpath.join("/Users", self.request.actor.username, "Downloads", basename)
+        if client_is_posix:
             directory = getattr(self.executor, "identity_directory", None)
             account = (
                 directory.linux_account(
@@ -5798,7 +6053,7 @@ class SmbActivityActionBundle:
             return source_path, self._local_path(remote_path)
         if isinstance(spec.destination, SmbShareLocation):
             destination_relative = self._destination_path(spec.destination, remote_path)
-            if self.client_access == "cifs_mount":
+            if self.client_access in {"cifs_mount", "macos_mount"}:
                 return source_path, self._client_path(destination_relative, share)
             return source_path, destination_relative
         return source_path, ""
@@ -6037,7 +6292,7 @@ class SmbActivityActionBundle:
             dialect="3.1.1",
             signing_policy="required",
             encryption_policy="required" if share.encryption == "required" else "off",
-            server_policy=f"{self._server_platform(server)}:file-server",
+            server_policy=f"{self._endpoint_platform(server)}:file-server",
             share_policy="disk:standard",
             client_access=self.client_access,
         )

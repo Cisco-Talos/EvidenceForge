@@ -1,0 +1,3 @@
+# Shared TCP retransmitted payload accounting
+
+Family-level owner: canonical transport wire accounting and TLS reconciliation. T/t retransmitted payload adds positive IP bytes beyond unique stream and headers while preserving packet/MTU compatibility. Route initial transport, explicit payload/file adjustment and TLS growth through shared helper; no emitter patch or removal of history. Cover clean and retransmitting small/bulk flows plus TLS SMTP/SSL. Generated single-marker histories are covered; logarithmic multi-marker raw streams remain a residual limitation. Capture loss is a separate observation owner. Moderate risk; whole-output verification required.

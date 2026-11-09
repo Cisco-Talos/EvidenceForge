@@ -1,0 +1,397 @@
+# macOS capability and evidence gates
+
+## Current generation admission (2026-11-06, revision 474)
+
+This table describes the current source tree, not capabilities already shipped in an older
+installer. The dated history below retains earlier gates; it does not override this summary.
+The [Mac guide](../../macos.md) is the public entry point; the
+[follow-through worklog](../../worklog/2026-11-06-macos-realism-follow-through.md) records
+implementation and verification. User acceptance and broad release gates remain open.
+
+| Area | Current supported scope | Explicit limit |
+| --- | --- | --- |
+| Generation target | macOS 27 arm64 workstation | Other unqualified targets reject independently of output; decoding is separate. |
+| Complete process starts | Independent canonical/native census, actionable rejection, exact recovery/filter equivalence | Every eligible modeled fork/exec, not every process a real Mac would contain. |
+| Native startup | Qualified Finder mains, Terminal/iTerm2, selected Chrome/Code helpers, SSH clients/non-PTY/PTY receivers and commands, selected root jobs | Existing-app window/restoration, Dock/Spotlight, arbitrary helper graphs and complex shell plans remain gated. |
+| ES process | v11 fork/exec/known-exit with canonical signing/audit/job-control/argv/environment/FD facts | Unknown terminal outcomes remain explicit; selected orderly results are model policy. |
+| ES filesystem | v11 empty create, modified/unmodified unmapped close, same-directory rename/replacement, pre-removal unlink | Ordinary generation is a nominal live Code document workload; generic file effects, broad reads/mappings and APFS artifacts are not converted. |
+| Chrome | Main, renderer, generic GPU/network roles; resident reuse under the exact main | No dedicated-GPU/Crashpad/general helper/IPC or blanket exact-build claim. |
+| VS Code | Selected 1.143.0 main and generic GPU/network/shared-Node roles | Renderer, extension/watcher/agent/PTY trees remain gated. |
+| Shared OS residents | Pre-window root cfprefsd and launchservicesd inventory | No invented in-window native startup/exit or ULF; other principals/services remain separately qualified. |
+| Docker | Controlled Desktop references retained | Complete backend/helper/VM graph remains deferred; CLI presence does not establish Desktop/native admission. |
+| Unified Log | Workspace entry, bounded ASP refusal, observed PAM acceptance and source-derived plain-key acceptance | No general app/service, VERBOSE SSH or launchd ULF. Final launchd capture was valid-empty under the agreed stopping rule. |
+| Other evidence | eCAR, interactive Bash/zsh, eligible network and remote-server logs, mounted SMB client effects | No Mac SMB server, OpenBSM, native archives/APFS image or validated native SIEM mapping. |
+| Verification | Installed-CLI Mac smoke, positive filesystem CLI evaluation, exact checkpoint/resume and native-filter equivalence | Earlier delivery counts belong to their dated workloads. These checks do not close user acceptance, broad release gates or general authenticity claims. |
+
+The [finite delivery plan](endpoint-delivery-acceptance.md) preserves prior scope decisions;
+its original full ULF target remains bounded by launchd qualification. No further open-ended
+collection or repeated assessment loop is implied.
+
+## Historical generation-admission notes (through 2026-11-01)
+
+November 1, revision 370: the human's successful v3 PTY fixed report establishes the shared
+receiver prefix plus controlling-terminal shell startup and genuine foreground command fork,
+setpgid and exec. Explicit `ssh_session.pty: true` selects the qualified initial zsh and
+literal installed command path. Terminal/iTerm2 full/native-only and exact PTY checkpoint
+tests pass; interrupted phases retain the same process and native rows. Omitted PTY intent
+preserves non-PTY behavior. The [PTY reference](ssh-startup-reference/PTY-REFERENCE.md) records
+the evidence and limits. Pipelines, effects, alternate shells, background jobs and additional
+helper families remain distinct. No new local-log read or capture was needed for implementation.
+
+Revision 369 qualifies bounded non-PTY SSH receiver startup: six actual forks, six successful
+execs and three known short-helper exits. The approved fixed-output offline review resolves
+the launchd/xpcproxy prefix, fork-only children, audit/credential transitions, job control,
+responsibility and per-exec descriptor tables. The initial fork shares the exact deferred
+transport/source journal; later stages share the retained native phase coordinator. Complete
+Mac-to-Mac workloads through Terminal and iTerm2 pass exact census reconciliation and output
+filtering; receiver checkpoint/resume is byte-identical to uninterrupted generation. Generic
+worker teardown outcomes remain unknown. PTY startup, SCP/SFTP helpers and native SSH Unified
+Log messages remain outside this bounded qualification. No further collection was needed.
+
+Revision 366 qualifies complete outbound SSH-client ES coverage to a modeled Linux receiver
+from both terminal variants. The private fixed report establishes the public SSH integer
+entitlement shape and runtime flags/architecture. Exact integer types survive checkpoint
+recovery. Automatic SSH source ports now use the canonical bundle's collision-aware allocator;
+authored exact ports retain exact semantics. Its separate receiver obligation is closed for
+the bounded non-PTY startup by revision 369 above.
+
+Revision 364 qualifies bounded fresh Apple Terminal and iTerm2 3.7.6 startup through one
+retained native phase owner. Terminal produces three real forks and four execs; iTerm2
+produces four forks and six execs, including its server and same-PID ShellLauncher-to-zsh
+replacement. Complete local-command workloads now reconcile every in-window start through
+the public CLI, with canonical credentials, session/TTY and FD tables. Existing shells reuse
+their identities. Other GUI apps, existing-app new windows/restoration and SSH PTY
+inventories remain separate obligations; no general all-process completion is claimed.
+
+October 30, revision 357: explicit `process.launch_method: finder` and the narrowly selected
+baseline reference app share the complete canonical launchd fork, root xpcproxy exec, GUI
+credential binding and app exec in one process lifetime. Native fork and both exec records are
+qualified; a declared app completion also produces native exit. The production profile passes
+the independent complete census when the owning GUI login predates collection. Phase recovery,
+filtering and checkpoint/resume remain part of acceptance.
+
+The approved v7 offline review closed the boot-parent token gate. Launchd's parent token has
+the default unattributed kernel form; launchd itself has an assigned nonzero unattributed audit
+session. Canonical State allocates the synthetic ID once and shares its origin through the
+startup chain until authenticated GUI adoption. No private numeric value was disclosed.
+Generic apps and Dock/Spotlight attribution remain separate obligations.
+See the [current completeness worklog](../../worklog/2026-10-28-macos-es-exec-completeness.md).
+
+October 30, revision 360: the approved offline Terminal review establishes bounded Boolean
+and string-array entitlement exports, setuid login credentials, additional login pipe FDs and
+the login-to-shell credential drop. The v11 codec, canonical signature and checkpoint owners
+now preserve the entitlement shape; verified Apple-shipped signing definitions supply separate
+Terminal/login catalog templates. Older frozen profiles retain their narrower capabilities.
+The native terminal startup producer remains gated pending its actual fork/exec, session,
+controlling-terminal, credential and descriptor transitions. No iTerm2 metadata is inferred.
+
+Revision 362 records the successful paired iTerm2 reference and approved helper review. Its
+server and ShellLauncher add one fork and two execs relative to Terminal; login's descriptor
+inventory also differs. V11 and canonical signing now preserve scalar-string and empty-object
+entitlements, with a separate verified vendor main-image template. Shared startup implementation
+can proceed with explicit app-specific stages; the comparison does not itself enable that producer.
+
+Revision 363 supplies independently signed iTerm2 3.7.6 helper deployments, explicit runtime
+policies, post-fork session/TTY allocation, exact installed-file login setuid execution and a
+separate authenticated login-child privilege drop. These shared canonical prerequisites are
+tested independently; the public aggregate startup path remains gated until its native phase
+coordinator, descriptors and complete-census acceptance are integrated.
+
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
+
+The [current coverage worklog](../../worklog/2026-10-27-macos-native-coverage.md) records the
+chronological ES ingress repair, exact checkpoint/filter acceptance and per-host/per-authored-action
+coverage diagnostics. A qualified plain nested Bash/zsh parent can now produce the bounded native
+command chain. The independent [macOS 27 benchmark](../../../scenarios/macos27-native-assessment/README.md)
+executes every authored nested command; its first current-profile panel confirms coherent native
+identities while rejecting shared network histories and query timing texture. This is engineering
+and bounded native-source acceptance, with broader realism work recorded in that benchmark.
+
+The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
+publication. Local GUI audit origins now belong to the canonical login and survive explicit
+user launches, inherited children and recovery. Qualified external commands without a PTY now
+receive their SSH channel's three pipe descriptors at exec. The current non-PTY startup now
+supplies its shell/helper inventories. PTY command generation, other GUI responsible-process
+relationships and unspecified exit results remain
+coverage limits. Natural completion of three literal query invocations now supplies declared
+nominal results; ordinary termination also preserves exact explicit normal/signal results.
+See the [completion worklog](../../worklog/2026-10-26-macos-command-exit-outcomes.md).
+Bounded app-policy refusal now uses `process.outcome: policy_refused` and the privately verified kernel ASP template. Exact cause, process allocation/exec stage and broader Gatekeeper families remain unqualified. Older v10/macOS 26 milestones
+below are historical context, not current target admission. See the
+[current profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md).
+
+The [GUI audit experiment and implementation](../../worklog/2026-10-26-macos-gui-audit-reference.md)
+record human-reviewed own-process comparisons from iTerm2 on macOS 27. Audit identity is shared
+across its tested windows/tabs and fork/exec, distinct from POSIX sessions, and changes across a
+human-attested same-boot GUI relogin while the audit user stays constant. The generator models
+those bounded relationships through existing login, process and recovery owners. This does
+not validate Apple Terminal startup behavior, native GUI log layouts or responsible ownership.
+
+GUI login/workspace entry and GUI application launch are separate coverage claims. An eCAR app
+birth may be modeled, but native fork/exec for Finder, Dock or Spotlight needs the corresponding
+qualified responsibility and launch relationship. Existing login audit identity alone does not
+supply those facts. See the [next experiment proposal](gui-launch-reference-plan.md).
+
+The historical milestones below targeted modeled macOS 26 arm64 workstations; the active target
+is now 27. “Implemented” means a canonical path exists; “experimental” means it is usable with
+explicit limitations; “validated” requires the named tests and reference boundary. A passing JSON
+parser does not establish native fidelity. This matrix records implementation progress, not a
+general macOS support claim.
+
+The [ES metadata map and evidence gates](es-metadata-and-evidence-gates.md) record the engineering ownership, public-search findings, acceptance criteria and controlled-capture fallback. Nonempty modeled fork/v10 CLI, parser, filtering and checkpoint acceptance pass. Three isolated blind panels are complete; the final mean is 66.75 with all reviewers judging Synthetic. The [bounded acceptance record](../../../scenarios/macos-assessment/ACCEPTANCE.md) separates completed engineering contracts from broader quality findings; there is no general authenticity pass. The user explicitly deferred native Gatekeeper denial and current-build ES exec/exit evidence on 2026-10-21; no further local-log inspection is authorized without asking the user first.
+
+| Capability | Canonical owner / observing sources | Current implementation | Evidence and remaining validation |
+| --- | --- | --- | --- |
+| Platform and source isolation | Shared OS classifier, world/deployment/source catalog | Implemented; Mac eCAR and history admitted, Windows/Linux endpoint formats excluded | Unit and mixed-fleet fresh-process/filter tests pass. The [worklog](../../worklog/2026-10-15-macos-workstation-implementation.md) records the latest full routine, focused and extended validation; platform-isolation reference checks pass; later shared realism fixes intentionally affect Windows/Linux too, while same-version filtering equivalence remains required |
+| Local GUI sessions and terminal ancestry | Identity directory, auth/process bundles, session close owner; eCAR | Experimental host-scoped accounts, published noninteractive `_sshd`/`sshd` identity (UID/GID 75), and Terminal → login → zsh; no Linux logind/PAM substitution | Correlated create/terminate and session reuse tests pass; implicit Mac session intent resolves before reuse so remote/service sessions cannot replace the GUI owner; experimental workspace-method entry is implemented; complete native GUI lifecycle remains open |
+| Catalog and application identity | Existing application/deployment catalog | 67 original IDs assessed, 48 prefilled Mac variants, native service and command entries | Public release/path references in catalog audit; 18 native service identities are catalog-only until their owners/triggers are modeled. Native SSH client activation is bundle-owned and distinct from the managed Homebrew client; four receiver/wrapper entries feed the bounded SSH startup owner. Explicit launchctl/plutil query commands have host-build identities and bounded lifetimes without persistence side effects or automatic persona selection. Profiled foreground commands have bounded lifetimes; three version-owned Chrome helper roles now use frozen installed assignments, data-driven baseline selection, exact browser parenting and GUI-session closure; complete helper coverage, IPC and helper network attribution remain open |
+| Interactive shell history | Canonical live shell/session owner; Bash/zsh durable journals | Experimental Mac Bash and single-line ASCII zsh extended incremental history | Native zsh reader and rejection/whitespace tests pass; no multiline, metafication, mutation or exit-only profile |
+| Network-visible activity | Existing network/browser/observation contracts; Zeek and other selected sensors | Reuses existing transport contracts; native Mac browser paths/UAs added | Mixed-fleet filtering and fresh-process determinism pass; comprehensive client fingerprints and application mappings remain open |
+| Process fork/exec/exit | Process state, immutable identities and process bundle; eCAR / bounded fork ES | Atomic state fork/exec/termination with bounded execution history, immutable registered lifetime ownership and a separate current-execution view for resource admission; metadata-complete fork/v10 source routing is registered; current-build exec/exit remain unavailable | State rollback, historical parent selection, PID reuse, lifecycle frontier and checkpoint tests pass. Delayed observations across PID reuse require the durable object ID. Explicit real/effective UID/GID and optional audit origin survive fork/exec, rollback and checkpoints; Mac launch credentials use modeled accounts. Host-owned audit PID versions now survive creation/exec, rollback, historical lookups and checkpoint recovery. Mac exec now replaces the entire task thread set with a new primary thread; exact preimage, rollback, retention, and checkpoint tests pass. Current-view transaction, lease exclusion, compaction and checkpoint gates pass; an authenticated Mac receiver child can now drop to the known session UID/GID through a distinct atomic credential transition. Explicit fork now publishes an authenticated eCAR create extension with parent/child execution IDs; generic process launches cannot substitute. Authenticated exec now publishes an eCAR process-modification extension, with exact before/after execution IDs and one lifetime. Audit adoption and child privilege drop now have exact eCAR modification projections, preserving execution identity with checkpointed credential-specific ordering. Explicit terminal results now survive authenticated termination, rollback and checkpoint recovery; unknown legacy results stay unknown. Explicit argv survives creation/fork/exec and historical recovery without parsing display text; launchd activation requires its declared vector. Explicit ordered execution environments now survive fork/exec, rollback and recovery, preserving unknown versus empty without consulting the host. Exact original/current parent lifetime references now survive fork/exec, PID reuse and checkpoint restoration; exact parent-exit adoption now preserves original parent, historical observations and current ownership through rollback and recovery. State can now freeze exact event-time parent execution/credential snapshots without PID substitution; native token projection still rejects unknown audit fields. Explicit responsible ownership and combined parent/responsible identity snapshots are implemented. Saved IDs, supplementary groups, complete native observation assembly and native source projection remain open |
+| POSIX groups and sessions | State process identities, indexed membership/reservations, action cohorts; eCAR | Internal explicit bootstrap/setsid/setpgid with fork inheritance, exec preservation, historical snapshots and leaderless lifetime ownership | Focused State, actor attribution, dispatch, filtering, rollback and checkpoint tests pass. Explicit membership changes remain chronological; inherited start/exit look-ahead preserves the exact live lifetime and terminal frontier. Mac terminal login creates an explicit session/group and shell children inherit it. Revision 225 adds modeled boot and SSH receiver sessions plus a separate SSH shell setsid transition; legacy unknown membership is retained only on compatibility paths. Atomic known-group launchd closure is implemented; retained service ownership survives leader exit, binding expiry and checkpoint restore; outside-group children are adopted atomically during unload. Native ES projection stays gated |
+| Endpoint Security export | Versioned native wire contracts, canonical fork source and exact projection/journal boundary | Experimental registered `macos_endpoint_security` selects modeled macOS 26 arm64 workstation fork/v10 only; collector activation shares the boot fleet and complete actual forks share canonical publication | Exact runtime/installed preparation, counters, filtering, rollback and source recovery are tested. The ordinary SSH receiver produces three metadata-complete fork/v10 rows. Nonempty CLI, parser, output filtering, manifest and exact checkpoint-resume acceptance pass; independently blinded native-source assessment is recorded in the assessment worklog. Exec/exit admission remains gated by ES-R1. Historical decoder versions do not expand generation |
+| Native boot/uptime clocks | Existing boot state, shared boot identity, explicit Mach timebase | Allocation-free integer projection shared by admitted bounded sources; timebase is explicitly modeled without host inference | Boot rollback/replan, checkpoint recomputation, exact arithmetic, overflow and host isolation tests pass. Public pre-release Tahoe ARM64 VM headers corroborate 125/3; stable-build/profile selection remains explicit. Sleep/wake and empirical clock calibration are excluded |
+| Responsible ownership and native identity fields | Explicit Mac lifetime relationship plus atomic event-time parent/responsible snapshots | Exact relationship ownership and complete explicitly supplied ES process snapshots implemented; bounded boot/SSH producers now assemble admitted native forks | Fork/exec inheritance, responsible exit, PID reuse, unknown versus explicit absence, expired proof, rollback, checkpoint corruption/cycle rejection and delayed projection tests pass. Missing audit/parent/group facts reject. Responsibility is explicit known absence for supported service launches; unknown relationships remain unavailable. Only the bounded fork/v10 family is admitted |
+| ES collector ownership | Dispatcher registry and State execution admission | Canonical boot activation, frozen fork-only source stamp, finite complete modeled inventory, explicit epochs/counters and durable restoration | Initial activation is independent of output filtering and never runs a host collector. Native preparation rebuilds bindings from restored owners, applies source policy and commits counters/reporting with the exact source journal. Unknown metadata stays unavailable; replacement-source activation and broader event families retain their narrower guards |
+| Unified Log export | Native wire contracts and immutable writer/clock projection boundary | Experimental macos_unified_log source renders only loginwindow workspace-method entry through the canonical session owner, native writer snapshot and ordinary collection/timing/host output mechanisms | Independently authored contracts cover strict types, offsets, redaction, optional presence and completion objects. The first 1,000 public Tahoe logEvent records pass structural decoding; this does not validate behavior templates or current-build ingestion. Other event kinds are rejected |
+| SSH authentication/session | Shared SSH bundle, eCAR and network projections | Experimental Mac clients to Linux and bounded Mac receivers. Mac receivers require an explicit arm64 workstation, local actor placement and SSH service; the existing continuation owns startup and automatic or paired authored close. Distinct helper fork/exec, service/user credential transitions, audit adoption and shell binding preserve canonical identity. No Linux PAM/logind or invented native Mac messages. Type 10 logon and SCP/SFTP receiver helpers remain unavailable | Shared-owner and real-engine mixed-platform tests pass, including immediate/deferred and authored close, absent endpoint collection and failed-write recovery. Fresh-process determinism/filtering and checkpoint gates are recorded in the worklog. Native authentication/close fidelity and empirical cross-source timing remain separate evidence gates |
+| SMB client | Existing storage/auth/transport bundle | Experimental mounted clients via existing mapping and automatic access semantics; native operation actors and client eCAR, network and Windows/Samba server evidence | Focused read, browse, create, update, copy/move download, delete and access-denied tests pass. Client actor requires an eligible local session; socket attribution remains unset. Upload source-path identity, encrypted sensor opacity, fresh-process/filter equality and Windows/Samba checkpoint-resume gates pass. Mac serving and native Mac SMB logs remain excluded |
+| Launch items | Shared runtime content, service/deployment, process-group and source publication owners | Experimental authored `macos_launch_item` root/system-domain write/bootstrap/activate/exit/unload/remove workflow | Exact live callers, increasing file versions, registration without activation, removal while loaded, group cleanup and explicit final unload are enforced. eCAR file/process evidence is available; registration/dormant unload is explicitly unobserved. Fault, filtering and registered/active checkpoint recovery tests pass. GUI domains, approval, automatic triggers and native launchd observations remain unsupported |
+| Blocked execution | Canonical pre-spawn policy outcome | Experimental `process.outcome: denied` with an exact earlier caller | No child or prohibited effects are created; ground truth identifies the denial. Explicit precursor activity remains. Returning failed exec has an internal canonical owner preserving the caller image; broader authored failed-exec behavior and native Gatekeeper denial remain unavailable |
+| Filesystem/signing identity | Content/deployment/storage and execution identity owners | Explicit runtime regular-file stat, signer/CDHash, Mach-O identity and image-security metadata; root Mac runtime artifacts use existing system ownership | Shared publication, rollback and checkpoint tests pass. Revision 316 adds automatic synthetic installed stat provisioning; revision 318 adds transactional session-owned terminal devices and shared-volume root/home directory facts. Bounded runtime current-path rename presentation is implemented. Broader APFS behavior and native filesystem artifacts remain excluded |
+| Terminal and exec metadata production | Canonical State/session/descriptor owners plus frozen execution and filesystem policy | Revision 318 supplies explicit terminal/null/inherited standard streams, transactional native pipe IDs, complete FD extents, clean launch environments, provisioned directories, arm64 slice/request-path facts and retained shebang intent | Terminal/login/shell, boot and root job launches use these owners. Current-State exec inherits known facts and applies close-on-exec; fork/dup preserve open-object identity. Rollback, slot reuse, setsid detachment, contradictory observations and checkpoint migration have invented-fixture tests. Unknown legacy state, unsupported paths and descriptor families stay unavailable. Revisions 320–323 add bounded validation producers and mixed native journal publication. In-execution security changes remain outside the profile; metadata-complete fork/v10 source routing is registered; SSH-helper metadata and nonempty CLI acceptance pass in revision 328; ES-R1/GK-R1 remain deferred gates |
+
+## Additional public evidence identified during implementation
+
+[Mullvad's source at revision 2889c913](https://github.com/mullvad/mullvadvpn-app/blob/2889c9135ceeb72ba1ee5503b74e37ecc7fb1a55/talpid-core/src/split_tunnel/macos/process.rs) includes fixtures labeled macOS 15 (message version 9 exit/exec), macOS 26 (version 10 fork), and macOS 27 beta (version 11 exec). The latter is outside this implementation's target. All retain `schema_version: 1`; that field alone is insufficient for profile admission. The version-10 example represents audit tokens as eight-element arrays and includes `cs_validation_category`. The historical exit record carries `event.exit.stat`, consistent with [Apple's exit event interface](https://developer.apple.com/documentation/endpointsecurity/es_event_exit_t). This narrows the missing-reference gap but does not validate a macOS 26 exit serializer. Source records, extracted JSON and acquisition hashes remain ignored; tests must be authored independently.
+
+[Wazuh's macOS collector investigation](https://github.com/wazuh/wazuh/issues/39522) reports version-dependent SSH teardown visibility: Unified Log teardown was absent in its macOS 26 tests while ES `openssh_logout` provided a separate observation. It also distinguishes GUI username redaction, collection downtime and responsible-process FDA authorization. These are externally reported bounds, not EvidenceForge calibration or proof across every Mac build. The [related ULS investigation](https://github.com/wazuh/wazuh/issues/39233) identifies sender filtering and PAM verdicts as distinct concerns. No published workload counts or delay distributions have been adopted as generation defaults.
+
+The native ES codec retains nanosecond timestamp text, required nulls, object-versus-array audit tokens, separate parent/responsible identities, raw exit wait status and native pipe descriptors. Create currently admits only the referenced existing-file destination; rename admits both tagged destination variants. These distinctions follow the public references and Apple's [destination union](https://developer.apple.com/documentation/endpointsecurity/es_destination_type_t) and [file-descriptor interface](https://developer.apple.com/documentation/endpointsecurity/es_fd_t). Unsupported event/version combinations, including the macOS 27 beta record, remain rejected. Structural acceptance does not enable a generator capability.
+
+Apple Developer Forums [thread 814435](https://developer.apple.com/forums/thread/814435) provides two controlled fork/spawn/credential/exec/exit sequences and an Apple DTS explanation. Its filtered attachments use message version 8; the OS/build is not established, so they do not close the macOS 26 exit gate. They corroborate same-PID exec with a changed PID version and unchanged process start time. They also show why a setuid observation's reported actor alone must not rewrite canonical credentials: spawn-time credential setup can be attributed to the calling parent, while the executed target carries the child's resulting credentials. Keep that source limitation separate from modeled outcome truth. The attachments, HTML, pinned XNU reference, hashes and derived summary remain ignored under `sample_data/macos/es-followup/apple-forum-814435/`; none of their records or identifiers appear in committed fixtures.
+
+Mounted SMB client profiles use public Apple [SMBClient source](https://github.com/apple-oss-distributions/SMBClient) and [file command sources](https://github.com/apple-oss-distributions/file_cmds) for platform vocabulary. `/Volumes/<mapping-id>` is an explicit synthetic allocation policy; it does not claim Finder mount naming or empirical discovery. Per-operation close tails are modeled values. No native SMB messages, personal paths or measured workload distributions were adopted.
+
+Optional catalog signer metadata now compiles through binary release identity and packed registry storage. The initial Terminal signing ID is corroborated by the previously acquired public SpriteTree export; that historical observation is static vocabulary, not macOS 26 native validation. CodeDirectory hashes are synthetic per release/architecture and separate from file hashes, following [Apple’s CodeDirectory distinction](https://developer.apple.com/documentation/technotes/tn3126-inside-code-signing-hashes). Runtime signing flags, local downloaded-executable signatures, full stat metadata and native ES projection remain open.
+
+Native export ingestion now uses explicit `native_codec` validation routes for the nested schemas. File discovery requires `macos_unified_log.ndjson` or `macos_endpoint_security.ndjson`; source-instance provenance follows existing directory rules without inventing native host fields. Valid completion markers are not evidence records, and unsupported/malformed records remain counted failures. These are internal structural-ingestion gates, not external SIEM normalization or lifecycle fidelity claims.
+
+The optional catalog executable format is distinct from signing: Apple documents [signatures on scripts](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), so signer metadata cannot imply a Mach-O image. The already-acquired public [Mandiant Tahoe export](https://github.com/mandiant/macos-UnifiedLogs/releases/tag/v1.0.0) corroborates nonempty image UUID metadata for launchd, loginwindow and native Mac logind. These three entries select the explicit native image profile; the compiler derives synthetic release-scoped UUIDs rather than copying captured values. This establishes modeled image identity, not measured release binaries or native log-generation fidelity.
+
+The native writer projection binds the exact process execution, active primary thread, effective credentials, deployed Mach-O image and boot uptime before rendering. It cannot substitute a session user for the logging service or resolve a reused PID later. Tracepoint encoding follows Apple’s public [XNU 12377.1.9 layout](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/libkern/firehose/tracepoint_private.h) and [native discriminants](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/libkern/firehose/firehose_types_private.h). The bounded profile permits a static main-image callsite with optional subsystem/rules flags; it excludes activities, dynamic formats, private arguments, oversize payloads and backtraces. Callsite offsets must be supplied by an explicit modeled profile, never copied from personal data or invented by an emitter. The experimental workspace-entry emitter consumes this boundary; it does not validate a complete GUI lifecycle.
+
+A further public [Darwin 25.1 arm64 failure report](https://github.com/openai/codex/issues/25882) includes kernel AppleSystemPolicy rejection text and describes failed launches during daemon resource exhaustion. This is a useful denial-path lead, not a validated Gatekeeper template: the report lacks full native JSON writer/image fields and synchronized parent/process/exit capture, and its failure cause differs from an ordinary quarantined-download rejection. Preserve any attempted child allocation separately from successful executable replacement when designing canonical denial consequences. No reported PID, timestamp, rate or raw record is adopted.
+
+Launchd job loading and demand-driven execution are separate in Apple’s [launchd guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html). The internal system-job adapter represents a loaded job with no process binding; it does not model modern Service Management registration. Apple’s [SMAppService registration contract](https://developer.apple.com/documentation/servicemanagement/smappservice/register%28%29) varies by service kind, and [requires-approval status](https://developer.apple.com/documentation/servicemanagement/smappservice/status-swift.enum/requiresapproval?language=objc) can describe a registered service that is ineligible to run. These references establish semantic distinctions, not native macOS 26 log fidelity.
+
+The loaded system-job definition is immutable runtime metadata, not a generated plist artifact. It retains the exact canonical file version, installation, program/argv, execution principal and bounded RunAtLoad intent; it does not treat that intent as execution. The shared service registry owns the snapshot, with no separate persistence-state dictionary. Lifecycle checkpoint schema 6 reads the prior schema 5 through an explicit bounded-head compatibility declaration; old service records remain unchanged semantically. Unsupported job keys, trigger types and native observations remain unavailable.
+
+Canonical file metadata stores job semantics alongside the existing file-content identity; no native plist bytes are generated. Ordinary records retain their prior packed representation. Local-artifact checkpoint schema 3 explicitly accepts schema 1/2 heads and rejects new metadata disguised as an old record. Loaded logical IDs retain their captured installation key, and semantic content seeds are independent of the ambient generation seed. The shared bounded registry now owns an explicit placement-withdrawal transition, separate from content expiry. It withdraws every retained version at the exact host/principal/platform/path, fences pending publications and rejects stale removal of a replacement. An existing-version refresh cannot resurrect a removed file. Historical content and loaded definitions remain retained; higher-level write/remove orchestration and native persistence output are still unavailable.
+
+Job-definition writes use the existing process-owned endpoint-effect contract: canonical content, artifact identity, writer process and eCAR file occurrence share one publication. The file effect has an explicit bounded final-state horizon, distinct from cache retention. Writing does not register or activate a job. The adapter remains internal pending complete authored lifecycle orchestration; it generates no native plist artifact or persistence message.
+
+The bounded unload adapter accepts an explicit terminal completion time; it does not model the request-to-signal interval or escalation. Apple’s archived [launchd.plist reference](https://github.com/apple-oss-distributions/launchd/blob/main/man/launchd.plist.5) distinguishes process-group cleanup and SIGTERM/ExitTimeOut. Those semantics do not validate macOS 26 messages or shutdown delays. A process tree cannot substitute for group membership. Known-group cleanup selects exact members; unknown membership and external live descendants retain explicit rejection guards.
+
+Revision 225 integrates modeled boot and SSH group/session ownership, including a distinct shell setsid stage, compatible legacy startup decoding and checkpoint validation of exact session leaders. Loaded-job launch planning now composes registered arguments with an independent group/session through the existing process/service transaction. Source completion survives lost startup returns after sink release. These engineering gates do not promote the ES or Gatekeeper native-evidence gates; full authored persistence remains open.
+
+Revision 227 implements explicit runtime regular-file stat publication, local-executable Mach-O metadata, execution-owned runtime image-security facts, and bounded dispatcher ES client counters with checkpoint recovery. These are canonical engineering capabilities. Installed executable stat population, terminal/device files, complete ES process snapshots, collector attachment and atomic native sink integration remain incomplete; ES-R1 and GK-R1 are unchanged. No new public configuration field or native source is introduced by this revision.
+
+Revision 228 adds experimental authored pre-spawn denial through `process.outcome: denied` and existing `parent_ref`. It retains an exact live caller, allocates no child and suppresses automatic command effects; ground truth records the outcome without native policy evidence. Fresh-process/hash-seed, output-filter and checkpoint-resume checks pass. This does not validate Gatekeeper messages or model failed exec inside an allocated child. Full authored launchd orchestration remains engineering work.
+
+Revisions 228–232 supersede the earlier pending authoring notes above: pre-spawn denial and bounded root/system persistence are now authored interfaces, with shared runtime artifact ownership. Exact ES collector attachment and completed connection closure are modeled and checkpointed; they do not infer a complete `is_es_client` view for arbitrary processes or enable native ES output. The worklog records final validation and remaining source-assembly boundaries.
+
+Revision 233 completes pure ES process projection for explicit non-terminal/runtime-file observations. Required relationship, executable version, stat, signing, client and terminal facts must agree; unknown values reject. Existing v6/v9/v10 envelope contracts validate optional-field presence. Production installed-file and terminal/device providers, complete client-state knowledge and native sink admission remain open; no new ES event family is enabled.
+
+Revision 234 adds exact execution-time directory/stat snapshots and a bounded native cwd projection. Launch/fork/exec producers must supply current facts; prior launch directories are never treated as permanently current. Rollback, historical recovery, legacy migration and same-host/time validation are covered. This closes the storage/projection component, not a chdir/fchdir owner or production directory provider; native exec remains unavailable.
+
+Revision 235 retains resolved executable versions for ordinary Mac launches, fork and exec, with compatible recovery and source-independent production tests. Complete native process projection now rejects a replacement version at the same path. Boot/SSH/job binding, runtime version retention through process exit, current path presentation and production native metadata/collector providers remain open. This reference does not enable an ES event family.
+
+Revision 236 adds read-only complete snapshot preparation for already-live processes backed by an exact retained runtime executable version. It preserves explicit collection facts and rejects stale, missing or replacement versions. Installed-file and staged-process providers, artifact retention and atomic native source publication remain open; source admission is unchanged.
+
+Precommit refinement (revision 237): a validated sealed single-start cohort can prepare a new runtime-file process snapshot before publication, with exact live relationship owners. Staged multi-process/session owners and simultaneous transitions still need a cohort overlay; the native source and atomic sink gates remain open.
+
+Executable producer refinement (revision 238): compiled Mac boot images, SSH wrapper/exec transitions and authored system-job activation retain canonical loaded versions. Fork inheritance and existing checkpoint codecs preserve them. Runtime placement replacement cannot rewrite retained State; native-file metadata and execution-long registry leases remain independent requirements.
+
+Retention refinement (revision 239): an existing exact runtime version can receive a transactional retention floor without changing current/removed placement. Cancellation, tail rollback, eviction-race rejection, repeated-hour time arithmetic and checkpoint expiry are tested. Process-lifetime interval composition remains open; the helper does not choose those bounds automatically.
+
+## Revision 240 preparation boundary
+Loaded runtime executables used by ordinary Mac launches and authored system jobs now receive transactional capacity leases through an explicit finite generation/history window. Generic Mac process observations resolve known loaded versions rather than replacement files at the same path. This remains conservative run-window retention; independent low-level exec/fork callers and open-ended execution need explicit interval integration, and loaded-path rename presentation is not modeled.
+Native process preparation now supports multiple staged births with exact staged parent/responsible/session owners, explicit installed-file stat joined to immutable deployment identity, and explicit session-owned terminal character-device observations. Automatic modeled installed-file stat/device allocation, complete collector membership and simultaneous execution/credential/close overlays remain incomplete. Internal projection support does not enable an ES source or validate a new native family.
+
+### Directory/exec and retention update — revision 241
+Successful explicit directory changes and returning failed exec now have canonical owners with rollback/history/checkpoint coverage. Directory observations remain distinct from immutable launch metadata; unknown history and unmodeled descriptors remain explicit gaps. Failed exec preserves the existing execution and adds no native denial claim. Repeated launches share finite-window leases per retained version. These engineering contracts do not change macOS 26 ES exec/exit or terminal Gatekeeper evidence gates, and they introduce no public scenario/configuration fields.
+
+### Descriptor ownership update — revision 243
+Explicit complete Mac descriptor tables now participate in fork, successful exec, failed exec, event-time history and checkpoint recovery. Unknown state remains unknown, and native FD kinds/pipe IDs and open-object allocation are not inferred. This closes a canonical inheritance/close-on-exec slice; it does not enable an ES source or close native exec/exit evidence gates.
+
+### Execution image update — revision 244
+Explicit image subtype and pre-resolution exec-path metadata are execution-owned, fork-inherited, replaced by exec, authenticated and checkpointed. Historical field projection uses the retained Mach-O binary version, never the generator host or a normalized replacement path. Missing facts remain unavailable. This does not enable macOS 26 ES exec or supply automatic metadata producers.
+
+### Script linkage update — revision 245
+Exact runtime shebang-script references now survive canonical fork, failed exec and recovery independently of loaded interpreter identity. Known absence and unknown remain distinct. Bounded native file preparation requires the exact retained script and complete metadata; argument lists do not imply shebang execution. Automatic producer/retention integration remains incomplete, and no native event family is enabled.
+
+### Exec preparation update — revision 246
+A bounded precommit helper now composes the runtime-backed ES process target for one standalone exec without modifying State. It requires complete explicit collection/file facts and exact relationship ownership. Descriptor replacement and flag transitions are also modeled through existing tables/cohorts. Neither helper admits native exec output; mixed lifecycle overlays, automatic producers and atomic native sink integration remain open.
+
+### Terminal and installed preparation update — revision 247
+Runtime-backed terminal process snapshots can be frozen from an authenticated standalone close before State makes the process inactive. Installed-release snapshots now use shared deployment/stat validation for sealed births, standalone exec and standalone close. These are preparation contracts, not exit-event admission or native sink authority. Missing metadata and unsupported mixed transitions still reject.
+
+### Collector batch update — revision 248
+Bounded same-connection groups now reserve and preclaim sequence allocation together. Invalid later members leave no partial prefix; filtering/delay decisions preserve counter values, and authenticated completed retries do not allocate again. Existing single-delivery behavior and dispatcher checkpoint state remain compatible. Native source/sink coupling remains unfinished.
+
+Revision 249 integrates finite-window runtime-image retention into Mac SSH exec publication. The existing exact transaction admits only an authenticated already-present target version, preserving placements and independent file/execution principals. Rollback, lost artifact returns, sink retry, filtering and checkpoint retention have coverage. Initial wrapper birth retention, script retention, native stat producers and actual ES source coupling remain separate work; this does not broaden native event admission.
+
+Revision 250 exposes a returning exec failure through `process.outcome: exec_failed`, with the same exact caller/path requirements as the bounded denial profile. The caller keeps its image and identity; unknown errno remains unknown. Successful effects and native failure messages are absent. Scenario validation, ground truth, skill-reference installation, a runnable invented example, filtering, fresh-process determinism and checkpoint recovery are covered. This does not close GK-R1 or ES-R1.
+
+Revision 251 supplies exact argument vectors for bounded Mac SSH wrapper/worker execs and login shells using their existing literal command profiles. Fork inheritance, collection filtering and checkpoint recovery preserve the vectors. General authored commands, environment vectors and native ES event admission remain separate; no host environment is read.
+
+Revision 252 extends the exact Mac exec transaction to retain existing before/after image and explicit script versions together. Same-path replacement cannot rebind the historical image or restore an old placement. SSH startup also retains its prior runtime wrapper; standalone script producers and initial process-birth script retention remain open. Complete file/stat/device producers and native ES publication still require their own engineering gates.
+
+### Fork record preparation — revision 253
+Complete explicit runtime fork facts now assemble into v6/v10 native NDJSON under an exact collector claim, with canonical time, initiating thread and unchanged precommit State/counters. This prepares source bytes for the future outer transaction; it does not enable ES output or close automatic metadata, retained-artifact, lifecycle/sink coupling or native exec/exit gates.
+
+### Retained content and explicit file facts (revisions 254–255)
+Exact standalone forks and production SSH forks retain inherited runtime images and explicitly known scripts through the existing artifact transaction. Replacing a current placement withdraws the older placement while retaining its content; expiration cannot resurrect that older path. Rollback and checkpoint tests cover the distinction. This does not normalize ambiguous legacy checkpoint placements retroactively or provide a native sink transaction.
+Explicit Mac file observations now own file object identity and logical size during effect publication. Redundant scalar inputs must agree; unknown stat remains unknown. These are canonical adapters with synthetic tests, not automatic filesystem measurement or native format validation. ES-R1 and GK-R1 remain open.
+
+### Pack and baseline platform values (revision 256)
+Custom process `platforms` and traffic `os` accept `macos`, sharing POSIX validation and existing configuration shape. Built-in Mac executable ownership participates in pack collision checks. DNS/TLS use the same configured OS tags, SMTP submission reuses STARTTLS policy, and Mac system file noise uses root ownership. Synthetic pack and generated transport tests pass; no published pack or native evidence-family gate changes.
+
+### Installed mail-client ownership (revision 257)
+Mac SMTP/mailbox access selects the modeled user's compiled Outlook/Thunderbird assignment; webmail uses the preferred installed browser. Unavailable assignments preserve transport evidence without inventing an endpoint process. Default mailer versions use the exact installed binary release, and app paths containing spaces retain correct command tokenization. Sender attachment reads use the modeled Mac Documents directory. Mac recipient cache/attachment-file projections are withheld until a supported application storage contract exists; Linux cache layouts are never substituted. This is log correlation scope, not a requirement to generate filesystem artifacts.
+
+### Legacy placement recovery (revision 258)
+Artifact checkpoint head 5 requires one current canonical version per execution placement. Compatible heads 1–4 migrate competing current versions with existing version/identity ordering; explicitly withdrawn paths stay removed. Historical content and retention leases survive. This closes the legacy-placement limitation recorded under revision 254, without changing scenario/configuration fields or the product version.
+
+### Installed fork and terminal argument integration — revisions 259–262
+Native fork preparation can use explicit installed-file metadata under the same authenticated State/collector boundary as runtime files. Native sink publication remains unavailable. Terminal/login/zsh production now retains explicit literal argv; environment and unsupplied filesystem facts remain unknown. Descriptor object kind is consistent within retained lifetime history and checkpoint restore. Optional Mac clock profiles use existing validation semantics. No new configuration fields or ES version/event families are admitted; ES-R1 and GK-R1 remain open.
+
+### Production retention and boot argv — revisions 263–264
+Mac boot processes preserve literal argv through both materialization paths and checkpoint restore. Deferred SSH transport authenticates a Mac source process against its exact retained loaded image even after replacement of that path. Missing retained content rejects instead of substituting a newer executable. Loaded-file path presentation after rename remains a separate observation problem; this does not introduce native ES source emission.
+
+### Production argument and collector follow-up — revisions 265–269
+Mac boot, terminal, profiled helper and SSH-client owners now retain literal argument vectors without inferring environment or parsing arbitrary authored shell text. Persistent SMB carries known credentials and loaded-image references through existing internal retry contracts; missing compiled releases remain unknown. These changes introduce no public configuration fields.
+Historical v9 exit bytes can be prepared from a complete explicit terminal observation under State/collector ownership. Explicit collector disconnect has live-owner admission and exact completed retries across exec/exit and checkpoint restore. Neither change enables native ES source publication. Automatic file/stat/device producers, complete collector membership and atomic lifecycle/artifact/collector/native-sink composition remain engineering gates. ES-R1 still blocks macOS 26 exec/exit validation; GK-R1 still blocks validated terminal Gatekeeper-denial output. No local inspection or new public evidence was used.
+
+### Retention and historical native preparation — revisions 270–277
+Explicit process-birth script retention is integrated alongside interpreter retention. Artifact commits precede process/job allocation in the remaining legacy paths; internal artifact failures do not allocate a partial process. Successful retention followed by a lost acknowledgement may leave a conservative finite-window lease.
+Historical v6/v9 exec bytes can now be prepared from an authenticated transition, exact installed/runtime providers and complete explicit execution/descriptor observations. Mixed provider transitions, known script presence/absence, descriptor close-on-exec, restored-owner reconstruction and fresh-process determinism are tested. Native vnode/pipe tags and IDs are supplied, not invented; automatic native-object providers and other descriptor families remain open. Positive ES membership queries reject contradictory non-client claims without treating absent profiles as proof of non-membership. Successful exec rejects a denied authorization result. No ES source is enabled; atomic publication, production metadata, ES-R1 and GK-R1 remain open.
+
+Revision 278 binds frozen native fork/exec/exit bytes to the exact pending collector delivery and canonical plan, and authenticates completed retry bytes without re-observing State. Counter publication alone does not prove canonical commit or native sink durability. This remains an internal preparation/recovery contract; source admission and the target-build evidence gates remain unchanged.
+
+Revision 279 completes Mac browser-pool selection for ordinary internal web visitors and authored HTTP referrer exposures. Mixed-fleet integration verifies identical browser presentation and referrer values in the actual server-owned web log and network-sensor Zeek record. Existing Windows/Linux selection is preserved; this is protocol/source correlation coverage, not validation of a new Mac-local source.
+
+### Termination-only native preparation — revisions 280–282
+Exact selected pre-close observations now support termination-only cohorts, with earlier responsible exits and equal-time boundary semantics distinguished. Complete explicit runtime/installed observations can prepare historical v9 exit groups. Collector batch capabilities authenticate every ordered frozen line and the canonical plan through pending/completed retries, including filtered rows. Invalid later rows bind no prefix. These contracts do not commit lifecycle state or admit a native source. Mixed-transition overlays, observing-collector shutdown and atomic lifecycle/artifact/collector/native-sink publication remain engineering work; target macOS 26 exec/exit validation remains ES-R1. No local inspection or new reference acquisition was used.
+
+### Canonical file placement — revision 283
+A single-link, same-directory, non-replacing Mac rename now uses the existing atomic artifact group: the old name is withdrawn, a new artifact version preserves file/content/signing identity, and loaded historical versions retain their leases. Supplied complete stat remains explicit. Concurrent destination writes, stale source, failure rollback and artifact-head-5 recovery have tests. Cross-directory/volume moves, replacement, alias resolution, directory metadata updates, authored orchestration and event-time native executable paths remain separate engineering work. This does not enable ES rename generation or a new artifact format.
+
+### Authored history source integration — revision 284
+Mac `spillage: shell_history` reuses the existing scenario surface, canonical local GUI/zsh ownership and source-observation path. Exact target-host `zsh_history` reachability is required before generation, including format filtering. Evaluation checks source, actor, host and exposed value. A history submission does not establish command success or create process/network side effects. Unsupported owners remain explicit skips. Filtering, fresh-process determinism and checkpoint continuation are tested; native ES and Gatekeeper gates are unchanged.
+
+### Terminal adoption composition — revision 285
+Authenticated surviving-child adoption can now share a native terminal-preparation cohort. Pre-close snapshots preserve equal-time ordering; earlier adoption changes retained relationship observations. Production launchd group cleanup and runtime/installed exit batches are tested without terminating surviving descendants. Other mixed-transition overlays and atomic native publication remain separate engineering gates. This does not enable ES output or close target-build validation.
+
+### Reversible collector publication — revision 286
+Prepared single and grouped counters can apply provisionally and roll back with an outer canonical transaction, retaining exact observations and frozen bytes. Completion proofs publish only on finalization. This supplies a transaction component; dispatcher/native-sink integration and source admission remain open, as do ES-R1 and GK-R1.
+
+### Exact dispatcher collector participation — revision 287
+Authenticated frozen single fork/exec/exit deliveries now join the existing exact canonical State/lifecycle/artifact publication transaction. Counter rollback, nested completion proofs, cancellation ownership, filtering, existing-source fault recovery and checkpoint reconstruction are tested. Native bytes use the existing retained-byte budget. This still does not attach a native sink, admit ES generation or validate macOS 26 exec/exit. Grouped delivery integration, production metadata and native sink publication remain engineering gates; ES-R1/GK-R1 are unchanged.
+
+### Explicit rename replacement — revision 288
+Same-directory rename can now replace an exact distinct same-volume single-link destination through the existing atomic artifact group. Both historical loaded files survive; cancellation, stage failures, stale destinations and expiry cannot resurrect old names. No configuration/checkpoint schema is added. Hard links, directory metadata effects, aliases, authored orchestration and event-time native path observations remain unavailable.
+
+### Prepared file-operation observations — revision 289
+The authenticated rename claim exposes detached canonical before/after file versions, optional replaced destination, operation time and exact publication token. Observation does not mutate placement or grant commit authority. Stale, foreign, expired and wrong-thread claims reject. This supplies source-preparation facts while leaving actor orchestration, directory updates, historical path lookup and native stat-time semantics explicit; no native ES output is enabled.
+
+
+### Ordinary exits and production group cleanup — revision 290
+Ordinary Mac exits now commit State closure, lifecycle closure and surviving-child adoption through the existing exact dispatcher. Later actions retain immutable birth ancestry and validate current adoption separately. System-job unload projects each descendant's own integrity. The invented group workflow covers natural child exits and group-wide unload; recovery tests explicitly retain a three-process job across the saved checkpoint and verify unique terminal output. Canonical modeled exits do not enable native ES exit output or close ES-R1; GUI launch-agent domains, automatic activation/respawn and native group publication remain open.
+
+### Exact collector batch cleanup — revision 291
+Batch cancellation retains exact reservation ownership even when caller-held source metadata is damaged; publication continues to reject changed facts. Claim-scoped batch completion tokens now support outer transaction composition. This does not yet integrate group counters with canonical publication or native sinks, and does not change ES-R1/GK-R1 or source admission.
+
+### Exact terminal-group publication — revision 292
+Bounded same-host Mac exit cohorts now use the existing canonical transaction and exact source journal, retaining per-process outcomes through partial writes and retries. This closes the canonical group writer prerequisite. Service-closure composites, collector batch participation and native sink admission remain distinct integration work; no native ES coverage or evidence gate changes.
+
+### Joint terminal-group counters — revision 293
+Authenticated historical ES exit batches now compose with exact canonical State/lifecycle group publication. Rollback, lost acknowledgements, cancellation, source retry, filtering and checkpoint restoration preserve ordered counters and frozen bytes. Native sink integration, service-closure composites, observing-client shutdown and target-build evidence gates remain open; no ES source admission is implied.
+
+### Reversible collector disconnect component — revision 294
+Explicit bounded connection sets can close provisionally under exact live process ownership and roll back with an outer transaction. Finalization preserves counters and uses the existing checkpoint profile. Automatic process-exit composition, service-group integration and native source publication remain engineering work; native self-exit evidence is not enabled.
+
+### Canonical process-owned disconnects — revision 295
+Ordinary exact Mac exits and exact terminal groups now close explicitly bound clients atomically with process State/lifecycle. Rollback, capacity limits, changed profiles, source retries, independent observing clients and existing checkpoint restoration are tested. Service-closure composites, exec-specific attachment semantics, native self-exit observations and native sink/source admission remain open. Pending native metadata must also reject changed client membership before publication; completed historical records retain their validity.
+
+### Collector and service integration — revisions 296–300
+Pending native bytes now reject changed modeled client ownership; completed historical records remain valid. Explicit client disconnects join ordinary, terminal-group and authored service-group exits. Authored activation/closure timing rolls back on rejection and shares exact canonical completion proofs. Production workflows adopt complete lost acknowledgements without duplicate allocation, closure or source rows. Whole-group service sink recovery, native sink/source admission, complete negative membership and observing-client self-exit remain engineering gaps. No external evidence gate is closed by these changes.
+
+Revision 304 extends exact terminal publication to explicit Mac service-group owners. Group and leader closure share canonical State, service lifecycle, timing, audit, optional modeled collector shutdown and a recoverable source journal. Focused fault tests cover cancellation, partial writes, lost acknowledgements and precommit rollback. Authored workflow adoption remains the next engineering step; this does not enable ES or close native evidence gates.
+
+Revision 305 activates exact group publication for authored system-job exit/unload. Existing eCAR output, canonical service/process closure and explicit collector shutdown recover together after partial writes or interruption; successful scenario bytes are unchanged. Native ES output is still unavailable, and target-build evidence gates remain open.
+
+### Retained placement bounds — revision 306
+Canonical runtime file versions retain publication/removal times separately from content leases. Rename/replacement and rollback preserve these bounds; checkpoint head 6 migrates old rows with unknown times rather than inventing history. This enables event-time placement engineering without claiming native stat timing, complete filesystem history or validated ES output. Full loaded-path projection and native delivery ownership remain integration work.
+
+Revision 307 adds bounded event-time lookup for a retained single-link Mac file object. It keeps loaded bytes and observed placement separate and rejects unknown, expired, changed-content or ambiguous history. Native projection, publication fencing and path-history retention beyond existing leases remain engineering work.
+
+Revision 308 projects known runtime executable placement at the observation time while preserving the loaded image identity. Renamed forks and historical snapshots are covered; unknown/expired path history is unavailable. Pending native metadata revalidation and publication fencing are still required before source admission.
+
+Revision 309 rejects pending runtime native executable views that no longer match canonical event-time placement, before binding and again before publication. Historical snapshots survive later removal. Keeping those facts stable through the complete canonical commit remains the next ownership step; native sink admission and reference gates remain open.
+
+Revision 310 keeps runtime placement stable through canonical native-backed publication with a bounded short-lived read claim. Placement mutation and eviction reject while the claim is active; unchanged-content retention may commit. Cancellation, deferred expiry, recovery, checkpoints and concurrent writers have tests. This closes the runtime file-fact race; native sink publication, complete production metadata and external evidence gates remain open.
+
+Revision 311 projects and revalidates a shebang script at its canonical exec instant. Renames preserve the original reference and interpreter identity; pre-exec removal rejects, while later removal leaves the historical record intact. The runtime file observation claim protects these facts through canonical publication. Native source admission remains gated.
+
+## Installed-file provisioning — revision 315
+
+An immutable modeled installed-filesystem provider now allocates distinct host-volume objects and sequential inodes from explicit file specifications. It validates exact deployment/release placement, consistent binary sizes, independent allocation/stat times and finite observation windows. Native live/planned snapshots and fork/exec/exit preparation can consume it; existing exact source recovery retains its frozen bytes. Reconstruction uses the same frozen specifications rather than a mutable allocator checkpoint. This does not automatically provision scenario files or terminal devices, enable ES generation, or validate macOS 26 exec/exit or Gatekeeper denial. The earlier row describing installed-stat population as wholly absent is superseded only for this explicit provisioning profile.
+
+## Automatic modeled installed files — revision 316
+
+The engine can now lazily compile installed-file specifications for explicit arm64 Mac deployments from a frozen YAML policy and exact local identities. Equal content shares its modeled size and build time; distinct placements retain separate objects and installation/access times. Declared catalog availability bounds the modeled dates. Unknown owners and older frozen inputs without the policy remain unavailable. The cache reconstructs after checkpoint restore and acquires configuration scope before its local compilation lock. The dense allocation, size and date distributions are synthetic model choices, without host inspection or APFS calibration. Terminal devices, remaining exec metadata, complete collector membership, mixed-transition preparation and native sink/source admission remain open; ES-R1 and GK-R1 are unchanged.
+
+## Bounded client inventory knowledge — revision 317
+
+An explicit complete modeled host inventory now supports negative client membership within a finite interval, alongside exact positive connection knowledge. Unregistered absence, old checkpoint completeness and discarded epoch history remain unknown. Restart advances the knowledge floor; backdated transitions across delivered history reject. Native preparation validates both positive and negative supplied claims, while an exact live-State producer can supply known membership with separately provided terminal facts. Counter/inventory snapshots share observation head 4, with compatible heads 1–3 and all-before-mutation corruption checks. Pending proofs bind coverage; completed retry bytes remain historical. This closes the bounded membership-owner gap, while automatic native-source inventory initialization, terminal/exec producers, mixed-transition preparation and native sink/source admission remain open. ES-R1/GK-R1 are unchanged.
+
+
+## Mixed-cohort native preparation — revision 319
+
+Exact selected births, fork sources, exec sources/targets and exits can now prepare relationships from State-admitted mixed cohorts through a shared read-only event-time view. Earlier related execution, credential/audit, adoption and close transitions are visible; equal-time cohort changes retain the pre-transition view. New-host staged namespace selection reuses canonical State resolution. Native runtime/installed preparation, rollback, checkpoint reconstruction, filtered output and retained-byte retries have invented-fixture tests. Canonical ordered same-process dependencies, actual atomic mixed/native publication, runtime security-fact producers, inventory initialization and collector self-observation remain open. No native source or evidence gate is admitted by this change.
+
+## Engineering checkpoint 323
+
+The bounded metadata, ordered transaction, collector initialization/lifetime and native publication engineering items are implemented. An explicit internal native sink shares State/lifecycle/artifact/counter/closure ownership and the existing exact durable journal with eCAR. Tests cover unavailable self-observation, later observer replacement, partial native writes and recovery after collector epoch replacement. Native generator-source admission, complete per-profile facts, current-build exec/exit evidence (ES-R1), terminal Gatekeeper denial (GK-R1) and parser/ingestion acceptance remain gates. Unsupported ordering/metadata families retain their explicit guards; no native event-family/version admission was expanded.
+
+## Native output lifecycle checkpoint 324
+
+An internal host-output adapter now composes the native exact sinks with standard emitter barriers, counts, incremental spool checkpoints and retryable terminal export. Invented historical fixtures cover partial-publication rejection/recovery, filtered mixed cohorts, collector retirement, aborted checkpoint preparation and fresh-process byte equality. The adapter remains outside the production factory and format catalog. Automatic source activation, supported build/event selection, complete per-profile facts and CLI/manifest/ingestion acceptance remain open; ES-R1/GK-R1 are unchanged.
+
+## Fork profile initialization checkpoint 325
+
+The frozen modeled source policy selects explicit macOS 26 arm64 workstations, v10 fork and literal privileged collector argv. An engine hook initializes the subscription and finite complete modeled inventory for an activated canonical collector, or rebinds its retained counters. Source/profile/configuration/build and shared boot/timebase identities persist in observation head 5; compatible older heads retain unknown policy. Complete native fork preparation uses the selected profile and requires all existing metadata facts; direct lower-level counters cannot bypass its finite window. Automatic collector process activation, normal factory/routing/manifest integration and CLI acceptance remain open. No new target-build capture, exec/exit or Gatekeeper reference gate is closed.
+
+## Authored command follow-through (revision 332)
+
+Basic installed discovery utilities now have host-build identities and exact bounded command profiles.
+Authored Mac command scheduling and completion preserve real shell ownership, including retained
+children when baseline generation visits later times first. Successful typed commands submit zsh
+or explicit Bash history; rejected launches cannot become PID-0 successes. Qualified direct commands
+from complete SSH shells use the existing atomic canonical fork/exec journal and fork-only native
+collector. The native fork still describes the inherited shell; native exec/exit and Gatekeeper denial
+remain deferred. Aggregate GUI launches, incomplete metadata and effect-bearing commands retain
+their narrower projection. See the [follow-through worklog](../../worklog/2026-10-24-macos-command-native-coverage.md).
+
+The zsh static signing vocabulary is corroborated by
+[Apple XNU](https://github.com/apple/darwin-xnu/blob/main/bsd/kern/mach_loader.c) and
+[Microsoft Defender’s documented zsh example](https://github.com/MicrosoftDocs/defender-docs/blob/public/defender-endpoint/mac-preferences.md).
+The catalog’s release-scoped CodeDirectory hash remains synthetic; this is not a macOS 26 capture.
+
+
+Revision 338 admits the bounded kernel app-policy refusal via explicit `process.outcome: policy_refused`. It uses an earlier live initiator and absolute app-bundle executable, an attempt-owned target PID, kernel PID/UID zero and `/kernel` export identity, a separate AppleSystemPolicy sender and Default/log absolute-PC tracepoint. The installed kernel binary path remains separate from its export pseudopath. Only the approved fixed-output checker processed the existing private evidence; no further collection or native values were exposed. Ordinary routing, timing, source omission, host sorting and exact State/spool recovery apply. No target RunningProcess/RunningThread, fork/exec/exit, command effects or shell history is inferred. Specific refusal causes, GUI parentage and target execution stage remain unclassified. Historical GK-R1 text above does not broaden this admission.

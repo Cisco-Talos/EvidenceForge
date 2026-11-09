@@ -1,0 +1,10 @@
+{
+  "scenario_revision": "01-supported",
+  "source_sha256": "57d395c554077b1c4afc8a58a9fb0255fabba3879bd1ad650da7d1ccd9bd3299",
+  "bundle": "/private/tmp/eforge-macos-assessment-20261021-loop1-attempt10",
+  "manifest_sha256": "6866fd518c6c864ebcde485728aa3900a93d150f8c562f7edd7b3c73242aab11",
+  "behavior_revision": 327,
+  "neutral_data": "/private/tmp/field-study-20261021-a/dataset",
+  "data_files": 24,
+  "data_bytes": 6355572
+}

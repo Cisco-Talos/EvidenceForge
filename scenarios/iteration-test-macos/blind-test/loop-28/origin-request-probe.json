@@ -1,0 +1,5 @@
+{
+  "proxy_origin_http": 123,
+  "exact_1ms": 40,
+  "min_seconds": "0.001000"
+}

@@ -17,8 +17,7 @@ description: >
 Operate only on the selected project's `.eforge/config` overlay, or a named layer in an explicitly
 selected `--context` file. Treat installed package config as read-only reference data.
 
-In an EvidenceForge source checkout, use `uv run eforge` so the commands exercise that checkout's
-code and development skills. Outside a source checkout, use the installed `eforge` command.
+In an EvidenceForge source checkout, use `uv run eforge` so the commands exercise that checkout's code and development skills. Outside a source checkout, use the installed `eforge` command.
 
 ## 1. Route scope before inspecting files
 
@@ -130,8 +129,7 @@ content merely to silence informational diagnostics. Preserve unrelated existing
 ## 5. Write and validate
 
 Mirror package-relative paths beneath `<root>/.eforge/config/` or the explicitly selected layer.
-Write only the selected overlay; do
-not edit package defaults, installed skill copies, packs, or scenario files.
+Write only the selected overlay; do not edit package defaults, installed skill copies, packs, or scenario files.
 
 After every mutation, start a fresh process and run:
 
@@ -143,6 +141,8 @@ Fix errors caused by the current change and rerun until they are clear. Do not s
 unrelated pre-existing errors or warnings. If a supplied scenario uses this overlay, also run
 scenario validation from the same working directory; repeat an explicit root only when one was
 selected. Use composition explanation when pack and overlay precedence matters.
+
+Read `/eforge:references:evidence-endpoint-macos` for modeled Mac coverage and limits.
 
 ## 6. Report
 State the project root, whether the operation remained read-only, files changed, directly implied

@@ -38,6 +38,11 @@ from evidenceforge.events.ground_truth import (
     GroundTruthEvent,
     write_ground_truth_document,
 )
+from evidenceforge.events.macos_native_coverage import (
+    MacosNativeActionCoverage,
+    MacosNativeCoverage,
+    MacosNativeCoverageCount,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
@@ -104,8 +109,11 @@ class GroundTruthGenerator:
         authored_intent_ledger: AuthoredIntentLedger | None = None,
         intent_execution_snapshot: tuple[IntentExecutionSnapshot, ...] = (),
         execution_effect_audit_snapshot: ExecutionEffectAuditSnapshot | None = None,
+        macos_native_coverage: MacosNativeCoverage | None = None,
     ):
+        self.macos_native_coverage = macos_native_coverage
         self.scenario = scenario
+        self._collection_start, self._collection_end = resolve_time_window(scenario.time_window)
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
@@ -130,6 +138,7 @@ class GroundTruthGenerator:
                 "observation_profile": self.scenario.observation_profile,
                 "collection_window": self._collection_window(),
                 "source_evidence_status": self._sorted_source_evidence_status(),
+                "macos_native_coverage": self.macos_native_coverage,
                 "ids_evaluation": self._build_ids_evaluation(),
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
@@ -142,6 +151,69 @@ class GroundTruthGenerator:
                 "events": self._build_event_records(),
             }
         )
+        if self.macos_native_coverage is not None:
+            hosts = []
+            for host in self.macos_native_coverage.hosts:
+                births = [
+                    event
+                    for event in document.events
+                    if event.kind == "process"
+                    and event.emitted
+                    and event.system == host.hostname
+                    and event.attributes.native_process_model == "aggregate_birth"
+                    and (
+                        host.process_census is None
+                        or host.process_census.window_start
+                        <= event.time
+                        < host.process_census.window_end
+                    )
+                ]
+                if not births:
+                    hosts.append(host)
+                    continue
+                actions = {action.storyline_cluster_id: action for action in host.authored_actions}
+                grouped: dict[str, int] = {}
+                for event in births:
+                    if event.storyline_id:
+                        grouped[event.storyline_id] = grouped.get(event.storyline_id, 0) + 1
+                for cluster, count in grouped.items():
+                    prior = actions.get(cluster)
+                    observations = prior.observations if prior is not None else ()
+                    actions[cluster] = MacosNativeActionCoverage(
+                        storyline_cluster_id=cluster,
+                        observations=(
+                            *observations,
+                            MacosNativeCoverageCount(
+                                phase="aggregate_birth",
+                                reason="aggregate_birth_only",
+                                status="filtered",
+                                count=count,
+                            ),
+                        ),
+                    )
+                hosts.append(
+                    host.model_copy(
+                        update={
+                            "observations": (
+                                *host.observations,
+                                MacosNativeCoverageCount(
+                                    phase="aggregate_birth",
+                                    reason="aggregate_birth_only",
+                                    status="filtered",
+                                    count=len(births),
+                                ),
+                            ),
+                            "authored_actions": tuple(actions[key] for key in sorted(actions)),
+                        }
+                    )
+                )
+            document = document.model_copy(
+                update={
+                    "macos_native_coverage": self.macos_native_coverage.model_copy(
+                        update={"hosts": tuple(hosts)}
+                    ),
+                }
+            )
         return document
 
     def _build_intent_reconciliation(self) -> dict | None:
@@ -254,6 +326,41 @@ class GroundTruthGenerator:
             content.append("\n## Source Evidence Status\n")
             content.append(self._create_source_evidence_status_section(doc))
 
+        if doc.macos_native_coverage is not None:
+            content.append("\n## macOS Native Process Coverage\n")
+            content.append(
+                "The canonical process census includes all committed starts and execs within the simulation window. "
+                "Source cohort diagnostics also include authored aggregate births. Qualification reasons are separate from "
+                "source filtering/drop decisions. Aggregate births allocate no ES counters. "
+                "This report does not qualify new native reference families.\n"
+            )
+            for host in doc.macos_native_coverage.hosts:
+                census = host.process_census
+                if census is not None:
+                    content.append(
+                        f"\n{host.hostname}: native fork {census.published_forks}/{census.expected_forks}; "
+                        f"exec {census.published_execs}/{census.expected_execs}; "
+                        f"unresolved aggregate starts {census.aggregate_births}; "
+                        f"identity reconciliation {'passes' if census.complete else 'fails'}.\n"
+                    )
+                    if census.expected_exits is not None:
+                        content.append(
+                            f"Exit observations {census.observed_exits}/{census.expected_exits}; "
+                            f"known results {census.known_exits}; native exits {census.published_exits}; "
+                            f"exit accounting {'passes' if census.exit_accounting_complete else 'fails'}; "
+                            f"exit completeness {'passes' if census.exit_complete else 'incomplete'}.\n"
+                        )
+            content.append("| Host | Phase | Qualification | Source decision | Count |")
+            content.append("| --- | --- | --- | --- | ---: |")
+            for host in doc.macos_native_coverage.hosts:
+                for item in host.observations:
+                    content.append(
+                        f"| {host.hostname} | {item.phase} | {item.reason} | {item.status} | {item.count} |"
+                    )
+            content.append(
+                "\nPer-action counts are in GROUND_TRUTH.json → macos_native_coverage.hosts[].authored_actions.\n"
+            )
+
         if doc.ids_evaluation is not None:
             content.append("\n## IDS Evaluation Summary\n")
             content.append(self._create_ids_evaluation_section(doc))
@@ -360,14 +467,18 @@ class GroundTruthGenerator:
     def _build_event_record(self, event: dict, *, section: str) -> dict:
         ts = event["time"]
         ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
-        ts = ts.astimezone(UTC).replace(microsecond=0)
+        skipped_reason = event.get("skipped_reason")
+        if skipped_reason is None and not self._collection_start <= ts < self._collection_end:
+            skipped_reason = "outside_collection_window"
+        # Preserve the canonical occurrence at subsecond collection boundaries.
+        ts = ts.astimezone(UTC)
         attributes = {
             key: _serialize_attr_value(value)
             for key, value in event.items()
             if key not in _EVENT_BASE_KEYS
         }
         if event.get("type") in ("spillage", "adversarial_payload"):
-            if event.get("skipped_reason"):
+            if skipped_reason:
                 for field in ("value", "value_sha256", "rendered_value", "rendered_sha256"):
                     attributes.pop(field, None)
             else:
@@ -385,17 +496,17 @@ class GroundTruthGenerator:
             "system": event["system"],
             "activity": event.get("activity", ""),
             "ground_truth_section": section,
-            "emitted": not bool(event.get("skipped_reason")),
+            "emitted": not bool(skipped_reason),
             "attributes": attributes,
         }
-        if event.get("skipped_reason"):
-            record["skipped_reason"] = event["skipped_reason"]
+        if skipped_reason:
+            record["skipped_reason"] = skipped_reason
         if section == "red_herring" and event.get("explanation"):
             record["explanation"] = event["explanation"]
         return record
 
     def _collection_window(self) -> dict[str, str | None]:
-        start, end = resolve_time_window(self.scenario.time_window)
+        start, end = self._collection_start, self._collection_end
         start = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
         end = (
             end.replace(tzinfo=UTC)
@@ -526,6 +637,12 @@ class GroundTruthGenerator:
 
     def _format_event_details(self, event: dict) -> str:
         event_type = event["type"]
+        if event_type == "process" and event.get("outcome") == "policy_refused":
+            return f"App-policy refusal: {event.get('process_name', 'N/A')} (reported target PID {event.get('refused_target_pid', 'N/A')}); cause and execution stage unclassified"
+        if event_type == "process" and event.get("outcome") == "denied":
+            return f"Denied before child allocation: {event.get('process_name', 'N/A')}; native policy evidence unavailable"
+        if event_type == "process" and event.get("outcome") == "exec_failed":
+            return f"Exec returned failure; caller image preserved: {event.get('process_name', 'N/A')}; errno unknown; native evidence unavailable"
         skipped_reason = event.get("skipped_reason")
         if skipped_reason:
             reason = str(skipped_reason).replace("_", " ")
@@ -567,6 +684,11 @@ class GroundTruthGenerator:
                 f"DHCP lease for {event.get('system', 'N/A')} "
                 f"(MAC: {event.get('mac_address', 'N/A')})"
                 f"{self._format_ids_alert_totals(event)}"
+            )
+        if event_type == "macos_launch_item":
+            return (
+                f"Mac system job {event.get('launchd_operation', 'N/A')}: "
+                f"`{event.get('launchd_label', 'N/A')}`"
             )
         if event_type == "service_installed":
             return f"Service installed: {event.get('service_name', 'N/A')} ({event.get('service_file_name', 'N/A')})"

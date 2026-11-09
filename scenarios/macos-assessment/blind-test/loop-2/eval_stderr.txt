@@ -1,0 +1,16 @@
+EvidenceForge Data Quality Evaluation
+Output directory: /private/tmp/eforge-macos-assessment-20261021-loop2-328
+Scenario comparison: 
+scenarios/macos-assessment/revisions/02-native/source/scenario.yaml
+✓ Verified authoritative bundle: macos-assessment
+
+[10/21/26 17:52:58] WARNING  Unknown field in ecar:             validator.py:503
+                             auth_session_ref                                   
+                    WARNING  Unknown field in ecar:             validator.py:503
+                             auth_protocol                                      
+                    WARNING  Unknown field in ecar:             validator.py:503
+                             account_scope                                      
+[10/21/26 17:52:59] WARNING  Unknown field in zsh_history:      validator.py:503
+                             duration_seconds                                   
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01
+  Parsed 10,823 records from 18 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00

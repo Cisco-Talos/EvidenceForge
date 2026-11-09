@@ -1,0 +1,8 @@
+{
+  "attempt1_revision": 470,
+  "accepted_revision": 471,
+  "all_data_files_identical": 119,
+  "authored_files_identical": 6,
+  "seed_unchanged": 42,
+  "reason": "Legacy frozen-config compatibility guard is inactive for the current benchmark. No panel or score was taken before the guard; no seed/input/data change or favorable-score selection."
+}

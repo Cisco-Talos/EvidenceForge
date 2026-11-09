@@ -1,0 +1,12 @@
+{
+  "discarded": [
+    {
+      "role": "network",
+      "reason": "Unrequested task-project public documentation snippet exposed by general Zeek web search",
+      "scored": false,
+      "replaced_by": "network_clean",
+      "retained_report": "discarded-network-review.md"
+    }
+  ],
+  "control": "Future public searches restricted to official primary sources/upstream repositories; stop unscored on task-project material exposure"
+}

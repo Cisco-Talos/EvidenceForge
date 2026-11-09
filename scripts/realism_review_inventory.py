@@ -596,6 +596,10 @@ def _dynamic_constructor_types(
 ) -> set[str]:
     """Resolve the finite event-type domain for known dynamic constructor expressions."""
 
+    if constructor["scope"].endswith("emit_macos_shell_history"):
+        return {"bash_command", "zsh_command"}
+    if constructor["scope"] == "MacosFilesystemActionBundle.prepare":
+        return {"file_create", "file_close", "file_rename", "file_delete"}
     expression = constructor["event_type_expression"]
     scope = constructor["scope"]
     if "_FILE_ACTION_EVENT_TYPES" in expression or scope.endswith(

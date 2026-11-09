@@ -697,6 +697,40 @@ identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.
 
+Canonical POSIX fork/exec state separates the process lifetime from immutable image executions. Fork inherits the current parent snapshot; exec keeps its PID, lifetime and login principal while advancing the execution identity and retaining bounded history. Optional `PosixProcessCredentials` snapshots keep real/effective UID/GID and audit origin separate. An explicit exec outcome may change effective IDs but must preserve known real and audit identities; general `setuid`/`setgid` operations remain separate from the bounded SSH transition below. Mac process launches resolve known accounts through the modeled identity directory or inherit an exact same-principal parent snapshot. They never infer audit IDs from GUI session IDs, Windows LogonIDs or the generator host. Missing credentials remain absent. Versioned process records retain these snapshots and explicitly upgrade older individual records without inventing absent facts. Mac process creation and exec reserve a distinct host-local audit PID version through the same transactional state owner; fork gets a new version, while parent and historical execution snapshots remain unchanged. Counter exhaustion fails explicitly rather than reusing a version. StateManager checkpoint head 7 persists native identity counters and explicitly reads compatible head 6; other incompatible heads use existing diagnostics. Successful Mac exec atomically retires the prior task threads and creates a fresh primary thread while keeping the process lifetime and historical execution snapshots. The exact retired set and new allocation belong to the authenticated cohort; rollback and checkpoints preserve both. Linux multi-threaded exec remains unavailable pending its separate thread semantics. Saved IDs and supplementary groups remain separate scope. Qualified Mac producers supply explicit responsible-process facts and native fork/exec projection through the source owner described below.
+
+POSIX job control uses optional immutable `PosixGroupIdentity` / `PosixSessionIdentity` snapshots, distinct from login/audit sessions and lifecycle groups. State owns explicit privileged PID-1 bootstrap, setsid and setpgid, with exact parent authorization before child exec. Fork inherits known membership; exec retains it. Membership changes preserve execution identity and retain bounded historical snapshots. Group/session numeric IDs stay reserved after leader exit until the last member leaves; closed intervals retire at the authoritative PID watermark. Indexed membership and numeric buckets avoid process-table scans during allocation. Transitions require chronological membership deltas; late mutation fails before publication. Cohort rollback includes membership, actor activity, indices and reservations. eCAR observes an authenticated `process_job_control` occurrence with the changing process as actor, prior child/self identity as target and resulting identity as subject. Source-local timing follows the resulting membership snapshot. State head 7 explicitly accepts head 6 plus unchanged version-6 allocator segments; running-process v10 and process-identity v6 preserve unknown membership in older records. No user-facing schema field changes. Qualified boot, terminal, SSH and system-job producers compose these memberships; explicit system-job unload uses the retained group-close owner. Other service families remain separately qualified.
+
+Optional POSIX execution environments are ordered UTF-8 string vectors on `ProcessIdentity` and `RunningProcess`. `None` means unknown and an empty tuple means known empty. Fork inherits the vector; exec replaces it or clears knowledge when omitted. Generic process creation requires explicit facts and never copies the parent's or generator host's environment. The owner preserves ordering, duplicate entries and literal values without shell expansion. History, rollback and checkpoint codecs retain the exact snapshots; running-process v11 and process-identity v7 migrate earlier records with absent environment. Mutable in-process environment updates are outside this bounded model. No authored scenario field or native ES output is introduced.
+
+The lifecycle registry retains immutable lifetime identity/token alongside an optional `ProcessRuntimeView`. Exact dependent transitions carry before/after execution or credential views through authenticated cohorts. Canonical exec advances this view; resource leases use its current image, role and principal without changing session membership. Retained foreground/singleton leases must be released before a view change, and historical lease admission against a newer view is rejected. Lifecycle checkpoint schema 5 preserves the current view after detail compaction and validates retained history. This is lifecycle infrastructure; native source publication remains separately gated.
+
+A bounded Mac SSH privilege-drop primitive uses the authenticated session’s existing UID/GID, principal and audit origin. It requires the exact live child of the privileged receiver after audit adoption, preserves PID, native PID version, threads and execution identity, and changes credentials/principal through a separate activity cohort. State rollback restores the same process object and username indexes; historical queries retain pre-drop attribution. Lifecycle authority publishes the matching current-token transition without rewriting the original token. StateManager checkpoint schema 5 and process record v6 preserve the bounded history. Bootstrap cannot reinterpret an already dropped process as having started under its current principal; restore both owners or publish the transition through lifecycle authority. This primitive does not enable Mac receivers, native observations, root-user SSH login, general setuid operations, saved IDs or supplementary groups.
+
+Native Mac clock projection uses `StateManager.get_macos_boot_clock` with an explicit `MachTimebase`. It reuses the registered canonical boot time and the existing service boot identity through a shared boot-ID owner. Integer arithmetic projects canonical awake elapsed time into uint64 ticks; it rejects pre-boot observations, missing host/boot facts, invalid ratios and overflow. It never samples the generator host. Wall-clock skew, observation delay and timestamp rendering remain owned by the timing infrastructure. Sleep/wake is excluded, so this does not model the divergence between Mach absolute and continuous clocks. No universal timebase is inferred from an OS/architecture label, and this primitive alone does not enable native source emission. Existing boot state supports recomputation after checkpoint recovery without new durable fields.
+
+Mac audit-session origin is separate session metadata (`MacosAuditSession`), not a desktop session ID, PID or effective credential. The start-batch owner can enrich an explicitly modeled Mac SSH authentication with a known account UID, authentication time and kernel-range audit ID before receiver process planning. No collector flag participates in allocation. The host-local namespace and enriched session row commit and roll back together; immutable origin remains on retained sessions after logoff without asserting kernel audit-session teardown. StateManager checkpoint schema 5 and active-session record v2 preserve these facts; older individual session records decode with absent origin, while incompatible older runtime heads fail explicitly. The authenticated action-cohort owner can bind this origin to the exact privileged SSH transport process without changing PID, audit PID version, execution, threads, or real/effective UID/GID. The existing process-activity patch owns the immutable binding and rollback; historical lookups before adoption retain the previous audit origin, including across later exec and checkpoint recovery. A subsequent fork inherits the adopted origin. Binding requires the live session's exact transport role and remains separate from dependent fork/exec/close cohorts. Replacing an already authenticated origin is unsupported. GUI audit membership, general audit-session joins and the production Mac SSH receiver are not enabled by these primitives; source projection is explicitly rejected until implemented.
+
+Optional Mac catalog `code_signature` metadata compiles to immutable `MachOCodeSignature` on the existing binary release identity. Signing ID and optional team ID are distinct from bundle identity, publisher and runtime signing flags. Its synthetic CodeDirectory hash uses a separate release/architecture namespace from whole-file content hashes. Only the main executable receives its configured signer; helpers and unknown signatures remain absent. Packed binary registry rows preserve this metadata; rows without it retain their previous representation. Neither signing identity nor a modeled digest asserts trust or notarization. Optional `MachOImageIdentity` separately carries an explicit arm64 build UUID on the binary release. Its deterministic derivation is release-scoped and independent of host/path/seed; it is synthetic metadata, not a measured publisher binary. It is never inferred from a Mac filename, signing identifier or content digest. Deployment interning rejects conflicting UUIDs for one release, and packed rows and canonical network request identities preserve present metadata. Absent metadata retains existing encodings. Apple describes build UUIDs as architecture-specific image identifiers in [TN3178](https://developer.apple.com/documentation/technotes/tn3178-checking-for-and-resolving-build-uuid-problems). The catalog can explicitly select this native image profile with optional `executable_format: mach_o` on a typed arm64 Mac deployment. The compiler supplies the main image UUID once; helpers and unspecified formats remain absent. Signing alone is insufficient because signed scripts also exist. This does not register a native source or claim complete executable metadata.
+
+The paired terminal startup primitives reuse these canonical owners. Installed-file observation
+also resolves an exact exec input before it is loaded, allowing the qualified root-owned 04555
+login file to supply its effective-UID transition without altering real/audit origin. A local
+login child drops that privilege in its own authenticated cohort; it must match the live login
+parent, GUI session, responsibility, group/session and inherited credentials. SSH admission
+keeps its privileged receiver/audit-binding requirements. Explicit post-fork `setsid` can
+allocate a new session-owned TTY through the existing device/counter owner; rollback and
+checkpoints retain the association. iTerm2's independently signed helpers use the frozen
+3.7.6 release and parent application placement, with a pre-existing user support cache.
+The current profile consumes these through `MacosTerminalStartup`, reusing the Finder GUI
+prefix and exact phase publisher. Its Apple/iTerm2 stage graphs share canonical transitions
+and differ in helper/argv/descriptor policy. Descriptor file actions and native pipe allocations
+belong to the exec transaction. An effective-UID-only drop advances canonical State/activity
+without inventing a change to the lifecycle registry's unchanged logical principal/integrity
+token. Missing local command parents route through this startup before effect actors freeze;
+readiness uses the parent's current execution, including same-PID replacements. Pending
+phases block checkpoints; finished startup uses the existing checkpoint owners.
+
 Auth/session callers supply successful logon, failed logon, logoff, service
 logon, machine-account logon, anonymous logon, NTLM validation, or workstation
 lock/unlock intent. `LogonActionBundle`, `FailedLogonActionBundle`,
@@ -866,7 +900,8 @@ LogEmitter (ABC)
 │   └── ... (10 more Zeek types)
 ├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EventIdentityPlan)
 ├── SyslogEmitter                    # Linux syslog (default RFC5424 or sof-elk RFC3164/year)
-├── BashHistoryEmitter               # Per-user bash history
+├── BashHistoryEmitter               # Durable per-user Bash history
+│   └── ZshHistoryEmitter            # Bounded Mac extended incremental history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)
 ├── WebEmitter                       # Apache/Nginx access logs
@@ -990,7 +1025,7 @@ The evaluation system (`src/evidenceforge/evaluation/`) scores generated data ac
 
 ```
 EvaluationEngine
-├── Parsers (18 format parsers)
+├── Parsers (generated sources and explicit native export readers)
 │   ├── WindowsEventParser (XML)
 │   ├── ZeekBaseParser + 13 protocol-specific
 │   ├── EcarParser (NDJSON)
@@ -1020,6 +1055,10 @@ EvaluationEngine
     ├── flags: list[str]
     └── supplementary: dict  ← includes host_log_profile diagnostic
 ```
+
+Native Mac exports have explicit `native_codec` validation routes to the nested versioned wire models. Their bounded NDJSON readers preserve source-native fields and directory provenance; valid Unified Log completion markers do not become evidence records. These ingestion routes are independent of generator source admission. Unsupported native families fail structure checks; missing native correlation/diagnostic rules remain unavailable rather than being represented by a flat template schema.
+
+`generation/macos_logging.py` prepares an immutable Unified Log writer snapshot from the exact active process execution, primary thread, deployed native image and registered boot clock. The source view keeps service credentials separate from the subject session and survives later process exit/PID reuse without another State lookup. `events/macos_logging.py` validates the bounded static main-image callsite and native tracepoint encoding; the format projector only serializes supplied facts and the source planner’s wall time. This internal boundary does not yet register generation or provide a GUI lifecycle template.
 
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
 
@@ -1174,6 +1213,8 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
+Compiled application descriptors retain bounded child image/command pairs from the existing catalog `children` field. The deployment registry materializes a selected helper only for the exact eligible parent assignment and an image present in that installation. Shared scoped parameters and principal presentation remain frozen; mutable catalog lookups cannot replace them. Old packed descriptors without children remain readable. This query allocates no process: the calling action bundle must own selection, live parent binding, source timing and termination. The Mac GUI baseline consumes existing spawn-rule child names, count caps and delay ranges, checks the exact installed parent and session deadline, and calls the ordinary process-execution owner for each selected helper. The session owns termination; collection gaps do not determine whether a helper exists. Chrome provides the initial bounded profile. These modeled delays do not claim measured browser behavior or helper network attribution.
+
 **Rule-based process trees:** Parent-child relationships are defined in `src/evidenceforge/generation/activity/spawn_rules.yaml` — a data-driven mapping of which processes can spawn which children, with command-line templates, lifetime metadata (long/short), and spawn delay ranges. The `_resolve_parent()` method on ActivityGenerator transparently finds an existing valid parent from the user's process history or auto-creates intermediate chains (e.g., explorer→powershell→dotnet.exe) with realistic backward timing. Long-lived parents created early in the scenario (first 30 minutes) have a 70% chance of being registered as pre-existing (no Sysmon Event 1 emitted). Depth is limited to 3 auto-created levels. Falls back to legacy `_select_parent_pid()` for processes not in the rules. `ProcessContext.parent_command_line` is populated from the parent process's StateManager entry.
 
 **Windows maintenance cadence:** Baseline Windows scheduled/background utility launches are data-driven through `system_processes.yaml`. Scheduled-task entries can declare optional selection weights, host-type eligibility, per-host window caps, and cooldowns, while the generator applies executable-specific lifetime profiles for common maintenance tools such as `CompatTelRunner.exe`, `usoclient.exe`, `MpCmdRun.exe`, and `cleanmgr.exe`. Remote/admin command parents are resolved by execution family above generic process-tree selection, preferring concrete owners such as live `PSEXESVC.exe`, `WmiPrvSE.exe`, Task Scheduler, service/SCM context, or PowerShell/WinRM when the command shape indicates them.
@@ -1204,10 +1245,181 @@ source references.
 
 ### Key Patterns
 
-**Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention. LogonID generation uses per-host RNG seeding (`_stable_seed(f"logon_ids_{hostname}")`) to ensure unique LogonID sequences per system.
+**Scoped deterministic RNG:** Generation uses explicitly scoped stable seeds and deterministic substreams. Never use Python's process-randomized `hash()` or a thread scheduling identity as a reproducibility key. LogonID generation uses per-host RNG seeding (`_stable_seed(f"logon_ids_{hostname}")`) to ensure unique LogonID sequences per system.
 
 **Discriminated unions:** Storyline event specs use Pydantic discriminated unions — `type: "process"` selects `ProcessEventSpec`, `type: "logon"` selects `LogonEventSpec`, etc. This provides compile-time-like type safety for YAML input.
 
-**Format groups:** The scenario declares `"zeek"` → the engine expands it to 13 individual emitters. Sensors reference format groups, not individual formats.
+**Format groups:** The scenario declares `"zeek"` → the source catalog expands it to 16 concrete formats. Sensor selections resolve through the same catalog; configured visibility determines which evidence is emitted.
 
 **Windows EventRecordID ordering:** Events are buffered as raw dicts, sorted by timestamp on flush, then assigned sequential EventRecordIDs. This matches real Windows behavior where RecordID always increases monotonically with time.
+
+## Experimental modeled macOS foundation
+
+Modeled platform classification is centralized in `utils/platforms.py`; generation, validation, source admission, deployment and evaluation share it. Mac boot applications and terminal ancestry come from the application catalog. Local accounts, session reuse, PID/thread allocation and source timing remain owned by the existing world/state/process layers. The behavior manifest includes the classifier and declares changes independently of the product version.
+
+`zsh_command` is an internal canonical interactive-command occurrence with Auth, Shell and source Host contexts. The generator must establish a live shell in the correct session before dispatch. `ZshHistoryEmitter` reuses the durable history journal and projects the bounded extended incremental profile; it creates no process, session, timestamp or workload truth. Native ES and selected Unified Log producers share the qualified canonical process/session owners described below. The current source also adds bounded native regular-file operations; see the filesystem section and [Mac guide](macos.md) for scope.
+
+### POSIX process source publication
+
+An explicit State `fork_process` plan authenticates fork provenance separately from a generic process start. The internal `process_fork` occurrence carries the inherited parent execution as actor and the new child lifetime as subject. Dispatcher coverage requires exactly one matching fork observation; generic creates cannot hide a fork or be relabeled as one. The source helper allocates no identity. Exact singleton publication, filtering, source timing and lost-return recovery use the existing cohort infrastructure. eCAR renders `PROCESS/CREATE` with `operation=fork`, child `execution_id` and `parent_execution_id`. Qualified native ES and Mac SSH receiver producers consume these authenticated process facts; generic starts do not acquire fork provenance. Fork provenance is a transient authenticated plan fact; runtime identity history and checkpoint schemas remain unchanged.
+
+`generation/actions/macos_ssh_receiver.py` coordinates the process-side Mac startup from preallocated session/receiver identities and compiled catalog descriptors. Its eleven ordered phases retain exact source receipts across failures and expose final process roles only after publication. Timing allocation, transport/session admission, durable startup continuation and receiver-close integration belong to the enclosing SSH owner. Supported receivers are authored through `ssh_session`.
+
+A staged Mac SSH receiver keeps its occurred process activity at bootstrap while a separate lifecycle hold retains it through transport close. The authenticated start batch derives this exception from its exact transport role and Mac audit identity; ordinary SSH/RDP activity retains its existing close frontier. SSH-manager and lifecycle retention deadlines must agree independently of activity. This lets the process coordinator apply earlier exec/credential phases without weakening early-close protection.
+
+The final Mac login-shell exec atomically installs the existing `session_shell_pid` through the authenticated live-session role patch. It requires the same-cohort execution, authenticated user credentials, receiver ancestry and session timing; it preserves the transport/process-tree owner and all other roles. Exact source recovery cannot repeat exec or reassign the shell. State checkpoints already preserve this field; unfinished startup still must drain before a checkpoint can be accepted. This is an internal binding, not an additional authored event type.
+
+SSH descendant teardown compares the original executable with immutable lifetime identity and the active executable/ordinal/principal with the current execution view. A legitimate exec therefore preserves children-first cleanup, while a State-only execution missing its lifecycle publication is rejected. Existing descendant ownership and source recovery remain authoritative.
+
+The shared `ssh_logout_occurrence` projection consumes exact session and source-tuple facts. Linux retains its PAM observation; Mac supplies canonical/eCAR logout with no Syslog context. Exact Mac logout admission checks the live SSH audit owner and modeled PID namespace before State closure. Source recovery uses the committed receipt after the session has ended. This does not claim a native Mac logout message or enable receiver authoring; the enclosing SSH continuation still must coordinate startup, application retirement and close.
+
+The close plan has distinct Linux and Mac authentication facts. Mac retains common phase timestamps and compiled initial/final receiver images; it has no PAM seed or logind-removal time. The existing SSH checkpoint journal preserves historical Linux rows byte-for-byte and adds a tagged `macos-v1` authentication row; unsupported tags fail decoding. Mac continuations reject the Linux-only logind phase, including restoration. Exact Mac receiver/descendant process closure verifies the live audit origin, session and transport role before commit; receipt recovery works after process State has ended. The shared close executor consumes these facts for children-first teardown, application retirement and canonical logout; Mac paths omit SIDs and skip Linux logind. The typed close journal round-trip and receipt recovery are tested against committed transport/startup State. The existing pre-reserved SSH continuation now retains an optional Mac startup request and its one-shot coordinator. It drains startup after transport binding, before immediate close and even when deferred close is not yet due. Failed source publication reuses the exact coordinator; checkpoints reject unfinished startup and serialize no capabilities. Restored Mac journals verify canonical audit ownership, receiver execution and initial shell/parent roles. An originally absent eCAR sink is valid for this Mac owner and cannot be introduced mid-session; Linux absence rules are unchanged. Private receiver preparation now resolves the explicit local account, `_sshd` service account, live modeled launchd and effective compiled helper/shell descriptors. It enriches the same staged session with Mac audit ownership and binds startup to its reserved close continuation before transport commit. Ten variable helper delays use the existing timing relationship schema (`macos.ssh_receiver_stage`) and exact preview/replay audit, within the shared authentication/readiness budget; they are modeled, not empirical. A selected visible sink must still attest positive rows, while the authenticated Mac transport/process/session cohort permits source omission, including zero collected rows and lost-return recovery. Linux/RDP proof requirements are unchanged. Private source-client composition now preflights receiver accounts, ancestry, timing and close capacity before requesting the existing source process/session owner. As in RDP, a source prerequisite commits separately before the exact transport/receiver transaction; receiver rollback does not claim to undo that source action. Real modeled Mac boot processes carry explicit root credentials. Mixed-platform clients and missing endpoint collection are tested. Supported `ssh_session` authoring routes through that startup/closure owner with checkpoint/replay support; SCP/SFTP receiver helpers remain unavailable.
+
+
+The same POSIX helper projects an existing process termination through the exact `process-exit:{object_id}` cohort. The current execution, host, integrity and close time must match authenticated State; lifecycle holds still prevent early closure. The singleton carries no unrelated mutations or effects. Omitted collection and recoverable sink delivery preserve one canonical close. It reuses eCAR termination without inferring a native ES exit status. Optional `PosixProcessExit` preserves an explicit normal exit or signal/core result in the authenticated close plan, canonical process context and retained ended-process row. Omitted results remain unknown; signal delivery is not terminal proof. The ES codec's bounded Darwin wait-status conversion does not enable native exit generation.
+
+Optional `ProcessIdentity.arguments` retains an exact POSIX argv per execution. Known arguments must match their canonical shell-quoted display command; no owner reconstructs them from display text. Fork inherits known argv and exec replaces it, retaining prior snapshots. Loaded launchd activation checks the existing definition's vector. StateManager head schema 6 uses running-process v9 and process-identity v5 records, with explicit migration of older individual records to unknown argv/outcome rather than fabricated defaults. The 256-argument/64-KiB argv budget is a modeled admission limit. Environment, cwd/file metadata, descriptors and complete native snapshots remain separate ES integration requirements.
+
+`generation/actions/posix_process.py` projects State-owned before/after snapshots into internal `process_exec` occurrences. `events/process.py` verifies their lifetime, execution ordinal, host, contexts and dependent lifecycle. Identity planning preserves the explicit pre-exec actor and post-exec subject. The dispatcher requires exactly one matching source member per authenticated exec transition; generic compatibility dispatch, substituted snapshots, duplicate members and unrelated source contexts are rejected. Publication uses the existing all-owner cohort, timing, observation and recovery mechanisms. eCAR renders the documented `PROCESS/MODIFY` extension; no Windows/Linux-native or ES/Unified Log rows are inferred. Credential-only transitions use their own authenticated State patches, described below.
+
+Source-timing checkpoint schema 4 adds a bounded execution-observation index. It prevents a new image's dependent rows from rendering before its visible exec, including after checkpoint restoration, and orders repeated execs after earlier process observations. The owner uses existing configured source latency and repair semantics; these are modeled timings, not measurements. Old checkpoint heads fail through the existing schema diagnostic. Authored scenarios, configuration fields and product version remain unchanged. Singleton exec cohorts also support exact eCAR publication and zero-row collection outcomes; sink recovery reuses the committed occurrence rather than executing again.
+
+Internal Mac `process_audit_bind`, `process_privilege_drop` and `process_service_drop` observations bind one-to-one to the existing authenticated State activity patch. The shared POSIX occurrence helper preserves before/after identity roles; compatibility dispatch and unrelated or missing source members are rejected. Exact singleton publication reuses the built-in eCAR sink, omission and recovery contracts. No native callback sequence is inferred. A bounded source-timing index keys credential visibility by source, execution identity, principal and credential snapshot, preserving historical attribution within one execution. It participates in rollback, retention and source-timing checkpoint schema 5; incompatible older heads use existing diagnostics. Mac receiver admission remains gated on receiver role materialization and full lifecycle integration.
+
+Pre-authentication Mac service children have a separate bounded State credential transition. The canonical owner validates the current and fork-time parent identities, preserves the current execution and thread identities, and records the transition ordinal so historical executions retain their original credentials. It cannot adopt an authenticated audit origin. The source projection uses the shared eCAR credential-extension contract. StateManager checkpoint schema 6 and running-process record v7 retain the service-drop history; v6 records upgrade with no invented transition. Lifecycle bootstrapping after an unregistered exec now fails explicitly rather than resetting the execution ordinal. Register the initial process and publish later transitions through lifecycle authority.
+
+Bounded Mac receiver authoring now routes `ssh_session` through the shared exact executor. It requires an explicit arm64 workstation and a modeled local actor; existing service-capability validation still applies. Calls lacking a close flag install the existing deferred bundle-owned continuation. Authoritative paired logout retains its existing `SessionEndPlan` in the exact SSH continuation; the authored logoff executes that continuation after verifying the session, actor, target and deadline. Automatic watermarks retain this owner without closing it early. The checkpoint journal preserves existing 31-field rows and adds the end plan only for authored Mac closure; restoration validates the same live State owner. SCP/SFTP receiver helpers remain rejected. WorldPlanner uses the completed Mac startup shell role and never invokes Linux shell bootstrap for Mac sessions. Deadline planning uses the actual receiver platform for negative clock bounds and both endpoint platforms for positive bounds; default Linux callers retain their prior inputs. No new configuration field or native SSH message is introduced. Earlier primitive-level admission limitations above describe their individual scope; this integration owns public receiver admission.
+
+The internal `macos_workspace_request` occurrence separates session intent from native observation. The shared auth/session executor emits it after a new local interactive Mac login and reuses the existing durable login-publication flag for session reuse. `MacosWorkspaceRequest` freezes the subject session and optional exact loginwindow writer observation. The host `MacosUnifiedLogEmitter` projects these facts into the bounded experimental UTC export without allocating identities or mutating State. SourceCatalog admits only Mac hosts; source observation and timing own missingness, delays and host clock offsets, while canonical Mach uptime remains unchanged. `macos_unified_log_profiles.yaml` uses the existing immutable overlay provider, and host emitter checkpoint/sort mechanisms own durable output. The separate bounded policy-refusal family is described below; other native event families remain unavailable.
+
+The qualified SSH authentication source is a facet of the native receiver's existing `process_audit_bind` occurrence at successful authentication. `MacosSshAuthentication` freezes the subject SSH session, root pre-adoption writer and actual transport peer. The credential transition keeps its before/after process roles and process lifecycle, and adds the session role. Its State cohort authenticates the exact audit binding and session activity patch. ULF and eCAR use one exact publication journal, including filtering, partial sink failure and lost-return recovery. A static main-image callsite may explicitly carry the private-data flag and modeled main-image backtrace offsets; renderers do not derive frames, allocate writers or change message privacy. Both PTY modes share this producer. Password intent uses the observed keyboard-interactive/PAM payload. Plain public-key intent uses canonical key type/SHA256 fingerprint and source-derived text from the same Apple OpenSSH auth_log/%.500s logger; its semantic basis is recorded separately from the local PAM reference. Unknown or certificate keys produce no invented native row. The shared SSH client-identity owner supplies canonical Base64 fingerprints to every source. Ordinary daemon verbosity is retained; verbose session messages, other unqualified SSH messages and launchd ULF remain gated.
+
+### Authored Mac system-job ownership
+The experimental `macos_launch_item` coordinator composes explicit root/system-domain file and lifecycle stages through existing owners. The shared runtime content registry owns definitions and placement removal; the service registry owns loaded snapshots; process/group transactions own activation, exit and unload. File stages use the finite `macos_launch_item_file` effect owner with exact occurrence cardinality and normal audit reconciliation, not an audit exemption. Registration and dormant unload create no fabricated source occurrence. An exact running caller is required even when State retains an exited identity for historical correlation.
+The explicit `root_xpcproxy_v11` preset freezes its clean environment into the file and loaded
+definition. `MacosSystemJobStartup` reuses the existing retained Mac phase journal for a root
+launchd fork/xpcproxy exec, setsid and a selected installed true or OS-inventory exec. The service authority binds the already
+published current process/group under State-to-registry lock order; it cannot redispatch a birth.
+Pending phases block checkpoint capture. Hydration validates the post-fork group creation time
+against the current execution, while legacy aggregate definitions retain their original contract.
+Authored entries inside warm-up execute in their indexed pass before collection, with ordinary
+pre-window source suppression; collection does not invent retrospective starts.
+Mac-containing baseline passes merge due authored owners with user-activity
+timestamps before realization. Future authored transitions remain pending until
+their own time. Mac final-pass process families admit starts with existing
+lifetime ownership, while other unbounded families retain their gates. The
+process scheduler rejects optional starts displaced beyond the collection end.
+Terminal catalog activity enters the same native startup/reuse owner as commands.
+Ground truth preserves canonical timestamp precision and marks pre/post-window
+occurrences unobserved; a logoff with no matching session is an explicit no-op.
+ES collector connections bind exact modeled executions. The current catalog selects macOS
+27 arm64 v11 process and bounded regular-file events; retired targets reject independently of
+output selection. The modeled boot collector, client inventory, counters and clock share
+checkpoint ownership. Exact publication freezes native facts with State/lifecycle/artifact
+commit. Exec needs explicit qualified entitlements and complete descriptors; exit needs a
+completed outcome. Supported local/Finder/terminal/Chrome/Code/SSH producers supply their
+own facts rather than inheriting blanket qualification. Historical wire decoding is separate
+from active admission; unknown facts never become fabricated source rows.
+
+The frozen Mac execution policy can select `ssh_command_descriptors: standard_pipes`.
+The authenticated SSH start batch reserves three distinct pipe identities in the existing host
+namespace and commits them with the session. `MacosSshCommandStreams` owns these channel streams;
+it is separate from a shell or helper's complete FD inventory. A qualified external-command exec
+may consume fd 0/1/2 after an exact fork from the bound login shell with known terminal absence.
+It preserves a known inherited table instead of replacing it. The shell's unknown table and the
+child's pre-exec history remain unknown. Later commands reuse channel pipes, and native ES exec
+renders the resulting canonical table. Allocation, validation, rollback and source publication
+use the existing session/process journal. StateManager schema 9 and active-session record v3
+retain streams through recovery; older no-stream records retain their v2 encoding and unknown
+semantics. There is no new pipe registry or source-dependent allocation. Human-reviewed own-process
+comparisons support the bounded post-exec layout, not sshd internals, PTY generation or native
+export timing; see the [SSH reference worklog](worklog/2026-10-26-macos-ssh-descriptor-reference.md).
+
+Ordinary Mac termination requests can carry an explicit `PosixProcessExit` and exact expected
+live execution. The occurrence and State plan publish the same result atomically through the
+existing lifecycle/native journal. A separate natural-command-completion marker permits the
+frozen execution policy's exact `command_completions` argv rules. Current policy supplies nominal
+zero outcomes only for `id`, `sw_vers` and `sw_vers -productVersion` at their enumerated absolute
+paths. The producer validates the first exec, known argv/script absence, account, installed
+content and completion window. Session teardown and timing-truncated closes remain unknown;
+other invocations get no success fallback. Deferred authored completion retains exact lifetime
+and execution IDs in the existing engine queue. Older policy/queue inputs keep unknown results.
+Foreground close admission checks immutable birth image and current runtime image/ordinal
+separately. See the [completion worklog](worklog/2026-10-26-macos-command-exit-outcomes.md).
+
+The frozen execution policy explicitly enables one audit origin per modeled normal-user local
+GUI authentication. The auth bundle allocates the origin and session atomically through the
+existing host-local audit namespace; GUI and SSH origins share that allocator. A local GUI
+session has no Windows desktop session ID. Explicit user launches consume the authenticated
+account's origin, while ordinary children inherit their parent's credentials. A new GUI login
+allocates a new origin independently of terminal POSIX sessions/groups. Known foreign audit
+origins cannot be overwritten by that clean-launch producer. Older frozen policies and already-materialized unknown origins
+remain unknown. Recovery validates local authentication, UID ownership, chronology and unique
+audit ownership across active and retained sessions. The bounded human-reviewed macOS 27 iTerm2
+experiment verifies these identity relationships, not native GUI startup records, responsible
+ownership or the terminal application's complete lifecycle.
+
+An explicit GUI exec adoption is a distinct authenticated transition. A live canonical
+`/usr/libexec/xpcproxy` owned by the exact local GUI session may replace its image with a regular
+app, adopt that session's audit origin, retain POSIX credentials/session, form its own process
+group and become self-responsible. The State cohort binds the exact session, snapshots and group
+reservation effects; rollback/checkpoint history preserve both sides. Ordinary exec cannot use
+this exception without that authority. Complete facts render through existing ES publication;
+unknown launcher/exec metadata stays unavailable. This internal transition does not turn generic
+GUI births into native execs or add an authored launch-method field. See the
+[Finder contract](design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md).
+
+The modeled local terminal chain can explicitly assign the app lifetime as the responsible
+owner of its login, shell and command descendants. That fact is carried by the existing process
+request/State contract, participates in stable intent identity and survives existing checkpoint
+encoding. Unknown/reused unqualified app ownership is not rewritten. Literal shell children,
+including a shell with a quoted command input, reuse the same canonical fork/exec and native
+publication owner as non-PTY SSH commands. Parsing preserves literal argv only; it performs no
+expansion or inner-command execution. Session teardown validates the lifecycle current runtime
+view while preserving the immutable birth image and lifetime identity.
+
+
+The internal `macos_policy_refusal` occurrence is produced only by an explicit authored `process.outcome: policy_refused`. The process-policy action bundle plans and commits an authenticated State cohort allocation, then publishes through the ordinary dispatcher. `MacosPolicyRefusalTarget` is an attempt identity, not a `ProcessIdentity`: its shared-namespace PID is reserved at the observation instant without claiming a birth or lifetime. State retains a bounded exact target/initiator/logging-TID receipt and checkpoints both it and the allocator state. `MacosKernelLogObservation` binds the host boot to its kernel writer and distinct deployment-owned AppleSystemPolicy image. Its source projector renders PID/UID zero and the absolute-style Default/log tracepoint using explicitly modeled profile offsets. Ordinary collection, timing, host sorting and checkpoint spools own export. No eCAR create or ES fork/exec/exit is requested. The pre-child `denied` and returning `exec_failed` paths remain separate; no refusal cause or target exec stage is inferred.
+
+### macOS native process source delivery
+
+Public generation retains immutable, unsequenced ES process and bounded filesystem facts in a private
+source ingress journal committed with the canonical action cohort. After all canonical producers
+and terminal recoveries finish, it streams those snapshots in occurrence order through the strict
+collector registry to allocate source-local and global sequence numbers. Canonical execution order
+therefore cannot move native timestamps or regress delivered source time. Unsupported/filtered
+phases advance source counters without inventing native records. The internal snapshots use the
+incremental emitter spool checkpoint contract and are removed before bundle completion. Legacy
+checkpoints preserve their immediate-delivery mode; direct ordered collector APIs are unchanged.
+
+
+### macOS bounded filesystem publication
+
+`MacosFilesystemActionBundle` accepts explicit canonical create/close/rename/unlink facts
+and uses the shared State/artifact/timing/effect/exact-source publication journal. It does
+not reinterpret a final-size generic file write as a native empty create. File/content
+versions, volume/device/inode, placement, caller execution and native stat phase are owned
+before rendering. eCAR FILE/CLOSE is an explicit EvidenceForge extension alongside the
+shared CREATE/RENAME/DELETE projections; native ES uses its qualified v11 payloads.
+
+`generation/macos_filesystem_workload.py` is the ordinary baseline caller. It samples a
+bounded configured document page for eligible live Code mains, serializes the save phases,
+and checks the whole activity against process/session/window admission. In-place writes
+retain file identity; atomic saves allocate a new object and rename over the prior placement;
+cleanup withdraws the exact current placement. These save choices are nominal workload policy,
+not a measurement of Code internals or APFS allocation.
+
+State owns host-local monotonic runtime inode allocation and mutable directory facts (256
+directories per host, 128 retained observations per directory). Fork/exec reobserves current
+stat while preserving immutable directory identity and historical execution snapshots. State
+head v14 checkpoints the new maps and restores v13 with empty maps while retaining its process
+census. Artifact checkpoints retain current placements/leases. Version numbers elsewhere in
+this document describe individual earlier migrations rather than the current global head.
+
+Rollback restores directory/inode state with failed canonical file publication. A committed
+phase retains its exact source receipt; source-tail retries neither repeat the file operation
+nor resample activity. Unfinished filesystem pages block the activity checkpoint barrier.
+Current-placement leases protect the latest file and retire independently of loaded-image
+leases. Native file records use the same chronological ingress/counters as process records,
+without becoming process-census births or a claim of complete filesystem capture. Existing
+SMB/download/launch-item effects do not automatically acquire this native projection.

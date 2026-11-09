@@ -8,7 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import App from "../src/App";
 import { StudioApi, StudioApiError, StudioSnapshot } from "../src/api";
-import type { EnvironmentReport } from "../src/api";
+import type { EnvironmentReport, ValidationResult } from "../src/api";
 import { ScorecardPanel } from "../src/ScorecardPanel";
 import { JobCard } from "../src/components";
 import { BundleFileBrowser } from "../src/BundleFileBrowser";
@@ -126,6 +126,33 @@ async function renderExpandedApp() {
   await expandLibraryGroups();
   return view;
 }
+
+test("library refresh keeps the library visible and reports completion and request failures", async () => {
+  const request = vi.mocked(useStudio().api!.request);
+  const original = request.getMockImplementation()!;
+  let finish!: (value: object) => void;
+  let fail!: (error: Error) => void;
+  request.mockImplementation((...args: Parameters<StudioApi["request"]>) => args[0] === "/v1/library/refresh"
+    ? new Promise((resolve, reject) => { finish = resolve; fail = reject; }) : original(...args));
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    const button = screen.getByRole("button", { name: "Refresh library" });
+    await user.click(button);
+    expect(button).toHaveTextContent("Refreshing…");
+    expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
+    await act(async () => finish({}));
+    expect(screen.getByText("Library refreshed.")).toBeVisible();
+    expect(button).toBeEnabled();
+    await user.click(button);
+    await act(async () => fail(new Error("Cannot scan workspace")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Cannot scan workspace");
+    expect(screen.getByText("The previous library contents remain visible.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
+    expect(button).toBeEnabled();
+  } finally { request.mockImplementation(original); }
+});
 
 test("an artifact has the same ordered actions and availability in its library and workspace", async () => {
   await renderExpandedApp();
@@ -681,6 +708,91 @@ test("Codex status dot explains a stalled connection and reconnects with active-
   }
 });
 
+test("revalidation hides old findings and visibly completes even with identical results", async () => {
+  const originalValidations = snapshot.validations;
+  const result: ValidationResult = { exit_code: 2, error: "", report: { valid: false, issues: [
+    { severity: "error", field_path: "environment.users.0", message: "Unknown host" },
+  ] } };
+  snapshot.validations = { alpha: { source_sha256: "sha-alpha", completed_at: 1800000000, result } };
+  const request = vi.mocked(useStudio().api!.request);
+  const originalRequest = request.getMockImplementation()!;
+  let finish!: (result: ValidationResult) => void;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1800000001000);
+  request.mockImplementation((...args: Parameters<StudioApi["request"]>) => args[0] === "/v1/validate"
+    ? new Promise<ValidationResult>((resolve) => { finish = resolve; }) : originalRequest(...args));
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    await user.click(screen.getByRole("button", { name: "Validation", exact: true }));
+    const panel = screen.getByRole("region", { name: "Validation", exact: true });
+    expect(within(panel).getByText("Unknown host")).toBeVisible();
+    for (const completedAt of [1800000001000, 1800000002000]) {
+      clock.mockReturnValue(completedAt);
+      const previousTime = panel.querySelector(".summary-context")!.textContent;
+      await user.click(within(panel).getByRole("button", { name: "Validate", exact: true }));
+      expect(panel.parentElement).toHaveAttribute("aria-busy", "true");
+      expect(panel.querySelector(".status")).toBeNull();
+      expect(within(panel).getByText("Validating current scenario…")).toBeVisible();
+      expect(within(panel).queryByText("Unknown host")).toBeNull();
+      expect(within(panel).queryByRole("button", { name: "Fix in chat" })).toBeNull();
+      expect(within(panel).getByRole("button", { name: "Validate", exact: true })).toBeDisabled();
+      await act(async () => { finish(result); });
+      expect(within(panel).queryByText("Validating current scenario…")).toBeNull();
+      expect(panel.querySelector(".status")).toBeNull();
+      expect(within(panel).getByText("Unknown host")).toBeVisible();
+      expect(within(panel).getByText("Needs changes · 1 error")).toBeVisible();
+      expect(within(panel).getByRole("button", { name: "Validate", exact: true })).toBeEnabled();
+      expect(panel.querySelector(".summary-context")!.textContent).not.toEqual(previousTime);
+      expect(panel.parentElement).toHaveAttribute("aria-busy", "false");
+    }
+  } finally { request.mockImplementation(originalRequest); snapshot.validations = originalValidations; clock.mockRestore(); }
+});
+
+for (const failure of ["request", "cli"] as const) {
+  test(`validation ${failure} failure shows its message and preserves previous findings`, async () => {
+    const originalValidations = snapshot.validations;
+    const previousResult: ValidationResult = { exit_code: 2, error: "", report: { valid: false, issues: [
+      { severity: "error", field_path: "environment.systems.0.os", message: "Unsupported Mac target" },
+    ] } };
+    snapshot.validations = { alpha: { source_sha256: "sha-alpha", completed_at: 1800000000, result: previousResult } };
+    const request = vi.mocked(useStudio().api!.request);
+    const originalRequest = request.getMockImplementation()!;
+    let finish!: (result: ValidationResult) => void;
+    let reject!: (reason: Error) => void;
+    const message = failure === "request" ? "Validation service disconnected" : "Validation timed out after 180 seconds";
+    request.mockImplementation((...args: Parameters<StudioApi["request"]>) => args[0] === "/v1/validate"
+      ? new Promise<ValidationResult>((resolve, fail) => { finish = resolve; reject = fail; }) : originalRequest(...args));
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+      const panel = screen.getByRole("region", { name: "Validation", exact: true });
+      await user.click(within(panel).getByRole("button", { name: "Validate", exact: true }));
+      expect(within(panel).getByRole("status")).toHaveTextContent("Validating current scenario…");
+      expect(within(panel).queryByText("Unsupported Mac target")).toBeNull();
+      await act(async () => {
+        if (failure === "request") reject(new Error(message));
+        else {
+          const failed: ValidationResult = { exit_code: -1, report: null, error: message };
+          snapshot.validations = { alpha: { source_sha256: "sha-alpha", completed_at: 1800000001, result: failed } };
+          finish(failed);
+        }
+      });
+      expect(panel.parentElement).toHaveAttribute("aria-busy", "false");
+      expect(within(panel).getByRole("alert")).toHaveTextContent(message);
+      expect(within(panel).getByText("Previous validation results:")).toBeVisible();
+      expect(within(panel).getByText("Unsupported Mac target")).toBeVisible();
+      expect(within(panel).getByRole("button", { name: "Validate", exact: true })).toBeEnabled();
+      // A retry must immediately clear the failure display as well as the old findings.
+      await user.click(within(panel).getByRole("button", { name: "Validate", exact: true }));
+      expect(within(panel).queryByRole("alert")).toBeNull();
+      expect(within(panel).queryByText("Unsupported Mac target")).toBeNull();
+      await act(async () => { finish(previousResult); });
+    } finally { request.mockImplementation(originalRequest); snapshot.validations = originalValidations; }
+  });
+}
+
 test("validation findings open a new chat with a reviewable repair draft", async () => {
   const user = userEvent.setup();
   const originalValidations = snapshot.validations;
@@ -956,6 +1068,40 @@ test("bundle groups and their owned/imported rows are newest-first without movin
 });
 
 for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`${kind} validation hides old findings while a new request runs`, async () => {
+    const originalItems = snapshot.items;
+    const originalGroups = snapshot.artifact_groups;
+    const request = vi.mocked(useStudio().api!.request);
+    const original = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "refresh-pack", kind, name: "Sector", version: "Draft", pack_source: "workspace" as const };
+    snapshot.items = [...originalItems, pack];
+    snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    let finish!: (value: object) => void;
+    request.mockImplementation((...args: Parameters<StudioApi["request"]>) => {
+      if (args[0] === `/v1/items/${pack.id}/lifecycle` && args[1] === "POST") return new Promise((resolve) => { finish = resolve; });
+      if (args[0] === `/v1/packs/${pack.id}/review`) return Promise.resolve({ valid: true, reference: "team:industry:sector@draft", digest: "same-review", dependencies: [], exports: {} });
+      return original(...args);
+    });
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Packs", exact: true }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Open Sector Draft" }));
+      const panel = screen.getByRole("region", { name: "Validation & release" });
+      await user.click(within(panel).getByRole("button", { name: "Validation & release", exact: true }));
+      await within(panel).findByText("Pack and locked dependencies passed validation.");
+      await user.click(within(panel).getByRole("button", { name: "Validate", exact: true }));
+      expect(within(panel).getByText("Validating pack and locked dependencies…")).toBeVisible();
+      expect(within(panel).queryByText("Pack and locked dependencies passed validation.")).toBeNull();
+      expect(within(panel).getByRole("button", { name: "Validate", exact: true })).toBeDisabled();
+      await act(async () => finish({}));
+      expect(within(panel).getByText("Pack and locked dependencies passed validation.")).toBeVisible();
+      expect(within(panel).getByRole("status")).toHaveTextContent("Checked");
+      expect(panel.querySelector(".status")).toBeNull();
+    } finally { request.mockImplementation(original); snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+  });
+
   test(`${kind} keeps validation and asset commands in their own collapsed section menus`, async () => {
     const originalItems = snapshot.items;
     const originalGroups = snapshot.artifact_groups;
@@ -2112,6 +2258,110 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
     } finally { snapshot.items = originalItems; snapshot.dependencies = originalDependencies; request.mockImplementation(implementation); }
   });
 }
+
+test("Environment loads lazily and reuses its inspection until inputs change or refresh is requested", async () => {
+  const originalItems = snapshot.items;
+  const originalDependencies = snapshot.dependencies;
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "initial", rows: [] } };
+  const request = vi.mocked(useStudio().api!.request);
+  const original = request.getMockImplementation()!;
+  const report = { source_sha256: "sha-alpha", valid: false, error: "Review this scenario", selected_packs: [], overlay_files: [] } as unknown as EnvironmentReport;
+  let finish!: (value: EnvironmentReport) => void;
+  let inspections = 0;
+  request.mockImplementation((...args: Parameters<StudioApi["request"]>) => {
+    if (args[0].endsWith("/dependencies/refresh")) return Promise.resolve(snapshot.dependencies!.alpha);
+    if (args[0] === "/v1/scenarios/alpha/environment") {
+      inspections++;
+      return new Promise((resolve) => { finish = resolve; });
+    }
+    return original(...args);
+  });
+  try {
+    const view = await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const panel = screen.getByRole("region", { name: "Environment", exact: true });
+    const toggle = within(panel).getByRole("button", { name: "Environment", exact: true });
+    expect(inspections).toBe(0);
+    await user.click(toggle);
+    expect(inspections).toBe(1);
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(panel.parentElement).toHaveAttribute("aria-busy", "true");
+    await user.click(toggle);
+    expect(inspections).toBe(1);
+    await act(async () => finish(report));
+    const finding = within(panel).getByText(/Review this scenario/);
+    expect(finding).toBeVisible();
+    const checkTime = within(panel).getByText(/^Checked /);
+    const checkedText = checkTime.textContent;
+    expect(checkTime.closest(".workspace-section-header")).not.toBeNull();
+    expect(panel.querySelector(".workspace-operation-feedback")).toBeNull();
+    await user.click(toggle);
+    expect(finding).not.toBeVisible();
+    await user.click(toggle);
+    expect(finding).toBeVisible();
+    expect(checkTime).toHaveTextContent(checkedText!);
+    expect(inspections).toBe(1);
+    await user.click(toggle);
+
+    // Changes invalidate the retained inspection even while the section is collapsed.
+    snapshot.items = originalItems.map((item) => item.id === "alpha" ? { ...item, source_sha256: "edited" } : item);
+    view.rerender(<App />);
+    await waitFor(() => expect(inspections).toBe(2));
+    await act(async () => finish({ ...report, source_sha256: "edited" }));
+    snapshot.dependencies = { alpha: { ready: true, fingerprint: "updated-config-and-packs", rows: [] } };
+    view.rerender(<App />);
+    await waitFor(() => expect(inspections).toBe(3));
+    await act(async () => finish({ ...report, source_sha256: "edited" }));
+    await user.click(within(panel).getByRole("button", { name: "Refresh environment" }));
+    await waitFor(() => expect(inspections).toBe(4));
+    await act(async () => finish({ ...report, source_sha256: "edited" }));
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(inspections).toBe(4);
+  } finally { request.mockImplementation(original); snapshot.items = originalItems; snapshot.dependencies = originalDependencies; }
+});
+
+test("Environment refresh remains busy through inspection and shows inspection failures inline", async () => {
+  const originalDependencies = snapshot.dependencies;
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "same-dependencies", rows: [] } };
+  const request = vi.mocked(useStudio().api!.request);
+  const original = request.getMockImplementation()!;
+  const report = { source_sha256: "sha-alpha", valid: false, error: "Scenario needs repair", selected_packs: [], overlay_files: [] } as unknown as EnvironmentReport;
+  let inspections = 0;
+  let finish!: (value: EnvironmentReport) => void;
+  let fail!: (error: Error) => void;
+  request.mockImplementation((...args: Parameters<StudioApi["request"]>) => {
+    if (args[0].endsWith("/dependencies/refresh")) return Promise.resolve(snapshot.dependencies!.alpha);
+    if (args[0] === "/v1/scenarios/alpha/environment") {
+      if (++inspections === 1) return Promise.resolve(report);
+      return new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    }
+    return original(...args);
+  });
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const panel = screen.getByRole("region", { name: "Environment", exact: true });
+    await user.click(within(panel).getByRole("button", { name: "Environment", exact: true }));
+    await within(panel).findByText(/Scenario needs repair/);
+    const refresh = within(panel).getByRole("button", { name: "Refresh environment" });
+    await user.click(refresh);
+    await waitFor(() => expect(inspections).toBe(2));
+    expect(refresh).toBeDisabled();
+    expect(within(panel).getByText("Refreshing environment…")).toBeVisible();
+    await act(async () => finish(report));
+    await waitFor(() => expect(refresh).toBeEnabled());
+    expect(within(panel).getByText(/^Checked /)).toBeVisible();
+    await user.click(refresh);
+    await waitFor(() => expect(inspections).toBe(3));
+    await act(async () => fail(new Error("Cannot inspect scenario files")));
+    expect(within(panel).getByText("Error: Cannot inspect scenario files")).toBeVisible();
+    expect(refresh).toBeEnabled();
+  } finally { request.mockImplementation(original); snapshot.dependencies = originalDependencies; }
+});
 
 test("Environment refresh failures recover the header action and keep existing status", async () => {
   const original = snapshot.dependencies;

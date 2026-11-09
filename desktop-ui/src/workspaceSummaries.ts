@@ -113,7 +113,7 @@ export function validationSummary(result: ValidationResult | undefined, stale: b
   const findings = [errors > 0 && countLabel(errors, "error"), warnings > 0 && countLabel(warnings, "warning"), infos > 0 && countLabel(infos, "info finding"), others > 0 && countLabel(others, "other finding")].filter(Boolean).join(" · ");
   const valid = result.exit_code === 0 && report?.valid !== false && errors === 0;
   return { headline: !report ? "Validation could not finish" : `${valid ? warnings ? "Valid with warnings" : "Passed" : "Needs changes"}${findings ? ` · ${findings}` : valid ? " · No validation issues found" : ""}`,
-    detail: [stale ? "Out of date · revalidate current inputs" : "Current revision", completedAt ? `Checked ${formatTime(completedAt)}` : ""].filter(Boolean).join(" · ") };
+    detail: [stale ? "Out of date · revalidate current inputs" : "Current revision", completedAt ? `Checked ${new Date(completedAt * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}` : ""].filter(Boolean).join(" · ") };
 }
 
 export function environmentSummary(health: DependencyHealth | undefined): SectionSummary {

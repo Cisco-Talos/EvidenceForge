@@ -1862,12 +1862,24 @@ class TestSyslogContext:
 
         syslog = mock_emitters["syslog"]
         assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
+        event = next(
+            call.args[0]
+            for call in syslog.emit.call_args_list
+            if call.args[0].syslog is not None
+            and "Failed password for alice from 10.0.10.2" in call.args[0].syslog.message
+        )
         assert event.syslog is not None
         assert event.syslog.app_name == "sshd"
         assert "Failed password for alice from 10.0.10.2" in event.syslog.message
         assert "tty=/dev/tty1" not in event.syslog.message
-        assert event.auth.source_ip == "10.0.10.2"
+        failure = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "failed_logon"
+        )
+        assert failure.auth.source_ip == "10.0.10.2"
+        assert failure.auth.auth_protocol == failure.auth.session_kind == "ssh"
+        assert f"port {failure.auth.source_port} ssh2" in event.syslog.message
 
     def test_generate_syslog_event_helper(
         self, activity_gen, state_manager, mock_emitters, timestamp

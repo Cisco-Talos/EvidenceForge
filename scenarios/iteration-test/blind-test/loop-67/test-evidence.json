@@ -1,0 +1,27 @@
+{
+  "behavior_revision": 468,
+  "focused_content_and_native_reason_checks_passed": 187,
+  "family_producer_proxy_checks_passed": 190,
+  "suites_overlap": true,
+  "config_files_validated": 101,
+  "config_errors": 0,
+  "config_warnings": 0,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "primary_failure_reference": "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4625",
+  "reference_qualification": "Official field definition: FailureReason describes Status. Official lockout XML pairs0xc0000234and%%2307. Existing generic failure model now pairs0xc000006dand%%2313while retaining specific disabled/unknown/password substatus.",
+  "explicit_shared_resource": "Configured modeled-inter-variable-font-v1; same resource size and content identity across origins. Defaults remain site-owned.",
+  "rendered_family_probes": {
+    "favicon_hosts": 47,
+    "favicon_distinct_sizes": 47,
+    "logo_hosts": 8,
+    "logo_distinct_sizes": 8,
+    "shared_font_hosts": 4,
+    "shared_font_sizes": 1,
+    "native_failure_rows": 20,
+    "failure_status_reason_mismatches": 0,
+    "browser_family_mismatches": 0,
+    "http_capture_budget_defects": 0,
+    "pid_allocation_reversals": 0
+  }
+}

@@ -1,0 +1,1856 @@
+{
+  "composition": {
+    "project_root": "/Users/dabianco/projects/SURGe/EvidenceForge",
+    "selected_packs": [
+      {
+        "digest": "11e90fb8aa02c2a97d55b6a90fb9b7c192470215174f10f2832da6c253c62928",
+        "location": "package:evidenceforge:industry:technology@1.0.0",
+        "name": "technology",
+        "publisher": "evidenceforge",
+        "source": "package",
+        "type": "industry",
+        "version": "1.0.0"
+      }
+    ]
+  },
+  "input": {
+    "kind": "scenario-2.0",
+    "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+  },
+  "issues": [
+    {
+      "code": "scenario.semantic",
+      "field_path": "baseline_activity.intensity",
+      "message": "Baseline intensity is 'low' but storyline has 107 events \u2014 noise-to-signal ratio target (500:1) may be unreachable",
+      "provenance": {
+        "field_path": "baseline_activity.intensity",
+        "origin_kind": "authored-field",
+        "portable_source": "sources/26349715dfc21e99-baseline_activity.yaml"
+      },
+      "severity": "warning",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/baseline_activity.yaml"
+      },
+      "suggestion": "Consider increasing intensity to 'medium' or 'high'"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.2",
+      "message": "[evt-email-003] \u2192 [evt-001] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.2",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.5",
+      "message": "[evt-003] \u2192 [evt-email-004] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.5",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.6",
+      "message": "[evt-email-004] \u2192 [evt-email-005] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.6",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.7",
+      "message": "[evt-email-005] \u2192 [evt-004] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.7",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.10",
+      "message": "[evt-006] \u2192 [evt-email-006] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.10",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.11",
+      "message": "[evt-email-006] \u2192 [evt-email-007] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.11",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.12",
+      "message": "[evt-email-007] \u2192 [evt-007] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.12",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.15",
+      "message": "[evt-009] \u2192 [evt-010] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.15",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.23",
+      "message": "[evt-015] \u2192 [evt-email-010] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.23",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.24",
+      "message": "[evt-email-010] \u2192 [evt-016] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.24",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.29",
+      "message": "[evt-019] \u2192 [evt-020] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.29",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.30",
+      "message": "[evt-020] \u2192 [evt-email-011] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.30",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.31",
+      "message": "[evt-email-011] \u2192 [evt-021] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.31",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.32",
+      "message": "[evt-021] \u2192 [evt-022] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.32",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.34",
+      "message": "[evt-022b] \u2192 [evt-023] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.34",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.36",
+      "message": "[evt-023b] \u2192 [evt-024] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.36",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.39",
+      "message": "[evt-026] \u2192 [evt-027] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.39",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.40",
+      "message": "[evt-027] \u2192 [evt-028] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.40",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.42",
+      "message": "[evt-029] \u2192 [evt-030] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.42",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.43",
+      "message": "[evt-030] \u2192 [evt-031] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.43",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.44",
+      "message": "[evt-031] \u2192 [evt-032] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.44",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.45",
+      "message": "[evt-032] \u2192 [evt-032b] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.45",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.46",
+      "message": "[evt-032b] \u2192 [evt-033] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.46",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.47",
+      "message": "[evt-033] \u2192 [evt-035] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.47",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.48",
+      "message": "[evt-035] \u2192 [mac-1-warmup-close] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.48",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.58",
+      "message": "[mac-1-inventory-remove] \u2192 [mac-2-warmup-close] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.58",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    },
+    {
+      "code": "scenario.semantic",
+      "field_path": "storyline.68",
+      "message": "[mac-2-inventory-remove] \u2192 [mac-1-terminal-task-1] share no obvious pivot indicator (actor, system, or IP)",
+      "provenance": {
+        "field_path": "storyline.68",
+        "origin_kind": "authored-field"
+      },
+      "severity": "info",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      },
+      "suggestion": "Ensure consecutive events share at least one field a hunter could pivot on"
+    }
+  ],
+  "resource_forecast": {
+    "available": true,
+    "calibration_label": "Bounded registries, cross-platform emitters and Mac native ingress budgets",
+    "calibration_version": 6,
+    "checkpoint_workspace": {
+      "expected_bytes": 0,
+      "lower_bytes": 0,
+      "upper_bytes": 0
+    },
+    "disk": {
+      "expected_bytes": 798587231,
+      "lower_bytes": 79858723,
+      "upper_bytes": 1197880846
+    },
+    "final_output": {
+      "expected_bytes": 57432302,
+      "lower_bytes": 8040522,
+      "upper_bytes": 86148453
+    },
+    "memory": {
+      "expected_bytes": 234429859,
+      "lower_bytes": 171133797,
+      "upper_bytes": 492302703
+    },
+    "pressures": [],
+    "registry_report": {
+      "emitter_payload_excluded_bytes": 164930859,
+      "excluded_components": [
+        "interpreter_and_generator_base",
+        "emitter_queues_and_format_state",
+        "rendered_payload_and_attachment_buffers",
+        "external_sort_and_storage_catalog_state"
+      ],
+      "legacy_calibrated_peak_bytes": 234429859,
+      "modeled_peak_floor_bytes": 206821480,
+      "peak_memory_combination": "maximum_not_sum",
+      "registries": [
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 1.3587640779999999,
+            "lookup_operations": 4117764,
+            "lookup_p95_microseconds": 9.041,
+            "mutation_operations": 98042,
+            "mutation_seconds": 4.168745840000001
+          },
+          "entries": {
+            "backing_entries": 50002,
+            "created_entries": 49021,
+            "expired_entries": 0,
+            "high_water_entries": 49021,
+            "leased_entries": 4903,
+            "live_entries": 12256,
+            "retained_entries": 36765,
+            "stale_entries": 981
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 60605,
+            "channel_fanout": 28.0,
+            "channel_observations": 4575256,
+            "effect_fanout": 2.696180183153205,
+            "effect_occurrences": 163402,
+            "registry": "lifecycle",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 28800,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 2,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_lifecycle_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 38462274,
+            "lower_bytes": 11202373,
+            "upper_bytes": 48077843
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 180000,
+          "plateau_reached_after_seconds": null,
+          "registry": "lifecycle",
+          "structural_bytes": 11202373
+        },
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 9790,
+            "expiry_seconds": 0.6378185,
+            "load_seconds": 0.3293663912,
+            "lookup_operations": 732088,
+            "lookup_p95_microseconds": 9.75,
+            "mutation_operations": 39219,
+            "mutation_seconds": 4.11211215
+          },
+          "entries": {
+            "backing_entries": 3349,
+            "created_entries": 13073,
+            "expired_entries": 9790,
+            "high_water_entries": 3283,
+            "leased_entries": 0,
+            "live_entries": 3269,
+            "retained_entries": 14,
+            "stale_entries": 66
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 60605,
+            "channel_fanout": 28.0,
+            "channel_observations": 4575256,
+            "effect_fanout": 2.696180183153205,
+            "effect_occurrences": 163402,
+            "registry": "application_channels",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 28800,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 2,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_application_channels_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 1638909,
+            "lower_bytes": 451420,
+            "upper_bytes": 2048637
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 7230,
+          "plateau_reached_after_seconds": 7230,
+          "registry": "application_channels",
+          "structural_bytes": 451420
+        },
+        {
+          "compaction_budget_entries": 4096,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.13649951999999999,
+            "lookup_operations": 274568,
+            "lookup_p95_microseconds": 7.96,
+            "mutation_operations": 7355,
+            "mutation_seconds": 0.11628255
+          },
+          "entries": {
+            "backing_entries": 5002,
+            "created_entries": 4903,
+            "expired_entries": 0,
+            "high_water_entries": 4903,
+            "leased_entries": 99,
+            "live_entries": 4903,
+            "retained_entries": 0,
+            "stale_entries": 99
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 60605,
+            "channel_fanout": 28.0,
+            "channel_observations": 4575256,
+            "effect_fanout": 2.696180183153205,
+            "effect_occurrences": 163402,
+            "registry": "local_artifacts",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 28800,
+            "static_entries": 0
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_local_artifacts_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "live_entry",
+          "memory": {
+            "expected_bytes": 1244559,
+            "lower_bytes": 1229556,
+            "upper_bytes": 1555699
+          },
+          "operation_profile": "historical_smoke_calibration",
+          "plateau_horizon_seconds": 172800,
+          "plateau_reached_after_seconds": null,
+          "registry": "local_artifacts",
+          "structural_bytes": 1229556
+        },
+        {
+          "compaction_budget_entries": 0,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.008572459999999999,
+            "lookup_operations": 18200,
+            "lookup_p95_microseconds": 1.291,
+            "mutation_operations": 0,
+            "mutation_seconds": 0.0
+          },
+          "entries": {
+            "backing_entries": 650,
+            "created_entries": 650,
+            "expired_entries": 0,
+            "high_water_entries": 650,
+            "leased_entries": 0,
+            "live_entries": 650,
+            "retained_entries": 0,
+            "stale_entries": 0
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 60605,
+            "channel_fanout": 28.0,
+            "channel_observations": 4575256,
+            "effect_fanout": 2.696180183153205,
+            "effect_occurrences": 163402,
+            "registry": "collection_deployment",
+            "scenario_override_entries": 0,
+            "scenario_seconds": 28800,
+            "static_entries": 650
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 250000,
+          "measured_profile": "historical_250k_collection_deployment_calibration",
+          "measurement_status": "measured",
+          "measurement_unit": "source",
+          "memory": {
+            "expected_bytes": 235783,
+            "lower_bytes": 80356,
+            "upper_bytes": 294729
+          },
+          "operation_profile": null,
+          "plateau_horizon_seconds": 0,
+          "plateau_reached_after_seconds": 0,
+          "registry": "collection_deployment",
+          "structural_bytes": 80356
+        },
+        {
+          "compaction_budget_entries": 0,
+          "costs": {
+            "expiry_operations": 0,
+            "expiry_seconds": 0.0,
+            "load_seconds": 0.008232962,
+            "lookup_operations": 24136,
+            "lookup_p95_microseconds": 1.709,
+            "mutation_operations": 0,
+            "mutation_seconds": 0.0
+          },
+          "entries": {
+            "backing_entries": 862,
+            "created_entries": 862,
+            "expired_entries": 0,
+            "high_water_entries": 862,
+            "leased_entries": 0,
+            "live_entries": 862,
+            "retained_entries": 0,
+            "stale_entries": 0
+          },
+          "heap_segment_amplification": 1.0,
+          "input": {
+            "base_occurrences": 60605,
+            "channel_fanout": 28.0,
+            "channel_observations": 4575256,
+            "effect_fanout": 2.696180183153205,
+            "effect_occurrences": 163402,
+            "registry": "deployment_content",
+            "scenario_override_entries": 13,
+            "scenario_seconds": 28800,
+            "static_entries": 862
+          },
+          "maximum_lookup_candidates": 1,
+          "measured_entries": 1000000,
+          "measured_profile": "historical_deployment_path_packed_calibration",
+          "measurement_status": "provisional",
+          "measurement_unit": "path_binding_equivalent",
+          "memory": {
+            "expected_bytes": 309096,
+            "lower_bytes": 145670,
+            "upper_bytes": 386370
+          },
+          "operation_profile": null,
+          "plateau_horizon_seconds": 0,
+          "plateau_reached_after_seconds": 0,
+          "registry": "deployment_content",
+          "structural_bytes": 145670
+        }
+      ],
+      "retained_state_family_coverage": [
+        {
+          "calibration_evidence_id": "resource_forecast:registry:lifecycle",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "lifecycle",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "lifecycle"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:application_channels",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "application_channels",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "application_channels"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:local_artifacts",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "local_artifacts",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "local_artifacts"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:collection_deployment",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "collection_deployment",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "collection_deployment"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:registry:deployment_content",
+          "calibration_evidence_kind": "scenario_forecast",
+          "disposition": "modeled_registry",
+          "family": "deployment_content",
+          "rationale": "Scenario-derived cardinality and a versioned per-entry calibration.",
+          "registry": "deployment_content"
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:process_runtime",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "process_runtime",
+          "rationale": "Process-runtime caches remain in the calibrated whole-generator peak because no current scenario-driver calibration exists.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:timing_runtime",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "timing_runtime",
+          "rationale": "Timing audit, clock, and constraint indexes remain in the calibrated whole-generator peak until a scenario-driver projection is measured.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:http",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "http",
+          "rationale": "HTTP sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:proxy",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "proxy",
+          "rationale": "Explicit-proxy sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:smb",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "smb",
+          "rationale": "SMB sidecar memory is retained in the calibrated whole-generator peak and SMB output costs; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:rdp",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "rdp",
+          "rationale": "RDP reconnect sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        },
+        {
+          "calibration_evidence_id": "resource_forecast:historical:ssh",
+          "calibration_evidence_kind": "historical_calibration",
+          "disposition": "legacy_calibrated_peak",
+          "family": "ssh",
+          "rationale": "SSH sidecar memory is retained in the calibrated whole-generator peak; the common application registry is modeled separately.",
+          "registry": null
+        }
+      ],
+      "total_created_entries": 68509,
+      "total_leased_entries": 5002,
+      "total_live_entries": 21940,
+      "total_registry_memory": {
+        "expected_bytes": 41890621,
+        "lower_bytes": 13109375,
+        "upper_bytes": 52363278
+      },
+      "total_retained_entries": 36779,
+      "total_stale_entries": 1146,
+      "total_structural_bytes": 13109375
+    },
+    "snapshot": {
+      "available_memory_bytes": 6635667456,
+      "disk_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test",
+      "free_disk_bytes": 13189120000,
+      "free_swap_bytes": 0,
+      "memory_limit_bytes": null,
+      "total_memory_bytes": 25769803776
+    }
+  },
+  "scenario": {
+    "description": "Canonical EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles. It\npreserves the expanded environment and attack narrative while including authored,\ntransport-correlated IDS assertions, sensor-local filtering, cross-platform SMB activity,\na second domain controller, centralized monitoring, and deliberate no-alert cases for broad\nautomated and LLM-as-a-judge quality evaluation.\nMeridian Healthcare Solutions is a mid-size healthcare IT company providing EHR\nintegration services from a corporate HQ with an on-premises data center. The\nstoryline compresses an APT-style web-app intrusion, Linux and Windows lateral\nmovement, credential theft, domain compromise, C2, DNS tunneling, data staging,\nexfiltration, email abuse, and cleanup into a 6-hour collection window while\npreserving broad event-type and log-format coverage. This expanded variant adds\nexplicit on-prem email topology, SMTP routing, corpus-backed message bodies,\nMIME artifacts, distribution groups, Bcc handling, STARTTLS visibility, ISP relay\negress, inbound/outbound/internal mail, explicit mailbox reads, rejected mail,\nand deterministic background email traffic. This benchmark epoch also adds one\nrepresentative benign cleartext multipart support upload through the explicit proxy.\nThis canonical epoch includes two macOS 27 arm64 engineering workstations and substantial\nlocal-terminal, GUI, browser-helper, SSH and explicit system-job activity. The original\nsix-hour mixed-fleet workload is retained; its date moves to a supported Mac epoch.\n",
+    "generation_seed": 42,
+    "name": "iteration-test",
+    "network": {
+      "segments": 4,
+      "sensors": 6
+    },
+    "output_formats": [
+      "bash_history",
+      "cisco_asa",
+      "ecar",
+      "macos_endpoint_security",
+      "macos_unified_log",
+      "proxy_access",
+      "snort_alert",
+      "syslog",
+      "web_access",
+      "windows",
+      "zeek",
+      "zsh_history"
+    ],
+    "personas": 16,
+    "red_herrings": 10,
+    "storyline_events": 107,
+    "systems": 23,
+    "users": 9,
+    "version": "2.0"
+  },
+  "schema_version": "1.0",
+  "severity_counts": {
+    "error": 0,
+    "info": 27,
+    "warning": 1
+  },
+  "status": "valid_with_warnings",
+  "storage": {
+    "available": true,
+    "file_sets": [],
+    "mappings": [
+      {
+        "audience": {
+          "systems": [
+            "WS-DRAMIREZ-01"
+          ],
+          "users": [
+            "diego.ramirez"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": "F:",
+        "id": "finance-f",
+        "lifecycle": "persistent",
+        "mount": null,
+        "presentations": [
+          {
+            "platform": "windows",
+            "root": "F:",
+            "type": "drive"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-SRV-01.finance",
+        "systems": [
+          "WS-DRAMIREZ-01"
+        ],
+        "users": [
+          "diego.ramirez"
+        ]
+      },
+      {
+        "audience": {
+          "systems": [
+            "WS-LNGUYEN-01",
+            "WS-OHADDAD-01"
+          ],
+          "users": [
+            "lina.nguyen",
+            "maya.ross",
+            "omar.haddad"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": null,
+        "id": "clinical-research-mnt",
+        "lifecycle": "persistent",
+        "mount": "/mnt/clinical-research",
+        "presentations": [
+          {
+            "platform": "linux",
+            "root": "/mnt/clinical-research",
+            "type": "mount"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-LNX-01.clinical-research",
+        "systems": [
+          "WS-LNGUYEN-01",
+          "WS-OHADDAD-01"
+        ],
+        "users": [
+          "lina.nguyen",
+          "maya.ross",
+          "omar.haddad"
+        ]
+      },
+      {
+        "audience": {
+          "systems": [
+            "LT-MRIVERA-02"
+          ],
+          "users": []
+        },
+        "credential_mode": "fixed",
+        "drive": null,
+        "id": "mhsync-mnt",
+        "lifecycle": "on_demand",
+        "mount": "/mnt/mhsync",
+        "presentations": [
+          {
+            "platform": "linux",
+            "root": "/mnt/mhsync",
+            "type": "mount"
+          }
+        ],
+        "principal": "svc_mhsync",
+        "share": "FILE-LNX-01.clinical-research",
+        "systems": [
+          "LT-MRIVERA-02"
+        ],
+        "users": []
+      },
+      {
+        "audience": {
+          "systems": [
+            "MAC-MROSS-01",
+            "MAC-MROSS-02"
+          ],
+          "users": [
+            "maya.ross"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": null,
+        "id": "mac-research",
+        "lifecycle": "persistent",
+        "mount": "/Volumes/ClinicalResearch",
+        "presentations": [
+          {
+            "platform": "macos",
+            "root": "/Volumes/ClinicalResearch",
+            "type": "mount"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-LNX-01.clinical-research",
+        "systems": [
+          "MAC-MROSS-01",
+          "MAC-MROSS-02"
+        ],
+        "users": [
+          "maya.ross"
+        ]
+      },
+      {
+        "audience": {
+          "systems": [
+            "MAC-MROSS-01",
+            "MAC-MROSS-02"
+          ],
+          "users": [
+            "maya.ross"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": null,
+        "id": "mac-shared",
+        "lifecycle": "persistent",
+        "mount": "/Volumes/Shared",
+        "presentations": [
+          {
+            "platform": "macos",
+            "root": "/Volumes/Shared",
+            "type": "mount"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-SRV-01.collaboration",
+        "systems": [
+          "MAC-MROSS-01",
+          "MAC-MROSS-02"
+        ],
+        "users": [
+          "maya.ross"
+        ]
+      },
+      {
+        "audience": {
+          "systems": [
+            "MAC-MROSS-01",
+            "MAC-MROSS-02"
+          ],
+          "users": [
+            "maya.ross"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": null,
+        "id": "mac-homes",
+        "lifecycle": "persistent",
+        "mount": "/Volumes/Users",
+        "presentations": [
+          {
+            "platform": "macos",
+            "root": "/Volumes/Users",
+            "type": "mount"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-SRV-01.homes",
+        "systems": [
+          "MAC-MROSS-01",
+          "MAC-MROSS-02"
+        ],
+        "users": [
+          "maya.ross"
+        ]
+      },
+      {
+        "audience": {
+          "systems": [
+            "MAC-MROSS-01",
+            "MAC-MROSS-02"
+          ],
+          "users": [
+            "maya.ross"
+          ]
+        },
+        "credential_mode": "per_user",
+        "drive": null,
+        "id": "mac-research-shared",
+        "lifecycle": "persistent",
+        "mount": "/Volumes/ResearchShared",
+        "presentations": [
+          {
+            "platform": "macos",
+            "root": "/Volumes/ResearchShared",
+            "type": "mount"
+          }
+        ],
+        "principal": null,
+        "share": "FILE-LNX-01.collaboration",
+        "systems": [
+          "MAC-MROSS-01",
+          "MAC-MROSS-02"
+        ],
+        "users": [
+          "maya.ross"
+        ]
+      }
+    ],
+    "schema_version": 3,
+    "shares": [
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "SYSVOL",
+        "network_root": "\\\\DC-01\\SYSVOL",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "dc_policy",
+        "provider": "windows",
+        "ref": "DC-01.sysvol",
+        "root": "SYSVOL",
+        "sample_paths": [
+          "Machine\\2023\\startup.ini",
+          "Machine\\2024\\gpt.ini",
+          "Machine\\2024\\startup-review.xml"
+        ],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\SYSVOL",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-01",
+        "volume": "system"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "NETLOGON",
+        "network_root": "\\\\DC-01\\NETLOGON",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "dc_policy",
+        "provider": "windows",
+        "ref": "DC-01.netlogon",
+        "root": "SYSVOL\\scripts",
+        "sample_paths": [
+          "Machine\\2023\\gpt-v2.pol",
+          "Machine\\2023\\logon-review.pol",
+          "Machine\\2023\\logon.xml"
+        ],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\SYSVOL\\scripts",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-01",
+        "volume": "system"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "C$",
+        "network_root": "\\\\DC-01\\C$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "DC-01.c_admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-01",
+        "volume": "system2"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "ADMIN$",
+        "network_root": "\\\\DC-01\\ADMIN$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "DC-01.admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-01",
+        "volume": "system2"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "SYSVOL",
+        "network_root": "\\\\DC-02\\SYSVOL",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "dc_policy",
+        "provider": "windows",
+        "ref": "DC-02.sysvol",
+        "root": "SYSVOL",
+        "sample_paths": [
+          "Machine\\2024\\logon-final.ps1",
+          "Machine\\2025\\groups.xml",
+          "Machine\\2025\\startup-v2.xml"
+        ],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\SYSVOL",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-02",
+        "volume": "system"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "NETLOGON",
+        "network_root": "\\\\DC-02\\NETLOGON",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "dc_policy",
+        "provider": "windows",
+        "ref": "DC-02.netlogon",
+        "root": "SYSVOL\\scripts",
+        "sample_paths": [
+          "Machine\\2024\\drives-final.xml",
+          "Machine\\2024\\drives-review.ini",
+          "Machine\\2024\\policy-review.xml"
+        ],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\SYSVOL\\scripts",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-02",
+        "volume": "system"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "C$",
+        "network_root": "\\\\DC-02\\C$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "DC-02.c_admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-02",
+        "volume": "system2"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "standard",
+        "audit_profile": "standard",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "ADMIN$",
+        "network_root": "\\\\DC-02\\ADMIN$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "DC-02.admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "DC-02",
+        "volume": "system2"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "Shared",
+        "network_root": "\\\\FILE-SRV-01\\Shared",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.collaboration",
+        "root": "Shared",
+        "sample_paths": [
+          "Archive\\2023\\team-roadmap-review.docx",
+          "Archive\\2024\\action-items.txt",
+          "Archive\\2026\\project-plan-approved.pptx"
+        ],
+        "seed_refs": [],
+        "server_native_root": "D:\\Shared",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-SRV-01",
+        "volume": "data"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "Users",
+        "network_root": "\\\\FILE-SRV-01\\Users",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "homes",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.homes",
+        "root": "Users",
+        "sample_paths": [
+          "Desktop\\2024\\expenses.pdf",
+          "Desktop\\2024\\presentation.txt",
+          "Desktop\\2025\\contacts.xlsx"
+        ],
+        "seed_refs": [],
+        "server_native_root": "D:\\Users",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-SRV-01",
+        "volume": "data"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "C$",
+        "network_root": "\\\\FILE-SRV-01\\C$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.c_admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-SRV-01",
+        "volume": "system"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 0,
+        "name": "ADMIN$",
+        "network_root": "\\\\FILE-SRV-01\\ADMIN$",
+        "platform": "windows",
+        "population": "small",
+        "preset": "collaboration",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.admin",
+        "root": "",
+        "sample_paths": [],
+        "seed_refs": [],
+        "server_native_root": "C:\\Windows\\",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-SRV-01",
+        "volume": "system"
+      },
+      {
+        "activity": "high",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "ntfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "Finance",
+        "network_root": "\\\\FILE-SRV-01\\Finance",
+        "platform": "windows",
+        "population": "medium",
+        "preset": "department",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.finance",
+        "root": "Departments\\Finance",
+        "sample_paths": [
+          "Archive\\2023\\expense-export.xlsx",
+          "Archive\\2024\\budget-review-final.csv",
+          "Archive\\2024\\monthly-close-draft.docx"
+        ],
+        "seed_refs": [
+          "variance_draft",
+          "q1_board_pack",
+          "q1_budget",
+          "q1_close_notes",
+          "q1_forecast",
+          "q1_variance"
+        ],
+        "server_native_root": "D:\\Departments\\Finance",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-SRV-01",
+        "volume": "data"
+      },
+      {
+        "activity": "low",
+        "advertised_filesystem": "ReFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "refs",
+        "case_policy": "case_insensitive",
+        "encryption": "required",
+        "file_count": 24,
+        "name": "ClinicalExports",
+        "network_root": "\\\\FILE-SRV-01\\ClinicalExports",
+        "platform": "windows",
+        "population": "small",
+        "preset": "backup",
+        "provider": "windows",
+        "ref": "FILE-SRV-01.clinical-exports",
+        "root": "Clinical\\Exports",
+        "sample_paths": [
+          "Audit\\2024-03\\deidentified-claims-sample.csv",
+          "Daily\\2023\\snapshot.log",
+          "Daily\\2023\\system-state-approved.log"
+        ],
+        "seed_refs": [
+          "deidentified_claims"
+        ],
+        "server_native_root": "C:\\Mounts\\Archive\\Clinical\\Exports",
+        "smb_native_filesystem": "ReFS",
+        "system": "FILE-SRV-01",
+        "volume": "archive"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "NTFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "xfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "Shared",
+        "network_root": "\\\\FILE-LNX-01\\Shared",
+        "platform": "linux",
+        "population": "medium",
+        "preset": "collaboration",
+        "provider": "samba",
+        "ref": "FILE-LNX-01.collaboration",
+        "root": "Shared",
+        "sample_paths": [
+          "Archive\\2024\\status-update.txt",
+          "Archive\\2025\\meeting-notes.pdf",
+          "Archive\\2025\\team-roadmap.pdf"
+        ],
+        "seed_refs": [],
+        "server_native_root": "/srv/samba/Shared",
+        "smb_native_filesystem": "NTFS",
+        "system": "FILE-LNX-01",
+        "volume": "research"
+      },
+      {
+        "activity": "normal",
+        "advertised_filesystem": "XFS",
+        "audit": "high",
+        "audit_profile": "high",
+        "backing_file_set": null,
+        "backing_filesystem": "xfs",
+        "case_policy": "case_insensitive",
+        "encryption": "not_required",
+        "file_count": 96,
+        "name": "ClinicalResearch",
+        "network_root": "\\\\FILE-LNX-01\\ClinicalResearch",
+        "platform": "linux",
+        "population": "medium",
+        "preset": "collaboration",
+        "provider": "samba",
+        "ref": "FILE-LNX-01.clinical-research",
+        "root": "ClinicalResearch",
+        "sample_paths": [
+          "Archive\\2024\\meeting-notes.pptx",
+          "Archive\\2025\\service-review.xlsx",
+          "Archive\\2025\\vendor-review-draft.docx"
+        ],
+        "seed_refs": [
+          "pipeline_manifest",
+          "integration_runbook",
+          "model_validation"
+        ],
+        "server_native_root": "/srv/samba/ClinicalResearch",
+        "smb_native_filesystem": "XFS",
+        "system": "FILE-LNX-01",
+        "volume": "research"
+      }
+    ],
+    "volumes": [
+      {
+        "filesystem": "ntfs",
+        "id": "system",
+        "label": "System",
+        "mount": "C:\\Windows\\",
+        "platform": "windows",
+        "system": "DC-01"
+      },
+      {
+        "filesystem": "ntfs",
+        "id": "system2",
+        "label": "System",
+        "mount": "C:\\",
+        "platform": "windows",
+        "system": "DC-01"
+      },
+      {
+        "filesystem": "ntfs",
+        "id": "system",
+        "label": "System",
+        "mount": "C:\\Windows\\",
+        "platform": "windows",
+        "system": "DC-02"
+      },
+      {
+        "filesystem": "ntfs",
+        "id": "system2",
+        "label": "System",
+        "mount": "C:\\",
+        "platform": "windows",
+        "system": "DC-02"
+      },
+      {
+        "filesystem": "ntfs",
+        "id": "data",
+        "label": "SharedData",
+        "mount": "D:\\",
+        "platform": "windows",
+        "system": "FILE-SRV-01"
+      },
+      {
+        "filesystem": "refs",
+        "id": "archive",
+        "label": "ClinicalArchive",
+        "mount": "C:\\Mounts\\Archive\\",
+        "platform": "windows",
+        "system": "FILE-SRV-01"
+      },
+      {
+        "filesystem": "ntfs",
+        "id": "system",
+        "label": "System",
+        "mount": "C:\\",
+        "platform": "windows",
+        "system": "FILE-SRV-01"
+      },
+      {
+        "filesystem": "xfs",
+        "id": "research",
+        "label": "ClinicalResearch",
+        "mount": "/srv/samba",
+        "platform": "linux",
+        "system": "FILE-LNX-01"
+      }
+    ]
+  },
+  "suggestions": [
+    {
+      "field_path": "baseline_activity.intensity",
+      "message": "Consider increasing intensity to 'medium' or 'high'",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/baseline_activity.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.2",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.5",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.6",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.7",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.10",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.11",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.12",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.15",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.23",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.24",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.29",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.30",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.31",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.32",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.34",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.36",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.39",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.40",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.42",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.43",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.44",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.45",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.46",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.47",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.48",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.58",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    },
+    {
+      "field_path": "storyline.68",
+      "message": "Ensure consecutive events share at least one field a hunter could pivot on",
+      "source": {
+        "kind": "authored-file",
+        "path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml"
+      }
+    }
+  ],
+  "valid": true
+}

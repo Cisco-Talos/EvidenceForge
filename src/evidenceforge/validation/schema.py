@@ -43,6 +43,7 @@ import yaml
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.models.ids import policy_fingerprint
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -88,17 +89,12 @@ _WINDOWS_PATTERNS = ["windows"]
 _LINUX_PATTERNS = ["linux", "ubuntu", "centos", "debian", "rhel"]
 
 # Formats that are bound to a specific OS
-_OS_BOUND_FORMATS: dict[str, str] = {
-    "windows_event_security": "windows",
-    "windows_event_sysmon": "windows",
-    "syslog": "linux",
-    "bash_history": "linux",
-}
-
-# Reverse: OS → expected host-local formats
-_OS_EXPECTED_FORMATS: dict[str, set[str]] = {
-    "windows": {"windows_event_security", "windows_event_sysmon"},
-    "linux": {"syslog", "bash_history"},
+_OS_BOUND_FORMATS: dict[str, tuple[str, ...]] = {
+    "windows_event_security": ("windows",),
+    "windows_event_sysmon": ("windows",),
+    "syslog": ("linux",),
+    "bash_history": ("linux", "macos"),
+    "zsh_history": ("macos",),
 }
 
 # Event types that are Windows-specific
@@ -125,20 +121,8 @@ _VOLUME_TARGETS: dict[str, int] = {"low": 500, "medium": 5000, "high": 10000}
 
 
 def _get_os_category(os_string: str) -> str:
-    """Detect OS category from OS string.
-
-    Args:
-        os_string: OS name/version string (e.g., "Windows 10", "Linux Ubuntu 20.04")
-
-    Returns:
-        "windows", "linux", or "unknown"
-    """
-    os_lower = os_string.lower()
-    if any(p in os_lower for p in _WINDOWS_PATTERNS):
-        return "windows"
-    if any(p in os_lower for p in _LINUX_PATTERNS):
-        return "linux"
-    return "unknown"
+    """Return the canonical modeled platform for an OS label."""
+    return platform_for_os(os_string)
 
 
 def _is_full_process_path(process_name: str) -> bool:
@@ -151,7 +135,7 @@ class ValidationIssue:
     """Represents a validation issue found in a scenario.
 
     Attributes:
-        severity: "error" (blocks generation) or "warning" (informational)
+        severity: "error" (blocks generation), "warning", or "info" (coverage note)
         field_path: Dot-separated path to the problematic field
         message: Human-readable description of the issue
         suggestion: Optional actionable suggestion to fix the issue
@@ -229,6 +213,7 @@ class ScenarioValidator:
             List of validation issues (errors and warnings)
         """
         self._validate_user_persona_references()
+        self._validate_macos_generation_targets()
         self._validate_system_user_references()
         self._validate_user_primary_system_references()
         self._validate_group_member_references()
@@ -238,6 +223,7 @@ class ScenarioValidator:
         self._validate_uniqueness()
         self._validate_expanded_activities()
         self._validate_event_sequences()
+        self._validate_macos_persistence()
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
@@ -252,7 +238,6 @@ class ScenarioValidator:
         self._validate_red_herring_references()
         self._validate_storyline_actor_work_hours()
         self._validate_noise_feasibility()
-        self._validate_storyline_format_coverage()
         self._validate_storyline_os_plausibility()
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
@@ -266,6 +251,7 @@ class ScenarioValidator:
         self._validate_process_network_pairing()
         self._validate_firewall_config()
         self._validate_observation_profile()
+        self._validate_macos_process_coverage()
         self._validate_network_identities()
         self._validate_public_identity_reuse()
         self._validate_traffic_affinities()
@@ -273,6 +259,44 @@ class ScenarioValidator:
         self._validate_legacy_smb_connections()
         self._sort_issues()
         return self.issues
+
+    def _validate_macos_generation_targets(self) -> None:
+        """Reject retired or unsupported Mac targets independently of output selection."""
+        macs = [
+            (index, system)
+            for index, system in enumerate(self.scenario.environment.systems)
+            if _get_os_category(system.os) == "macos"
+        ]
+        if not macs:
+            return
+        from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
+            load_macos_endpoint_security_profiles,
+        )
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        catalog = load_macos_endpoint_security_profiles()
+        supported = (
+            ", ".join(
+                f"macOS {profile.os_major} {profile.architecture} workstation"
+                for profile in catalog.profiles
+            )
+            if catalog is not None
+            else "no active macOS generation target in these frozen inputs"
+        )
+        for index, system in macs:
+            if select_macos_es_profile(system) is None:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.systems.{index}.os",
+                        message=f"Unsupported macOS generation target {system.os!r}",
+                        suggestion=(
+                            f"Supported targets: {supported}. Set the modeled OS, architecture "
+                            "and system type explicitly; changing output formats does not "
+                            "enable a retired generation profile."
+                        ),
+                    )
+                )
 
     def _validate_public_identity_reuse(self) -> None:
         """Report authored public addresses assigned contradictory semantic roles."""
@@ -355,16 +379,16 @@ class ScenarioValidator:
                         severity="error",
                         field_path=f"{path}.system",
                         message=f"Unknown storage file-set system {file_set.system!r}",
-                        suggestion="Reference an existing Windows or Linux environment system.",
+                        suggestion="Reference an existing Windows, Linux or macOS environment system.",
                     )
                 )
-            elif _get_os_category(system.os) not in {"windows", "linux"}:
+            elif _get_os_category(system.os) not in {"windows", "linux", "macos"}:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"{path}.system",
-                        message="Storage file sets require a recognized Windows or Linux system",
-                        suggestion="Use a modeled Windows or Linux host.",
+                        message="Storage file sets require a recognized Windows, Linux or macOS system",
+                        suggestion="Use a modeled Windows, Linux or macOS host.",
                     )
                 )
             if file_set.preset.casefold() not in known_presets:
@@ -635,13 +659,13 @@ class ScenarioValidator:
                         suggestion="Target a Windows system or use a POSIX mount for Linux clients.",
                     )
                 )
-            if mapping.mount is not None and "linux" not in platforms:
+            if mapping.mount is not None and not platforms.intersection({"linux", "macos"}):
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"environment.storage.mappings.{index}.mount",
-                        message="Storage mapping mount has no applicable Linux client",
-                        suggestion="Target a Linux system or use a drive for Windows clients.",
+                        message="Storage mapping mount has no applicable Linux/macOS client",
+                        suggestion="Target a POSIX client or use a drive for Windows clients.",
                     )
                 )
 
@@ -768,12 +792,15 @@ class ScenarioValidator:
                                     suggestion="Use path_style: mounted or unc for a Linux client.",
                                 )
                             )
-                        if spec.path_style == "mounted" and client_platform != "linux":
+                        if spec.path_style == "mounted" and client_platform not in {
+                            "linux",
+                            "macos",
+                        }:
                             self.issues.append(
                                 ValidationIssue(
                                     severity="error",
                                     field_path=f"{path}.path_style",
-                                    message="Mounted SMB presentation is only valid on Linux clients",
+                                    message="Mounted SMB presentation requires a Linux/macOS client",
                                     suggestion="Use path_style: mapped or unc for a Windows client.",
                                 )
                             )
@@ -784,6 +811,18 @@ class ScenarioValidator:
                                     field_path=f"{path}.client_access",
                                     message="windows_native SMB access requires a Windows client",
                                     suggestion="Use cifs_mount, smbclient, or auto for a Linux client.",
+                                )
+                            )
+                        if client_platform == "macos" and (
+                            spec.client_access != "auto"
+                            or spec.path_style not in {"auto", "mounted"}
+                        ):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.client_access",
+                                    message="macOS SMB clients require automatic mounted access",
+                                    suggestion="Use client_access: auto with path_style: auto/mounted and a mount mapping.",
                                 )
                             )
                         if (
@@ -853,7 +892,7 @@ class ScenarioValidator:
                                         suggestion="Use an absolute Windows drive path.",
                                     )
                                 )
-                            if client_platform == "linux" and not location_is_posix:
+                            if client_platform in {"linux", "macos"} and not location_is_posix:
                                 self.issues.append(
                                     ValidationIssue(
                                         severity="error",
@@ -1001,6 +1040,10 @@ class ScenarioValidator:
     ) -> None:
         """Validate per-share mapping, credential, identity, and ACL feasibility."""
 
+        macos_client = spec.client is None and any(
+            host.hostname.casefold() == system.casefold() and _get_os_category(host.os) == "macos"
+            for host in self.scenario.environment.systems
+        )
         authored_mapping = None
         if spec.mapping is not None:
             mapping = world.mappings_by_id.get(spec.mapping.casefold())
@@ -1081,7 +1124,7 @@ class ScenarioValidator:
                 )
                 selection_error = True
 
-            if spec.client_access == "cifs_mount" and (
+            if (spec.client_access == "cifs_mount" or macos_client) and (
                 selected_mapping is None or selected_mapping.mount is None
             ):
                 mounted = [mapping for mapping in applicable if mapping.mount is not None]
@@ -1091,8 +1134,10 @@ class ScenarioValidator:
                             severity="error",
                             field_path=f"{path}.client_access",
                             message=(
-                                "cifs_mount SMB access must resolve exactly one active "
-                                f"Linux mount mapping for {share.ref}; found {len(mounted)}"
+                                f"{'macOS mounted' if macos_client else 'cifs_mount'} SMB access "
+                                "must resolve exactly one active "
+                                f"{'macOS' if macos_client else 'Linux'} mount mapping "
+                                f"for {share.ref}; found {len(mounted)}"
                             ),
                             suggestion="Set mapping to one mapping with mount, or use smbclient.",
                         )
@@ -1120,8 +1165,8 @@ class ScenarioValidator:
                     ValidationIssue(
                         severity="error",
                         field_path=f"{path}.mapping",
-                        message=f"Storage mapping {selected_mapping.id!r} has no Linux mount",
-                        suggestion="Configure mount or target a Linux audience for allocation.",
+                        message=f"Storage mapping {selected_mapping.id!r} has no POSIX mount",
+                        suggestion="Configure mount or target a Linux/macOS audience for allocation.",
                     )
                 )
 
@@ -1592,6 +1637,66 @@ class ScenarioValidator:
                         "Use one of the configured observation profiles: "
                         f"{', '.join(sorted(available))}"
                     ),
+                )
+            )
+
+    def _validate_macos_process_coverage(self) -> None:
+        """Use the engine's same lossless native-collection preflight."""
+        if not any(
+            _get_os_category(system.os) == "macos" for system in self.scenario.environment.systems
+        ):
+            return
+        from evidenceforge.generation.macos_process_coverage import (
+            requires_complete_macos_processes,
+            validate_complete_collection,
+        )
+        from evidenceforge.generation.source_deployment_compiler import (
+            SourceDeploymentCompilationError,
+            compile_scenario_source_deployment,
+        )
+        from evidenceforge.models.exceptions import StateError
+        from evidenceforge.utils.time import resolve_time_window
+
+        formats = frozenset(str(entry.get("format", "")) for entry in self.scenario.output.logs)
+        if not requires_complete_macos_processes(self.scenario, formats):
+            return
+        try:
+            compilation = compile_scenario_source_deployment(self.scenario)
+            start, end = resolve_time_window(self.scenario.time_window)
+            validate_complete_collection(self.scenario, compilation.deployment, formats, start, end)
+            from evidenceforge.generation.activity.macos_execution_metadata import (
+                load_macos_execution_metadata_profile,
+            )
+            from evidenceforge.generation.deployment_compiler import (
+                compile_native_deployment_registry,
+            )
+            from evidenceforge.generation.macos_launch_support import macos_launch_issues
+            from evidenceforge.generation.world_model import WorldModel
+
+            profile = load_macos_execution_metadata_profile()
+            if profile is not None:
+                registry = compile_native_deployment_registry(
+                    self.scenario, WorldModel(self.scenario, "validation.invalid")
+                )
+                for issue in macos_launch_issues(self.scenario, registry, profile):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path="macos_process_coverage",
+                            message=(
+                                f"Unsupported native Mac launch on {issue.hostname} for "
+                                f"{issue.username}: {issue.image}: {', '.join(issue.issues)}"
+                            ),
+                            suggestion="Repair the installed executable metadata and canonical launch policy.",
+                        )
+                    )
+        except (StateError, SourceDeploymentCompilationError, ValueError) as error:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="macos_process_coverage",
+                    message=str(error),
+                    suggestion="Use full lossless ES process collection, or declare partial coverage explicitly.",
                 )
             )
 
@@ -2484,6 +2589,19 @@ class ScenarioValidator:
             seed % len(email_config.default_mailbox_servers)
         ]
 
+    def _validate_macos_persistence(self) -> None:
+        from evidenceforge.validation.macos_persistence import persistence_problems
+
+        for path, message in persistence_problems(self.scenario):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=path,
+                    message=message,
+                    suggestion="Use explicit write/bootstrap/activate/exit/unload/remove stages and an earlier root caller.",
+                )
+            )
+
     def _validate_event_sequences(self) -> None:
         """Validate typed event declarations (Phase 8.4).
 
@@ -2513,6 +2631,7 @@ class ScenarioValidator:
             "ecar",
             "syslog",
             "bash_history",
+            "zsh_history",
             "snort_alert",
             "cisco_asa",
             "web_access",
@@ -2563,20 +2682,42 @@ class ScenarioValidator:
                             )
                         )
 
-                if getattr(spec, "type", "") == "process":
+                if getattr(spec, "type", "") in {"process", "macos_launch_item"}:
+                    unsuccessful = getattr(spec, "outcome", "success") != "success"
+                    if unsuccessful:
+                        target = next(
+                            (
+                                system
+                                for system in self.scenario.environment.systems
+                                if system.hostname == event.system
+                            ),
+                            None,
+                        )
+                        if target is None or platform_for_os(target.os) != "macos":
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"storyline.{idx}.events.{spec_idx}.outcome",
+                                    message="Unsuccessful process outcome currently requires a Mac workstation",
+                                    suggestion="Use a modeled Mac host and an exact existing caller for this outcome.",
+                                )
+                            )
                     ref_key_base = (event.system, event.actor)
                     parent_ref = getattr(spec, "parent_ref", None)
                     if parent_ref is not None and (*ref_key_base, parent_ref) not in process_refs:
                         self.issues.append(
                             ValidationIssue(
-                                severity="warning",
+                                severity="error" if unsuccessful else "warning",
                                 field_path=f"storyline.{idx}.events.{spec_idx}.parent_ref",
                                 message=(
                                     f"Process parent_ref '{parent_ref}' has no earlier matching "
                                     "process_ref for the same storyline actor and system"
                                 ),
                                 suggestion=(
-                                    "Define the parent process earlier with process_ref, or omit "
+                                    "Define the caller earlier with process_ref; unsuccessful attempts "
+                                    "require an exact existing caller."
+                                    if unsuccessful
+                                    else "Define the parent process earlier with process_ref, or omit "
                                     "parent_ref to use the default shell/service parent inference."
                                 ),
                             )
@@ -2815,12 +2956,16 @@ class ScenarioValidator:
     def _validate_output_formats(self) -> None:
         """Validate output.logs format names."""
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
 
         # Accept both group names (zeek, windows) and individual format names (zeek_conn)
         known_output_formats = set(FORMAT_GROUPS.keys()) | {
             "ecar",
             "syslog",
             "bash_history",
+            "zsh_history",
+            "macos_endpoint_security",
+            "macos_unified_log",
             "snort_alert",
             "cisco_asa",
             "web_access",
@@ -2831,6 +2976,18 @@ class ScenarioValidator:
 
         for idx, log_spec in enumerate(self.scenario.output.logs):
             fmt = log_spec.get("format", "")
+            if fmt == "macos_endpoint_security" and not any(
+                select_macos_es_profile(system) is not None
+                for system in self.scenario.environment.systems
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"output.logs.{idx}.format",
+                        message="Native ES requires an active macOS 27 arm64 workstation profile",
+                        suggestion="Use an explicit supported workstation or omit this format.",
+                    )
+                )
             if fmt and fmt not in known_output_formats:
                 self.issues.append(
                     ValidationIssue(
@@ -2929,7 +3086,7 @@ class ScenarioValidator:
         return formats
 
     def _validate_format_os_compatibility(self) -> None:
-        """Check that OS-bound formats have matching systems and vice versa."""
+        """Reject incompatible OS formats and describe effective endpoint coverage."""
         expanded_formats = self._get_expanded_formats()
         os_categories = {
             system.hostname: _get_os_category(system.os)
@@ -2938,8 +3095,9 @@ class ScenarioValidator:
         os_present = set(os_categories.values())
 
         # Error: OS-bound format requested but no matching-OS systems
-        for fmt, required_os in _OS_BOUND_FORMATS.items():
-            if fmt in expanded_formats and required_os not in os_present:
+        for fmt, platforms in _OS_BOUND_FORMATS.items():
+            required_os = " or ".join(platforms)
+            if fmt in expanded_formats and not os_present.intersection(platforms):
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
@@ -2953,24 +3111,20 @@ class ScenarioValidator:
                     )
                 )
 
-        # Warning: system OS has no corresponding format in output
-        for hostname, os_cat in os_categories.items():
-            if os_cat == "unknown":
-                continue
-            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
-            if expected and not (expected & expanded_formats):
-                self.issues.append(
-                    ValidationIssue(
-                        severity="warning",
-                        field_path="output.logs",
-                        message=(
-                            f"System '{hostname}' is {os_cat} but no {os_cat} log formats in output"
-                        ),
-                        suggestion=(
-                            f"Add a {os_cat} format group (e.g., {', '.join(sorted(expected))})"
-                        ),
-                    )
-                )
+        # Collection coverage is independent of OS compatibility. Network-only
+        # exercises are valid; specific invisible actions are diagnosed by the
+        # shared behavior reachability contracts instead of demanding OS bundles.
+        from evidenceforge.validation.evidence_reachability import analyze_host_endpoint_coverage
+
+        self.issues.extend(
+            ValidationIssue(
+                severity=finding.severity,
+                field_path=finding.field_path,
+                message=finding.message,
+                suggestion=finding.suggestion,
+            )
+            for finding in analyze_host_endpoint_coverage(self.scenario)
+        )
 
     def _validate_segment_sensor_coverage(self) -> None:
         """Check that network segments with systems have sensor coverage."""
@@ -3207,41 +3361,6 @@ class ScenarioValidator:
                 )
             )
 
-    def _validate_storyline_format_coverage(self) -> None:
-        """Check storyline systems have appropriate format coverage."""
-        if not self.scenario.storyline:
-            return
-
-        expanded_formats = self._get_expanded_formats()
-        checked_systems: set[str] = set()
-
-        for idx, event in enumerate(self.scenario.storyline):
-            hostname = event.system
-            if hostname in checked_systems or hostname not in self.hostnames:
-                continue
-            checked_systems.add(hostname)
-
-            system = self._get_system(hostname)
-            if not system:
-                continue
-
-            os_cat = _get_os_category(system.os)
-            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
-            missing = expected - expanded_formats
-            if missing:
-                self.issues.append(
-                    ValidationIssue(
-                        severity="warning",
-                        field_path=f"storyline.{idx}.system",
-                        message=(
-                            f"[{event.id}] Storyline system '{hostname}' ({os_cat}) "
-                            f"expects formats {sorted(missing)} but they "
-                            f"are not in output.logs"
-                        ),
-                        suggestion="Add the missing formats to output.logs",
-                    )
-                )
-
     def _validate_storyline_os_plausibility(self) -> None:
         """Check storyline event types are plausible for target system OS."""
         if not self.scenario.storyline:
@@ -3257,6 +3376,58 @@ class ScenarioValidator:
 
             for spec_idx, spec in enumerate(event.events):
                 event_type = spec.type
+                if (
+                    event_type == "ssh_session"
+                    and getattr(spec, "pty", False)
+                    and os_cat != "macos"
+                ):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"storyline.{idx}.events.{spec_idx}.pty",
+                            message=f"[{event.id}] Explicit SSH PTY generation requires a qualified Mac receiver",
+                            suggestion="Use pty: true on a macOS 27 arm64 workstation SSH receiver.",
+                        )
+                    )
+                if os_cat == "macos":
+                    limitation: str | None = None
+                    if event_type == "logon" and getattr(spec, "logon_type", None) == 10:
+                        limitation = "Use ssh_session for Mac remote interactive activity"
+                    elif event_type == "ssh_session":
+                        actor = next(
+                            (
+                                user
+                                for user in self.scenario.environment.users
+                                if user.username == event.actor
+                            ),
+                            None,
+                        )
+                        if system.architecture != "arm64" or system.type != "workstation":
+                            limitation = "Mac SSH receivers require an explicit arm64 workstation"
+                        elif (
+                            actor is None
+                            or not (
+                                actor.primary_system == system.hostname
+                                or system.assigned_user == actor.username
+                            )
+                            or actor.username.casefold() in {"root", "_sshd", "sshd"}
+                        ):
+                            limitation = (
+                                "Mac SSH receivers require an explicitly placed local user; "
+                                "use primary_system or assigned_user"
+                            )
+                    if limitation is not None:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}",
+                                message=f"[{event.id}] {limitation}",
+                                suggestion=(
+                                    "Use the bounded Mac SSH workstation profile, or a Linux "
+                                    "receiver for other remote-session behavior."
+                                ),
+                            )
+                        )
 
                 # Windows-only events on Linux
                 if os_cat == "linux" and event_type in _WINDOWS_EVENT_TYPES:
@@ -3294,11 +3465,36 @@ class ScenarioValidator:
 
                 # Process command OS mismatch
                 if event_type == "process" and hasattr(spec, "command_line"):
+                    if getattr(spec, "launch_method", None) == "finder" and os_cat != "macos":
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.launch_method",
+                                message="Finder launch_method requires a supported Mac host",
+                                suggestion="Use a supported Mac host or remove launch_method.",
+                            )
+                        )
                     cmd = spec.command_line or spec.process_name
                     cmd_lower = cmd.lower()
                     process_name = getattr(spec, "process_name", "")
 
                     if process_name and not _is_full_process_path(process_name):
+                        from evidenceforge.generation.activity.application_catalog import (
+                            has_catalog_entry,
+                        )
+
+                        if os_cat == "macos" and not has_catalog_entry(process_name, os_cat):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"storyline.{idx}.events.{spec_idx}.process_name",
+                                    message=(
+                                        f"[{event.id}] Unknown macOS executable "
+                                        f"'{process_name}' has no canonical catalog path"
+                                    ),
+                                    suggestion="Provide a full path or add a Mac catalog entry.",
+                                )
+                            )
                         self.issues.append(
                             ValidationIssue(
                                 severity="info",
@@ -3315,11 +3511,16 @@ class ScenarioValidator:
                         )
                     elif process_name:
                         from evidenceforge.generation.activity.application_catalog import (
+                            has_catalog_entry,
                             resolve_image_path,
                         )
 
                         basename = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-                        resolved = resolve_image_path(basename, os_cat)
+                        resolved = (
+                            basename
+                            if os_cat == "macos" and not has_catalog_entry(basename, os_cat)
+                            else resolve_image_path(basename, os_cat)
+                        )
                         if resolved != basename and resolved.lower() != process_name.lower():
                             self.issues.append(
                                 ValidationIssue(
@@ -3436,10 +3637,10 @@ class ScenarioValidator:
         from evidenceforge.generation.spillage import (
             HTTP_SURFACES,
             LINUX_ONLY_SURFACES,
-            SURFACE_FORMATS,
             SpillageSafetyError,
             check_spillage_safety,
             choose_web_spillage_scheme,
+            expected_sources_for_surface,
             web_server_supported_schemes,
         )
 
@@ -3459,13 +3660,10 @@ class ScenarioValidator:
                     continue
                 field_path = f"storyline.{idx}.events.{spec_idx}"
 
-                # shell_history/syslog are Linux-modeled; emitting them on any non-Linux
-                # host (Windows OR an unknown OS such as macOS/BSD/Solaris) would silently
-                # drop the credential while still labeling it in ground truth — a phantom
-                # positive — so this is a hard error. The emitter only handles linux, so
-                # gate on != "linux", not == "windows". (process_command_line is cross-OS,
-                # so it is exempt.)
-                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES:
+                # Native syslog remains Linux-only. Authored Mac history uses
+                # the existing explicitly owned zsh submission path.
+                mac_history = os_cat == "macos" and spec.surface == "shell_history"
+                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES and not mac_history:
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
@@ -3481,7 +3679,8 @@ class ScenarioValidator:
 
                 # The credential is lost (but still ground-truthed) if the
                 # surface's output format is not collected — phantom positive.
-                required_fmt = SURFACE_FORMATS.get(spec.surface)
+                sources = expected_sources_for_surface(spec.surface, os_category=os_cat)
+                required_fmt = sources[0] if sources else None
                 if required_fmt and required_fmt not in expanded_formats:
                     self.issues.append(
                         ValidationIssue(
@@ -3536,7 +3735,16 @@ class ScenarioValidator:
 
                 # Non-interactive service accounts get no bash history, so a
                 # shell_history spill for them would never land.
-                if spec.surface == "shell_history" and is_noninteractive_bash_user(event.actor):
+                if spec.surface == "shell_history" and (
+                    is_noninteractive_bash_user(event.actor)
+                    or (
+                        mac_history
+                        and (
+                            event.actor == "root"
+                            or event.actor in self.scenario.environment.service_accounts
+                        )
+                    )
+                ):
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
@@ -3563,6 +3771,15 @@ class ScenarioValidator:
                         )
                     )
 
+                if mac_history and spec.value is not None and not spec.value.isascii():
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=f"[{event.id}] Mac shell_history requires the ASCII zsh_history profile",
+                            suggestion="Use an ASCII invented value or another supported surface",
+                        )
+                    )
                 if spec.value is not None:
                     try:
                         check_spillage_safety(spec.value, family=None)
@@ -4229,7 +4446,11 @@ class ScenarioValidator:
             process_domains: set[str] = set()
             connection_hostnames: set[str] = set()
             for event in entry.events:
-                if event.type == "process" and getattr(event, "command_line", None):
+                if (
+                    event.type == "process"
+                    and getattr(event, "outcome", "success") == "success"
+                    and getattr(event, "command_line", None)
+                ):
                     process_domains |= extract_hostnames_from_command(event.command_line)
                 if event.type == "connection" and getattr(event, "hostname", None):
                     connection_hostnames.add(event.hostname.lower())

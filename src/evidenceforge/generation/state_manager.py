@@ -33,35 +33,111 @@ import math
 import random
 import secrets
 from bisect import bisect_left
-from collections.abc import Callable, Iterator
+from collections import ChainMap
+from collections.abc import Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum, StrEnum
 from itertools import islice
 from threading import RLock, Thread, current_thread, get_ident
+from typing import Literal
 
+from evidenceforge.config.schemas import MacosTerminalDeviceProfile
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    MacosAuditSession,
+    MacosProcessAuditBinding,
+    MacosProcessPrivilegeDrop,
+    MacosProcessServiceDrop,
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+    validate_process_arguments,
+    validate_process_environment,
+)
+from evidenceforge.events.job_control import (
+    PosixGroupIdentity,
+    PosixJobControlChange,
+    PosixSessionIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_descriptors import (
+    MacosDescriptorBinding,
+    MacosDescriptorTable,
+    validate_macos_descriptors,
+)
+from evidenceforge.events.macos_exec_image import MacosExecImage, validate_macos_exec_image
+from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
+from evidenceforge.events.macos_execution_directory import (
+    MacosExecutionDirectory,
+    validate_macos_execution_directory,
+)
+from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
+from evidenceforge.events.macos_filesystem_state import (
+    MAX_FILESYSTEM_DIRECTORIES_PER_HOST,
+    MAX_FILESYSTEM_DIRECTORY_HISTORY,
+    MacosFilesystemChange,
+)
+from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
+from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
+from evidenceforge.events.macos_spawn_io import MacosSpawnIO
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
+from evidenceforge.events.macos_terminal import MacosTerminalObservation, MacosTerminalSession
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
     normalize_zeek_history,
 )
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
+from evidenceforge.events.process_executable import (
+    ProcessExecutableVersion,
+    validate_process_executable_version,
+)
+from evidenceforge.events.process_observation import (
+    ProcessParentObservation,
+    ProcessRelationshipObservation,
+    ProcessResponsibilityObservation,
+)
+from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
+from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
     DeferredSessionProtocol,
 )
+from evidenceforge.generation.identity import MacAccount
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
     IndexedEntityStore,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.macos_audit_identity import MacosAuditIdentityLedger
+from evidenceforge.generation.macos_process_census import MacosOccurrenceDigest, MacosProcessCensus
+from evidenceforge.generation.macos_process_overlay import MacosProcessRelationshipOverlay
+from evidenceforge.generation.macos_spawn_descriptors import plan_spawn_descriptors
+from evidenceforge.generation.macos_terminal_devices import (
+    plan_macos_standard_io,
+    plan_macos_terminal,
+)
+from evidenceforge.generation.posix_job_control import (
+    MAX_MEMBERSHIP_CHANGES,
+    ReservationKey,
+    ReservationRows,
+    membership_updates,
+    numeric_id_reserved,
+    reservation_key,
+)
 from evidenceforge.generation.storage_world import CompiledStorageFile
+from evidenceforge.generation.timing.macos import MachTimebase, MacosBootClock
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
     ActiveSession,
@@ -76,6 +152,11 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
+
+# Retain a bounded historical execution window per live/retained process.
+_MAX_RETAINED_EXECUTIONS_PER_PROCESS = 64
+_MAX_RETAINED_PROCESS_DIRECTORIES = 64
+_MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES = 64
 
 
 def _authority_values_match(left: object, right: object) -> bool:
@@ -115,6 +196,8 @@ _LINUX_PID_BLOCK_SECONDS = 300
 def _bind_materialization_digest_freezer() -> Callable[[object, set[int]], object]:
     """Bind a deep freezer that never dispatches through caller-owned values."""
 
+    audit_ledger_type = MacosAuditIdentityLedger
+    audit_ledger_snapshot = MacosAuditIdentityLedger.canonical_snapshot
     exact_scalar_types = frozenset({bool, int, float, str, bytes})
     exact_container_types = frozenset({dict, list, tuple, set, frozenset})
     rejected_subclass_bases = (
@@ -166,6 +249,11 @@ def _bind_materialization_digest_freezer() -> Callable[[object, set[int]], objec
         if value is None:
             return None
         value_type = type_type(value)
+        if value_type is audit_ledger_type:
+            return (
+                "canonical-macos-audit-identities",
+                freeze(audit_ledger_snapshot(value), active),
+            )
         if value_type in exact_scalar_types:
             return value
         if value_type is datetime_type:
@@ -516,7 +604,6 @@ class _LinuxLogindAllocatorPatch:
     event_time: datetime
     session_id: int
     initial: int | None
-    epoch: datetime | None
     rng_state_after: object
 
 
@@ -528,6 +615,8 @@ class _SessionAllocatorPatch:
     used_logon_id: int | None
     windows_session_counter: tuple[str, int] | None
     linux_logind: _LinuxLogindAllocatorPatch | None
+    macos_audit_session_counter: tuple[str, int] | None = None
+    macos_ssh_pipe_counter: tuple[str, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,6 +638,8 @@ class _SessionMaterializationPayload:
     source_ready_time: datetime | None = None
     closure_owned_by_bundle: bool = False
     end_plan: SessionEndPlan | None = None
+    audit_origin: MacosAuditSession | None = None
+    ssh_command_streams: MacosSshCommandStreams | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,6 +688,16 @@ class SessionMaterializationPlan:
         return self._payload.end_plan
 
     @property
+    def audit_origin(self) -> MacosAuditSession | None:
+        """Return the explicitly planned native authentication origin, if any."""
+        return self._payload.audit_origin
+
+    @property
+    def ssh_command_streams(self) -> MacosSshCommandStreams | None:
+        """Return channel-owned command streams, not a helper descriptor inventory."""
+        return self._payload.ssh_command_streams
+
+    @property
     def external_rng_state_after(self) -> object | None:
         """Return the action RNG state to install only after a successful commit."""
 
@@ -618,6 +719,17 @@ class _ProcessAllocatorPatch:
     pid_candidate_probe_delta: int
     thread_counter: tuple[str, int] | None
     thread_rng_state: tuple[str, object] | None
+    macos_anonymous_audit_session: tuple[str, int] | None = None
+    macos_boot_audit_session: tuple[str, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MacosPolicyRefusalAllocation:
+    """Cohort-owned PID/TID allocation without a process or thread lifetime."""
+
+    target: MacosPolicyRefusalTarget
+    kernel_thread_id: int
+    allocator: _ProcessAllocatorPatch
 
 
 @dataclass(frozen=True, slots=True)
@@ -634,6 +746,9 @@ class _ProcessMaterializationPayload:
     auth_session_id: int | None
     auth_logon_type: int | None
     require_session: bool
+    forked: bool = False
+    terminal_session: MacosTerminalSession | None = None
+    initial_descriptors: MacosDescriptorTable | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,6 +778,11 @@ class ProcessMaterializationPlan:
         """Return the authenticated token bound to downstream prepared work."""
 
         return self._integrity_token
+
+    @property
+    def forked(self) -> bool:
+        """Return whether this start was explicitly planned as a POSIX fork."""
+        return self._payload.forked
 
     @property
     def parent_identity(self) -> ProcessIdentity | None:
@@ -707,6 +827,7 @@ class _ProcessTerminationMaterializationPayload:
     parent_identity: ProcessIdentity | None
     parent_activity_time: datetime | None
     session_references: tuple[_ProcessTerminationSessionReference, ...]
+    exit_outcome: PosixProcessExit | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -741,6 +862,12 @@ class ProcessTerminationMaterializationPlan:
         """Return the exact canonical termination time."""
 
         return self._payload.end_time
+
+    @property
+    def exit_outcome(self) -> PosixProcessExit | None:
+        """Return the explicit terminal result, or unknown for legacy callers."""
+
+        return self._payload.exit_outcome
 
     @property
     def parent_activity_time(self) -> datetime | None:
@@ -1042,6 +1169,7 @@ class _SessionProcessMaterializationLinks:
     winlogon: int = -1
     explorer: int = -1
     process_tree_root: int = -1
+    session_manager: int = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1100,6 +1228,35 @@ class MaterializationBatchPlan:
 
         return self._boot_times
 
+    def process_hold_activity_time(
+        self, identity: ProcessIdentity, hold_until: datetime
+    ) -> datetime:
+        """Separate a staged Mac receiver's bootstrap activity from future retention.
+
+        Only the authenticated Mac SSH session's privileged initial transport
+        process qualifies. Other processes retain the established close frontier.
+        The lifecycle hold still owns the complete transport interval.
+        """
+        session = self.session
+        if (
+            session is None
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or not 0 <= self._session_process_links.transport < len(self.processes)
+            or self.processes[self._session_process_links.transport].identity != identity
+            or session.identity.hostname != identity.hostname
+            or session.identity.logon_id != identity.logon_id
+            or identity.audit_pid_version is None
+            or identity.execution_ordinal != 0
+            or identity.principal != "root"
+            or identity.credentials is None
+            or not identity.credentials.is_unattributed_root
+            or identity.started_at > session.audit_origin.created_at
+        ):
+            return hold_until
+        return identity.started_at
+
     @property
     def publication_token(self) -> str:
         """Return the authenticated token bound to the complete batch."""
@@ -1121,6 +1278,7 @@ class MaterializationBatchBuilder:
         self._boot_times: dict[str, datetime] = {}
         self._session_process_plans: dict[str, ProcessMaterializationPlan] = {}
         self._sealed = False
+        self._macos_audit_pid_versions: dict[str, int] = {}
         self._pid_counters: dict[str, int] = {}
         self._pid_rng_states: dict[str, object] = {}
         self._pid_os: dict[str, str] = {}
@@ -1161,6 +1319,34 @@ class MaterializationBatchBuilder:
         plan = self._manager._plan_batch_session(self, kwargs)
         self._session = plan
         return plan
+
+    def enrich_macos_audit_session(
+        self,
+        plan: SessionMaterializationPlan,
+        *,
+        audit_uid: int,
+        authenticated_at: datetime,
+    ) -> SessionMaterializationPlan:
+        """Reserve a native SSH or local GUI audit origin before planning processes."""
+        self._require_open()
+        if self._session is not plan or self._processes:
+            raise StateError("macOS audit enrichment must precede batch process planning")
+        enriched = self._manager._enrich_batch_macos_audit_session(
+            self, plan, audit_uid=audit_uid, authenticated_at=authenticated_at
+        )
+        self._session = enriched
+        return enriched
+
+    def enrich_macos_ssh_command_streams(
+        self, plan: SessionMaterializationPlan, *, first_pipe_id: int
+    ) -> SessionMaterializationPlan:
+        """Reserve channel pipe identities before receiver startup, without publishing FDs."""
+        self._require_open()
+        enriched = self._manager._enrich_batch_macos_ssh_command_streams(
+            self, plan, first_pipe_id=first_pipe_id
+        )
+        self._session = enriched
+        return enriched
 
     def enrich_linux_logind_session(
         self,
@@ -1203,6 +1389,20 @@ class MaterializationBatchBuilder:
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
+        exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
+        executable_version: ProcessExecutableVersion | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None = None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
+        new_posix_session: bool = False,
+        new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
+        responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1228,11 +1428,131 @@ class MaterializationBatchBuilder:
             parent_activity_time=parent_activity_time,
             auth_session_id=auth_session_id,
             auth_logon_type=auth_logon_type,
+            credentials=credentials,
+            arguments=arguments,
+            environment=environment,
+            image_security=image_security,
+            exec_image=exec_image,
+            exec_script=exec_script,
+            executable_version=executable_version,
+            execution_directory=execution_directory,
+            macos_terminal=macos_terminal,
+            macos_standard_io=macos_standard_io,
+            new_posix_session=new_posix_session,
+            new_posix_group=new_posix_group,
+            macos_boot_audit_session=macos_boot_audit_session,
+            responsibility=responsibility,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
         self._processes.append(plan)
         return plan
+
+    def plan_macos_ssh_receiver_fork(
+        self,
+        parent: ProcessIdentity,
+        *,
+        session: SessionMaterializationPlan,
+        forked_at: datetime,
+        execution_directory: MacosExecutionDirectory,
+        lifecycle_group_id: str,
+    ) -> ProcessMaterializationPlan:
+        """Reserve a real launchd fork in its new SSH session's atomic State batch.
+
+        Logical session ownership does not change the inherited POSIX/audit
+        credentials, loaded image, job membership or execution ordinal. Later
+        startup phases own setsid, image replacement and authenticated adoption.
+        """
+        self._require_open()
+        if (
+            type(parent) is not ProcessIdentity
+            or type(session) is not SessionMaterializationPlan
+            or self._session is not session
+            or self._processes
+            or type(forked_at) is not datetime
+            or forked_at.utcoffset() is None
+        ):
+            raise StateError("Mac SSH receiver fork requires its exact fresh session batch")
+        manager = self._manager
+        at = ensure_utc(forked_at)
+        if (
+            manager.get_process_identity(parent.hostname, 1) != parent
+            or manager._pid_os.get(parent.hostname) != "macos"
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or parent.principal != "root"
+            or parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or parent.job_control is None
+            or parent.execution_started_at > at
+            or session.identity.hostname != parent.hostname
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.identity.started_at > at
+            or session.audit_origin is None
+            or at >= session.audit_origin.created_at
+            or session._payload.effective_uid != session.audit_origin.audit_uid
+            or session._payload.effective_gid is None
+            or session._payload.network_close_time is None
+            or session._payload.network_close_time <= at
+        ):
+            raise StateError("Mac SSH receiver fork lost its boot parent or pre-auth session")
+        current = manager.process_directory_at(parent, event_time=at)
+        if (
+            type(execution_directory) is not MacosExecutionDirectory
+            or current is None
+            or execution_directory.native_path != current.native_path
+            or execution_directory.metadata != current.metadata
+            or execution_directory.observed_at != at
+        ):
+            raise StateError("Mac SSH receiver fork requires its inherited directory observation")
+        descriptors = manager.process_descriptors_at(parent, event_time=at)
+        plan = self.plan_process(
+            system=parent.hostname,
+            parent_pid=parent.pid,
+            image=parent.image,
+            command_line=parent.command_line,
+            username=parent.principal,
+            integrity_level="System",
+            os_category="macos",
+            credentials=parent.credentials,
+            arguments=parent.arguments,
+            environment=parent.environment,
+            image_security=parent.image_security,
+            exec_image=parent.exec_image,
+            exec_script=parent.exec_script,
+            executable_version=parent.executable_version,
+            execution_directory=execution_directory,
+            responsibility=parent.responsibility,
+            logon_id=session.identity.logon_id,
+            lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=parent.lifecycle_group_id,
+            start_time=at,
+            parent_activity_time=at,
+            require_session=True,
+            session_plan=session,
+            auth_session_id=session.identity.session_id,
+            auth_logon_type=10,
+        )
+        payload = replace(
+            plan._payload,
+            forked=True,
+            initial_descriptors=descriptors.inherited_at(at) if descriptors is not None else None,
+        )
+        fork = replace(
+            plan,
+            _payload=payload,
+            _integrity_token=_materialization_integrity_token(
+                manager._materialization_secret,
+                "process",
+                plan.expected_version,
+                plan.identity,
+                payload,
+                plan._allocator_patch,
+            ),
+        )
+        self._processes[-1] = fork
+        return fork
 
     def plan_boot_time(self, system: str, boot_time: datetime) -> datetime:
         """Stage one exact host boot-time replacement without changing State."""
@@ -1259,6 +1579,7 @@ class MaterializationBatchBuilder:
         winlogon_plan: ProcessMaterializationPlan | None = None,
         explorer_plan: ProcessMaterializationPlan | None = None,
         process_tree_root_plan: ProcessMaterializationPlan | None = None,
+        session_manager_plan: ProcessMaterializationPlan | None = None,
     ) -> None:
         """Bind exact planned process roles into the session's primitive commit."""
 
@@ -1272,6 +1593,7 @@ class MaterializationBatchBuilder:
             "winlogon": winlogon_plan,
             "explorer": explorer_plan,
             "process_tree_root": process_tree_root_plan,
+            "session_manager": session_manager_plan,
         }
         for role, process in values.items():
             if process is None:
@@ -1562,7 +1884,7 @@ class DeferredSessionStateAuthority:
     protocol: DeferredSessionProtocol
     binding_disposition: DeferredSessionBindingDisposition
     bound_at: datetime
-    batch: MaterializationBatchPlan
+    batch: MaterializationBatchPlan | None
     existing_session_patch: ConnectionExistingSessionPatch | None
     existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None
     _owner: "StateManager" = field(repr=False, compare=False)
@@ -1581,8 +1903,13 @@ class DeferredSessionStateAuthority:
         if type(self.bound_at) is not datetime:
             raise TypeError("Deferred session State authority requires an exact binding time")
         object.__setattr__(self, "bound_at", ensure_utc(self.bound_at))
-        if type(self.batch) is not MaterializationBatchPlan:
-            raise TypeError("Deferred session State authority requires an exact batch")
+        if (
+            type(self.batch) is not MaterializationBatchPlan
+            and not self.allocation_free_rdp_reconnect
+        ):
+            raise TypeError(
+                "Deferred session State authority requires an exact batch or ACTIVE RDP patch"
+            )
         if self.existing_session_patch is not None and (
             type(self.existing_session_patch) is not ConnectionExistingSessionPatch
         ):
@@ -1600,6 +1927,17 @@ class DeferredSessionStateAuthority:
             raise TypeError("Deferred session State authority capability has an unsupported type")
         if type(self._integrity_token) is not str or not self._integrity_token:
             raise TypeError("Deferred session State authority requires an integrity token")
+
+    @property
+    def allocation_free_rdp_reconnect(self) -> bool:
+        """Identify the closed existing-session-only RDP State shape."""
+        return bool(
+            self.batch is None
+            and self.protocol is DeferredSessionProtocol.RDP
+            and self.binding_disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION
+            and type(self.existing_session_patch) is ConnectionExistingSessionPatch
+            and self.existing_session_process_roles_patch is None
+        )
 
     @property
     def publication_token(self) -> str:
@@ -1661,7 +1999,7 @@ def _deferred_session_state_authority_integrity_token(
     protocol: DeferredSessionProtocol,
     binding_disposition: DeferredSessionBindingDisposition,
     bound_at: datetime,
-    batch: MaterializationBatchPlan,
+    batch: MaterializationBatchPlan | None,
     existing_session_patch: ConnectionExistingSessionPatch | None,
     existing_session_process_roles_patch: ConnectionExistingSessionProcessRolesPatch | None,
     owner_identity: int,
@@ -1676,7 +2014,7 @@ def _deferred_session_state_authority_integrity_token(
         protocol.value,
         binding_disposition.value,
         bound_at,
-        batch.publication_token,
+        batch.publication_token if batch is not None else "allocation-free-rdp",
         (existing_session_patch._integrity_token if existing_session_patch is not None else ""),
         (
             existing_session_process_roles_patch.publication_token
@@ -2116,15 +2454,16 @@ class ActionCohortSessionMetadataPatch:
 
 @dataclass(frozen=True, slots=True)
 class ActionCohortLiveSessionProcessRolesPatch:
-    """Exact live-session shell-role transition backed by staged processes."""
+    """Exact live-session role transition backed by staged creation or execution."""
 
     target: SessionIdentity
     before: ActionCohortLiveSessionProcessRolesState
     after: ActionCohortLiveSessionProcessRolesState
     winlogon_plan: ProcessMaterializationPlan | None
-    explorer_plan: ProcessMaterializationPlan
+    explorer_plan: ProcessMaterializationPlan | None
     process_tree_root_plan: ProcessMaterializationPlan | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    macos_shell: ProcessIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2134,6 +2473,20 @@ class ActionCohortProcessActivityPatch:
     target: ProcessMaterializationPlan | ProcessIdentity
     activity_time: datetime
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    audit_binding: MacosProcessAuditBinding | None = None
+    privilege_drop: MacosProcessPrivilegeDrop | None = None
+    service_drop: MacosProcessServiceDrop | None = None
+    job_control_change: PosixJobControlChange | None = None
+    job_control_actor: ProcessIdentity | None = None
+    parentage_change: ProcessParentageChange | None = None
+    adopting_parent: ProcessIdentity | None = None
+    directory_change: MacosExecutionDirectory | None = None
+    filesystem_change: MacosFilesystemChange | None = None
+    descriptor_table: MacosDescriptorTable | None = None
+    native_pipe_allocation: tuple[int, int, str] | None = None
+    terminal_after: MacosTerminalSession | None = None
+    terminal_policy_json: str | None = None
+    policy_refusal: MacosPolicyRefusalAllocation | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -2141,6 +2494,34 @@ class ActionCohortProcessActivityPatch:
         if type(self.activity_time) is not datetime:
             raise TypeError("Action cohort process activity requires an exact datetime")
         object.__setattr__(self, "activity_time", ensure_utc(self.activity_time))
+        allocation = self.native_pipe_allocation
+        if allocation is not None and (
+            type(allocation) is not tuple
+            or len(allocation) != 3
+            or type(allocation[0]) is not int
+            or type(allocation[1]) is not int
+            or not 0 < allocation[0] <= allocation[1] < 2**64
+            or type(allocation[2]) is not str
+            or not allocation[2]
+            or self.descriptor_table is None
+        ):
+            raise ValueError("Mac pipe allocation requires exact counter and descriptor ownership")
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCohortProcessExecution:
+    """One authenticated image replacement within an existing process lifetime."""
+
+    target: ProcessIdentity
+    after: ProcessIdentity
+    retired_threads: tuple[ThreadIdentity, ...]
+    thread_counter: tuple[str, int] | None
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    descriptors_after: MacosDescriptorTable | None = None
+    gui_session: SessionIdentity | None = None
+    finder_spawn: bool = False
+    spawn_io: MacosSpawnIO | None = None
+    spawn_pipe_counter: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2168,6 +2549,8 @@ class ActionCohortProcessTermination:
     parent_activity: ActionCohortProcessActivityPatch | None
     staged_session_references: tuple[_ProcessTerminationSessionReference, ...]
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    exit_outcome: PosixProcessExit | None = None
+    post_execution: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical terminal time."""
@@ -2180,7 +2563,7 @@ class ActionCohortProcessTermination:
     def identity(self) -> ProcessIdentity:
         """Return the exact process identity being terminalized."""
 
-        return self.target.identity
+        return self.post_execution if self.post_execution is not None else self.target.identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -2228,6 +2611,7 @@ class ActionCohortMaterializationPlan:
     _live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...]
     _session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     _process_activity: tuple[ActionCohortProcessActivityPatch, ...]
+    _process_executions: tuple[ActionCohortProcessExecution, ...]
     _session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     _process_terminations: tuple[ActionCohortProcessTermination, ...]
     _session_terminalizations: tuple[ActionCohortSessionTerminalization, ...]
@@ -2282,6 +2666,12 @@ class ActionCohortMaterializationPlan:
         return self._process_activity
 
     @property
+    def process_executions(self) -> tuple[ActionCohortProcessExecution, ...]:
+        """Return exact before/after execution snapshots within existing lifetimes."""
+
+        return self._process_executions
+
+    @property
     def session_activity_patches(self) -> tuple[ActionCohortSessionActivityPatch, ...]:
         """Return exact staged/live session activity transitions."""
 
@@ -2325,6 +2715,7 @@ class ActionCohortMaterializationResult:
     terminalized_sessions: tuple[SessionIdentity, ...]
     smb_file_mutation: SmbFileMutationCommitResult | None
     smb_connection_finalization: SmbConnectionFinalizationResult | None
+    executed_processes: tuple[ProcessIdentity, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2348,6 +2739,16 @@ class _PreparedActionCohortProcessStart:
     linux_pid_allocations_default: TemporalAllocationIndex | None
     fixed_pid_reservations_default: set[int] | None
     thread_rng_replacement: random.Random | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedActionCohortExecThreads:
+    """Mac exec thread rows and retention deadline prepared before mutation."""
+
+    execution: ActionCohortProcessExecution
+    retired: tuple[RunningThread, ...]
+    replacement: RunningThread
+    deadline: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -2376,7 +2777,7 @@ class _PreparedActionCohortSessionTerminalization:
 class _ActionCohortMappingSavepoint:
     """One bounded mapping key captured before cohort mutation."""
 
-    mapping: dict[object, object]
+    mapping: MutableMapping[object, object]
     key: object
     present: bool
     value: object
@@ -2502,6 +2903,7 @@ class _MaterializationBatchRollbackProjection:
     _live_session_process_roles: tuple[()] = ()
     _session_metadata: tuple[()] = ()
     _process_activity: tuple[()] = ()
+    _process_executions: tuple[()] = ()
     _session_activity: tuple[()] = ()
 
 
@@ -2520,9 +2922,12 @@ class _PreparedActionCohortCommitPlan:
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...]
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     process_activity: tuple[ActionCohortProcessActivityPatch, ...]
+    process_executions: tuple[ActionCohortProcessExecution, ...]
+    exec_threads: tuple[_PreparedActionCohortExecThreads, ...]
     session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     expected_started_sessions: tuple[SessionIdentity, ...]
     expected_started_processes: tuple[ProcessIdentity, ...]
+    expected_executed_processes: tuple[ProcessIdentity, ...]
     expected_terminated_processes: tuple[ProcessIdentity, ...]
     expected_terminalized_sessions: tuple[SessionIdentity, ...]
     committed_version: int
@@ -2536,6 +2941,17 @@ class _PreparedActionCohortCommitPlan:
     claim_version: int
     claim_state_time: datetime | None
     claim_preimage: object
+    refusal_allocations: tuple["_PreparedPolicyRefusalAllocation", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPolicyRefusalAllocation:
+    allocation: MacosPolicyRefusalAllocation
+    rng: random.Random
+    temporal_default: TemporalAllocationIndex
+    reservations: dict[int, list[tuple[datetime, datetime]]]
+    intervals: list[tuple[datetime, datetime]]
+    receipt: MacosPolicyRefusalReceipt
 
 
 @dataclass(slots=True)
@@ -2702,6 +3118,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         ] = []
         self._session_metadata_patches: list[ActionCohortSessionMetadataPatch] = []
         self._process_activity_patches: list[ActionCohortProcessActivityPatch] = []
+        self._process_execution_drafts: list[ActionCohortProcessExecution] = []
         self._session_activity_patches: list[ActionCohortSessionActivityPatch] = []
         self._process_termination_drafts: list[ActionCohortProcessTermination] = []
         self._session_terminalization_drafts: list[ActionCohortSessionTerminalization] = []
@@ -2735,6 +3152,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._live_session_process_roles_patches.clear()
         self._session_metadata_patches.clear()
         self._process_activity_patches.clear()
+        self._process_execution_drafts.clear()
         self._session_activity_patches.clear()
         self._process_termination_drafts.clear()
         self._session_terminalization_drafts.clear()
@@ -2815,6 +3233,20 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
+        exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
+        executable_version: ProcessExecutableVersion | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None = None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
+        new_posix_session: bool = False,
+        new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
+        responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -2861,6 +3293,20 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 parent_activity_time=parent_activity_time,
                 auth_session_id=auth_session_id,
                 auth_logon_type=auth_logon_type,
+                credentials=credentials,
+                arguments=arguments,
+                environment=environment,
+                image_security=image_security,
+                exec_image=exec_image,
+                exec_script=exec_script,
+                executable_version=executable_version,
+                execution_directory=execution_directory,
+                macos_terminal=macos_terminal,
+                macos_standard_io=macos_standard_io,
+                new_posix_session=new_posix_session,
+                new_posix_group=new_posix_group,
+                macos_boot_audit_session=macos_boot_audit_session,
+                responsibility=responsibility,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -2932,6 +3378,25 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             raise StateError("Action cohort repeats a live-session process-role patch")
         self._live_session_process_roles_patches.append(patch)
 
+    def bind_macos_ssh_session_shell(
+        self, target: SessionIdentity, *, shell: ProcessIdentity
+    ) -> None:
+        """Bind this cohort's login-shell exec to its exact live Mac SSH session."""
+        self._require_open()
+        if len(self._live_session_process_roles_patches) >= (
+            _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES
+        ):
+            raise StateError("Action cohort live-session role patch limit exceeded")
+        patch = self._manager._prepare_action_cohort_macos_ssh_shell_patch(
+            self, target=target, shell=shell
+        )
+        if any(
+            candidate.target == patch.target
+            for candidate in self._live_session_process_roles_patches
+        ):
+            raise StateError("Action cohort repeats a live-session process-role patch")
+        self._live_session_process_roles_patches.append(patch)
+
     def session_metadata(
         self,
         target: SessionMaterializationPlan | SessionIdentity,
@@ -2982,7 +3447,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         """Stage one exact process activity frontier."""
 
         self._require_open()
-        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        normalized = self._manager._normalize_action_cohort_process_target(
+            self, target, allow_executed=True
+        )
         key = self._manager._action_process_target_key(normalized)
         if any(
             self._manager._action_process_target_key(patch.target) == key
@@ -2996,6 +3463,934 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 _capability=_ActionCohortCapability(),
             )
         )
+
+    def plan_macos_policy_refusal(
+        self, initiator: ProcessIdentity, *, image: str, refused_at: datetime
+    ) -> MacosPolicyRefusalAllocation:
+        """Reserve only the reported target PID and kernel observation TID."""
+        self._require_open()
+        if self._process_activity_patches:
+            raise StateError("Policy refusal requires its own process activity cohort")
+        normalized = self._manager._normalize_action_cohort_process_target(self, initiator)
+        if type(normalized) is not ProcessIdentity:
+            raise StateError("Policy refusal requires an existing initiating process")
+        with self._manager._capability_minting_guard("plan_macos_policy_refusal"):
+            allocation = self._manager._plan_macos_policy_refusal(normalized, image, refused_at)
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=allocation.target.refused_at,
+                policy_refusal=allocation,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return allocation
+
+    def record_macos_descriptors(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        table: MacosDescriptorTable,
+        _native_pipe_allocation: tuple[int, int, str] | None = None,
+    ) -> None:
+        """Stage an explicitly known complete table for a live or newly staged process.
+
+        Ordinary file/socket activity does not infer a descriptor table. A live
+        update requires its own cohort; staged initialization may accompany its
+        exact process birth. Unknown state is not an empty table.
+        """
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(table) is not MacosDescriptorTable:
+            raise StateError("Descriptor observation requires an exact table")
+        key = self._manager._action_process_target_key(normalized)
+        if any(
+            self._manager._action_process_target_key(p.target) == key
+            for p in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=table.observed_at,
+            descriptor_table=table,
+            native_pipe_allocation=_native_pipe_allocation,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_descriptor_patch(patch)
+        self._process_activity_patches.append(patch)
+
+    def open_macos_pipe(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        at: datetime,
+        read_fd: int,
+        write_fd: int,
+        first_pipe_id: int,
+        close_on_exec: bool = False,
+    ) -> MacosDescriptorTable:
+        """Stage one pipe object and both descriptors in the canonical transaction.
+
+        Native IDs are monotonic per host; cancellation and rollback consume no
+        ID. Fork/dup retain the same object and native ID. Unknown parent tables
+        remain unavailable rather than being replaced with standard streams.
+        """
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        identity = self._manager._action_process_identity(normalized)
+        table = (
+            normalized._payload.initial_descriptors
+            if type(normalized) is ProcessMaterializationPlan
+            else self._manager.process_descriptors_at(identity, event_time=at)
+        )
+        if table is None or type(first_pipe_id) is not int or not 0 < first_pipe_id < 2**63:
+            raise StateError(
+                "Mac pipe creation requires a known table and explicit native ID policy"
+            )
+        counter = self._manager._macos_pipe_counters.get(
+            identity.hostname, (first_pipe_id, first_pipe_id - 1)
+        )
+        for patch in self._process_activity_patches:
+            if (
+                patch.native_pipe_allocation is not None
+                and self._manager._action_process_identity(patch.target).hostname
+                == identity.hostname
+            ):
+                base, last, _ = patch.native_pipe_allocation
+                counter = base, last
+        if counter[0] != first_pipe_id or counter[1] >= 2**64 - 1:
+            raise StateError("Mac pipe allocation policy changed or its native IDs are exhausted")
+        pipe_id = counter[1] + 1
+        object_id = stable_uuid("macos-native-pipe", identity.hostname, pipe_id)
+        for fd in (read_fd, write_fd):
+            table = table.opened(
+                MacosDescriptorBinding(fd, "pipe", object_id, close_on_exec, pipe_id),
+                observed_at=at,
+            )
+        self.record_macos_descriptors(
+            normalized, table=table, _native_pipe_allocation=(first_pipe_id, pipe_id, object_id)
+        )
+        return table
+
+    def patch_macos_filesystem(
+        self, target: ProcessIdentity, change: MacosFilesystemChange
+    ) -> None:
+        """Stage exact shared directory/allocator truth with its actor frontier."""
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(normalized) is not ProcessIdentity or self._process_activity_patches:
+            raise StateError("Filesystem mutation requires its own live-actor cohort")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=change.after.observed_at,
+            filesystem_change=change,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_filesystem_patch(patch)
+        self._process_activity_patches.append(patch)
+
+    def change_macos_process_directory(
+        self, target: ProcessIdentity, *, directory: MacosExecutionDirectory
+    ) -> None:
+        """Stage a successful explicit directory change for one live Mac process.
+
+        The supplied path/stat describes the resolved directory after success.
+        Failed chdir and descriptor-based fchdir are not inferred. The immutable
+        launch/exec directory remains unchanged; mutable lifetime state owns
+        subsequent observations. This transition requires its own cohort.
+        """
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if (
+            type(normalized) is not ProcessIdentity
+            or type(directory) is not MacosExecutionDirectory
+        ):
+            raise StateError("Directory change requires an exact live process and directory")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=directory.observed_at,
+            directory_change=directory,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_process_directory_patch(patch)
+        if self._process_activity_patches:
+            raise StateError("Directory change requires its own process cohort")
+        self._process_activity_patches.append(patch)
+
+    def change_posix_job_control(
+        self,
+        target: ProcessIdentity,
+        *,
+        operation: Literal["bootstrap", "setsid", "setpgid"],
+        changed_at: datetime,
+        group: PosixGroupIdentity | None = None,
+        actor: ProcessIdentity | None = None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None = None,
+    ) -> ProcessIdentity:
+        """Stage one explicit POSIX membership transition in its own atomic cohort.
+
+        With setpgid, omit group to create the target's own group. An explicit
+        group must already be live in the same session. Actor defaults to self.
+        Bootstrap is limited to the modeled privileged PID-1 process at birth.
+        """
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(changed_at) is not datetime:
+            raise StateError("POSIX membership requires exact process identity and time")
+        if actor is not None and type(actor) is not ProcessIdentity:
+            raise StateError("POSIX membership actor requires an exact process identity")
+        if group is not None and type(group) is not PosixGroupIdentity:
+            raise StateError("POSIX membership destination requires an exact group identity")
+        if changed_at.utcoffset() is None:
+            raise StateError("POSIX membership requires an aware transition time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        at = ensure_utc(changed_at)
+        if operation in {"bootstrap", "setsid"}:
+            if group is not None:
+                raise StateError("POSIX session creation does not accept an existing group")
+            session = PosixSessionIdentity(
+                normalized.hostname, normalized.pid, normalized.object_id, at
+            )
+            after = PosixGroupIdentity(session, normalized.pid, normalized.object_id, at)
+        elif operation == "setpgid":
+            if normalized.job_control is None:
+                raise StateError("POSIX group change requires known current membership")
+            after = (
+                group
+                if group is not None
+                else PosixGroupIdentity(
+                    normalized.job_control.session, normalized.pid, normalized.object_id, at
+                )
+            )
+        else:
+            raise StateError("Unsupported POSIX membership operation")
+        if macos_terminal is not None and operation != "setsid":
+            raise StateError("Mac terminal allocation requires explicit session creation")
+        terminal_after = (
+            self._manager._plan_macos_terminal_session(
+                replace(normalized, job_control=after),
+                macos_terminal,
+                self._manager._pid_os.get(normalized.hostname, "unknown"),
+                staged=(),
+            )
+            if macos_terminal is not None
+            else MacosTerminalSession(after.session, 0)
+            if operation == "setsid"
+            and normalized.job_control is not None
+            and normalized.job_control.session in self._manager._macos_terminal_sessions
+            else None
+        )
+        change = PosixJobControlChange(operation, normalized.job_control, after, at)
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=at,
+            job_control_change=change,
+            job_control_actor=normalized if actor is None else actor,
+            terminal_after=terminal_after,
+            terminal_policy_json=(
+                macos_terminal.model_dump_json()
+                if type(macos_terminal) is MacosTerminalDeviceProfile
+                else macos_terminal
+            ),
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_posix_job_control_patch(patch)
+        if self._process_activity_patches:
+            raise StateError("POSIX membership change requires its own process cohort")
+        self._process_activity_patches.append(patch)
+        return replace(normalized, job_control=after)
+
+    def adopt_process_after_parent_exit(
+        self, target: ProcessIdentity, *, adopter: ProcessIdentity, changed_at: datetime
+    ) -> ProcessIdentity:
+        """Stage PID-1 adoption; the old parent's exact exit must share this cohort."""
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(adopter) is not ProcessIdentity:
+            raise StateError("Parent adoption requires exact process lifetimes")
+        if type(changed_at) is not datetime or changed_at.utcoffset() is None:
+            raise StateError("Parent adoption requires an aware canonical time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        if normalized.parentage is None:
+            raise StateError("Parent adoption requires known original and current parentage")
+        after = replace(
+            normalized.parentage,
+            current=ProcessParentReference(
+                adopter.hostname, adopter.object_id, adopter.pid, adopter.started_at
+            ),
+        )
+        change = ProcessParentageChange(normalized.parentage, after, ensure_utc(changed_at))
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=change.changed_at,
+            parentage_change=change,
+            adopting_parent=adopter,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_posix_parentage_patch(patch)
+        if any(
+            self._manager._action_process_identity(item.target).object_id == normalized.object_id
+            for item in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(patch)
+        return replace(normalized, parent_pid=adopter.pid, parentage=after)
+
+    def bind_macos_process_audit_origin(
+        self, target: ProcessIdentity, *, bound_at: datetime
+    ) -> ProcessIdentity:
+        """Stage an authenticated SSH audit origin on its privileged live receiver.
+
+        This changes audit attribution only. Fork, exec, privilege changes and
+        source observations remain separately owned occurrences.
+        """
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(bound_at) is not datetime:
+            raise StateError("Process audit-origin adoption requires exact identity and time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        session = self._manager.get_session(normalized.logon_id)
+        if session is None or session.audit_origin is None or normalized.credentials is None:
+            raise StateError("Process audit-origin adoption requires authenticated session facts")
+        binding = MacosProcessAuditBinding(
+            origin=session.audit_origin,
+            before=normalized.credentials,
+            after=replace(
+                normalized.credentials,
+                audit_uid=session.audit_origin.audit_uid,
+                audit_session_id=session.audit_origin.audit_session_id,
+            ),
+            bound_at=ensure_utc(bound_at),
+        )
+        self._manager._validate_macos_process_audit_binding(normalized, binding)
+        if any(
+            self._manager._action_process_target_key(patch.target)
+            == self._manager._action_process_target_key(normalized)
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=binding.bound_at,
+                audit_binding=binding,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(normalized, credentials=binding.after)
+
+    def drop_macos_service_child_privileges(
+        self, target: ProcessIdentity, *, service_account: MacAccount, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Stage a pre-authentication child drop to a modeled well-known service account."""
+        self._require_open()
+        if (
+            type(target) is not ProcessIdentity
+            or type(service_account) is not MacAccount
+            or type(dropped_at) is not datetime
+            or dropped_at.utcoffset() is None
+        ):
+            raise StateError(
+                "Service privilege drop requires exact process, account and aware time"
+            )
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        process = self._manager._validate_action_live_process_identity(normalized)
+        parent = self._manager.get_process_identity(normalized.hostname, normalized.parent_pid)
+        if (
+            parent is None
+            or normalized.credentials is None
+            or service_account.host != normalized.hostname
+            or service_account.scope != "well_known"
+            or service_account.account_name != "_sshd"
+            or service_account.logical_name != "_sshd"
+            or service_account.uid == 0
+        ):
+            raise StateError(
+                "Service privilege drop requires its host-local SSH service account and parent"
+            )
+        drop = MacosProcessServiceDrop(
+            parent.object_id,
+            parent.execution_id,
+            normalized.execution_ordinal,
+            normalized.credentials,
+            PosixProcessCredentials(
+                service_account.uid,
+                service_account.uid,
+                service_account.gid,
+                service_account.gid,
+                normalized.credentials.audit_uid,
+                normalized.credentials.audit_session_id,
+            ),
+            normalized.principal,
+            service_account.account_name,
+            process.integrity_level,
+            "Medium",
+            ensure_utc(dropped_at),
+        )
+        self._manager._validate_macos_process_service_drop(normalized, drop)
+        if any(
+            self._manager._action_process_target_key(patch.target)
+            == self._manager._action_process_target_key(normalized)
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=drop.dropped_at,
+                service_drop=drop,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(normalized, principal=drop.after_principal, credentials=drop.after)
+
+    def drop_macos_gui_launcher_credentials(
+        self, target: ProcessIdentity, *, session: SessionIdentity, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Bind a root xpcproxy child to one GUI account, preserving its audit origin."""
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(normalized) is not ProcessIdentity or type(session) is not SessionIdentity:
+            raise StateError("GUI service drop requires exact live process and session identities")
+        process = self._manager._validate_action_live_process_identity(normalized)
+        owner = self._manager.get_session(session.logon_id)
+        parent = self._manager.get_process_identity(normalized.hostname, normalized.parent_pid)
+        if (
+            owner is None
+            or parent is None
+            or normalized.credentials is None
+            or owner.effective_uid is None
+            or owner.effective_gid is None
+        ):
+            raise StateError("GUI service drop lost its account or boot parent")
+        drop = MacosProcessServiceDrop(
+            parent.object_id,
+            parent.execution_id,
+            normalized.execution_ordinal,
+            normalized.credentials,
+            PosixProcessCredentials(
+                owner.effective_uid,
+                owner.effective_uid,
+                owner.effective_gid,
+                owner.effective_gid,
+                normalized.credentials.audit_uid,
+                normalized.credentials.audit_session_id,
+            ),
+            normalized.principal,
+            owner.username,
+            process.integrity_level,
+            "Medium",
+            ensure_utc(dropped_at),
+            session,
+            normalized.logon_id,
+            session.logon_id,
+            owner.audit_origin,
+        )
+        self._manager._validate_macos_process_service_drop(normalized, drop)
+        if self._process_activity_patches:
+            raise StateError("GUI service drop requires its own exact process cohort")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=drop.dropped_at,
+                service_drop=drop,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(
+            normalized,
+            principal=drop.after_principal,
+            credentials=drop.after,
+            logon_id=drop.after_logon_id,
+        )
+
+    def drop_macos_ssh_child_privileges(
+        self, target: ProcessIdentity, *, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Stage a permanent authenticated child privilege drop without replacing its image."""
+        return self._drop_macos_authenticated_child_privileges(
+            target, dropped_at=dropped_at, session_kind="ssh"
+        )
+
+    def drop_macos_login_child_privileges(
+        self, target: ProcessIdentity, *, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Drop a forked setuid login child's effective UID before its shell/helper exec."""
+        return self._drop_macos_authenticated_child_privileges(
+            target, dropped_at=dropped_at, session_kind="interactive"
+        )
+
+    def _drop_macos_authenticated_child_privileges(
+        self,
+        target: ProcessIdentity,
+        *,
+        dropped_at: datetime,
+        session_kind: Literal["ssh", "interactive"],
+    ) -> ProcessIdentity:
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(dropped_at) is not datetime:
+            raise StateError("SSH privilege drop requires exact process identity and time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        process = self._manager._validate_action_live_process_identity(normalized)
+        session = self._manager.get_session(normalized.logon_id)
+        if (
+            session is None
+            or session.session_kind != session_kind
+            or session.audit_origin is None
+            or normalized.credentials is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+        ):
+            raise StateError(
+                "SSH privilege drop requires authenticated session UID/GID and audit facts"
+            )
+        drop = MacosProcessPrivilegeDrop(
+            origin=session.audit_origin,
+            before=normalized.credentials,
+            after=PosixProcessCredentials(
+                session.effective_uid,
+                session.effective_uid,
+                session.effective_gid,
+                session.effective_gid,
+                session.audit_origin.audit_uid,
+                session.audit_origin.audit_session_id,
+            ),
+            before_principal=normalized.principal,
+            after_principal=session.username,
+            before_integrity=process.integrity_level,
+            after_integrity="Medium",
+            dropped_at=ensure_utc(dropped_at),
+        )
+        self._manager._validate_macos_process_privilege_drop(normalized, drop)
+        if any(
+            self._manager._action_process_target_key(patch.target)
+            == self._manager._action_process_target_key(normalized)
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=drop.dropped_at,
+                privilege_drop=drop,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(normalized, principal=drop.after_principal, credentials=drop.after)
+
+    def fork_process(
+        self,
+        parent: ProcessIdentity,
+        *,
+        forked_at: datetime,
+        execution_directory: MacosExecutionDirectory | None = None,
+        lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
+        responsibility: ProcessResponsibility | None = None,
+    ) -> ProcessMaterializationPlan:
+        """Stage a POSIX child inheriting the exact current parent image and session."""
+
+        self._require_open()
+        with self._manager._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.fork_process"
+        ):
+            if type(parent) is not ProcessIdentity:
+                raise StateError("Process fork requires an exact live parent identity")
+            normalized = self._manager._normalize_action_cohort_process_target(self, parent)
+            assert type(normalized) is ProcessIdentity
+            process = self._manager._validate_action_live_process_identity(normalized)
+            platform = self._manager._pid_os.get(parent.hostname)
+            if platform not in {"linux", "macos"}:
+                raise StateError("Process fork requires a POSIX PID namespace")
+            if type(forked_at) is not datetime or forked_at.utcoffset() is None:
+                raise StateError("Process fork requires an aware datetime")
+            timestamp = ensure_utc(forked_at)
+            if timestamp < parent.execution_started_at:
+                raise StateError("Process fork precedes its parent execution")
+            plan = self.plan_process(
+                system=parent.hostname,
+                parent_pid=parent.pid,
+                image=parent.image,
+                command_line=parent.command_line,
+                username=parent.principal,
+                integrity_level=process.integrity_level,
+                os_category=platform,
+                logon_id=parent.logon_id,
+                start_time=timestamp,
+                parent_activity_time=timestamp,
+                require_session=bool(parent.logon_id),
+                auth_session_id=process.auth_session_id,
+                auth_logon_type=process.auth_logon_type,
+                credentials=parent.credentials,
+                arguments=parent.arguments,
+                environment=parent.environment,
+                image_security=parent.image_security,
+                exec_image=parent.exec_image,
+                exec_script=parent.exec_script,
+                executable_version=parent.executable_version,
+                execution_directory=execution_directory,
+                responsibility=(
+                    responsibility if responsibility is not None else parent.responsibility
+                ),
+                lifecycle_group_id=lifecycle_group_id,
+                concurrency_group_id=concurrency_group_id,
+            )
+
+            if responsibility is not None and responsibility != parent.responsibility:
+                from evidenceforge.events.process import (
+                    macos_gui_child_responsibility_matches,
+                    macos_service_child_responsibility_matches,
+                )
+
+                if platform != "macos" or not (
+                    macos_gui_child_responsibility_matches(parent, plan.identity)
+                    or macos_service_child_responsibility_matches(parent, plan.identity)
+                ):
+                    raise StateError(
+                        "Fork responsibility must inherit or name its exact GUI app/service parent"
+                    )
+            descriptors = (
+                self._manager.process_descriptors_at(parent, event_time=timestamp)
+                if platform == "macos"
+                else None
+            )
+            payload = replace(
+                plan._payload,
+                forked=True,
+                initial_descriptors=(
+                    descriptors.inherited_at(timestamp) if descriptors is not None else None
+                ),
+            )
+            fork = replace(
+                plan,
+                _payload=payload,
+                _integrity_token=_materialization_integrity_token(
+                    self._manager._materialization_secret,
+                    "process",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    plan._allocator_patch,
+                ),
+            )
+            self._processes[-1] = fork
+            return fork
+
+    def plan_macos_gui_launcher(
+        self,
+        *,
+        system: str,
+        username: str,
+        logon_id: str,
+        start_time: datetime,
+        credentials: PosixProcessCredentials,
+        executable_version: ProcessExecutableVersion,
+        image_security: MacosImageSecurity,
+        descriptors: MacosDescriptorTable,
+        lifecycle_group_id: str = "",
+    ) -> ProcessMaterializationPlan:
+        """Reserve an anonymous launcher origin for one staged GUI adoption.
+
+        This is an aggregate xpcproxy start, not proof of its initial exec or a
+        native fork. Its own activation remains an independent ES obligation.
+        The following GUI exec must use this exact birth in the same cohort.
+        """
+        self._require_open()
+        if (
+            type(credentials) is not PosixProcessCredentials
+            or type(executable_version) is not ProcessExecutableVersion
+            or type(image_security) is not MacosImageSecurity
+            or type(descriptors) is not MacosDescriptorTable
+        ):
+            raise StateError(
+                "GUI launcher requires exact credentials, loaded image and descriptor facts"
+            )
+        if self._action_sessions or any(
+            item._allocator_patch.macos_anonymous_audit_session is not None
+            for item in self._processes
+        ):
+            raise StateError("GUI launcher requires one existing login and one audit reservation")
+        credentials.__post_init__()
+        descriptors.__post_init__()
+        if descriptors.hostname != system or descriptors.observed_at != ensure_utc(start_time):
+            raise StateError("GUI launcher descriptors require its exact host and birth instant")
+        previous = self._manager._macos_audit_session_counters.get(system, 99_999)
+        if not 99_999 <= previous < 2**32 - 2:
+            raise StateError("macOS anonymous audit session namespace is exhausted")
+        audit_session = previous + 1
+        plan = self.plan_process(
+            system=system,
+            parent_pid=1,
+            image="/usr/libexec/xpcproxy",
+            command_line="/usr/libexec/xpcproxy",
+            username=username,
+            integrity_level="Medium",
+            os_category="macos",
+            logon_id=logon_id,
+            start_time=start_time,
+            parent_activity_time=start_time,
+            credentials=replace(credentials, audit_uid=2**32 - 1, audit_session_id=audit_session),
+            executable_version=executable_version,
+            image_security=image_security,
+            responsibility=ProcessResponsibility(None),
+            lifecycle_group_id=lifecycle_group_id,
+        )
+        payload = replace(plan._payload, initial_descriptors=descriptors)
+        allocator = replace(
+            plan._allocator_patch, macos_anonymous_audit_session=(system, audit_session)
+        )
+        result = replace(
+            plan,
+            _payload=payload,
+            _allocator_patch=allocator,
+            _integrity_token=_materialization_integrity_token(
+                self._manager._materialization_secret,
+                "process",
+                plan.expected_version,
+                plan.identity,
+                payload,
+                allocator,
+            ),
+        )
+        self._processes[-1] = result
+        return result
+
+    def execute_process(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        image: str,
+        command_line: str,
+        executed_at: datetime,
+        credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
+        exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
+        executable_version: ProcessExecutableVersion | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
+        macos_ssh_standard_io: bool = False,
+        macos_gui_session: SessionIdentity | None = None,
+        macos_finder_spawn: bool = False,
+        macos_spawn_io: MacosSpawnIO | None = None,
+    ) -> ProcessIdentity:
+        """Stage one image replacement; return its immutable post-exec snapshot."""
+
+        self._require_open()
+        selected = self._manager._normalize_action_cohort_process_target(self, target)
+        birth = selected if type(selected) is ProcessMaterializationPlan else None
+        normalized = birth.identity if birth is not None else selected
+        assert type(normalized) is ProcessIdentity
+        if birth is not None and not birth._payload.forked and macos_gui_session is None:
+            raise StateError("Same-cohort execution requires an authenticated fork birth")
+        platform = (
+            self._manager._action_cohort_process_pid_namespaces(tuple(self._processes))[id(birth)]
+            if birth is not None
+            else self._manager._pid_os.get(normalized.hostname, "unknown")
+        )
+        if any(
+            patch.target.object_id == normalized.object_id
+            for patch in self._process_execution_drafts
+        ):
+            raise StateError("Action cohort repeats a process execution")
+        if type(image) is not str or not image.startswith("/") or "\0" in image:
+            raise StateError("Process execution requires an absolute POSIX image path")
+        if type(command_line) is not str or not command_line or "\0" in command_line:
+            raise StateError("Process execution requires a non-empty command line")
+        if type(executed_at) is not datetime:
+            raise StateError("Process execution requires an exact datetime")
+        timestamp = ensure_utc(executed_at)
+        if timestamp <= normalized.execution_started_at:
+            raise StateError("Process execution must follow the current execution start")
+        self._manager._validate_process_credentials(credentials, platform)
+        gui_relationships = None
+        if macos_gui_session is not None:
+            gui_relationships = self._manager._plan_macos_gui_exec_relationships(
+                normalized, macos_gui_session, timestamp, image=image, birth=birth
+            )
+            if credentials is not None and credentials != gui_relationships[0]:
+                raise StateError("GUI exec credentials disagree with its authenticated login")
+            credentials = gui_relationships[0]
+        elif credentials is not None and (
+            normalized.credentials is None or credentials.origin != normalized.credentials.origin
+        ):
+            raise StateError("Process execution must preserve known real and audit credentials")
+        validate_process_environment(environment)
+        validate_process_executable_version(executable_version, platform)
+        validate_macos_execution_directory(
+            execution_directory,
+            hostname=normalized.hostname,
+            observed_at=timestamp,
+            platform=platform,
+        )
+        validate_macos_image_security(image_security, platform)
+        validate_macos_exec_image(exec_image, platform)
+        validate_macos_exec_script(
+            exec_script,
+            platform=platform,
+            hostname=normalized.hostname,
+        )
+        audit_pid_version = self._manager._preview_macos_audit_pid_version(
+            normalized.hostname,
+            platform,
+            previous=self._macos_audit_pid_versions.get(normalized.hostname),
+        )
+        retired_threads: tuple[ThreadIdentity, ...] = ()
+        thread_counter: tuple[str, int] | None = None
+        primary_thread = normalized.primary_thread
+        if platform == "macos":
+            retired_threads = tuple(
+                sorted(
+                    (
+                        self._manager._thread_identity(thread)
+                        for thread in self._manager._running_threads.find(
+                            "process_object_id", normalized.object_id
+                        )
+                    ),
+                    key=lambda thread: thread.tid,
+                )
+            )
+            if birth is not None:
+                assert normalized.primary_thread is not None
+                retired_threads = (normalized.primary_thread,)
+            tid, thread_counter, _ = self._manager._preview_primary_thread(
+                system=normalized.hostname,
+                os_category="macos",
+                object_id=normalized.object_id,
+                pid=normalized.pid,
+                counter_override=self._thread_counters.get(normalized.hostname),
+                extra_used_tids=self._planned_tids.get(normalized.hostname),
+            )
+            primary_thread = ThreadIdentity(
+                hostname=normalized.hostname,
+                process_object_id=normalized.object_id,
+                pid=normalized.pid,
+                tid=tid,
+                object_id=stable_uuid(
+                    "thread",
+                    normalized.hostname,
+                    normalized.object_id,
+                    normalized.pid,
+                    tid,
+                    timestamp.isoformat(),
+                    "primary",
+                ),
+                started_at=timestamp,
+                kind="primary",
+            )
+        after = replace(
+            normalized,
+            primary_thread=primary_thread,
+            audit_pid_version=audit_pid_version,
+            image=image,
+            credentials=credentials if credentials is not None else normalized.credentials,
+            arguments=arguments,
+            environment=environment,
+            image_security=image_security,
+            exec_image=exec_image,
+            exec_script=exec_script,
+            executable_version=executable_version,
+            execution_directory=execution_directory,
+            command_line=command_line,
+            execution_ordinal=normalized.execution_ordinal + 1,
+            lifetime_image=normalized.initial_image,
+            executed_at=timestamp,
+            job_control=gui_relationships[1] if gui_relationships else normalized.job_control,
+            responsibility=gui_relationships[2] if gui_relationships else normalized.responsibility,
+        )
+        descriptors = (
+            birth._payload.initial_descriptors
+            if birth is not None
+            else self._manager.process_descriptors_at(normalized, event_time=timestamp)
+            if platform == "macos"
+            else None
+        )
+        if type(macos_ssh_standard_io) is not bool:
+            raise StateError("SSH command descriptor selection requires an exact bool")
+        descriptors_after = descriptors.after_exec(timestamp) if descriptors is not None else None
+        if type(macos_finder_spawn) is not bool:
+            raise StateError("Finder spawn descriptor selection requires an exact bool")
+        if macos_finder_spawn:
+            if macos_ssh_standard_io:
+                raise StateError("Finder and SSH descriptor contracts are mutually exclusive")
+            descriptors_after = self._manager._macos_finder_spawn_descriptor_table(birth, after)
+        if macos_ssh_standard_io:
+            if descriptors is not None:
+                raise StateError("SSH command contract cannot replace a known inherited FD table")
+            descriptors_after = self._manager._macos_ssh_command_descriptor_table(birth, timestamp)
+        spawn_pipe_counter = None
+        if macos_spawn_io is not None:
+            if (
+                type(macos_spawn_io) is not MacosSpawnIO
+                or platform != "macos"
+                or macos_ssh_standard_io
+                or macos_finder_spawn
+                or macos_gui_session is not None
+                or any(p.native_pipe_allocation is not None for p in self._process_activity_patches)
+            ):
+                raise StateError(
+                    "Mac spawn file actions require a separate qualified exec boundary"
+                )
+            counter = self._manager._macos_pipe_counters.get(normalized.hostname)
+            for prior in self._process_execution_drafts:
+                if (
+                    prior.target.hostname == normalized.hostname
+                    and prior.spawn_pipe_counter is not None
+                ):
+                    first, _, last = prior.spawn_pipe_counter
+                    counter = first, last
+            terminal = (
+                self._manager.known_macos_terminal(after.job_control.session, timestamp)
+                if after.job_control is not None
+                else None
+            )
+            if macos_spawn_io.kind in {"ssh_shell", "ssh_pty_shell"}:
+                macos_spawn_io.__post_init__()
+                descriptors_after = self._manager._macos_ssh_shell_descriptor_table(
+                    after, pty=macos_spawn_io.kind == "ssh_pty_shell"
+                )
+            else:
+                descriptors_after, spawn_pipe_counter = plan_spawn_descriptors(
+                    after,
+                    macos_spawn_io,
+                    inherited=descriptors,
+                    terminal=terminal,
+                    pipe_counter=counter,
+                )
+        if audit_pid_version is not None:
+            self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
+        if thread_counter is not None:
+            self._thread_counters[normalized.hostname] = thread_counter[1]
+            assert primary_thread is not None
+            self._planned_tids.setdefault(normalized.hostname, set()).add(primary_thread.tid)
+        self._process_execution_drafts.append(
+            ActionCohortProcessExecution(
+                target=normalized,
+                after=after,
+                retired_threads=retired_threads,
+                thread_counter=thread_counter,
+                _capability=_ActionCohortCapability(),
+                descriptors_after=descriptors_after,
+                gui_session=macos_gui_session,
+                finder_spawn=macos_finder_spawn,
+                spawn_io=macos_spawn_io,
+                spawn_pipe_counter=spawn_pipe_counter,
+            )
+        )
+        return after
+
+    def process_execution_descriptors(
+        self, process: ProcessIdentity
+    ) -> MacosDescriptorTable | None:
+        """Read the exact prepared post-exec table without deriving or reallocating it."""
+        self._require_open()
+        for execution in self._process_execution_drafts:
+            if execution.after == process:
+                return execution.descriptors_after
+        raise StateError("Descriptor lookup requires an exact staged process execution")
 
     def patch_session_activity(
         self,
@@ -3026,11 +4421,33 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         *,
         end_time: datetime,
         parent_activity_time: datetime | None = None,
+        exit_outcome: PosixProcessExit | None = None,
     ) -> None:
         """Stage one live or same-cohort process terminalization."""
 
         self._require_open()
-        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        execution = next(
+            (
+                item
+                for item in self._process_execution_drafts
+                if type(target) is ProcessIdentity and item.after == target
+            ),
+            None,
+        )
+        base = target
+        if execution is not None:
+            base = next(
+                (item for item in self._processes if item.identity == execution.target),
+                execution.target,
+            )
+            if ensure_utc(end_time) <= execution.after.execution_started_at:
+                raise StateError("Ordered process close must follow its exact execution")
+            if parent_activity_time is not None:
+                raise StateError("Ordered execution close cannot add parent activity")
+        normalized = self._manager._normalize_action_cohort_process_target(self, base)
+        self._manager._validate_process_exit_outcome(
+            exit_outcome, self._manager._action_process_identity(normalized).hostname
+        )
         key = self._manager._action_process_target_key(normalized)
         if any(
             self._manager._action_process_target_key(termination.target) == key
@@ -3043,6 +4460,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 pid=normalized.pid,
                 end_time=end_time,
                 parent_activity_time=parent_activity_time,
+                exit_outcome=exit_outcome,
             )
             if close_plan.identity != normalized:
                 raise StateError("Action cohort live process identity drifted before close")
@@ -3072,6 +4490,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 parent_activity=parent_activity,
                 staged_session_references=(),
                 _capability=_ActionCohortCapability(),
+                exit_outcome=exit_outcome,
+                post_execution=execution.after if execution is not None else None,
             )
         )
 
@@ -3174,7 +4594,66 @@ def _materialization_integrity_token(
 ) -> str:
     """Authenticate every immutable plan and allocator-patch field."""
 
-    del payload, allocator_patch
+    if (
+        type(payload) is _SessionMaterializationPayload
+        and type(allocator_patch) is not _SessionAllocatorPatch
+    ):
+        raise StateError("Session materialization requires an exact session allocator")
+    if type(payload) is _SessionMaterializationPayload and (
+        payload.audit_origin is not None
+        or allocator_patch.macos_audit_session_counter is not None
+        or payload.ssh_command_streams is not None
+        or allocator_patch.macos_ssh_pipe_counter is not None
+    ):
+        origin = payload.audit_origin
+        counter = allocator_patch.macos_audit_session_counter
+        if (
+            type(origin) is not MacosAuditSession
+            or type(counter) is not tuple
+            or len(counter) != 2
+            or counter != (identity.hostname, origin.audit_session_id)
+        ):
+            raise StateError("macOS audit session plan has inconsistent origin/allocator facts")
+        streams = payload.ssh_command_streams
+        pipes = allocator_patch.macos_ssh_pipe_counter
+        if streams is not None or pipes is not None:
+            if (
+                type(streams) is not MacosSshCommandStreams
+                or type(pipes) is not tuple
+                or len(pipes) != 3
+                or pipes[0] != identity.hostname
+                or any(type(value) is not int for value in pipes[1:])
+                or not 0 < pipes[1] <= pipes[2] - 2 < 2**64 - 2
+                or identity.session_kind != "ssh"
+                or payload.auth_protocol != "ssh"
+                or payload.effective_uid != origin.audit_uid
+                or streams.hostname != identity.hostname
+                or streams.session_object_id != identity.object_id
+                or streams.available_at != payload.source_ready_time
+                or streams.available_at < origin.created_at
+                or (
+                    payload.network_close_time is not None
+                    and streams.available_at >= payload.network_close_time
+                )
+                or tuple(item.native_pipe_id for item in streams.bindings)
+                != (pipes[2] - 2, pipes[2] - 1, pipes[2])
+                or any(
+                    item.object_id
+                    != stable_uuid("macos-native-pipe", identity.hostname, item.native_pipe_id)
+                    for item in streams.bindings
+                )
+            ):
+                raise StateError("SSH command streams lost their exact session/pipe allocation")
+            streams.__post_init__()
+        _validate_action_cohort_safe_value((identity, payload, allocator_patch), set())
+        return _trusted_capability_digest(
+            authority_secret,
+            "session-macos-audit-v1",
+            expected_version,
+            identity,
+            payload,
+            allocator_patch,
+        )
     return _trusted_capability_digest(
         authority_secret,
         kind,
@@ -3376,6 +4855,33 @@ def _materialization_batch_integrity_token(
 
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
+        MacosPolicyRefusalTarget,
+        MacosPolicyRefusalAllocation,
+        PosixProcessCredentials,
+        MacosAuditSession,
+        MacosSshCommandStreams,
+        MacosProcessAuditBinding,
+        MacosProcessPrivilegeDrop,
+        MacosProcessServiceDrop,
+        PosixProcessExit,
+        PosixGroupIdentity,
+        PosixSessionIdentity,
+        MacosTerminalSession,
+        MacosSpawnIO,
+        ProcessParentage,
+        ProcessParentageChange,
+        ProcessParentReference,
+        ProcessResponsibility,
+        MacosImageSecurity,
+        MacosExecImage,
+        MacosExecScript,
+        ProcessExecutableVersion,
+        MacosExecutionDirectory,
+        MacosFilesystemChange,
+        MacosDescriptorBinding,
+        MacosDescriptorTable,
+        ResponsibleProcessReference,
+        PosixJobControlChange,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -3396,6 +4902,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ActionCohortLiveSessionProcessRolesState,
         ActionCohortLiveSessionProcessRolesPatch,
         ActionCohortProcessActivityPatch,
+        ActionCohortProcessExecution,
         ActionCohortSessionActivityPatch,
         ActionCohortProcessTermination,
         ActionCohortSessionTerminalization,
@@ -3418,6 +4925,8 @@ def _detach_materialization_batch_safe_value(
     value_type = type(value)
     if value is None or value_type in {bool, int, float, str, bytes, datetime}:
         return value
+    if value_type is MacosDirectoryMetadata:
+        return detach_directory_metadata(value)
     value_id = id(value)
     if value_id in active:
         raise StateError("Materialization batch capability contains a recursive value")
@@ -3478,6 +4987,9 @@ def _validate_action_cohort_safe_value(value: object, active: set[int]) -> None:
             raise StateError("Action cohort datetime must be an exact UTC value")
         return
     if type(value) is _ActionCohortCapability:
+        return
+    if type(value) is MacosDirectoryMetadata:
+        detach_directory_metadata(value)
         return
     if type(value) is tuple:
         object_id = id(value)
@@ -3614,6 +5126,7 @@ def _action_cohort_semantic_preimage(
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    process_executions: tuple[ActionCohortProcessExecution, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
@@ -3622,7 +5135,7 @@ def _action_cohort_semantic_preimage(
 ) -> tuple[object, ...]:
     """Return deterministic semantics without secrets or object addresses."""
 
-    return (
+    legacy = (
         "action-cohort-materialization-v2",
         expected_version,
         expected_state_time,
@@ -3640,12 +5153,21 @@ def _action_cohort_semantic_preimage(
                     if patch.winlogon_plan is not None
                     else None
                 ),
-                _action_cohort_process_target_semantic(patch.explorer_plan),
+                (
+                    _action_cohort_process_target_semantic(patch.explorer_plan)
+                    if patch.explorer_plan is not None
+                    else None
+                ),
                 (
                     _action_cohort_process_target_semantic(patch.process_tree_root_plan)
                     if patch.process_tree_root_plan is not None
                     else None
                 ),
+            )
+            + (
+                (("macos-ssh-shell-v1", patch.macos_shell),)
+                if patch.macos_shell is not None
+                else ()
             )
             for patch in live_session_process_roles
         ),
@@ -3658,7 +5180,85 @@ def _action_cohort_semantic_preimage(
             for patch in session_metadata
         ),
         tuple(
-            (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+            (
+                (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-policy-refusal-v1",
+                    patch.policy_refusal,
+                )
+                if patch.policy_refusal is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-process-privilege-drop-v1",
+                    patch.privilege_drop,
+                )
+                if patch.privilege_drop is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "posix-job-control-v1",
+                    patch.job_control_change,
+                    patch.job_control_actor,
+                    *((patch.terminal_after,) if patch.terminal_after is not None else ()),
+                    *(
+                        ("terminal-policy-v1", patch.terminal_policy_json)
+                        if patch.terminal_policy_json is not None
+                        else ()
+                    ),
+                )
+                if patch.job_control_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "posix-parent-adoption-v1",
+                    patch.parentage_change,
+                    patch.adopting_parent,
+                )
+                if patch.parentage_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-process-service-drop-v1",
+                    patch.service_drop,
+                )
+                if patch.service_drop is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-filesystem-change-v1",
+                    patch.filesystem_change,
+                )
+                if patch.filesystem_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-directory-change-v1",
+                    patch.directory_change,
+                )
+                if patch.directory_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-descriptor-table-v1",
+                    patch.descriptor_table,
+                    *(
+                        (patch.native_pipe_allocation,)
+                        if patch.native_pipe_allocation is not None
+                        else ()
+                    ),
+                )
+                if patch.descriptor_table is not None
+                else (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+                if patch.audit_binding is None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-process-audit-binding-v1",
+                    patch.audit_binding,
+                )
+            )
             for patch in process_activity
         ),
         tuple(
@@ -3676,6 +5276,7 @@ def _action_cohort_semantic_preimage(
                 if type(termination.target) is ProcessTerminationMaterializationPlan
                 else _action_cohort_process_target_semantic(termination.target),
                 termination.end_time,
+                termination.exit_outcome,
                 (
                     (
                         _action_cohort_process_target_semantic(termination.parent_activity.target),
@@ -3685,6 +5286,11 @@ def _action_cohort_semantic_preimage(
                     else None
                 ),
                 termination.staged_session_references,
+            )
+            + (
+                (("post-execution-close-v1", termination.post_execution),)
+                if termination.post_execution is not None
+                else ()
             )
             for termination in process_terminations
         ),
@@ -3697,6 +5303,35 @@ def _action_cohort_semantic_preimage(
         ),
         _action_cohort_smb_connection_finalization_semantic(smb_connection_finalization),
         _action_cohort_smb_file_mutation_semantic(smb_file_mutation_terminalization),
+    )
+
+    if not process_executions:
+        return legacy
+    return (
+        *legacy,
+        (
+            "process-executions-v2",
+            tuple(
+                (patch.target, patch.after, patch.retired_threads, patch.thread_counter)
+                + (
+                    (("macos-exec-descriptors-v1", patch.descriptors_after),)
+                    if patch.descriptors_after is not None
+                    else ()
+                )
+                + (
+                    (("macos-gui-exec-v1", patch.gui_session),)
+                    if patch.gui_session is not None
+                    else ()
+                )
+                + ((("macos-finder-spawn-v1",),) if patch.finder_spawn else ())
+                + (
+                    (("macos-spawn-io-v1", patch.spawn_io, patch.spawn_pipe_counter),)
+                    if patch.spawn_io is not None
+                    else ()
+                )
+                for patch in process_executions
+            ),
+        ),
     )
 
 
@@ -3738,6 +5373,7 @@ def _action_cohort_integrity_token(
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    process_executions: tuple[ActionCohortProcessExecution, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
@@ -3754,6 +5390,7 @@ def _action_cohort_integrity_token(
         live_session_process_roles,
         session_metadata,
         process_activity,
+        process_executions,
         session_activity,
         process_terminations,
         session_terminalizations,
@@ -4134,6 +5771,10 @@ class StateManager:
                 username=lambda process: process.username,
                 system=lambda process: process.system,
                 logon_id=lambda process: process.logon_id,
+                posix_group=lambda process: process.job_control,
+                posix_session=lambda process: (
+                    process.job_control.session if process.job_control else None
+                ),
             )
         )
         self.state.running_processes = self._running_processes
@@ -4179,8 +5820,24 @@ class StateManager:
         self._logon_id_aliases_by_target: dict[str, set[str]] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
+        self._macos_audit_pid_versions: dict[str, int] = {}
+        self._macos_audit_identity_intents = MacosAuditIdentityLedger(
+            lambda key, value: self._record_incremental_checkpoint_value(
+                "_macos_audit_identity_intents", key, value
+            )
+        )
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
+        self._posix_job_control_reservations: dict[ReservationKey, ReservationRows] = {}
+        self._macos_terminal_sessions: dict[PosixSessionIdentity, MacosTerminalSession] = {}
+        self._macos_terminal_slots: dict[str, tuple[tuple[int, PosixSessionIdentity], ...]] = {}
+        self._macos_terminal_ordinals: dict[str, int] = {}
+        self._macos_pipe_counters: dict[str, tuple[int, int]] = {}
+        self._macos_filesystem_directories: dict[
+            tuple[str, str], tuple[MacosExecutionDirectory, ...]
+        ] = {}
+        self._macos_filesystem_inodes: dict[str, tuple[int, int]] = {}
+        self._posix_job_control_reservation_counts: dict[str, int] = {}
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._pid_time_epochs: dict[str, datetime] = {}
         self._pid_bucket_offsets: dict[tuple[str, datetime], int] = {}
@@ -4192,15 +5849,17 @@ class StateManager:
         self._active_pid_reservation_counts: dict[str, int] = {}
         self._transient_pid_reservations: dict[str, dict[int, list[tuple[datetime, datetime]]]] = {}
         self._transient_pid_reservation_counts: dict[str, int] = {}
+        self._macos_policy_refusals: ExpiringIndex[str, MacosPolicyRefusalReceipt] = ExpiringIndex()
         self._pid_candidate_probe_count = 0
         self._pid_allocation_count = 0
         self._connection_id_counter = 0
         self._thread_id_counters: dict[str, int] = {}
         self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
+        self._macos_audit_session_counters: dict[str, int] = {}
+        self._macos_process_census: dict[str, MacosProcessCensus] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
-        self._linux_logind_session_epochs: dict[str, datetime] = {}
         self._linux_logind_session_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_logind_session_last_ids: dict[str, int] = {}
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
@@ -4465,6 +6124,11 @@ class StateManager:
                 "started processes",
             ),
             (
+                result.executed_processes,
+                commit_plan.expected_executed_processes,
+                "executed processes",
+            ),
+            (
                 result.terminated_processes,
                 commit_plan.expected_terminated_processes,
                 "terminated processes",
@@ -4519,6 +6183,7 @@ class StateManager:
             result.committed_version,
             tuple(id(item) for item in result.started_sessions),
             tuple(id(item) for item in result.started_processes),
+            tuple(id(item) for item in result.executed_processes),
             tuple(id(item) for item in result.terminated_processes),
             tuple(id(item) for item in result.terminalized_sessions),
             id(result.smb_file_mutation) if result.smb_file_mutation is not None else 0,
@@ -5338,6 +7003,26 @@ class StateManager:
             )
             return hashlib.sha256(repr(frozen).encode()).hexdigest()
 
+    def configure_macos_process_census(self, hostname: str, start: datetime, end: datetime) -> None:
+        """Start independent window accounting before any process materialization."""
+        with self._lock:
+            if not hostname or ensure_utc(start) != start or ensure_utc(end) != end or start >= end:
+                raise StateError("Mac process census requires a host and ordered UTC window")
+            if self._pid_os.get(hostname, "macos") != "macos":
+                raise StateError("Mac process census cannot cover a non-Mac host")
+            prior = self._macos_process_census.get(hostname)
+            if prior is not None and (prior.start, prior.end) != (start, end):
+                raise StateError("Mac process census window cannot change during generation")
+            if prior is None:
+                self._macos_process_census[hostname] = MacosProcessCensus(
+                    start, end, exits=MacosOccurrenceDigest(), known_exits=MacosOccurrenceDigest()
+                )
+
+    def macos_process_census_snapshot(self) -> tuple[tuple[str, MacosProcessCensus], ...]:
+        """Return immutable per-host obligations, including terminated processes."""
+        with self._lock:
+            return tuple(sorted(self._macos_process_census.items()))
+
     def prepared_materialization_batch(
         self,
         plan: MaterializationBatchPlan,
@@ -5345,6 +7030,21 @@ class StateManager:
         """Return an immutable context locator backed by a private owner registry."""
 
         return _PreparedMaterializationBatchContext(self, plan)
+
+    @contextmanager
+    def current_process_guard(self, identity: ProcessIdentity) -> Iterator[None]:
+        """Hold the State lane while an existing exact process acquires service ownership."""
+        epoch = self._reject_mutation_during_action_cohort_claim("current_process_guard")
+        with self._lock:
+            self._reject_mutation_during_action_cohort_claim(
+                "current_process_guard", admitted_at=epoch
+            )
+            if self.get_process_identity(identity.hostname, identity.pid) != identity:
+                raise StateError("Service binding requires the exact current process execution")
+            process = self.get_process(identity.hostname, identity.pid)
+            if process is None or process.end_time is not None:
+                raise StateError("Service binding requires a live process")
+            yield
 
     @contextmanager
     def materialization_guard(self, plan: _MaterializationPlan | int) -> Iterator[None]:
@@ -5419,6 +7119,8 @@ class StateManager:
             raise StateError("Session materialization plan integrity validation failed")
 
     def _validate_process_materialization_plan(self, plan: ProcessMaterializationPlan) -> None:
+        if type(plan._payload.forked) is not bool:
+            raise StateError("Process creation provenance requires an exact boolean")
         expected = _materialization_integrity_token(
             self._materialization_secret,
             "process",
@@ -5429,6 +7131,23 @@ class StateManager:
         )
         if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Process materialization plan integrity validation failed")
+        patch = plan._allocator_patch.macos_boot_audit_session
+        if patch is not None:
+            identity = plan.identity
+            if (
+                patch[0] != identity.hostname
+                or type(patch[1]) is not int
+                or not 100_000 <= patch[1] < 2**32 - 1
+                or identity.pid != 1
+                or identity.parent_pid != 0
+                or identity.image != "/sbin/launchd"
+                or identity.principal != "root"
+                or identity.credentials is None
+                or not identity.credentials.is_unattributed_root
+                or identity.credentials.audit_session_id != patch[1]
+                or plan._allocator_patch.macos_anonymous_audit_session is not None
+            ):
+                raise StateError("Boot audit session lost its exact root process or allocator")
 
     def _validate_process_termination_materialization_plan(
         self,
@@ -5571,8 +7290,10 @@ class StateManager:
                 raise StateError("SMB connection root session counter patch is malformed")
             self._bounded_smb_connection_text(counter[0], label="root session counter host")
             self._bounded_smb_connection_int(counter[1], label="root session counter")
-        if allocator.linux_logind is not None:
-            raise StateError("SMB connection root cannot use a Linux logind allocator")
+        if allocator.linux_logind is not None or allocator.macos_audit_session_counter is not None:
+            raise StateError("SMB connection root cannot use an interactive session allocator")
+        if payload.audit_origin is not None:
+            raise StateError("SMB connection root cannot establish a native audit origin")
         if type(plan._integrity_token) is not str or len(plan._integrity_token) != 64:
             raise StateError("SMB connection root session token is malformed")
 
@@ -5642,6 +7363,8 @@ class StateManager:
         payload = plan._payload
         if type(payload) is not _ProcessMaterializationPayload:
             raise StateError("SMB connection root process payload has an invalid exact type")
+        if type(payload.forked) is not bool or payload.forked:
+            raise StateError("SMB connection root cannot substitute a POSIX fork")
         self._bounded_smb_connection_text(
             payload.integrity_level,
             label="root process integrity level",
@@ -5680,6 +7403,8 @@ class StateManager:
         patch = plan._allocator_patch
         if type(patch) is not _ProcessAllocatorPatch:
             raise StateError("SMB connection root process allocator patch is malformed")
+        if patch.macos_boot_audit_session is not None:
+            raise StateError("SMB process roots cannot allocate a boot audit session")
 
         def text_int_pair(value: object, label: str) -> None:
             if type(value) is not tuple or len(value) != 2:
@@ -6190,6 +7915,7 @@ class StateManager:
             plan._live_session_process_roles,
             plan._session_metadata,
             plan._process_activity,
+            plan._process_executions,
             plan._session_activity,
             plan._process_terminations,
             plan._session_terminalizations,
@@ -6210,6 +7936,7 @@ class StateManager:
             ),
             (plan._session_metadata, ActionCohortSessionMetadataPatch),
             (plan._process_activity, ActionCohortProcessActivityPatch),
+            (plan._process_executions, ActionCohortProcessExecution),
             (plan._session_activity, ActionCohortSessionActivityPatch),
             (plan._process_terminations, ActionCohortProcessTermination),
             (plan._session_terminalizations, ActionCohortSessionTerminalization),
@@ -6230,6 +7957,7 @@ class StateManager:
                         plan._live_session_process_roles,
                         plan._session_metadata,
                         plan._process_activity,
+                        plan._process_executions,
                         plan._session_activity,
                         plan._process_terminations,
                     )
@@ -6263,6 +7991,7 @@ class StateManager:
                 plan._live_session_process_roles,
                 plan._session_metadata,
                 plan._process_activity,
+                plan._process_executions,
                 plan._session_activity,
                 plan._process_terminations,
                 plan._session_terminalizations,
@@ -6281,8 +8010,23 @@ class StateManager:
         for termination in plan._process_terminations:
             if type(termination._capability) is not _ActionCohortCapability:
                 raise StateError("Action cohort process termination capability is malformed")
+            if termination.post_execution is not None and (
+                type(termination.post_execution) is not ProcessIdentity
+                or not any(
+                    item.target == termination.target.identity
+                    and item.after == termination.post_execution
+                    for item in plan._process_executions
+                )
+                or termination.end_time <= termination.post_execution.execution_started_at
+            ):
+                raise StateError("Ordered close requires the exact earlier execution member")
+            self._validate_process_exit_outcome(
+                termination.exit_outcome, termination.identity.hostname
+            )
             if type(termination.target) is ProcessTerminationMaterializationPlan:
                 self._validate_process_termination_materialization_plan(termination.target)
+                if termination.exit_outcome != termination.target.exit_outcome:
+                    raise StateError("Action cohort process exit outcome changed")
                 if termination.target.expected_version != plan.expected_version:
                     raise StateError("Action cohort process close uses another State version")
                 if termination.end_time != termination.target.end_time:
@@ -6306,12 +8050,54 @@ class StateManager:
                 for reference in termination.staged_session_references
             ):
                 raise StateError("Action cohort staged session references are malformed")
+        execution_targets: set[str] = set()
+        for execution in plan._process_executions:
+            if (
+                type(execution.target) is not ProcessIdentity
+                or type(execution.after) is not ProcessIdentity
+                or type(execution.retired_threads) is not tuple
+                or type(execution.finder_spawn) is not bool
+                or (execution.spawn_io is not None and type(execution.spawn_io) is not MacosSpawnIO)
+                or (
+                    execution.spawn_pipe_counter is not None
+                    and (
+                        type(execution.spawn_pipe_counter) is not tuple
+                        or len(execution.spawn_pipe_counter) != 3
+                        or any(type(value) is not int for value in execution.spawn_pipe_counter)
+                    )
+                )
+                or (
+                    execution.gui_session is not None
+                    and type(execution.gui_session) is not SessionIdentity
+                )
+                or any(type(thread) is not ThreadIdentity for thread in execution.retired_threads)
+                or (
+                    execution.thread_counter is not None
+                    and (
+                        type(execution.thread_counter) is not tuple
+                        or len(execution.thread_counter) != 2
+                        or type(execution.thread_counter[0]) is not str
+                        or type(execution.thread_counter[1]) is not int
+                    )
+                )
+            ):
+                raise StateError("Action cohort process execution requires exact identities")
+            if execution.target.object_id in execution_targets:
+                raise StateError("Action cohort repeats a process execution target")
+            execution_targets.add(execution.target.object_id)
         for patch in plan._live_session_process_roles:
             if (
                 type(patch.target) is not SessionIdentity
                 or type(patch.before) is not ActionCohortLiveSessionProcessRolesState
                 or type(patch.after) is not ActionCohortLiveSessionProcessRolesState
-                or type(patch.explorer_plan) is not ProcessMaterializationPlan
+                or (
+                    patch.explorer_plan is not None
+                    and type(patch.explorer_plan) is not ProcessMaterializationPlan
+                )
+                or (
+                    patch.macos_shell is not None and type(patch.macos_shell) is not ProcessIdentity
+                )
+                or ((patch.explorer_plan is None) == (patch.macos_shell is None))
                 or (
                     patch.winlogon_plan is not None
                     and type(patch.winlogon_plan) is not ProcessMaterializationPlan
@@ -6326,6 +8112,7 @@ class StateManager:
             *plan._live_session_process_roles,
             *plan._session_metadata,
             *plan._process_activity,
+            *plan._process_executions,
             *plan._session_activity,
         ):
             if type(patch._capability) is not _ActionCohortCapability:
@@ -6353,6 +8140,7 @@ class StateManager:
             "live_session_process_roles": plan._live_session_process_roles,
             "session_metadata": plan._session_metadata,
             "process_activity": plan._process_activity,
+            "process_executions": plan._process_executions,
             "session_activity": plan._session_activity,
             "process_terminations": plan._process_terminations,
             "session_terminalizations": plan._session_terminalizations,
@@ -6371,6 +8159,7 @@ class StateManager:
             live_session_process_roles=plan._live_session_process_roles,
             session_metadata=plan._session_metadata,
             process_activity=plan._process_activity,
+            process_executions=plan._process_executions,
             session_activity=plan._session_activity,
             process_terminations=plan._process_terminations,
             session_terminalizations=plan._session_terminalizations,
@@ -6737,6 +8526,8 @@ class StateManager:
         self,
         builder: ActionCohortMaterializationBuilder,
         target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        allow_executed: bool = False,
     ) -> ProcessMaterializationPlan | ProcessIdentity:
         """Require an exact staged member or exact currently live process identity."""
 
@@ -6755,6 +8546,10 @@ class StateManager:
                 return target
             if type(target) is not ProcessIdentity:
                 raise TypeError("Action cohort process target has an unsupported exact type")
+            if allow_executed and any(
+                execution.after == target for execution in builder._process_execution_drafts
+            ):
+                return target
             process = self._processes_by_object_id.get(target.object_id)
             if (
                 process is None
@@ -6821,14 +8616,14 @@ class StateManager:
             patch = process._allocator_patch.pid_os
             if patch is not None:
                 host, category = patch
-                if host != identity.hostname or category not in {"linux", "windows"}:
+                if host != identity.hostname or category not in {"linux", "windows", "macos"}:
                     raise StateError("Action cohort process PID namespace patch is malformed")
                 existing = namespaces.get(host)
                 if existing is not None and existing != category:
                     raise StateError("Action cohort process PID namespace changed within a cohort")
                 namespaces[host] = category
             category = namespaces.get(identity.hostname)
-            if category not in {"linux", "windows"}:
+            if category not in {"linux", "windows", "macos"}:
                 raise StateError("Action cohort process has no exact PID namespace")
             resolved[id(process)] = category
         return resolved
@@ -6929,6 +8724,114 @@ class StateManager:
                 process_pid_namespaces=process_pid_namespaces,
             )
             return patch
+
+    def _prepare_action_cohort_macos_ssh_shell_patch(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        *,
+        target: SessionIdentity,
+        shell: ProcessIdentity,
+    ) -> ActionCohortLiveSessionProcessRolesPatch:
+        """Prepare the shell role alongside its exact same-cohort image replacement."""
+        with self._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.bind_macos_ssh_session_shell"
+        ):
+            if type(target) is not SessionIdentity or type(shell) is not ProcessIdentity:
+                raise TypeError("Mac SSH shell binding requires exact session/process identities")
+            normalized = self._normalize_action_cohort_session_target(builder, target)
+            assert type(normalized) is SessionIdentity
+            before = self._action_cohort_live_session_process_roles(normalized)
+            patch = ActionCohortLiveSessionProcessRolesPatch(
+                target=normalized,
+                before=before,
+                after=replace(before, session_shell_pid=shell.pid),
+                winlogon_plan=None,
+                explorer_plan=None,
+                process_tree_root_plan=None,
+                macos_shell=shell,
+                _capability=_ActionCohortCapability(),
+            )
+            self._validate_action_cohort_macos_ssh_shell_transition(
+                patch, executions=tuple(builder._process_execution_drafts)
+            )
+            return patch
+
+    def _validate_action_cohort_macos_ssh_shell_transition(
+        self,
+        patch: ActionCohortLiveSessionProcessRolesPatch,
+        *,
+        executions: tuple[ActionCohortProcessExecution, ...],
+    ) -> SessionIdentity:
+        """Require an authenticated user child, receiver ancestry and initial shell exec."""
+        target = patch.target
+        session = self._validate_action_live_session_identity(target)
+        shell = patch.macos_shell
+        if (
+            type(shell) is not ProcessIdentity
+            or sum(execution.after == shell for execution in executions) != 1
+        ):
+            raise StateError("Mac SSH shell role requires its exact same-cohort execution")
+        if any(
+            role is not None
+            for role in (patch.winlogon_plan, patch.explorer_plan, patch.process_tree_root_plan)
+        ):
+            raise StateError("Mac SSH shell role cannot contain Windows desktop plans")
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+            or session.source_ready_time is None
+            or session.network_close_time is None
+            or patch.before != self._action_cohort_live_session_process_roles(target)
+            or patch.before.session_shell_pid is not None
+            or patch.after != replace(patch.before, session_shell_pid=shell.pid)
+        ):
+            raise StateError("Mac SSH shell role lost its initial session owner")
+        origin = session.audit_origin
+        expected_credentials = PosixProcessCredentials(
+            session.effective_uid,
+            session.effective_uid,
+            session.effective_gid,
+            session.effective_gid,
+            origin.audit_uid,
+            origin.audit_session_id,
+        )
+        parent = self.get_process_identity(shell.hostname, shell.parent_pid)
+        receiver = (
+            self.get_process_identity(target.hostname, session.transport_pid)
+            if session.transport_pid is not None
+            else None
+        )
+        if (
+            shell.hostname != target.hostname
+            or shell.logon_id != target.logon_id
+            or shell.principal != target.principal
+            or shell.credentials != expected_credentials
+            or shell.audit_pid_version is None
+            or shell.execution_ordinal != 1
+            or not shell.image.startswith("/")
+            or shell.command_line != "-" + shell.image.rsplit("/", 1)[-1]
+            or not origin.created_at < shell.started_at < shell.execution_started_at
+            or not shell.execution_started_at
+            <= session.source_ready_time
+            < session.network_close_time
+            or parent is None
+            or parent.logon_id != target.logon_id
+            or parent.principal != target.principal
+            or parent.credentials != expected_credentials
+            or parent.execution_started_at >= shell.started_at
+            or receiver is None
+            or receiver.pid != parent.parent_pid
+            or receiver.logon_id != target.logon_id
+            or receiver.principal != "root"
+            or receiver.credentials
+            != PosixProcessCredentials(0, 0, 0, 0, origin.audit_uid, origin.audit_session_id)
+        ):
+            raise StateError("Mac SSH shell role changed its user, execution or receiver ancestry")
+        return target
 
     def _action_cohort_process_parent_target(
         self,
@@ -7104,6 +9007,7 @@ class StateManager:
             ),
             (builder._session_metadata_patches, list, "session metadata"),
             (builder._process_activity_patches, list, "process activity"),
+            (builder._process_execution_drafts, list, "process executions"),
             (builder._session_activity_patches, list, "session activity"),
             (builder._process_termination_drafts, list, "process terminations"),
             (builder._session_terminalization_drafts, list, "session terminalizations"),
@@ -7158,6 +9062,7 @@ class StateManager:
             ),
             (builder._session_metadata_patches, list, "session metadata"),
             (builder._process_activity_patches, list, "process activity"),
+            (builder._process_execution_drafts, list, "process executions"),
             (builder._session_activity_patches, list, "session activity"),
             (builder._process_termination_drafts, list, "process terminations"),
         )
@@ -7205,6 +9110,7 @@ class StateManager:
                     builder._live_session_process_roles_patches,
                     builder._session_metadata_patches,
                     builder._process_activity_patches,
+                    builder._process_execution_drafts,
                     builder._session_activity_patches,
                     builder._process_termination_drafts,
                     builder._session_terminalization_drafts,
@@ -7268,6 +9174,9 @@ class StateManager:
                     if value is not None:
                         times.append(value)
             times.extend(patch.activity_time for patch in builder._process_activity_patches)
+            times.extend(
+                patch.after.execution_started_at for patch in builder._process_execution_drafts
+            )
             times.extend(patch.activity_time for patch in builder._session_activity_patches)
             times.extend(termination.end_time for termination in process_terminations)
             times.extend(
@@ -7290,6 +9199,7 @@ class StateManager:
                 "live_session_process_roles": tuple(builder._live_session_process_roles_patches),
                 "session_metadata": tuple(builder._session_metadata_patches),
                 "process_activity": tuple(builder._process_activity_patches),
+                "process_executions": tuple(builder._process_execution_drafts),
                 "session_activity": tuple(builder._session_activity_patches),
                 "process_terminations": tuple(process_terminations),
                 "session_terminalizations": tuple(builder._session_terminalization_drafts),
@@ -7307,6 +9217,7 @@ class StateManager:
                 _live_session_process_roles=tuple(builder._live_session_process_roles_patches),
                 _session_metadata=tuple(builder._session_metadata_patches),
                 _process_activity=tuple(builder._process_activity_patches),
+                _process_executions=tuple(builder._process_execution_drafts),
                 _session_activity=tuple(builder._session_activity_patches),
                 _process_terminations=tuple(process_terminations),
                 _session_terminalizations=tuple(builder._session_terminalization_drafts),
@@ -7327,6 +9238,7 @@ class StateManager:
                     live_session_process_roles=plan._live_session_process_roles,
                     session_metadata=plan._session_metadata,
                     process_activity=plan._process_activity,
+                    process_executions=plan._process_executions,
                     session_activity=plan._session_activity,
                     process_terminations=plan._process_terminations,
                     session_terminalizations=plan._session_terminalizations,
@@ -7358,6 +9270,172 @@ class StateManager:
             if plan.expected_version != builder.expected_version:
                 raise StateError("Materialization batch session fence changed during planning")
             return plan
+
+    def _enrich_batch_macos_audit_session(
+        self,
+        builder: MaterializationBatchBuilder,
+        plan: SessionMaterializationPlan,
+        *,
+        audit_uid: int,
+        authenticated_at: datetime,
+    ) -> SessionMaterializationPlan:
+        """Reserve one audit origin without consuming state or collector settings."""
+        with self._capability_minting_guard(
+            "MaterializationBatchBuilder.enrich_macos_audit_session"
+        ):
+            if (
+                type(builder) is not MaterializationBatchBuilder
+                or builder._manager is not self
+                or builder._session is not plan
+                or builder._processes
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+                or builder.expected_version != self._materialization_version
+                or self.state.current_time != builder._expected_state_time
+            ):
+                raise StateError("macOS audit enrichment requires the current unpopulated batch")
+            self._validate_session_materialization_plan(plan)
+            ssh = plan.identity.session_kind == "ssh" and plan._payload.auth_protocol == "ssh"
+            gui = (
+                plan.identity.session_kind == "interactive"
+                and type(plan._payload.logon_type) is int
+                and plan._payload.logon_type == 2
+                and plan._payload.auth_protocol == "local"
+                and plan._payload.source_ip == "-"
+                and type(plan._payload.source_port) is int
+                and plan._payload.source_port == 0
+                and type(plan.identity.session_id) is int
+                and plan._payload.transport_pid is None
+                and plan._payload.network_close_time is None
+                and type(plan._payload.effective_uid) is int
+                and plan._payload.effective_uid == audit_uid
+            )
+            if (
+                plan.audit_origin is not None
+                or plan._allocator_patch.macos_audit_session_counter is not None
+                or plan._allocator_patch.linux_logind is not None
+                or plan.identity.session_id != 0
+                or not (ssh or gui)
+                or self._pid_os.get(plan.identity.hostname) != "macos"
+            ):
+                raise StateError(
+                    "macOS audit enrichment requires an unenriched Mac SSH or local GUI session"
+                )
+            created_at = ensure_utc(authenticated_at)
+            if (
+                created_at < plan.identity.started_at
+                or (
+                    plan._payload.source_ready_time is not None
+                    and created_at > plan._payload.source_ready_time
+                )
+                or (
+                    plan._payload.network_close_time is not None
+                    and created_at >= plan._payload.network_close_time
+                )
+            ):
+                raise StateError("Audit authentication must fall inside the session open interval")
+            host = plan.identity.hostname
+            previous = self._macos_audit_session_counters.get(host, 99_999)
+            if type(previous) is not int or not 99_999 <= previous < 2**32 - 2:
+                raise StateError("macOS audit session namespace is exhausted or invalid")
+            origin = MacosAuditSession(audit_uid, previous + 1, created_at)
+            payload = replace(
+                plan._payload,
+                audit_origin=origin,
+                state_time=max(plan._payload.state_time, created_at),
+            )
+            allocator = replace(
+                plan._allocator_patch, macos_audit_session_counter=(host, previous + 1)
+            )
+            return replace(
+                plan,
+                _payload=payload,
+                _allocator_patch=allocator,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    allocator,
+                ),
+            )
+
+    def _enrich_batch_macos_ssh_command_streams(
+        self,
+        builder: MaterializationBatchBuilder,
+        plan: SessionMaterializationPlan,
+        *,
+        first_pipe_id: int,
+    ) -> SessionMaterializationPlan:
+        """Reserve one no-PTY channel's distinct pipes in the existing host namespace."""
+        with self._capability_minting_guard("enrich_macos_ssh_command_streams"):
+            if (
+                type(builder) is not MaterializationBatchBuilder
+                or builder._manager is not self
+                or builder._session is not plan
+                or builder._processes
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+                or builder.expected_version != self._materialization_version
+                or self.state.current_time != builder._expected_state_time
+            ):
+                raise StateError("SSH command streams require the current unpopulated batch")
+            self._validate_session_materialization_plan(plan)
+            if (
+                self._pid_os.get(plan.identity.hostname) != "macos"
+                or plan.identity.session_kind != "ssh"
+                or plan._payload.auth_protocol != "ssh"
+                or plan.audit_origin is None
+                or plan._payload.effective_uid != plan.audit_origin.audit_uid
+                or plan._payload.source_ready_time is None
+                or plan.ssh_command_streams is not None
+                or plan._allocator_patch.macos_ssh_pipe_counter is not None
+                or type(first_pipe_id) is not int
+                or not 0 < first_pipe_id < 2**63
+            ):
+                raise StateError("SSH command streams require an authenticated Mac channel")
+            host = plan.identity.hostname
+            counter = self._macos_pipe_counters.get(host, (first_pipe_id, first_pipe_id - 1))
+            if (
+                type(counter) is not tuple
+                or len(counter) != 2
+                or any(type(item) is not int for item in counter)
+                or counter[0] != first_pipe_id
+                or not first_pipe_id - 1 <= counter[1] < 2**64 - 3
+            ):
+                raise StateError("SSH channel pipe policy changed or its IDs are exhausted")
+            last = counter[1] + 3
+            streams = MacosSshCommandStreams(
+                host,
+                plan.identity.object_id,
+                plan._payload.source_ready_time,
+                tuple(
+                    MacosDescriptorBinding(
+                        fd,
+                        "pipe",
+                        stable_uuid("macos-native-pipe", host, native_id),
+                        False,
+                        native_id,
+                    )
+                    for fd, native_id in enumerate(range(last - 2, last + 1))
+                ),
+            )
+            payload = replace(plan._payload, ssh_command_streams=streams)
+            allocator = replace(
+                plan._allocator_patch, macos_ssh_pipe_counter=(host, first_pipe_id, last)
+            )
+            return replace(
+                plan,
+                _payload=payload,
+                _allocator_patch=allocator,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    allocator,
+                ),
+            )
 
     def _enrich_batch_linux_logind_session(
         self,
@@ -7736,8 +9814,8 @@ class StateManager:
             self._validate_session_materialization_plan(plan)
             if plan.expected_version != self._materialization_version:
                 raise StateError("Session materialization plan became stale before enrichment")
-            if plan._allocator_patch.linux_logind is not None:
-                raise StateError("Session materialization plan already owns a Linux logind ID")
+            if plan._allocator_patch.linux_logind is not None or plan.audit_origin is not None:
+                raise StateError("Session materialization plan already owns a native session ID")
             if plan.identity.session_id != 0:
                 raise StateError("Linux logind enrichment requires an unresolved session_id=0 plan")
             session_id, logind_patch = self._preview_linux_logind_session_id(
@@ -7774,6 +9852,10 @@ class StateManager:
             if plan.expected_version != self._materialization_version:
                 raise StateError("Session materialization plan became stale before commit")
             identity = plan.identity
+            if plan._allocator_patch.macos_ssh_pipe_counter is not None:
+                host, first, last = plan._allocator_patch.macos_ssh_pipe_counter
+                if self._macos_pipe_counters.get(host, (first, first - 1)) != (first, last - 3):
+                    raise StateError("SSH channel pipe allocation lost its exact host counter")
             if identity.logon_id in self.state.active_sessions:
                 raise StateError(
                     f"Session materialization LogonID is already live: {identity.logon_id}"
@@ -7812,6 +9894,12 @@ class StateManager:
         if patch.windows_session_counter is not None:
             host, counter = patch.windows_session_counter
             self._windows_session_id_counters[host] = counter
+        if patch.macos_audit_session_counter is not None:
+            host, counter = patch.macos_audit_session_counter
+            self._macos_audit_session_counters[host] = counter
+        if patch.macos_ssh_pipe_counter is not None:
+            host, first, last = patch.macos_ssh_pipe_counter
+            self._macos_pipe_counters[host] = first, last
         if patch.linux_logind is not None:
             self._commit_linux_logind_allocator_patch(
                 patch.linux_logind,
@@ -8483,6 +10571,29 @@ class StateManager:
             session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
+            if session.audit_origin is not None and session.session_kind == "interactive":
+                if (
+                    source_ready_time is not None
+                    and ensure_utc(source_ready_time) < session.audit_origin.created_at
+                ):
+                    raise StateError("Mac GUI readiness cannot precede its audit authentication")
+                protected = (
+                    (username, session.username),
+                    (start_time, session.start_time),
+                    (source_ip, "-"),
+                    (source_port, 0),
+                    (session_kind, "interactive"),
+                    (transport_pid, None),
+                    (network_close_time, None),
+                    (auth_protocol, "local"),
+                    (session_id, 0),
+                    (effective_uid, session.audit_origin.audit_uid),
+                )
+                if any(
+                    value is not None and (type(value) is not type(expected) or value != expected)
+                    for value, expected in protected
+                ):
+                    raise StateError("Cannot replace an authenticated Mac GUI audit owner")
             if username is not None:
                 self._authoritative_session_ends.remove(session.logon_id)
                 session.username = username
@@ -8768,57 +10879,80 @@ class StateManager:
 
         preview_rng = _random_from_state(rng_state)
         sampled_initial = preview_rng.randint(20, 250)
-        normalized_time = ensure_utc(event_time).replace(microsecond=0)
+        normalized_time = ensure_utc(event_time)
         current_initial = self._linux_logind_session_initials.get(system)
         initial = current_initial if current_initial is not None else sampled_initial
         initial_patch = initial if current_initial is None else None
-        boot_epoch = self._system_boot_times.get(system)
-        current_epoch = self._linux_logind_session_epochs.get(system)
-        epoch = boot_epoch if boot_epoch is not None else current_epoch
-        epoch_patch: datetime | None = None
-        if epoch is None:
-            epoch = normalized_time
-            epoch_patch = normalized_time
-        elapsed_seconds = max(
-            0,
-            int((normalized_time - ensure_utc(epoch)).total_seconds()),
+        allocation_rng = random.Random(
+            _stable_seed(
+                f"linux_logind_session_increment:{system}:{normalized_time.isoformat()}:{len(self._linux_logind_session_used_ids.get(system, set()))}"
+            )
         )
-        elapsed_minutes = elapsed_seconds // 60
-        second_slot = normalized_time.second // 10
-        stride = 8 + (_stable_seed(f"logind_session_minute_stride:{system}") % 2)
-        minute_jitter = _stable_seed(f"logind_session_minute_jitter:{system}:{elapsed_minutes}") % 2
-        candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
+        # logind IDs advance when sessions are allocated, not as a function of
+        # elapsed wall-clock time. A small per-allocation gap represents other
+        # sessions that were not observed by this source collection.
+        # Irregular hidden allocation batches leave room for sessions that are
+        # planned later with an earlier timestamp.
+        increment = allocation_rng.randint(4, 10) * allocation_rng.randint(2, 8)
         used = self._linux_logind_session_used_ids.get(system, set())
         allocations = self._linux_logind_session_allocations.get(system)
         earlier_max = (
             allocations.max_value_at_or_before(normalized_time) if allocations is not None else None
         )
-        if earlier_max is not None and candidate <= earlier_max:
-            bump = 1 + (
-                _stable_seed(f"logind_session_lower_bound:{system}:{normalized_time}:{candidate}")
-                % 3
-            )
-            candidate = earlier_max + bump
-        salt = 0
-        while candidate in used or (
-            allocations is not None
-            and allocations.matches_elapsed_delta(
-                normalized_time,
-                candidate,
-                tolerance=0.0,
-                integral_seconds=True,
-            )
-        ):
-            candidate += 7 + (
-                _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
-            )
-            salt += 1
+        future_min = (
+            allocations.min_value_after(normalized_time) if allocations is not None else None
+        )
+        lower = earlier_max if earlier_max is not None else 0
+        candidate = (earlier_max if earlier_max is not None else initial) + increment
+        if future_min is not None and candidate >= future_min:
+            upper = future_min
+            if upper - lower <= 1:
+                # Planning can arrive out of event-time order after earlier
+                # allocations have consumed every integer in this interval.
+                # Preserve host uniqueness and successful generation; this rare
+                # fallback follows allocation order because no ordered ID remains.
+                candidate = max(used, default=lower) + increment
+            else:
+                midpoint = (lower + upper) // 2
+                candidate = midpoint
+                for _ in range(32):
+                    candidate = allocation_rng.randint(lower + 1, upper - 1)
+                    if candidate not in used:
+                        break
+                else:
+                    candidate = -1
+                    for values in (
+                        range(midpoint + 1, upper),
+                        range(lower + 1, midpoint + 1),
+                    ):
+                        candidate = next((value for value in values if value not in used), -1)
+                        if candidate >= 0:
+                            break
+                if candidate < 0:
+                    candidate = max(used, default=lower) + increment
+        while candidate in used:
+            if future_min is None:
+                candidate += allocation_rng.randint(4, 10) * allocation_rng.randint(2, 8)
+                continue
+            upper = future_min
+            for _ in range(32):
+                candidate = allocation_rng.randint(lower + 1, upper - 1)
+                if candidate not in used:
+                    break
+            else:
+                candidate = next(
+                    (value for value in range(lower + 1, upper) if value not in used), -1
+                )
+            if candidate < 0:
+                raise StateError(
+                    "Linux logind identity interval has no unused ID between existing sessions "
+                    f"on {system}: lower={lower}, upper={upper}"
+                )
         return candidate, _LinuxLogindAllocatorPatch(
             system=system,
             event_time=normalized_time,
             session_id=candidate,
             initial=initial_patch,
-            epoch=epoch_patch,
             rng_state_after=preview_rng.getstate(),
         )
 
@@ -8833,8 +10967,6 @@ class StateManager:
 
         if patch.initial is not None:
             self._linux_logind_session_initials[patch.system] = patch.initial
-        if patch.epoch is not None:
-            self._linux_logind_session_epochs[patch.system] = patch.epoch
         used_ids = self._linux_logind_session_used_ids.get(patch.system)
         if used_ids is None:
             used_ids = used_ids_default if used_ids_default is not None else set()
@@ -8981,6 +11113,98 @@ class StateManager:
             counter = rng.randint(8000, 42000)
         return counter, rng, True
 
+    def _plan_macos_policy_refusal(
+        self, initiator: ProcessIdentity, image: str, refused_at: datetime
+    ) -> MacosPolicyRefusalAllocation:
+        """Preview a PID and logging TID using the existing Mac host allocators."""
+        if (
+            type(initiator) is not ProcessIdentity
+            or self._pid_os.get(initiator.hostname) != "macos"
+        ):
+            raise StateError("Policy refusal requires an established Mac initiating process")
+        if type(refused_at) is not datetime or refused_at.utcoffset() is None:
+            raise StateError("Policy refusal requires an aware occurrence time")
+        at = ensure_utc(refused_at)
+        self._validate_action_live_process_identity(initiator)
+        live = self._processes_by_object_id[initiator.object_id]
+        if at < max(initiator.execution_started_at, live.last_activity_time or live.start_time):
+            raise StateError("Policy refusal cannot precede its initiating process activity")
+        host = initiator.hostname
+        epoch = self._system_boot_times.get(host)
+        if epoch is None or at < epoch:
+            raise StateError("Policy refusal requires its established host boot")
+        counter, rng, _ = self._preview_pid_allocator(host, "macos")
+        prefix = self._linux_pid_weekly_churn_prefixes.get(host)
+        prefix_patch = None
+        if prefix is None:
+            prefix = self._build_linux_pid_weekly_churn_prefix(host)
+            prefix_patch = (host, prefix)
+        pid, position, bucket, probes = self._preview_linux_pid(
+            system=host,
+            counter=counter,
+            rng=rng,
+            current_time=at,
+            minimum_logical_exclusive=None,
+            prefix=prefix,
+            epoch=epoch,
+            os_category="macos",
+        )
+        target = MacosPolicyRefusalTarget(
+            host,
+            stable_uuid(
+                "macos-policy-attempt", host, at.isoformat(), position, image, initiator.object_id
+            ),
+            pid,
+            image,
+            at,
+            position,
+        )
+        tid, thread_counter, thread_rng = self._preview_primary_thread(
+            system=host, os_category="macos", object_id=target.object_id, pid=0
+        )
+        assert thread_rng is None
+        return MacosPolicyRefusalAllocation(
+            target,
+            tid,
+            _ProcessAllocatorPatch(
+                pid_counter=(host, counter),
+                pid_os=None,
+                pid_rng_state=(host, rng.getstate()),
+                pid_epoch=None,
+                pid_weekly_prefix=prefix_patch,
+                linux_allocation=(host, at, position),
+                pid_bucket_offset=bucket,
+                fixed_pid=None,
+                pid_allocation_count_delta=1,
+                pid_candidate_probe_delta=probes,
+                thread_counter=thread_counter,
+                thread_rng_state=None,
+            ),
+        )
+
+    def validates_macos_policy_refusal(
+        self,
+        target: MacosPolicyRefusalTarget,
+        *,
+        kernel_thread_id: int | None = None,
+        initiator_object_id: str | None = None,
+    ) -> bool:
+        """Check the exact namespace reservation without claiming a live process."""
+        if type(target) is not MacosPolicyRefusalTarget:
+            return False
+        with self._lock:
+            receipt = self._macos_policy_refusals.get(target.object_id)
+            return (
+                self._pid_os.get(target.hostname) == "macos"
+                and receipt is not None
+                and receipt.target == target
+                and (kernel_thread_id is None or kernel_thread_id == receipt.kernel_thread_id)
+                and (
+                    initiator_object_id is None
+                    or initiator_object_id == receipt.initiator_object_id
+                )
+            )
+
     def _preview_windows_pid(
         self,
         *,
@@ -9031,6 +11255,7 @@ class StateManager:
         bucket_ordinal: int | None = None,
         extra_allocations: tuple[tuple[datetime, int], ...] = (),
         extra_reserved_pids: set[int] | None = None,
+        os_category: str = "linux",
     ) -> tuple[int, int, tuple[tuple[str, datetime], int], int]:
         if (
             self._pid_allocation_watermark is not None
@@ -9151,7 +11376,11 @@ class StateManager:
         candidates = 0
         for _probe in range(probe_budget):
             candidates += 1
-            pid = self._normalize_linux_pid(logical_position)
+            pid = (
+                100 + ((logical_position - 100) % 99900)
+                if os_category == "macos"
+                else self._normalize_linux_pid(logical_position)
+            )
             if (
                 (allocations is None or not allocations.contains_value(logical_position))
                 and all(
@@ -9198,6 +11427,19 @@ class StateManager:
     ) -> tuple[int, tuple[str, int] | None, tuple[str, object] | None]:
         if os_category == "linux":
             return pid, None, None
+        if os_category == "macos":
+            counter = (
+                counter_override
+                if counter_override is not None
+                else self._thread_id_counters.get(
+                    system, 1000 + (_stable_seed(f"macos_thread_initial:{system}") % 100000)
+                )
+            )
+            used = {thread.tid for thread in self._running_threads.find("system", system)}
+            used.update(extra_used_tids or ())
+            while counter in used:
+                counter += 1
+            return counter, (system, counter + 1), None
         counter = (
             self._thread_id_counters.get(
                 system,
@@ -9222,6 +11464,233 @@ class StateManager:
         next_counter = candidate + (4 * rng.randint(1, 17))
         return candidate, (system, next_counter), (system, rng.getstate())
 
+    def _preview_macos_audit_pid_version(
+        self, system: str, os_category: str, *, previous: int | None = None
+    ) -> int | None:
+        """Reserve no state while selecting the next modeled native process version."""
+
+        if os_category != "macos":
+            return None
+        self._macos_audit_identity_intents.drain_before_planning()
+        current = self._macos_audit_pid_versions.get(system, 0) if previous is None else previous
+        if type(current) is not int or not 0 <= current < 2**32 - 1:
+            raise StateError("macOS audit PID version namespace is exhausted or invalid")
+        return current + 1
+
+    @staticmethod
+    def _validate_process_credentials(
+        credentials: PosixProcessCredentials | None, os_category: str
+    ) -> None:
+        """Admit explicit native credentials only in a modeled POSIX namespace."""
+
+        if credentials is not None and (
+            type(credentials) is not PosixProcessCredentials
+            or os_category not in {"linux", "macos"}
+        ):
+            raise StateError("Process credentials require a POSIX platform and immutable snapshot")
+
+    @staticmethod
+    def _initial_process_parentage(
+        platform: str, parent_pid: int, parent: ProcessIdentity | None
+    ) -> ProcessParentage | None:
+        """Freeze the exact already-resolved parent; preserve unknown virtual parents."""
+        if platform not in {"macos", "linux"} or (parent_pid != 0 and parent is None):
+            return None
+        reference = (
+            None
+            if parent is None
+            else ProcessParentReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+        )
+        return ProcessParentage(reference, reference)
+
+    @staticmethod
+    def _validate_new_posix_session(
+        requested: bool,
+        platform: str,
+        parent_pid: int,
+        new_group: bool = False,
+        *,
+        fixed_pid: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
+    ) -> None:
+        if type(requested) is not bool or type(new_group) is not bool:
+            raise StateError("New POSIX launch session requires an exact boolean")
+        if requested and new_group:
+            raise StateError("A POSIX launch cannot request both a new session and group")
+        boot_session = (
+            requested
+            and platform == "macos"
+            and parent_pid == 0
+            and type(fixed_pid) is int
+            and fixed_pid == 1
+            and credentials is not None
+            and credentials.is_unattributed_root
+        )
+        if (
+            (requested or new_group)
+            and not boot_session
+            and (platform not in {"macos", "linux"} or parent_pid <= 0)
+        ):
+            raise StateError("New POSIX launch session requires a POSIX child launch")
+
+    @staticmethod
+    def _initial_posix_membership(
+        requested: bool,
+        parent: ProcessIdentity | None,
+        hostname: str,
+        pid: int,
+        object_id: str,
+        started_at: datetime,
+        new_group: bool,
+    ) -> PosixGroupIdentity | None:
+        """Own an explicit session-creating launch or validated Mac PID-1 boot launch.
+
+        This is a successful aggregate process-launch contract, not an observed
+        fork or setsid syscall. Ordinary creation and explicit fork inherit only.
+        """
+        if requested:
+            if parent is None and pid != 1:
+                raise StateError("New POSIX launch session requires an exact parent or boot owner")
+            session = PosixSessionIdentity(hostname, pid, object_id, started_at)
+            return PosixGroupIdentity(session, pid, object_id, started_at)
+        if new_group:
+            if parent is None or parent.job_control is None or pid == 1:
+                raise StateError("New POSIX launch group requires an exact known parent session")
+            return PosixGroupIdentity(parent.job_control.session, pid, object_id, started_at)
+        return parent.job_control if parent is not None else None
+
+    def _plan_macos_terminal_session(
+        self,
+        identity: ProcessIdentity,
+        intent: Literal["absent"] | MacosTerminalDeviceProfile | None,
+        os_category: str,
+        *,
+        staged: tuple[MacosTerminalSession, ...],
+    ) -> MacosTerminalSession | None:
+        """Preview a session-owned device without consuming its slot or inode."""
+        if intent is None:
+            return None
+        if os_category != "macos":
+            raise StateError("Mac terminal intent requires a Mac process")
+        host = identity.hostname
+        previous = self._macos_terminal_ordinals.get(host, 0)
+        same_host = tuple(item for item in staged if item.session.hostname == host)
+        ordinal = max((previous, *(item.ordinal for item in same_host))) + 1
+        occupied = tuple(slot for slot, _ in self._macos_terminal_slots.get(host, ())) + tuple(
+            item.slot for item in same_host if item.slot is not None
+        )
+        planned = plan_macos_terminal(identity, intent, ordinal=ordinal, occupied=occupied)
+        if planned is not None and planned.ordinal:
+            metadata = planned.observe(planned.session.started_at).metadata
+            existing = (
+                tuple(
+                    self._macos_terminal_sessions[session]
+                    for _, session in self._macos_terminal_slots.get(host, ())
+                )
+                + same_host
+            )
+            for value in existing:
+                if not value.ordinal:
+                    continue
+                observed = value.observe(value.session.started_at).metadata
+                if (metadata.device, metadata.inode) == (
+                    observed.device,
+                    observed.inode,
+                ) or metadata.special_device == observed.special_device:
+                    raise StateError(
+                        "Mac terminal device or inode range collides with a retained object"
+                    )
+        return planned
+
+    def _plan_macos_standard_io(
+        self,
+        identity: ProcessIdentity,
+        intent: Literal["terminal", "null", "inherit"] | None,
+        platform: str,
+        terminal: MacosTerminalSession | None,
+        parent: ProcessIdentity | None,
+        parent_plan: ProcessMaterializationPlan | None,
+    ) -> MacosDescriptorTable | None:
+        if intent is None:
+            return None
+        if platform != "macos":
+            raise StateError("Mac standard I/O intent requires a Mac process")
+        if terminal is None and identity.job_control is not None:
+            terminal = self._macos_terminal_sessions.get(identity.job_control.session)
+        table = (
+            parent_plan._payload.initial_descriptors
+            if parent_plan is not None
+            else self.process_descriptors_at(parent, event_time=identity.started_at)
+            if parent is not None
+            else None
+        )
+        return plan_macos_standard_io(identity, intent, terminal=terminal, parent=table)
+
+    def known_macos_terminal(
+        self, session: PosixSessionIdentity, at: datetime
+    ) -> Literal["absent"] | MacosTerminalObservation | None:
+        """Observe an exact retained session, preserving unknown legacy state.
+
+        Equal-time terminal observations may be selected before canonical
+        closure; a later instant never revives the retired terminal lifetime.
+        Process authentication belongs to the calling live/planned owner.
+        """
+        if (
+            type(session) is not PosixSessionIdentity
+            or type(at) is not datetime
+            or at.utcoffset() is None
+            or at < session.started_at
+        ):
+            raise StateError("Mac terminal observation requires an exact timed session")
+        with self._lock:
+            rows = self._posix_job_control_reservations.get(reservation_key(session), ())
+            row = next((item for item in rows if item.identity == session), None)
+            if row is None or (row.ended_at is not None and at > row.ended_at):
+                return None
+            terminal = self._macos_terminal_sessions.get(session)
+            return terminal.observe(at) if terminal is not None else None
+
+    def _plan_macos_boot_audit_origin(
+        self,
+        *,
+        system: str,
+        platform: str,
+        parent_pid: int,
+        fixed_pid: int | None,
+        image: str,
+        username: str,
+        credentials: PosixProcessCredentials | None,
+        requested: bool,
+        new_posix_session: bool,
+    ) -> tuple[PosixProcessCredentials | None, tuple[str, int] | None]:
+        """Reserve one modeled assigned boot origin without inventing an authenticated login."""
+        if type(requested) is not bool:
+            raise StateError("Boot audit assignment requires an exact boolean")
+        if not requested:
+            return credentials, None
+        if (
+            platform != "macos"
+            or parent_pid != 0
+            or type(fixed_pid) is not int
+            or fixed_pid != 1
+            or image != "/sbin/launchd"
+            or username != "root"
+            or not new_posix_session
+            or credentials is None
+            or not credentials.is_unattributed_root
+            or credentials.audit_uid != 2**32 - 1
+        ):
+            raise StateError(
+                "Assigned boot audit origin requires the exact unattributed Mac launchd"
+            )
+        previous = self._macos_audit_session_counters.get(system, 99_999)
+        if type(previous) is not int or not 99_999 <= previous < 2**32 - 2:
+            raise StateError("macOS boot audit session namespace is exhausted or invalid")
+        assigned = previous + 1
+        return replace(credentials, audit_session_id=assigned), (system, assigned)
+
     def plan_process_materialization(
         self,
         *,
@@ -9242,14 +11711,64 @@ class StateManager:
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
+        exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
+        executable_version: ProcessExecutableVersion | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None = None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
+        new_posix_session: bool = False,
+        new_posix_group: bool = False,
+        macos_boot_audit_session: bool = False,
+        responsibility: ProcessResponsibility | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
+            self._validate_new_posix_session(
+                new_posix_session,
+                os_category,
+                parent_pid,
+                new_posix_group,
+                fixed_pid=fixed_pid,
+                credentials=credentials,
+            )
+            self._validate_process_credentials(credentials, os_category)
+            credentials, boot_audit_patch = self._plan_macos_boot_audit_origin(
+                system=system,
+                platform=os_category,
+                parent_pid=parent_pid,
+                fixed_pid=fixed_pid,
+                image=image,
+                username=username,
+                credentials=credentials,
+                requested=macos_boot_audit_session,
+                new_posix_session=new_posix_session,
+            )
+            validate_process_arguments(arguments, command_line=command_line)
+            validate_process_environment(environment)
+            validate_macos_image_security(image_security, os_category)
+            validate_macos_exec_image(exec_image, os_category)
+            validate_macos_exec_script(exec_script, platform=os_category, hostname=system)
+            validate_process_executable_version(executable_version, os_category)
+            if environment is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit process environment requires a POSIX host")
+            if arguments is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
             effective_start = ensure_utc(raw_start)
+            validate_macos_execution_directory(
+                execution_directory,
+                hostname=system,
+                observed_at=effective_start,
+                platform=os_category,
+            )
             parent_identity = (
                 self._process_identity_active_at_locked(system, parent_pid, effective_start)
                 if parent_pid > 0
@@ -9302,7 +11821,7 @@ class StateManager:
                 pid = fixed_pid
                 logical_position = fixed_pid
                 fixed_patch = (system, fixed_pid)
-                if os_category == "linux":
+                if os_category in {"linux", "macos"}:
                     linux_allocation = (system, effective_start, fixed_pid)
             elif os_category == "windows":
                 pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
@@ -9326,6 +11845,7 @@ class StateManager:
                 if parent is not None and parent.start_time <= effective_start and parent.pid > 1:
                     minimum_parent = parent.pid_logical_position
                 pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    os_category=os_category,
                     system=system,
                     counter=counter,
                     rng=pid_rng,
@@ -9378,7 +11898,27 @@ class StateManager:
                 parent_pid=parent_pid,
                 image=image,
                 command_line=command_line,
+                arguments=arguments,
+                environment=environment,
+                image_security=image_security,
+                exec_image=exec_image,
+                exec_script=exec_script,
+                executable_version=executable_version,
+                execution_directory=execution_directory,
+                responsibility=responsibility,
+                parentage=self._initial_process_parentage(os_category, parent_pid, parent_identity),
+                job_control=self._initial_posix_membership(
+                    new_posix_session,
+                    parent_identity,
+                    system,
+                    pid,
+                    object_id,
+                    effective_start,
+                    new_posix_group,
+                ),
                 principal=username,
+                credentials=credentials,
+                audit_pid_version=self._preview_macos_audit_pid_version(system, os_category),
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -9391,6 +11931,13 @@ class StateManager:
                     object_id=thread_object_id,
                     started_at=effective_start,
                 ),
+            )
+            terminal_session = self._plan_macos_terminal_session(
+                identity, macos_terminal, os_category, staged=()
+            )
+            self._validate_process_responsibility(identity, os_category, parent_identity)
+            initial_descriptors = self._plan_macos_standard_io(
+                identity, macos_standard_io, os_category, terminal_session, parent_identity, None
             )
             payload = _ProcessMaterializationPayload(
                 integrity_level=integrity_level,
@@ -9405,6 +11952,8 @@ class StateManager:
                 auth_session_id=auth_session_id,
                 auth_logon_type=auth_logon_type,
                 require_session=require_session,
+                terminal_session=terminal_session,
+                initial_descriptors=initial_descriptors,
             )
             allocator_patch = _ProcessAllocatorPatch(
                 pid_counter=(system, counter),
@@ -9419,6 +11968,7 @@ class StateManager:
                 pid_candidate_probe_delta=candidate_delta,
                 thread_counter=thread_counter,
                 thread_rng_state=thread_rng_state,
+                macos_boot_audit_session=boot_audit_patch,
             )
             expected_version = self._materialization_version
             return ProcessMaterializationPlan(
@@ -9491,6 +12041,21 @@ class StateManager:
             )
         )
 
+    def _validate_process_exit_outcome(
+        self, outcome: PosixProcessExit | None, hostname: str
+    ) -> None:
+        """Admit explicit terminal facts only for an established POSIX host."""
+        if outcome is None:
+            return
+        if type(outcome) is not PosixProcessExit:
+            raise StateError("Process termination requires an exact POSIX exit outcome")
+        outcome.__post_init__()
+        platform = self._pid_os.get(hostname)
+        if platform not in {"macos", "linux"}:
+            raise StateError("POSIX exit outcome requires a modeled Linux or macOS process")
+        if platform == "macos" and outcome.signal is not None and outcome.signal >= 32:
+            raise StateError("macOS termination signal is outside the Darwin signal range")
+
     def plan_process_termination_materialization(
         self,
         *,
@@ -9498,10 +12063,12 @@ class StateManager:
         pid: int,
         end_time: datetime | None = None,
         parent_activity_time: datetime | None = None,
+        exit_outcome: PosixProcessExit | None = None,
     ) -> ProcessTerminationMaterializationPlan:
         """Freeze one exact live process termination without publishing state."""
 
         with self._capability_minting_guard("plan_process_termination_materialization"):
+            self._validate_process_exit_outcome(exit_outcome, system)
             process = self.state.running_processes.get((system, pid))
             if process is None:
                 raise StateError(
@@ -9540,6 +12107,7 @@ class StateManager:
                 parent_identity=parent_identity,
                 parent_activity_time=normalized_parent_activity,
                 session_references=self._process_termination_session_references(system, pid),
+                exit_outcome=exit_outcome,
             )
             expected_version = self._materialization_version
             plan = ProcessTerminationMaterializationPlan(
@@ -9577,6 +12145,20 @@ class StateManager:
         parent_activity_time: datetime | None,
         auth_session_id: int | None,
         auth_logon_type: int | None,
+        credentials: PosixProcessCredentials | None,
+        arguments: tuple[str, ...] | None,
+        environment: tuple[str, ...] | None,
+        image_security: MacosImageSecurity | None,
+        exec_image: MacosExecImage | None,
+        exec_script: MacosExecScript | None,
+        executable_version: ProcessExecutableVersion | None,
+        execution_directory: MacosExecutionDirectory | None,
+        macos_terminal: Literal["absent"] | MacosTerminalDeviceProfile | None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None,
+        new_posix_session: bool,
+        new_posix_group: bool,
+        macos_boot_audit_session: bool,
+        responsibility: ProcessResponsibility | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -9591,10 +12173,46 @@ class StateManager:
                 raise StateError("Materialization batch became stale during process planning")
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
+            self._validate_new_posix_session(
+                new_posix_session,
+                os_category,
+                parent_pid,
+                new_posix_group,
+                fixed_pid=fixed_pid,
+                credentials=credentials,
+            )
+            self._validate_process_credentials(credentials, os_category)
+            credentials, boot_audit_patch = self._plan_macos_boot_audit_origin(
+                system=system,
+                platform=os_category,
+                parent_pid=parent_pid,
+                fixed_pid=fixed_pid,
+                image=image,
+                username=username,
+                credentials=credentials,
+                requested=macos_boot_audit_session,
+                new_posix_session=new_posix_session,
+            )
+            validate_process_arguments(arguments, command_line=command_line)
+            validate_process_environment(environment)
+            validate_macos_image_security(image_security, os_category)
+            validate_macos_exec_image(exec_image, os_category)
+            validate_macos_exec_script(exec_script, platform=os_category, hostname=system)
+            validate_process_executable_version(executable_version, os_category)
+            if environment is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit process environment requires a POSIX host")
+            if arguments is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
             effective_start = ensure_utc(raw_start)
+            validate_macos_execution_directory(
+                execution_directory,
+                hostname=system,
+                observed_at=effective_start,
+                platform=os_category,
+            )
 
             planned_parent: ProcessIdentity | None = None
             virtual_parent_pid: int | None = None
@@ -9719,7 +12337,7 @@ class StateManager:
                 pid = fixed_pid
                 logical_position = fixed_pid
                 fixed_patch = (system, fixed_pid)
-                if os_category == "linux":
+                if os_category in {"linux", "macos"}:
                     linux_allocation = (system, effective_start, fixed_pid)
             elif os_category == "windows":
                 pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
@@ -9763,6 +12381,7 @@ class StateManager:
                 )
                 planned_allocations = tuple(builder._linux_allocations.get(system, ()))
                 pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    os_category=os_category,
                     system=system,
                     counter=counter,
                     rng=pid_rng,
@@ -9837,7 +12456,29 @@ class StateManager:
                 parent_pid=parent_pid,
                 image=image,
                 command_line=command_line,
+                arguments=arguments,
+                environment=environment,
+                image_security=image_security,
+                exec_image=exec_image,
+                exec_script=exec_script,
+                executable_version=executable_version,
+                execution_directory=execution_directory,
+                responsibility=responsibility,
+                parentage=self._initial_process_parentage(os_category, parent_pid, planned_parent),
+                job_control=self._initial_posix_membership(
+                    new_posix_session,
+                    planned_parent,
+                    system,
+                    pid,
+                    object_id,
+                    effective_start,
+                    new_posix_group,
+                ),
                 principal=username,
+                credentials=credentials,
+                audit_pid_version=self._preview_macos_audit_pid_version(
+                    system, os_category, previous=builder._macos_audit_pid_versions.get(system)
+                ),
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -9850,6 +12491,27 @@ class StateManager:
                     object_id=thread_object_id,
                     started_at=effective_start,
                 ),
+            )
+            terminal_session = self._plan_macos_terminal_session(
+                identity,
+                macos_terminal,
+                os_category,
+                staged=tuple(
+                    p._payload.terminal_session
+                    for p in builder._processes
+                    if p._payload.terminal_session is not None
+                ),
+            )
+            self._validate_process_responsibility(
+                identity, os_category, planned_parent, tuple(p.identity for p in builder._processes)
+            )
+            initial_descriptors = self._plan_macos_standard_io(
+                identity,
+                macos_standard_io,
+                os_category,
+                terminal_session,
+                planned_parent,
+                parent_plan,
             )
             payload = _ProcessMaterializationPayload(
                 integrity_level=integrity_level,
@@ -9864,6 +12526,8 @@ class StateManager:
                 auth_session_id=auth_session_id,
                 auth_logon_type=auth_logon_type,
                 require_session=require_session,
+                terminal_session=terminal_session,
+                initial_descriptors=initial_descriptors,
             )
             allocator_patch = _ProcessAllocatorPatch(
                 pid_counter=(system, counter),
@@ -9881,6 +12545,7 @@ class StateManager:
                 pid_candidate_probe_delta=candidate_delta,
                 thread_counter=thread_counter,
                 thread_rng_state=thread_rng_state,
+                macos_boot_audit_session=boot_audit_patch,
             )
             plan = ProcessMaterializationPlan(
                 _expected_version=builder.expected_version,
@@ -9896,6 +12561,8 @@ class StateManager:
                     allocator_patch,
                 ),
             )
+            if identity.audit_pid_version is not None:
+                builder._macos_audit_pid_versions[system] = identity.audit_pid_version
             builder._pid_counters[system] = counter
             builder._pid_rng_states[system] = pid_rng.getstate()
             if allocator_patch.pid_os is not None:
@@ -9932,6 +12599,14 @@ class StateManager:
                 raise StateError("Process termination materialization plan became stale")
 
             identity = plan.identity
+            self._validate_process_exit_outcome(plan.exit_outcome, identity.hostname)
+            membership_updates(
+                self._posix_job_control_reservations,
+                identity.job_control,
+                None,
+                plan.end_time,
+                lifetime_boundary=True,
+            )
             key = (identity.hostname, identity.pid)
             process = self.state.running_processes.get(key)
             if process is None:
@@ -10015,6 +12690,11 @@ class StateManager:
         payload = plan._payload
         key = prepared.process_key if prepared is not None else (identity.hostname, identity.pid)
         process = self.state.running_processes[key]
+        census = self._macos_process_census.get(identity.hostname)
+        if census is not None:
+            self._macos_process_census[identity.hostname] = census.terminate(
+                identity, at=payload.end_time, known=payload.exit_outcome is not None
+            )
 
         parent_identity = payload.parent_identity
         parent_activity_time = payload.parent_activity_time
@@ -10044,6 +12724,7 @@ class StateManager:
             thread.end_time = payload.end_time
             self._ended_threads.set(thread_key, thread, thread_deadline)
 
+        self._commit_posix_membership(identity.job_control, None, payload.end_time)
         del self.state.running_processes[key]
         remaining = self._active_pid_reservation_counts[identity.hostname] - 1
         if remaining > 0:
@@ -10051,6 +12732,7 @@ class StateManager:
         else:
             self._active_pid_reservation_counts.pop(identity.hostname)
         process.end_time = payload.end_time
+        process.exit_outcome = payload.exit_outcome
         self._process_object_ids.pop(key)
         self._processes_by_object_id.pop(identity.object_id)
         process_deadline = (
@@ -10527,6 +13209,22 @@ class StateManager:
                 thread_keys.add(thread_key)
 
             process_pid_namespaces = self._action_cohort_process_pid_namespaces(plan.processes)
+            anonymous_launchers = tuple(
+                item
+                for item in plan.processes
+                if item._allocator_patch.macos_anonymous_audit_session is not None
+            )
+            if anonymous_launchers and (
+                len(anonymous_launchers) != 1
+                or plan.sessions
+                or not any(
+                    item.target == anonymous_launchers[0].identity and item.gui_session is not None
+                    for item in plan.process_executions
+                )
+            ):
+                raise StateError(
+                    "Anonymous GUI launcher requires its same-cohort authenticated exec"
+                )
             if len(plan._session_process_links) != len(plan.sessions):
                 raise StateError("Action cohort session process links are incomplete")
             role_plan_owners: dict[int, str] = {}
@@ -10591,13 +13289,18 @@ class StateManager:
                     patch.target.logon_id,
                     "cohort-process-roles",
                 )
-                identity = self._validate_action_cohort_live_session_process_roles_transition(
-                    patch,
-                    processes=processes,
-                    processes_by_pid=processes_by_pid,
-                    process_indexes=process_indexes,
-                    process_pid_namespaces=process_pid_namespaces,
-                )
+                if patch.macos_shell is not None:
+                    identity = self._validate_action_cohort_macos_ssh_shell_transition(
+                        patch, executions=plan._process_executions
+                    )
+                else:
+                    identity = self._validate_action_cohort_live_session_process_roles_transition(
+                        patch,
+                        processes=processes,
+                        processes_by_pid=processes_by_pid,
+                        process_indexes=process_indexes,
+                        process_pid_namespaces=process_pid_namespaces,
+                    )
                 if identity.object_id in live_role_by_session:
                     raise StateError("Action cohort repeats a live-session process-role target")
                 live_role_by_session[identity.object_id] = patch
@@ -10645,15 +13348,48 @@ class StateManager:
             staged_sessions = tuple(plan.sessions)
 
             process_activity: dict[str, ActionCohortProcessActivityPatch] = {}
+            pipe_counters = dict(self._macos_pipe_counters)
             for patch in plan._process_activity:
                 identity = self._action_process_identity(patch.target)
+                post_exec = any(
+                    execution.after == patch.target for execution in plan._process_executions
+                )
                 if type(patch.target) is ProcessMaterializationPlan:
                     if processes.get(identity.object_id) is not patch.target:
                         raise StateError("Action cohort process activity replaced its staged plan")
-                else:
+                elif not post_exec:
                     self._validate_action_live_process_identity(identity)
+                if post_exec and (
+                    patch.activity_time < identity.execution_started_at
+                    or any(
+                        getattr(patch, name) is not None
+                        for name in (
+                            "audit_binding",
+                            "privilege_drop",
+                            "service_drop",
+                            "job_control_change",
+                            "parentage_change",
+                            "directory_change",
+                            "filesystem_change",
+                            "descriptor_table",
+                            "policy_refusal",
+                            "job_control_actor",
+                            "adopting_parent",
+                            "native_pipe_allocation",
+                            "terminal_after",
+                            "terminal_policy_json",
+                        )
+                    )
+                ):
+                    raise StateError(
+                        "Post-exec activity requires a plain frontier after its exact execution"
+                    )
                 if identity.object_id in process_activity:
                     raise StateError("Action cohort repeats a process activity target")
+                if (
+                    patch.terminal_after is not None or patch.terminal_policy_json is not None
+                ) and patch.job_control_change is None:
+                    raise StateError("Mac terminal allocation requires its session transition")
                 if patch.activity_time < identity.started_at:
                     raise StateError("Action cohort process activity precedes process start")
                 self._validate_activity_before_owning_hard_deadline_locked(
@@ -10664,7 +13400,378 @@ class StateManager:
                     effective_end_plans=effective_end_plans,
                     label="Action cohort process activity",
                 )
+                if (
+                    sum(
+                        change is not None
+                        for change in (
+                            patch.audit_binding,
+                            patch.privilege_drop,
+                            patch.service_drop,
+                            patch.job_control_change,
+                            patch.parentage_change,
+                            patch.directory_change,
+                            patch.filesystem_change,
+                            patch.descriptor_table,
+                            patch.policy_refusal,
+                        )
+                    )
+                    > 1
+                ):
+                    raise StateError(
+                        "Audit adoption and privilege drop require distinct transitions"
+                    )
+                if patch.privilege_drop is not None:
+                    if type(patch.target) is not ProcessIdentity:
+                        raise StateError("SSH privilege drop requires an existing child")
+                    self._validate_macos_process_privilege_drop(patch.target, patch.privilege_drop)
+                    if patch.activity_time != patch.privilege_drop.dropped_at:
+                        raise StateError("SSH privilege-drop time differs from its activity")
+                if patch.audit_binding is not None:
+                    if type(patch.target) is not ProcessIdentity:
+                        raise StateError("Audit-origin adoption requires an existing receiver")
+                    self._validate_macos_process_audit_binding(patch.target, patch.audit_binding)
+                    if patch.activity_time != patch.audit_binding.bound_at:
+                        raise StateError("Audit-origin adoption time differs from its activity")
+                if patch.service_drop is not None:
+                    if type(patch.target) is not ProcessIdentity:
+                        raise StateError("Service privilege drop requires an existing child")
+                    self._validate_macos_process_service_drop(patch.target, patch.service_drop)
+                    if patch.activity_time != patch.service_drop.dropped_at:
+                        raise StateError("Service privilege-drop time differs from its activity")
+                if any(
+                    change is not None
+                    for change in (
+                        patch.audit_binding,
+                        patch.privilege_drop,
+                        patch.service_drop,
+                        patch.job_control_change,
+                        patch.parentage_change,
+                    )
+                ):
+                    if (
+                        any(
+                            item.target.object_id == identity.object_id
+                            for item in plan._process_executions
+                        )
+                        or any(
+                            item.identity.object_id == identity.object_id
+                            for item in plan._process_terminations
+                        )
+                        or any(
+                            item.parent_identity is not None
+                            and item.parent_identity.object_id == identity.object_id
+                            for item in plan._processes
+                        )
+                        or any(
+                            item.identity.logon_id == identity.logon_id
+                            for item in plan._session_terminalizations
+                        )
+                    ):
+                        raise StateError(
+                            "Process credential transitions require a separate cohort from receiver dependencies"
+                        )
+                if patch.descriptor_table is not None:
+                    self._validate_macos_descriptor_patch(patch)
+                    if patch.native_pipe_allocation is not None:
+                        first, native_id, _ = patch.native_pipe_allocation
+                        previous = pipe_counters.get(identity.hostname, (first, first - 1))
+                        if previous != (first, native_id - 1):
+                            raise StateError("Mac pipe allocation lost its exact host counter")
+                        pipe_counters[identity.hostname] = first, native_id
+                if patch.directory_change is not None:
+                    self._validate_macos_process_directory_patch(patch)
+                if patch.filesystem_change is not None:
+                    self._validate_macos_filesystem_patch(patch)
+                if (
+                    patch.job_control_change is not None
+                    or patch.directory_change is not None
+                    or patch.filesystem_change is not None
+                    or patch.policy_refusal is not None
+                    or (
+                        patch.descriptor_table is not None and type(patch.target) is ProcessIdentity
+                    )
+                ):
+                    if patch.policy_refusal is not None:
+                        if type(patch.target) is not ProcessIdentity:
+                            raise StateError("Policy refusal requires an exact existing initiator")
+                        expected = self._plan_macos_policy_refusal(
+                            patch.target,
+                            patch.policy_refusal.target.image,
+                            patch.activity_time,
+                        )
+                        if patch.policy_refusal != expected:
+                            raise StateError(
+                                "Policy refusal allocation differs from exact State planning"
+                            )
+                    if patch.job_control_change is not None:
+                        self._validate_posix_job_control_patch(patch)
+                    if (
+                        any(
+                            (
+                                plan.sessions,
+                                plan.processes,
+                                plan.process_executions,
+                                plan.process_terminations,
+                                plan.session_terminalizations,
+                                plan.session_metadata_patches,
+                                plan.session_activity_patches,
+                                plan.live_session_process_role_patches,
+                                plan._smb_connection_finalization,
+                                plan._smb_file_mutation_terminalization,
+                            )
+                        )
+                        or len(plan._process_activity) != 1
+                    ):
+                        raise StateError(
+                            "Membership, directory or descriptor change requires its own process cohort"
+                        )
+                elif patch.job_control_actor is not None:
+                    raise StateError("POSIX membership actor requires a membership change")
+                if patch.parentage_change is not None:
+                    self._validate_posix_parentage_patch(patch)
+                    prior_parent = patch.parentage_change.before.current
+                    assert prior_parent is not None and patch.adopting_parent is not None
+                    if not any(
+                        item.identity.object_id == prior_parent.object_id
+                        and item.end_time == patch.activity_time
+                        for item in plan._process_terminations
+                    ) or any(
+                        item.identity.object_id == patch.adopting_parent.object_id
+                        for item in plan._process_terminations
+                    ):
+                        raise StateError(
+                            "Parent adoption requires its old parent's exact cohort exit"
+                        )
+                elif patch.adopting_parent is not None:
+                    raise StateError("Adopting parent requires an authenticated parent transition")
                 process_activity[identity.object_id] = patch
+
+            execution_thread_ids: set[tuple[str, int]] = {
+                (item.identity.hostname, item.identity.primary_thread.tid)
+                for item in plan._processes
+                if item.identity.primary_thread is not None
+            }
+            for execution in plan._process_executions:
+                before, after = execution.target, execution.after
+                birth = processes.get(before.object_id)
+                if birth is not None:
+                    if birth.identity != before or (
+                        not birth._payload.forked and execution.gui_session is None
+                    ):
+                        raise StateError("Ordered exec requires the exact authenticated fork birth")
+                    process = self._prepare_action_cohort_process_start(birth).process
+                    platform = process_pid_namespaces[id(birth)]
+                else:
+                    process = self._validate_action_live_process_identity(before)
+                    platform = self._pid_os.get(before.hostname)
+                if platform not in {"linux", "macos"}:
+                    raise StateError("Process image replacement requires a POSIX PID namespace")
+                threads = self._running_threads.find("process_object_id", before.object_id)
+                is_macos = platform == "macos"
+                current_descriptors = (
+                    birth._payload.initial_descriptors
+                    if birth is not None
+                    else self._descriptor_table_from_history(process, after.execution_started_at)
+                    if is_macos
+                    else None
+                )
+                expected_descriptors = (
+                    current_descriptors.after_exec(after.execution_started_at)
+                    if current_descriptors is not None
+                    else None
+                )
+                if execution.spawn_io is not None:
+                    if (
+                        not is_macos
+                        or execution.finder_spawn
+                        or execution.gui_session is not None
+                        or any(p.native_pipe_allocation is not None for p in plan._process_activity)
+                    ):
+                        raise StateError("Mac spawn file actions changed their separate exec owner")
+                    terminal = (
+                        self.known_macos_terminal(
+                            after.job_control.session, after.execution_started_at
+                        )
+                        if after.job_control is not None
+                        else None
+                    )
+                    if execution.spawn_io.kind in {"ssh_shell", "ssh_pty_shell"}:
+                        execution.spawn_io.__post_init__()
+                        expected_descriptors = self._macos_ssh_shell_descriptor_table(
+                            after, pty=execution.spawn_io.kind == "ssh_pty_shell"
+                        )
+                        counter_change = None
+                    else:
+                        expected_descriptors, counter_change = plan_spawn_descriptors(
+                            after,
+                            execution.spawn_io,
+                            inherited=current_descriptors,
+                            terminal=terminal,
+                            pipe_counter=pipe_counters.get(before.hostname),
+                        )
+                    if counter_change != execution.spawn_pipe_counter:
+                        raise StateError("Mac spawn pipe allocation changed its exact counter")
+                    if counter_change is not None:
+                        first, _, last = counter_change
+                        pipe_counters[before.hostname] = first, last
+                elif execution.spawn_pipe_counter is not None:
+                    raise StateError("Mac spawn pipe allocation lost its file-action owner")
+                elif execution.finder_spawn:
+                    expected_descriptors = self._macos_finder_spawn_descriptor_table(birth, after)
+                elif expected_descriptors is None and execution.descriptors_after is not None:
+                    expected_descriptors = self._macos_ssh_command_descriptor_table(
+                        birth, after.execution_started_at
+                    )
+                if execution.descriptors_after != expected_descriptors:
+                    raise StateError("Process execution descriptor effect is stale or changed")
+                if is_macos:
+                    actual_threads = tuple(
+                        sorted(
+                            (self._thread_identity(row) for row in threads),
+                            key=lambda thread: thread.tid,
+                        )
+                    )
+                    if birth is not None:
+                        assert before.primary_thread is not None
+                        actual_threads = (before.primary_thread,)
+                    replacement = after.primary_thread
+                    if (
+                        not actual_threads
+                        or execution.retired_threads != actual_threads
+                        or before.primary_thread not in actual_threads
+                        or any(
+                            row.started_at > after.execution_started_at for row in actual_threads
+                        )
+                    ):
+                        raise StateError(
+                            "Process execution thread preimage is stale or out of order"
+                        )
+                    if (
+                        type(replacement) is not ThreadIdentity
+                        or replacement.hostname != before.hostname
+                        or replacement.process_object_id != before.object_id
+                        or replacement.pid != before.pid
+                        or replacement.kind != "primary"
+                        or replacement.started_at != after.execution_started_at
+                        or replacement.tid <= 0
+                        or replacement.tid < self._thread_id_counters.get(before.hostname, 0)
+                        or replacement.object_id
+                        != stable_uuid(
+                            "thread",
+                            before.hostname,
+                            before.object_id,
+                            before.pid,
+                            replacement.tid,
+                            after.execution_started_at.isoformat(),
+                            "primary",
+                        )
+                        or execution.thread_counter != (before.hostname, replacement.tid + 1)
+                        or (before.hostname, replacement.tid) in execution_thread_ids
+                        or any(
+                            row.tid == replacement.tid
+                            for row in self._running_threads.find("system", before.hostname)
+                        )
+                    ):
+                        raise StateError("Process execution requires a fresh native primary thread")
+                    execution_thread_ids.add((before.hostname, replacement.tid))
+                elif execution.retired_threads or execution.thread_counter is not None:
+                    raise StateError("Native exec thread replacement requires macOS")
+                elif any(thread.tid != process.primary_tid for thread in threads):
+                    raise StateError(
+                        "Process execution with worker threads requires explicit thread replacement"
+                    )
+                gui_relationships = None
+                if execution.gui_session is not None:
+                    gui_relationships = self._plan_macos_gui_exec_relationships(
+                        before,
+                        execution.gui_session,
+                        after.execution_started_at,
+                        image=after.image,
+                        birth=birth,
+                    )
+                    if (
+                        after.credentials,
+                        after.job_control,
+                        after.responsibility,
+                    ) != gui_relationships:
+                        raise StateError("GUI exec changed its exact authenticated relationships")
+                elif after.credentials != before.credentials and (
+                    before.credentials is None
+                    or after.credentials is None
+                    or after.credentials.origin != before.credentials.origin
+                ):
+                    raise StateError("Process execution changed real or audit credentials")
+                if self._pid_os.get(before.hostname) == "macos":
+                    if (
+                        after.audit_pid_version is None
+                        or after.audit_pid_version
+                        <= self._macos_audit_pid_versions.get(before.hostname, 0)
+                    ):
+                        raise StateError("Process execution requires a new macOS audit PID version")
+                elif after.audit_pid_version is not None:
+                    raise StateError("Audit PID versions require a macOS process")
+                expected = replace(
+                    before,
+                    primary_thread=after.primary_thread if is_macos else before.primary_thread,
+                    image=after.image,
+                    command_line=after.command_line,
+                    arguments=after.arguments,
+                    environment=after.environment,
+                    image_security=after.image_security,
+                    exec_image=after.exec_image,
+                    exec_script=after.exec_script,
+                    executable_version=after.executable_version,
+                    execution_directory=after.execution_directory,
+                    credentials=after.credentials,
+                    audit_pid_version=after.audit_pid_version,
+                    execution_ordinal=before.execution_ordinal + 1,
+                    lifetime_image=before.initial_image,
+                    executed_at=after.executed_at,
+                    job_control=gui_relationships[1] if gui_relationships else before.job_control,
+                    responsibility=(
+                        gui_relationships[2] if gui_relationships else before.responsibility
+                    ),
+                )
+                if after != expected or after.execution_started_at <= before.execution_started_at:
+                    raise StateError("Process execution changed lifetime ownership or ordinal")
+                if (
+                    process.last_activity_time is not None
+                    and after.execution_started_at < process.last_activity_time
+                ):
+                    raise StateError("Process execution precedes already committed activity")
+                # The canonical stage order owns fork birth -> one exec -> exact close.
+                # Other activity, dependent children and session shutdown still require
+                # their own explicit ordering contract.
+                if (
+                    (
+                        before.object_id in process_activity
+                        and process_activity[before.object_id].target != after
+                    )
+                    or any(
+                        item.identity.object_id == before.object_id and item.post_execution != after
+                        for item in plan._process_terminations
+                    )
+                    or any(
+                        item.parent_identity is not None
+                        and item.parent_identity.object_id == before.object_id
+                        for item in plan._processes
+                    )
+                    or any(
+                        item.identity.logon_id == before.logon_id
+                        for item in plan._session_terminalizations
+                    )
+                ):
+                    raise StateError(
+                        "Process execution requires a separate cohort from dependent activity or close"
+                    )
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    after.execution_started_at,
+                    hostname=before.hostname,
+                    logon_id=before.logon_id,
+                    staged_sessions=staged_sessions,
+                    effective_end_plans=effective_end_plans,
+                    label="Action cohort process execution",
+                )
 
             session_activity: dict[str, ActionCohortSessionActivityPatch] = {}
             for patch in plan._session_activity:
@@ -10877,6 +13984,27 @@ class StateManager:
                             "Action cohort terminalized session retains a live owned process"
                         )
 
+            for process_plan in plan.processes:
+                facts = process_plan.identity.responsibility
+                parent = process_plan.parent_identity
+                if facts is None or facts.responsible is None:
+                    continue
+                if parent is not None and parent.responsibility == facts:
+                    # Inheritance preserves an established relationship even
+                    # after its responsible lifetime exits. New attribution
+                    # must instead refer to an owner alive at this birth.
+                    continue
+                owner_close = termination_by_process.get(facts.responsible.object_id)
+                if (
+                    owner_close is not None
+                    and owner_close[1].end_time <= process_plan.identity.started_at
+                ):
+                    raise StateError("New responsibility cannot follow its same-cohort owner exit")
+
+            self._validate_posix_membership_sequence(
+                plan._processes, plan._process_terminations, plan._process_executions
+            )
+
             member_frontiers = [
                 value
                 for value in (
@@ -10887,6 +14015,7 @@ class StateManager:
                     *(patch.after.source_ready_time for patch in plan._session_metadata),
                     *(patch.after.network_close_time for patch in plan._session_metadata),
                     *(patch.activity_time for patch in plan._process_activity),
+                    *(patch.after.execution_started_at for patch in plan._process_executions),
                     *(patch.activity_time for patch in plan._session_activity),
                     *(termination.end_time for termination in plan.process_terminations),
                     *(
@@ -10928,6 +14057,8 @@ class StateManager:
             auth_session_ref=payload.auth_session_ref,
             effective_uid=payload.effective_uid,
             effective_gid=payload.effective_gid,
+            audit_origin=payload.audit_origin,
+            ssh_command_streams=payload.ssh_command_streams,
             network_close_time=payload.network_close_time,
             source_ready_time=payload.source_ready_time,
             closure_owned_by_bundle=payload.closure_owned_by_bundle,
@@ -10972,6 +14103,24 @@ class StateManager:
             parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
             concurrency_group_id=payload.concurrency_group_id,
             pid_logical_position=payload.pid_logical_position,
+            credentials=identity.credentials,
+            arguments=identity.arguments,
+            environment=identity.environment,
+            image_security=identity.image_security,
+            exec_image=identity.exec_image,
+            exec_script=identity.exec_script,
+            executable_version=identity.executable_version,
+            execution_directory=identity.execution_directory,
+            descriptor_history=(
+                (payload.initial_descriptors,) if payload.initial_descriptors is not None else ()
+            ),
+            directory_history=(
+                (identity.execution_directory,) if identity.execution_directory is not None else ()
+            ),
+            responsibility=identity.responsibility,
+            parentage=identity.parentage,
+            job_control=identity.job_control,
+            audit_pid_version=identity.audit_pid_version,
         )
         thread = RunningThread(
             hostname=primary_thread.hostname,
@@ -11012,7 +14161,7 @@ class StateManager:
             primitive = target
         else:
             assert type(target) is ProcessMaterializationPlan
-            identity = target.identity
+            identity = termination.identity
             parent_activity = termination.parent_activity
             parent_identity = (
                 StateManager._action_process_identity(parent_activity.target)
@@ -11029,12 +14178,21 @@ class StateManager:
                     parent_activity.activity_time if parent_activity is not None else None
                 ),
                 session_references=termination.staged_session_references,
+                exit_outcome=termination.exit_outcome,
             )
             primitive = ProcessTerminationMaterializationPlan(
                 _expected_version=target.expected_version,
                 _identity=identity,
                 _payload=payload,
                 _integrity_token="",
+            )
+        if termination.post_execution is not None:
+            identity = termination.post_execution
+            assert identity.primary_thread is not None
+            primitive = replace(
+                primitive,
+                _identity=identity,
+                _payload=replace(primitive._payload, threads=(identity.primary_thread,)),
             )
         identity = primitive.identity
         deadline = (primitive.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
@@ -11057,6 +14215,7 @@ class StateManager:
         processes: tuple[_PreparedActionCohortProcessStart, ...],
         process_terminations: tuple[_PreparedActionCohortProcessTermination, ...],
         session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...],
+        exec_threads: tuple[_PreparedActionCohortExecThreads, ...] = (),
         boot_times: tuple[tuple[str, datetime], ...] = (),
         smb_connection_finalization: _SmbConnectionFinalizationPreparation | None = None,
         smb_file_mutation_terminalization: (_SmbFileMutationTerminalPreparation | None) = None,
@@ -11072,7 +14231,7 @@ class StateManager:
         object_entries: dict[int, _ActionCohortObjectSavepoint] = {}
         temporal_offsets: dict[tuple[int, str], int] = {}
 
-        def capture_mapping(mapping: dict[object, object], key: object) -> None:
+        def capture_mapping(mapping: MutableMapping[object, object], key: object) -> None:
             journal_key = (id(mapping), key)
             if journal_key in mapping_entries:
                 return
@@ -11251,10 +14410,15 @@ class StateManager:
                     self._windows_session_id_counters,
                     patch.windows_session_counter[0],
                 )  # type: ignore[arg-type]
+            if patch.macos_audit_session_counter is not None:
+                capture_mapping(
+                    self._macos_audit_session_counters, patch.macos_audit_session_counter[0]
+                )  # type: ignore[arg-type]
+            if patch.macos_ssh_pipe_counter is not None:
+                capture_mapping(self._macos_pipe_counters, patch.macos_ssh_pipe_counter[0])  # type: ignore[arg-type]
             if patch.linux_logind is not None:
                 logind = patch.linux_logind
                 capture_mapping(self._linux_logind_session_initials, logind.system)  # type: ignore[arg-type]
-                capture_mapping(self._linux_logind_session_epochs, logind.system)  # type: ignore[arg-type]
                 capture_mapping(self._linux_logind_session_last_ids, logind.system)  # type: ignore[arg-type]
                 capture_mapped_set(
                     self._linux_logind_session_used_ids,  # type: ignore[arg-type]
@@ -11276,15 +14440,35 @@ class StateManager:
                     item.session.logon_id,
                 )
 
+        def capture_membership(group: PosixGroupIdentity | None) -> None:
+            if group is None:
+                return
+            for member in (group, group.session):
+                capture_mapping(self._posix_job_control_reservations, reservation_key(member))
+            capture_mapping(self._posix_job_control_reservation_counts, group.session.hostname)
+
         for item in processes:
             process = item.process
             thread = item.thread
+            capture_mapping(self._macos_process_census, process.system)
+            capture_membership(process.job_control)
+            terminal = item.plan._payload.terminal_session
+            if terminal is not None:
+                capture_mapping(self._macos_terminal_sessions, terminal.session)
+                capture_mapping(self._macos_terminal_slots, terminal.session.hostname)
+                capture_mapping(self._macos_terminal_ordinals, terminal.session.hostname)
             capture_object(process)
             capture_object(thread)
             process_key = (process.system, process.pid)
             thread_key = (thread.hostname, thread.process_object_id, thread.tid)
             capture_indexed(self._running_processes, process_key)  # type: ignore[arg-type]
             capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+            capture_mapping(self._macos_audit_pid_versions, process.system)  # type: ignore[arg-type]
+            if process.audit_pid_version is not None:
+                capture_mapping(
+                    self._macos_audit_identity_intents,  # type: ignore[arg-type]
+                    (process.system, process.audit_pid_version),
+                )
             capture_mapping(self._active_pid_reservation_counts, process.system)  # type: ignore[arg-type]
             capture_mapping(self._process_object_ids, process_key)  # type: ignore[arg-type]
             capture_mapping(self._processes_by_object_id, process.ecar_object_id)  # type: ignore[arg-type]
@@ -11298,6 +14482,8 @@ class StateManager:
                 (self._pid_bucket_offsets, patch.pid_bucket_offset),
                 (self._thread_id_counters, patch.thread_counter),
                 (self._thread_id_rngs, patch.thread_rng_state),
+                (self._macos_audit_session_counters, patch.macos_anonymous_audit_session),
+                (self._macos_audit_session_counters, patch.macos_boot_audit_session),
             ):
                 if entry is not None:
                     capture_mapping(mapping, entry[0])  # type: ignore[arg-type]
@@ -11329,6 +14515,8 @@ class StateManager:
         ended_thread_keys: set[object] = set()
         for item in process_terminations:
             identity = item.plan.identity
+            capture_mapping(self._macos_process_census, identity.hostname)
+            capture_membership(identity.job_control)
             process = process_rows.get(identity.object_id) or self._processes_by_object_id.get(
                 identity.object_id
             )
@@ -11410,13 +14598,83 @@ class StateManager:
                     added_time=(ensure_utc(after_plan.canonical_end) if adds_record else None),
                     adds_record=adds_record,
                 )
+        for execution in plan._process_executions:
+            capture_mapping(self._macos_process_census, execution.target.hostname)
+            if execution.spawn_pipe_counter is not None:
+                capture_mapping(self._macos_pipe_counters, execution.target.hostname)
+            capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
+            if execution.after.audit_pid_version is not None:
+                capture_mapping(
+                    self._macos_audit_identity_intents,  # type: ignore[arg-type]
+                    (execution.after.hostname, execution.after.audit_pid_version),
+                )
+            capture_object(
+                process_rows.get(execution.target.object_id)
+                or self._processes_by_object_id[execution.target.object_id]
+            )
+            if execution.gui_session is not None:
+                capture_membership(execution.target.job_control)
+                capture_membership(execution.after.job_control)
+                capture_indexed(
+                    self._running_processes, (execution.target.hostname, execution.target.pid)
+                )  # type: ignore[arg-type]
+        for replacement in exec_threads:
+            capture_mapping(self._thread_id_counters, replacement.replacement.hostname)  # type: ignore[arg-type]
+            for thread in (*replacement.retired, replacement.replacement):
+                thread_key = (thread.hostname, thread.process_object_id, thread.tid)
+                capture_object(thread)
+                capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+                ended_thread_keys.add(thread_key)
         for patch in plan._process_activity:
             identity = self._action_process_identity(patch.target)
+            if patch.native_pipe_allocation is not None:
+                capture_mapping(self._macos_pipe_counters, identity.hostname)
+            if patch.filesystem_change is not None:
+                change = patch.filesystem_change
+                capture_mapping(
+                    self._macos_filesystem_directories,
+                    (identity.hostname.casefold(), change.after.native_path),
+                )
+                if change.allocation is not None:
+                    capture_mapping(self._macos_filesystem_inodes, identity.hostname.casefold())
+            if patch.policy_refusal is not None:
+                allocation = patch.policy_refusal
+                pid_patch = allocation.allocator
+                for mapping, entry in (
+                    (self._pid_counters, pid_patch.pid_counter),
+                    (self._pid_os, pid_patch.pid_os),
+                    (self._pid_rngs, pid_patch.pid_rng_state),
+                    (self._pid_time_epochs, pid_patch.pid_epoch),
+                    (self._linux_pid_weekly_churn_prefixes, pid_patch.pid_weekly_prefix),
+                    (self._pid_bucket_offsets, pid_patch.pid_bucket_offset),
+                    (self._thread_id_counters, pid_patch.thread_counter),
+                ):
+                    if entry is not None:
+                        capture_mapping(mapping, entry[0])
+                assert pid_patch.linux_allocation is not None
+                capture_temporal_addition(self._linux_pid_allocations, *pid_patch.linux_allocation)
+                capture_mapping(self._transient_pid_reservations, identity.hostname)
+                reservations = self._transient_pid_reservations.get(identity.hostname)
+                if reservations is not None:
+                    capture_mapping(reservations, allocation.target.pid)
+                capture_mapping(self._transient_pid_reservation_counts, identity.hostname)
             process = (
                 process_rows.get(identity.object_id)
                 or self._processes_by_object_id[identity.object_id]
             )
             capture_object(process)
+            if patch.job_control_change is not None:
+                if patch.job_control_actor is not None:
+                    capture_object(self._processes_by_object_id[patch.job_control_actor.object_id])
+                capture_membership(patch.job_control_change.before)
+                capture_membership(patch.job_control_change.after)
+                if patch.terminal_after is not None:
+                    capture_mapping(self._macos_terminal_sessions, patch.terminal_after.session)
+                    capture_mapping(self._macos_terminal_slots, identity.hostname)
+                    capture_mapping(self._macos_terminal_ordinals, identity.hostname)
+                capture_indexed(self._running_processes, (identity.hostname, identity.pid))
+            if patch.privilege_drop is not None or patch.service_drop is not None:
+                capture_indexed(self._running_processes, (identity.hostname, identity.pid))
         for patch in plan._session_activity:
             identity = self._action_session_identity(patch.target)
             session = (
@@ -11478,6 +14736,14 @@ class StateManager:
             mapped_set_entries=tuple(mapped_set_entries.values()),
             indexed_store_entries=tuple(indexed_store_entries.values()),
             expiring_indexes=(
+                capture_expiring(
+                    self._macos_policy_refusals,
+                    {
+                        patch.policy_refusal.target.object_id
+                        for patch in plan._process_activity
+                        if patch.policy_refusal is not None
+                    },
+                ),
                 capture_expiring(self._ended_sessions, ended_session_keys),  # type: ignore[arg-type]
                 capture_expiring(self._ended_processes_by_key, ended_process_keys),  # type: ignore[arg-type]
                 capture_expiring(
@@ -12227,6 +15493,7 @@ class StateManager:
         live_session_process_roles = plan._live_session_process_roles
         session_metadata = plan._session_metadata
         process_activity = plan._process_activity
+        process_executions = plan._process_executions
         session_activity = plan._session_activity
         process_terminations = plan._process_terminations
         session_terminalizations = plan._session_terminalizations
@@ -12254,6 +15521,7 @@ class StateManager:
             live_session_process_roles,
             session_metadata,
             process_activity,
+            process_executions,
             session_activity,
             process_terminations,
             session_terminalizations,
@@ -12278,6 +15546,7 @@ class StateManager:
                 or live_session_process_roles
                 or session_metadata
                 or process_activity
+                or process_executions
                 or session_activity
                 or process_terminations
                 or len(session_terminalizations) != 1
@@ -12324,6 +15593,7 @@ class StateManager:
             "live_session_process_roles": tuple(item for item in live_session_process_roles),
             "session_metadata": tuple(item for item in session_metadata),
             "process_activity": tuple(item for item in process_activity),
+            "process_executions": tuple(item for item in process_executions),
             "session_activity": tuple(item for item in session_activity),
             "process_terminations": tuple(item for item in process_terminations),
             "session_terminalizations": tuple(item for item in session_terminalizations),
@@ -12350,6 +15620,7 @@ class StateManager:
                 live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
                 session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
                 process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+                process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
                 session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
                 process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
                 session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12369,6 +15640,7 @@ class StateManager:
                 live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
                 session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
                 process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+                process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
                 session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
                 process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
                 session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12386,6 +15658,7 @@ class StateManager:
             _live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
             _session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
             _process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+            _process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
             _session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
             _process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
             _session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12425,6 +15698,40 @@ class StateManager:
         processes = tuple(
             self._prepare_action_cohort_process_start(item) for item in plan.processes
         )
+        staged_threads = {
+            (item.thread.hostname, item.thread.process_object_id, item.thread.tid): item.thread
+            for item in processes
+        }
+        exec_threads: list[_PreparedActionCohortExecThreads] = []
+        for execution in plan.process_executions:
+            if not execution.retired_threads:
+                continue
+            primary = execution.after.primary_thread
+            assert primary is not None
+            exec_threads.append(
+                _PreparedActionCohortExecThreads(
+                    execution=execution,
+                    retired=tuple(
+                        staged_threads.get((thread.hostname, thread.process_object_id, thread.tid))
+                        or self._running_threads[
+                            (thread.hostname, thread.process_object_id, thread.tid)
+                        ]
+                        for thread in execution.retired_threads
+                    ),
+                    replacement=RunningThread(
+                        hostname=primary.hostname,
+                        process_object_id=primary.process_object_id,
+                        pid=primary.pid,
+                        tid=primary.tid,
+                        object_id=primary.object_id,
+                        start_time=primary.started_at,
+                        kind=primary.kind,
+                    ),
+                    deadline=(
+                        execution.after.execution_started_at + _ENDED_IDENTITY_RETENTION
+                    ).timestamp(),
+                )
+            )
         sessions_by_object_id = {item.plan.identity.object_id: item.session for item in sessions}
         terminalizations: list[_PreparedActionCohortSessionTerminalization] = []
         for terminalization in plan.session_terminalizations:
@@ -12469,6 +15776,7 @@ class StateManager:
             processes=processes,
             process_terminations=process_terminations,
             session_terminalizations=session_terminalizations,
+            exec_threads=tuple(exec_threads),
             smb_connection_finalization=smb_connection_finalization,
             smb_file_mutation_terminalization=smb_file_mutation_terminalization,
         )
@@ -12484,9 +15792,12 @@ class StateManager:
             live_session_process_roles=tuple(item for item in plan._live_session_process_roles),
             session_metadata=tuple(item for item in plan._session_metadata),
             process_activity=tuple(item for item in plan._process_activity),
+            process_executions=tuple(item for item in plan._process_executions),
+            exec_threads=tuple(exec_threads),
             session_activity=tuple(item for item in plan._session_activity),
             expected_started_sessions=tuple(item.identity for item in plan._sessions),
             expected_started_processes=tuple(item.identity for item in plan._processes),
+            expected_executed_processes=tuple(item.after for item in plan._process_executions),
             expected_terminated_processes=tuple(
                 item.identity for item in plan._process_terminations
             ),
@@ -12506,6 +15817,29 @@ class StateManager:
             claim_version=self._materialization_version,
             claim_state_time=self.state.current_time,
             claim_preimage=self._action_cohort_rollback_observation(rollback_journal),
+            refusal_allocations=tuple(
+                _PreparedPolicyRefusalAllocation(
+                    allocation=patch.policy_refusal,
+                    rng=_random_from_state(patch.policy_refusal.allocator.pid_rng_state[1]),
+                    temporal_default=TemporalAllocationIndex(),
+                    reservations=self._transient_pid_reservations.get(
+                        patch.policy_refusal.target.hostname, {}
+                    ),
+                    intervals=[
+                        *self._transient_pid_reservations.get(
+                            patch.policy_refusal.target.hostname, {}
+                        ).get(patch.policy_refusal.target.pid, ()),
+                        (patch.activity_time, patch.activity_time),
+                    ],
+                    receipt=MacosPolicyRefusalReceipt(
+                        patch.policy_refusal.target,
+                        patch.policy_refusal.kernel_thread_id,
+                        self._action_process_identity(patch.target).object_id,
+                    ),
+                )
+                for patch in plan._process_activity
+                if patch.policy_refusal is not None
+            ),
         )
 
     @contextmanager
@@ -12547,6 +15881,7 @@ class StateManager:
                 committed_version=commit_plan.committed_version,
                 started_sessions=commit_plan.expected_started_sessions,
                 started_processes=commit_plan.expected_started_processes,
+                executed_processes=commit_plan.expected_executed_processes,
                 terminated_processes=commit_plan.expected_terminated_processes,
                 terminalized_sessions=commit_plan.expected_terminalized_sessions,
                 smb_file_mutation=(
@@ -13023,9 +16358,170 @@ class StateManager:
             self._commit_action_cohort_live_session_process_roles(patch)
         for patch in prepared.session_metadata:
             self._commit_action_cohort_session_metadata(patch)
+        for replacement in prepared.exec_threads:
+            for thread in replacement.retired:
+                key = (thread.hostname, thread.process_object_id, thread.tid)
+                self._running_threads.pop(key)
+                thread.end_time = replacement.execution.after.execution_started_at
+                self._ended_threads.set(key, thread, replacement.deadline)
+            thread = replacement.replacement
+            key = (thread.hostname, thread.process_object_id, thread.tid)
+            self._running_threads[key] = thread
+            self._ended_threads.pop(key, None)
+            self._thread_id_counters[thread.hostname] = max(
+                self._thread_id_counters.get(thread.hostname, 0), thread.tid + 1
+            )
+            self._processes_by_object_id[thread.process_object_id].primary_tid = thread.tid
+        for execution in prepared.process_executions:
+            process = self._processes_by_object_id[execution.target.object_id]
+            census = self._macos_process_census.get(process.system)
+            if census is not None:
+                self._macos_process_census[process.system] = census.execute(execution.after)
+            process.prior_executions = (*process.prior_executions, execution.target)[
+                -_MAX_RETAINED_EXECUTIONS_PER_PROCESS:
+            ]
+            process.image = execution.after.image
+            process.command_line = execution.after.command_line
+            process.arguments = execution.after.arguments
+            process.environment = execution.after.environment
+            process.image_security = execution.after.image_security
+            process.exec_image = execution.after.exec_image
+            process.exec_script = execution.after.exec_script
+            process.executable_version = execution.after.executable_version
+            process.execution_directory = execution.after.execution_directory
+            if execution.descriptors_after is not None:
+                self._append_process_descriptors(process, execution.descriptors_after)
+            if execution.spawn_pipe_counter is not None:
+                first, _, last = execution.spawn_pipe_counter
+                self._macos_pipe_counters[process.system] = first, last
+            if execution.after.execution_directory is not None:
+                self._append_process_directory(process, execution.after.execution_directory)
+            process.credentials = execution.after.credentials
+            if execution.gui_session is not None:
+                change = PosixJobControlChange(
+                    "setpgid",
+                    execution.target.job_control,
+                    execution.after.job_control,
+                    execution.after.execution_started_at,
+                )
+                self._commit_posix_membership(
+                    change.before, change.after, change.changed_at, lifetime_boundary=True
+                )
+                process.job_control = change.after
+                process.job_control_history = (*process.job_control_history, change)
+                process.responsibility = execution.after.responsibility
+                self._running_processes.refresh((process.system, process.pid))
+            process.audit_pid_version = execution.after.audit_pid_version
+            if process.audit_pid_version is not None:
+                self._macos_audit_identity_intents[(process.system, process.audit_pid_version)] = (
+                    execution.after.execution_started_at,
+                    execution.after.execution_id,
+                )
+                self._macos_audit_pid_versions[process.system] = max(
+                    self._macos_audit_pid_versions.get(process.system, 0), process.audit_pid_version
+                )
+            process.execution_ordinal = execution.after.execution_ordinal
+            process.lifetime_image = execution.after.lifetime_image
+            process.executed_at = execution.after.executed_at
+            process.last_activity_time = execution.after.execution_started_at
+        for refusal in prepared.refusal_allocations:
+            allocation = refusal.allocation
+            pid_patch = allocation.allocator
+            host = allocation.target.hostname
+            self._commit_pid_allocator_patch(
+                pid_patch, prepared_rng=refusal.rng, temporal_default=refusal.temporal_default
+            )
+            if pid_patch.thread_counter is not None:
+                self._thread_id_counters[host] = pid_patch.thread_counter[1]
+            self._transient_pid_reservations[host] = refusal.reservations
+            refusal.reservations[allocation.target.pid] = refusal.intervals
+            self._transient_pid_reservation_counts[host] = (
+                self._transient_pid_reservation_counts.get(host, 0) + 1
+            )
+            self._macos_policy_refusals.set(
+                allocation.target.object_id,
+                refusal.receipt,
+                (allocation.target.refused_at + _ENDED_IDENTITY_RETENTION).timestamp(),
+            )
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
+            if patch.descriptor_table is not None:
+                self._append_process_descriptors(process, patch.descriptor_table)
+                if patch.native_pipe_allocation is not None:
+                    first, native_id, _ = patch.native_pipe_allocation
+                    self._macos_pipe_counters[process.system] = first, native_id
+            if patch.directory_change is not None:
+                self._append_process_directory(process, patch.directory_change)
+            if patch.filesystem_change is not None:
+                change = patch.filesystem_change
+                key = (identity.hostname.casefold(), change.after.native_path)
+                history = self._macos_filesystem_directories.get(key)
+                if history is None:
+                    born = change.before.metadata.born
+                    seed = replace(
+                        change.before,
+                        observed_at=datetime.fromtimestamp(born.seconds, tz=UTC).replace(
+                            microsecond=born.nanoseconds // 1000
+                        ),
+                    )
+                    history = (seed,)
+                self._macos_filesystem_directories[key] = (*history, change.after)[
+                    -MAX_FILESYSTEM_DIRECTORY_HISTORY:
+                ]
+                if change.allocation is not None:
+                    first, _, last = change.allocation
+                    self._macos_filesystem_inodes[identity.hostname.casefold()] = first, last
+            if patch.job_control_change is not None:
+                change = patch.job_control_change
+                self._commit_posix_membership(
+                    change.before,
+                    change.after,
+                    change.changed_at,
+                    lifetime_boundary=change.operation == "setsid",
+                )
+                if patch.terminal_after is not None:
+                    terminal = patch.terminal_after
+                    self._macos_terminal_sessions[terminal.session] = terminal
+                    if terminal.ordinal:
+                        self._macos_terminal_ordinals[identity.hostname] = terminal.ordinal
+                        self._macos_terminal_slots[identity.hostname] = tuple(
+                            sorted(
+                                (
+                                    *self._macos_terminal_slots.get(identity.hostname, ()),
+                                    (terminal.slot, terminal.session),
+                                )
+                            )
+                        )
+                process.job_control = change.after
+                process.job_control_history = (*process.job_control_history, change)
+                if patch.job_control_actor is not None:
+                    acting = self._processes_by_object_id[patch.job_control_actor.object_id]
+                    acting.last_activity_time = patch.activity_time
+                self._running_processes.refresh((identity.hostname, identity.pid))
+            if patch.parentage_change is not None:
+                change = patch.parentage_change
+                process.parentage = change.after
+                process.parent_pid = change.after.current_pid
+                process.parentage_history = (*process.parentage_history, change)
+            if patch.audit_binding is not None:
+                process.credentials = patch.audit_binding.after
+                process.audit_binding = patch.audit_binding
+            if patch.privilege_drop is not None or patch.service_drop is not None:
+                drop = patch.privilege_drop or patch.service_drop
+                assert drop is not None
+                process.credentials = drop.after
+                process.username = drop.after_principal
+                process.integrity_level = drop.after_integrity
+                process.privilege_drop = patch.privilege_drop
+                process.service_drop = patch.service_drop
+                if patch.service_drop is not None and patch.service_drop.gui_session is not None:
+                    owner = patch.service_drop.gui_session
+                    process.logon_id = owner.logon_id
+                    process.token_logon_id = owner.logon_id
+                    process.auth_session_id = owner.session_id
+                    process.auth_logon_type = 2
+                self._running_processes.refresh((identity.hostname, identity.pid))
             if (
                 process.last_activity_time is None
                 or process.last_activity_time < patch.activity_time
@@ -13232,6 +16728,7 @@ class StateManager:
                 staged_processes_by_pid[process_key] = identity
                 staged_pids.add(process_key)
                 staged_threads.add(thread_key)
+            self._validate_posix_membership_sequence(plan.processes)
 
     def _commit_prevalidated_materialization_batch_unclaimed(
         self,
@@ -13283,11 +16780,362 @@ class StateManager:
             self._materialization_version += 1
         return session, processes
 
+    def _replace_posix_reservation_rows(self, key: ReservationKey, rows: ReservationRows) -> None:
+        old = self._posix_job_control_reservations.get(key, ())
+        host = key[1]
+        count = self._posix_job_control_reservation_counts.get(host, 0) + len(rows) - len(old)
+        if rows:
+            self._posix_job_control_reservations[key] = rows
+        else:
+            self._posix_job_control_reservations.pop(key, None)
+        if count:
+            self._posix_job_control_reservation_counts[host] = count
+        else:
+            self._posix_job_control_reservation_counts.pop(host, None)
+
+    def _commit_posix_membership(
+        self,
+        before: PosixGroupIdentity | None,
+        after: PosixGroupIdentity | None,
+        at: datetime,
+        *,
+        lifetime_boundary: bool = False,
+    ) -> None:
+        for key, rows in membership_updates(
+            self._posix_job_control_reservations,
+            before,
+            after,
+            at,
+            lifetime_boundary=before is None or after is None or lifetime_boundary,
+        ).items():
+            self._replace_posix_reservation_rows(key, rows)
+
+    def get_posix_group_members(
+        self, group: PosixGroupIdentity, *, limit: int | None = None
+    ) -> tuple[ProcessIdentity, ...]:
+        """Return current exact-lifetime members using the group index."""
+        if type(group) is not PosixGroupIdentity:
+            raise StateError("POSIX membership lookup requires an exact group identity")
+        if limit is not None and (type(limit) is not int or limit < 1):
+            raise StateError("POSIX membership limit must be a positive integer")
+        with self._lock:
+            members: list[ProcessIdentity] = []
+            for row in self._running_processes.find_iter("posix_group", group):
+                if limit is not None and len(members) >= limit:
+                    raise StateError("POSIX group exceeds this operation's membership budget")
+                members.append(self._process_identity(row))
+            return tuple(sorted(members, key=lambda identity: identity.pid))
+
+    def _validate_posix_parentage_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        target, change, adopter = patch.target, patch.parentage_change, patch.adopting_parent
+        if (
+            type(target) is not ProcessIdentity
+            or type(change) is not ProcessParentageChange
+            or type(adopter) is not ProcessIdentity
+        ):
+            raise StateError("Parent adoption requires exact live identities and change")
+        change.__post_init__()
+        process = self._validate_action_live_process_identity(target)
+        self._validate_action_live_process_identity(adopter)
+        prior = change.before.current
+        assert prior is not None
+        parent = self.get_process_identity_by_object_id(prior.object_id)
+        if parent is None:
+            raise StateError("Parent adoption lost its exact original live parent")
+        self._validate_action_live_process_identity(parent)
+        if (
+            self._pid_os.get(target.hostname) not in {"macos", "linux"}
+            or adopter.hostname != target.hostname
+            or adopter.pid != 1
+            or adopter.parent_pid != 0
+            or adopter.principal != "root"
+            or adopter.credentials is None
+            or adopter.credentials.real_uid != 0
+            or adopter.credentials.effective_uid != 0
+            or adopter.parentage != ProcessParentage(None, None)
+            or adopter.object_id == target.object_id
+            or change.before != target.parentage
+            or prior
+            != ProcessParentReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+            or change.after.current
+            != ProcessParentReference(
+                adopter.hostname, adopter.object_id, adopter.pid, adopter.started_at
+            )
+            or change.changed_at != patch.activity_time
+            or change.changed_at < max(target.execution_started_at, adopter.execution_started_at)
+            or change.changed_at < (process.last_activity_time or process.start_time)
+            or (
+                process.parentage_history
+                and change.changed_at <= process.parentage_history[-1].changed_at
+            )
+            or len(process.parentage_history) >= 64
+        ):
+            raise StateError(
+                "Parent adoption has stale, foreign, backdated or unsupported ownership"
+            )
+
+    def _validate_posix_job_control_patch(
+        self,
+        patch: ActionCohortProcessActivityPatch,
+        *,
+        gui_exec_boundary: bool = False,
+    ) -> None:
+        target, change, actor = patch.target, patch.job_control_change, patch.job_control_actor
+        if (
+            type(target) is not ProcessIdentity
+            or type(change) is not PosixJobControlChange
+            or type(actor) is not ProcessIdentity
+        ):
+            raise StateError("POSIX membership requires exact live target, actor and transition")
+        process = self._validate_action_live_process_identity(target)
+        acting_process = self._validate_action_live_process_identity(actor)
+        if self._pid_os.get(target.hostname) not in {"macos", "linux"}:
+            raise StateError("POSIX membership requires a POSIX host")
+        expected_terminal = (
+            MacosTerminalSession(change.after.session, 0)
+            if change.operation == "setsid"
+            and change.before is not None
+            and change.before.session in self._macos_terminal_sessions
+            else None
+        )
+        if patch.terminal_policy_json is not None:
+            if change.operation != "setsid":
+                raise StateError("Mac terminal allocation requires explicit session creation")
+            policy = (
+                "absent"
+                if patch.terminal_policy_json == "absent"
+                else MacosTerminalDeviceProfile.model_validate_json(patch.terminal_policy_json)
+            )
+            expected_terminal = self._plan_macos_terminal_session(
+                replace(target, job_control=change.after),
+                policy,
+                self._pid_os.get(target.hostname, "unknown"),
+                staged=(),
+            )
+        if patch.terminal_after != expected_terminal:
+            raise StateError("POSIX session change lost its canonical terminal detachment")
+        if (
+            change.before != target.job_control
+            or change.after.session.hostname != target.hostname
+            or actor.hostname != target.hostname
+            or change.changed_at != patch.activity_time
+            or change.changed_at < max(target.execution_started_at, actor.execution_started_at)
+            or (
+                process.last_activity_time is not None
+                and change.changed_at < process.last_activity_time
+            )
+            or (
+                acting_process.last_activity_time is not None
+                and change.changed_at < acting_process.last_activity_time
+            )
+            or (
+                process.job_control_history
+                and change.changed_at <= process.job_control_history[-1].changed_at
+            )
+            or len(process.job_control_history) >= MAX_MEMBERSHIP_CHANGES
+        ):
+            raise StateError("POSIX membership transition has stale, backdated or oversized state")
+        self._validate_activity_before_owning_hard_deadline_locked(
+            change.changed_at,
+            hostname=actor.hostname,
+            logon_id=actor.logon_id,
+            label="POSIX group-changing actor activity",
+        )
+        own = actor.object_id == target.object_id
+        after, before = change.after, change.before
+        if change.operation == "bootstrap":
+            if (
+                not own
+                or target.pid != 1
+                or target.parent_pid != 0
+                or target.credentials is None
+                or target.credentials.effective_uid != 0
+                or change.changed_at != target.started_at
+                or process.job_control_history
+                or self.state.current_time != target.started_at
+            ):
+                raise StateError("POSIX bootstrap requires the privileged PID-1 process at birth")
+        elif before is None:
+            raise StateError("POSIX membership transition requires known current membership")
+        elif change.operation == "setsid":
+            if not own or before.pgid == target.pid:
+                raise StateError("setsid requires a non-group-leader acting on itself")
+        else:
+            if (
+                before.session != after.session
+                or before.session.sid == target.pid
+                or actor.job_control is None
+                or actor.job_control.session != before.session
+            ):
+                raise StateError("setpgid cannot move a session leader or cross sessions")
+            if not own and (
+                target.parent_pid != actor.pid
+                or target.execution_ordinal != 0
+                or actor.started_at > target.started_at
+            ):
+                raise StateError("setpgid requires self or a child that has not executed")
+            rows = self._posix_job_control_reservations.get(reservation_key(after), ())
+            if after.pgid != target.pid and (
+                not rows or rows[-1].ended_at is not None or rows[-1].identity != after
+            ):
+                raise StateError("setpgid destination must be a live group in the same session")
+        if change.operation in {"bootstrap", "setsid"} and (
+            after.pgid != target.pid
+            or after.leader_object_id != target.object_id
+            or after.started_at != change.changed_at
+            or after.session.sid != target.pid
+            or after.session.leader_object_id != target.object_id
+            or after.session.started_at != change.changed_at
+        ):
+            raise StateError("POSIX session creation must use its creating process identity")
+        if after.pgid == target.pid and (
+            after.leader_object_id != target.object_id or after.started_at != change.changed_at
+        ):
+            raise StateError("New POSIX group must use its creating process identity")
+        membership_updates(
+            self._posix_job_control_reservations,
+            before,
+            after,
+            change.changed_at,
+            lifetime_boundary=gui_exec_boundary or change.operation == "setsid",
+        )
+
+    def _plan_macos_gui_exec_relationships(
+        self,
+        before: ProcessIdentity,
+        owner: SessionIdentity,
+        at: datetime,
+        *,
+        image: str,
+        birth: ProcessMaterializationPlan | None = None,
+    ) -> tuple[PosixProcessCredentials, PosixGroupIdentity, ProcessResponsibility]:
+        """Authenticate a local GUI exec adoption without a general credential rewrite."""
+        if type(owner) is not SessionIdentity:
+            raise StateError("GUI exec adoption requires its exact session identity")
+        if birth is None:
+            self._validate_action_live_process_identity(before)
+        elif (
+            birth.identity != before
+            or birth._payload.forked
+            or birth._allocator_patch.macos_anonymous_audit_session
+            != (
+                before.hostname,
+                self._macos_audit_session_counters.get(before.hostname, 99_999) + 1,
+            )
+            or before.credentials is None
+            or before.credentials.audit_uid != 2**32 - 1
+            or before.credentials.audit_session_id
+            != birth._allocator_patch.macos_anonymous_audit_session[1]
+        ):
+            raise StateError("GUI exec adoption requires its exact staged anonymous launcher")
+        session = self.get_session_at(owner.logon_id, at)
+        parent = self.get_process_identity_at(before.hostname, before.parent_pid, at)
+        old = before.credentials
+        if (
+            self._pid_os.get(before.hostname) != "macos"
+            or before.image != "/usr/libexec/xpcproxy"
+            or ".app/Contents/MacOS/" not in image
+            or before.parent_pid != 1
+            or parent is None
+            or parent.image != "/sbin/launchd"
+            or parent.job_control is None
+            or parent.job_control.session.sid != 1
+            or parent.job_control.session.leader_object_id != parent.object_id
+            or before.parentage is None
+            or before.parentage.original_pid != 1
+            or before.parentage.current is None
+            or before.parentage.current.object_id != parent.object_id
+            or before.job_control is None
+            or before.job_control.session != parent.job_control.session
+            or before.job_control.pgid == before.pid
+            or old is None
+            or session is None
+            or session.system != before.hostname
+            or session.username != before.principal
+            or before.logon_id != owner.logon_id
+            or self.get_session_identity(owner.logon_id) != owner
+            or owner.session_kind != "interactive"
+            or session.logon_type != 2
+            or session.auth_protocol != "local"
+            or session.audit_origin is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+            or (old.real_uid, old.effective_uid) != (session.effective_uid,) * 2
+            or (old.real_gid, old.effective_gid) != (session.effective_gid,) * 2
+            or at < session.audit_origin.created_at
+        ):
+            raise StateError("GUI exec adoption lost its launchd, local account or login authority")
+        origin = session.audit_origin
+        if (old.audit_uid, old.audit_session_id) == (origin.audit_uid, origin.audit_session_id):
+            raise StateError("GUI exec adoption requires a distinct launcher audit origin")
+        credentials = replace(
+            old, audit_uid=origin.audit_uid, audit_session_id=origin.audit_session_id
+        )
+        group = PosixGroupIdentity(before.job_control.session, before.pid, before.object_id, at)
+        change = PosixJobControlChange("setpgid", before.job_control, group, at)
+        if birth is None:
+            # The qualified exec moves this member out of the shared boot group.
+            # Another member's planner lookahead cannot floor this process's
+            # transition. Keep per-process ordering and last-member retirement
+            # checks; the membership delta never closes the boot group early.
+            self._validate_posix_job_control_patch(
+                ActionCohortProcessActivityPatch(
+                    target=before,
+                    activity_time=at,
+                    job_control_change=change,
+                    job_control_actor=before,
+                    _capability=_ActionCohortCapability(),
+                ),
+                gui_exec_boundary=True,
+            )
+        return credentials, group, ProcessResponsibility(None)
+
+    def _validate_posix_membership_sequence(
+        self,
+        starts: tuple[ProcessMaterializationPlan, ...],
+        closes: tuple[ActionCohortProcessTermination, ...] = (),
+        executions: tuple[ActionCohortProcessExecution, ...] = (),
+    ) -> None:
+        # Overlay only touched numeric buckets; never copy or scan the process table.
+        updates: dict[ReservationKey, ReservationRows] = {}
+        view = ChainMap(updates, self._posix_job_control_reservations)
+        for plan in starts:
+            updates.update(
+                membership_updates(
+                    view,
+                    None,
+                    plan.identity.job_control,
+                    plan.identity.started_at,
+                    lifetime_boundary=True,
+                )
+            )
+        for execution in executions:
+            if execution.gui_session is not None:
+                updates.update(
+                    membership_updates(
+                        view,
+                        execution.target.job_control,
+                        execution.after.job_control,
+                        execution.after.execution_started_at,
+                        lifetime_boundary=True,
+                    )
+                )
+        for plan in closes:
+            updates.update(
+                membership_updates(
+                    view, plan.identity.job_control, None, plan.end_time, lifetime_boundary=True
+                )
+            )
+
     def validate_process_materialization(self, plan: ProcessMaterializationPlan) -> None:
         """Validate every fallible process-start condition without publishing state."""
 
         with self._lock:
             self._validate_process_materialization_plan(plan)
+            if plan._allocator_patch.macos_anonymous_audit_session is not None:
+                raise StateError("Anonymous GUI launcher requires its authenticated exec cohort")
             if plan.expected_version != self._materialization_version:
                 raise StateError("Process materialization plan became stale before commit")
             identity = plan.identity
@@ -13314,6 +17162,7 @@ class StateManager:
                     f"Process materialization primary thread is already live: {thread_key!r}"
                 )
             self._validate_process_parent_identity_locked(plan)
+            self._validate_posix_membership_sequence((plan,))
             parent_activity_time = plan._payload.parent_activity_time
             parent_identity = plan._payload.parent_identity
             if parent_activity_time is not None and parent_identity is not None:
@@ -13338,18 +17187,15 @@ class StateManager:
             ):
                 raise StateError("Process auth token disagrees with its owning session")
 
-    def _commit_prevalidated_process_materialization(
+    def _commit_pid_allocator_patch(
         self,
-        plan: ProcessMaterializationPlan,
+        patch: _ProcessAllocatorPatch,
         *,
-        advance_version: bool = True,
-        update_state_time: bool = True,
-        prepared: _PreparedActionCohortProcessStart | None = None,
-        emit_log: bool = True,
-    ) -> RunningProcess:
-        """Perform primitive process writes after validation under materialization_guard."""
-
-        patch = plan._allocator_patch
+        prepared_rng: random.Random | None = None,
+        temporal_default: TemporalAllocationIndex | None = None,
+        fixed_default: set[int] | None = None,
+    ) -> None:
+        """Install shared PID namespace facts without admitting an execution."""
         if patch.pid_counter is not None:
             host, counter = patch.pid_counter
             self._pid_counters[host] = counter
@@ -13358,8 +17204,8 @@ class StateManager:
             self._pid_os[host] = category
         if patch.pid_rng_state is not None:
             host, rng_state = patch.pid_rng_state
-            if prepared is not None and prepared.pid_rng_replacement is not None:
-                self._pid_rngs[host] = prepared.pid_rng_replacement
+            if prepared_rng is not None:
+                self._pid_rngs[host] = prepared_rng
             else:
                 rng = self._pid_rngs.setdefault(host, random.Random())
                 rng.setstate(rng_state)
@@ -13374,9 +17220,7 @@ class StateManager:
             allocations = self._linux_pid_allocations.get(host)
             if allocations is None:
                 allocations = (
-                    prepared.linux_pid_allocations_default
-                    if prepared is not None and prepared.linux_pid_allocations_default is not None
-                    else TemporalAllocationIndex()
+                    temporal_default if temporal_default is not None else TemporalAllocationIndex()
                 )
                 self._linux_pid_allocations[host] = allocations
             allocations.add(at, logical_position)
@@ -13387,15 +17231,38 @@ class StateManager:
             host, pid = patch.fixed_pid
             reservations = self._fixed_pid_reservations.get(host)
             if reservations is None:
-                reservations = (
-                    prepared.fixed_pid_reservations_default
-                    if prepared is not None and prepared.fixed_pid_reservations_default is not None
-                    else set()
-                )
+                reservations = fixed_default if fixed_default is not None else set()
                 self._fixed_pid_reservations[host] = reservations
             reservations.add(pid)
         self._pid_allocation_count += patch.pid_allocation_count_delta
         self._pid_candidate_probe_count += patch.pid_candidate_probe_delta
+
+    def _commit_prevalidated_process_materialization(
+        self,
+        plan: ProcessMaterializationPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+        prepared: _PreparedActionCohortProcessStart | None = None,
+        emit_log: bool = True,
+    ) -> RunningProcess:
+        """Perform primitive process writes after validation under materialization_guard."""
+
+        patch = plan._allocator_patch
+        if patch.macos_anonymous_audit_session is not None:
+            host, counter = patch.macos_anonymous_audit_session
+            self._macos_audit_session_counters[host] = counter
+        if patch.macos_boot_audit_session is not None:
+            host, counter = patch.macos_boot_audit_session
+            self._macos_audit_session_counters[host] = counter
+        self._commit_pid_allocator_patch(
+            patch,
+            prepared_rng=prepared.pid_rng_replacement if prepared is not None else None,
+            temporal_default=prepared.linux_pid_allocations_default
+            if prepared is not None
+            else None,
+            fixed_default=prepared.fixed_pid_reservations_default if prepared is not None else None,
+        )
         if patch.thread_counter is not None:
             host, counter = patch.thread_counter
             self._thread_id_counters[host] = counter
@@ -13408,9 +17275,36 @@ class StateManager:
                 rng.setstate(rng_state)
 
         payload = plan._payload
+        terminal = payload.terminal_session
+        if terminal is not None:
+            self._macos_terminal_sessions[terminal.session] = terminal
+            if terminal.ordinal:
+                host = terminal.session.hostname
+                self._macos_terminal_ordinals[host] = terminal.ordinal
+                self._macos_terminal_slots[host] = tuple(
+                    sorted(
+                        (
+                            *self._macos_terminal_slots.get(host, ()),
+                            (terminal.slot, terminal.session),
+                        )
+                    )
+                )
         if update_state_time:
             self.state.current_time = payload.state_time
         identity = plan.identity
+        census = self._macos_process_census.get(identity.hostname)
+        if census is not None:
+            self._macos_process_census[identity.hostname] = census.birth(
+                identity, forked=payload.forked
+            )
+        if identity.audit_pid_version is not None:
+            self._macos_audit_identity_intents[(identity.hostname, identity.audit_pid_version)] = (
+                identity.execution_started_at,
+                identity.execution_id,
+            )
+            self._macos_audit_pid_versions[identity.hostname] = max(
+                self._macos_audit_pid_versions.get(identity.hostname, 0), identity.audit_pid_version
+            )
         if payload.parent_activity_time is not None and identity.parent_pid:
             parent = self.state.running_processes.get((identity.hostname, identity.parent_pid))
             if parent is not None and (
@@ -13421,6 +17315,7 @@ class StateManager:
         prepared_start = prepared or self._prepare_action_cohort_process_start(plan)
         process = prepared_start.process
         key = (process.system, process.pid)
+        self._commit_posix_membership(None, identity.job_control, identity.started_at)
         self.state.running_processes[key] = process
         self._active_pid_reservation_counts[process.system] = (
             self._active_pid_reservation_counts.get(process.system, 0) + 1
@@ -13578,7 +17473,7 @@ class StateManager:
             self._pid_os[system] = "windows"
         else:
             self._pid_counters[system] = pid_rng.randint(8000, 42000)
-            self._pid_os[system] = "linux"
+            self._pid_os[system] = os_category
 
     def _pid_is_reserved(
         self,
@@ -13588,6 +17483,10 @@ class StateManager:
         release_time: datetime | None,
     ) -> bool:
         """Return whether a rendered PID overlaps any live reservation."""
+        if numeric_id_reserved(
+            self._posix_job_control_reservations, system, pid, start_time, release_time
+        ):
+            return True
         if (system, pid) in self.state.running_processes:
             return True
         if pid in self._fixed_pid_reservations.get(system, set()):
@@ -13612,6 +17511,7 @@ class StateManager:
             self._active_pid_reservation_counts.get(system, 0)
             + len(self._fixed_pid_reservations.get(system, ()))
             + self._transient_pid_reservation_counts.get(system, 0)
+            + self._posix_job_control_reservation_counts.get(system, 0)
         )
 
     def advance_pid_allocation_watermark(self, cutoff: datetime) -> None:
@@ -13664,6 +17564,27 @@ class StateManager:
                 else:
                     del self._transient_pid_reservations[system]
                     self._transient_pid_reservation_counts.pop(system, None)
+            for key, rows in tuple(self._posix_job_control_reservations.items()):
+                retained = tuple(
+                    row for row in rows if row.ended_at is None or row.ended_at >= normalized_cutoff
+                )
+                self._replace_posix_reservation_rows(key, retained)
+                if key[0] == "session":
+                    kept = {row.identity for row in retained}
+                    for row in rows:
+                        if row.identity not in kept:
+                            terminal = self._macos_terminal_sessions.pop(row.identity, None)
+                            if terminal is not None and terminal.ordinal:
+                                host = terminal.session.hostname
+                                slots = tuple(
+                                    item
+                                    for item in self._macos_terminal_slots.get(host, ())
+                                    if item[1] != terminal.session
+                                )
+                                if slots:
+                                    self._macos_terminal_slots[host] = slots
+                                else:
+                                    self._macos_terminal_slots.pop(host, None)
             self._pid_allocation_watermark = normalized_cutoff
             self._expire_retained_identities(normalized_cutoff)
             self._materialization_version += 1
@@ -13783,7 +17704,11 @@ class StateManager:
         )
         for _probe in range(probe_budget):
             self._pid_candidate_probe_count += 1
-            pid = self._normalize_linux_pid(logical_position)
+            pid = (
+                100 + ((logical_position - 100) % 99900)
+                if self._pid_os.get(system) == "macos"
+                else self._normalize_linux_pid(logical_position)
+            )
             if not allocations.contains_value(logical_position) and not self._pid_is_reserved(
                 system,
                 pid,
@@ -14001,6 +17926,14 @@ class StateManager:
                 candidate += 1
             return candidate
 
+        if os_category == "macos":
+            tid, counter_update, _ = self._preview_primary_thread(
+                system=system, os_category=os_category, object_id=process_object_id, pid=pid
+            )
+            if counter_update is not None:
+                self._thread_id_counters[system] = counter_update[1]
+            return tid
+
         counter = self._thread_id_counters.get(
             system,
             2000 + (4 * (_stable_seed(f"windows_tid_initial:{system}") % 5000)),
@@ -14170,14 +18103,1002 @@ class StateManager:
                 return None
             return self._process_identity(process)
 
-    def get_process_identity_by_object_id(self, object_id: str) -> ProcessIdentity | None:
+    def get_process_identity_by_object_id(
+        self, object_id: str, *, event_time: datetime | None = None
+    ) -> ProcessIdentity | None:
         """Resolve a live or ended process by its durable process object identity."""
 
         with self._lock:
             process = self._processes_by_object_id.get(
                 object_id
             ) or self._ended_processes_by_object_id.get(object_id)
-            return self._process_identity(process) if process is not None else None
+            if process is None:
+                return None
+            if event_time is not None:
+                return self._process_execution_active_at(process, ensure_utc(event_time))
+            return self._process_identity(process)
+
+    def _validate_process_responsibility(
+        self,
+        identity: ProcessIdentity,
+        platform: str,
+        parent: ProcessIdentity | None,
+        staged: tuple[ProcessIdentity, ...] = (),
+    ) -> None:
+        facts = identity.responsibility
+        if facts is None:
+            return
+        if platform != "macos":
+            raise StateError("Explicit process responsibility requires a modeled Mac host")
+        reference = facts.responsible
+        if reference is None:
+            return
+        # A child may inherit a proven relationship whose original responsible
+        # process has already exited or retired. Observation still needs retained
+        # exit proof before it may apply the native self fallback.
+        if parent is not None and parent.responsibility == facts:
+            return
+        target = next((p for p in staged if p.object_id == reference.object_id), None)
+        if target is None:
+            target = self.get_process_identity_by_object_id(
+                reference.object_id, event_time=identity.started_at
+            )
+        if (
+            target is None
+            or ResponsibleProcessReference(
+                target.hostname, target.object_id, target.pid, target.started_at
+            )
+            != reference
+        ):
+            raise StateError("Process responsibility requires an exact active lifetime")
+
+    def _validate_macos_descriptor_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        identity = self._action_process_identity(patch.target)
+        process = None
+        if type(patch.target) is ProcessMaterializationPlan:
+            platform = (
+                patch.target._allocator_patch.pid_os[1]
+                if patch.target._allocator_patch.pid_os is not None
+                else self._pid_os.get(identity.hostname, "unknown")
+            )
+            if patch.activity_time != identity.started_at:
+                raise StateError("Staged descriptor initialization requires exact process birth")
+        else:
+            process = self._validate_action_live_process_identity(identity)
+            platform = self._pid_os.get(identity.hostname, "unknown")
+        try:
+            validate_macos_descriptors(
+                patch.descriptor_table,
+                hostname=identity.hostname,
+                observed_at=patch.activity_time,
+                platform=platform,
+            )
+        except ValueError as error:
+            raise StateError("Descriptor observation requires exact Mac process facts") from error
+        frontier = identity.execution_started_at
+        if process is not None:
+            frontier = max(frontier, process.last_activity_time or process.start_time)
+        if patch.activity_time < frontier or (
+            process is not None
+            and process.descriptor_history
+            and patch.activity_time <= process.descriptor_history[-1].observed_at
+        ):
+            raise StateError("Descriptor observation must follow process activity and prior table")
+
+        if process is not None:
+            known_kinds = {
+                binding.object_id: binding.kind
+                for table in process.descriptor_history
+                for binding in table.bindings
+            }
+            if any(
+                binding.object_id in known_kinds and known_kinds[binding.object_id] != binding.kind
+                for binding in patch.descriptor_table.bindings
+            ):
+                raise StateError("Descriptor object kind contradicts retained lifetime history")
+        histories = process.descriptor_history if process is not None else ()
+        if process is None and patch.target.parent_identity is not None:
+            inherited = self.process_descriptors_at(
+                patch.target.parent_identity, event_time=patch.activity_time
+            )
+            histories = (inherited,) if inherited is not None else ()
+        known_pipes = {
+            binding.object_id: binding.native_pipe_id
+            for table in histories
+            for binding in table.bindings
+            if binding.native_pipe_id is not None
+        }
+        allocation = patch.native_pipe_allocation
+        if allocation is not None:
+            first, native_id, object_id = allocation
+            previous = self._macos_pipe_counters.get(identity.hostname, (first, first - 1))
+            if (
+                previous[0] != first
+                or native_id <= previous[1]
+                or object_id != stable_uuid("macos-native-pipe", identity.hostname, native_id)
+                or not any(
+                    item.object_id == object_id and item.native_pipe_id == native_id
+                    for item in patch.descriptor_table.bindings
+                )
+            ):
+                raise StateError("Mac native pipe allocation contradicts its exact object/counter")
+            known_pipes[object_id] = native_id
+        if any(
+            (
+                binding.object_id in known_pipes
+                and binding.native_pipe_id != known_pipes[binding.object_id]
+            )
+            or (binding.native_pipe_id is not None and binding.object_id not in known_pipes)
+            for binding in patch.descriptor_table.bindings
+        ):
+            raise StateError(
+                "Native pipe identity requires its canonical allocation or inherited owner"
+            )
+
+    @staticmethod
+    def _append_process_descriptors(process: RunningProcess, table: MacosDescriptorTable) -> None:
+        history = process.descriptor_history
+        if history and history[-1].observed_at == table.observed_at:
+            history = history[:-1]
+        process.descriptor_history = (*history, table)[-_MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES:]
+
+    @staticmethod
+    def _descriptor_table_from_history(
+        process: RunningProcess, at: datetime
+    ) -> MacosDescriptorTable | None:
+        return next(
+            (item for item in reversed(process.descriptor_history) if item.observed_at <= at), None
+        )
+
+    def _macos_finder_spawn_descriptor_table(
+        self, birth: ProcessMaterializationPlan | None, after: ProcessIdentity
+    ) -> MacosDescriptorTable:
+        """Apply explicitly modeled child spawn file actions, without inventing a parent table."""
+        parent = birth.parent_identity if birth is not None else None
+        if (
+            birth is None
+            or not birth.forked
+            or parent is None
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or birth.identity.image != parent.image
+            or after.image != "/usr/libexec/xpcproxy"
+            or after.execution_ordinal != 1
+            or after.principal != "root"
+            or after.credentials is None
+            or any(
+                value != 0
+                for value in (
+                    after.credentials.real_uid,
+                    after.credentials.effective_uid,
+                    after.credentials.real_gid,
+                    after.credentials.effective_gid,
+                )
+            )
+        ):
+            raise StateError("Finder file actions require the exact boot-parent root launcher fork")
+        return MacosDescriptorTable(
+            after.hostname,
+            after.execution_started_at,
+            tuple(
+                MacosDescriptorBinding(
+                    fd, "file", stable_uuid("finder-spawn-vnode", after.object_id, fd), False
+                )
+                for fd in range(3)
+            ),
+            native_last_fd=2,
+        )
+
+    def _macos_ssh_shell_descriptor_table(
+        self, after: ProcessIdentity, *, pty: bool = False
+    ) -> MacosDescriptorTable:
+        """Bind the initial shell to its authenticated pipes or exact session-owned PTY."""
+        if type(pty) is not bool:
+            raise StateError("SSH shell terminal mode requires an exact boolean")
+        at = after.execution_started_at
+        session = self.get_session_at(after.logon_id, at)
+        parent = self.get_process_identity_at(after.hostname, after.parent_pid, at)
+        if (
+            session is None
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.system != after.hostname
+            or session.username != after.principal
+            or session.audit_origin is None
+            or session.audit_origin.created_at >= at
+            or session.source_ready_time is None
+            or at > session.source_ready_time
+            or session.network_close_time is None
+            or at >= session.network_close_time
+            or parent is None
+            or parent.parent_pid != session.transport_pid
+            or parent.logon_id != after.logon_id
+            or parent.image != "/usr/libexec/sshd-session"
+            or parent.principal != after.principal
+            or after.image not in {"/bin/zsh", "/bin/bash"}
+            or after.arguments != ("-zsh" if after.image == "/bin/zsh" else "-bash",)
+            or after.execution_ordinal != 1
+            or after.initial_image != parent.image
+            or after.credentials is None
+            or after.credentials != parent.credentials
+            or after.credentials.audit_uid != session.audit_origin.audit_uid
+            or after.credentials.audit_session_id != session.audit_origin.audit_session_id
+            or after.job_control is None
+        ):
+            raise StateError("Mac SSH shell descriptors require its exact authenticated worker")
+        terminal = self.known_macos_terminal(after.job_control.session, at)
+        if pty:
+            if (
+                type(terminal) is not MacosTerminalObservation
+                or terminal.session != after.job_control.session
+                or session.ssh_command_streams is not None
+                or after.image != "/bin/zsh"
+            ):
+                raise StateError("Mac SSH PTY shell requires its exact terminal and qualified zsh")
+            object_id = stable_uuid(
+                "macos-ssh-pty-open", after.object_id, terminal.metadata.canonical_json()
+            )
+            return MacosDescriptorTable(
+                after.hostname,
+                at,
+                tuple(
+                    MacosDescriptorBinding(fd, "file", object_id, False, is_terminal=True)
+                    for fd in range(3)
+                ),
+                2,
+            )
+        if (
+            terminal != "absent"
+            or session.ssh_command_streams is None
+            or session.ssh_command_streams.session_object_id != session.ecar_object_id
+            or session.ssh_command_streams.hostname != after.hostname
+        ):
+            raise StateError("Mac SSH non-PTY shell requires its exact channel streams")
+        # Readiness controls external commands. The startup owner observes the
+        # same reserved objects at the earlier initial-shell exec boundary.
+        return MacosDescriptorTable(after.hostname, at, session.ssh_command_streams.bindings, 2)
+
+    def _macos_ssh_command_descriptor_table(
+        self, birth: ProcessMaterializationPlan | None, at: datetime
+    ) -> MacosDescriptorTable:
+        """Validate the exact no-PTY external-command descriptor contract.
+
+        The shell/helper table remains unknown. Only a fresh direct child of
+        the bound authenticated shell may consume its channel-owned pipes.
+        """
+        if type(birth) is not ProcessMaterializationPlan or not birth._payload.forked:
+            raise StateError("SSH command descriptor contract requires its exact fork birth")
+        identity, parent = birth.identity, birth.parent_identity
+        session = self.get_session_at(identity.logon_id, at)
+        if (
+            session is None
+            or self._pid_os.get(identity.hostname) != "macos"
+            or session.ssh_command_streams is None
+            or session.audit_origin is None
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.system != identity.hostname
+            or session.username != identity.principal
+            or session.source_ready_time is None
+            or at < session.source_ready_time
+            or parent is None
+            or parent.pid != session.session_shell_pid
+            or parent.principal != identity.principal
+            or parent.logon_id != identity.logon_id
+            or parent.image not in {"/bin/zsh", "/bin/bash"}
+            or parent.command_line not in {"-zsh", "-bash"}
+            or parent.job_control is None
+            or self.known_macos_terminal(parent.job_control.session, at) != "absent"
+            or identity.credentials is None
+            or identity.credentials != parent.credentials
+            or identity.credentials.audit_uid != session.audit_origin.audit_uid
+            or identity.credentials.audit_session_id != session.audit_origin.audit_session_id
+            or session.ssh_command_streams.session_object_id != session.ecar_object_id
+            or session.ssh_command_streams.hostname != identity.hostname
+        ):
+            raise StateError(
+                "SSH command descriptors require the exact authenticated non-PTY shell"
+            )
+        return session.ssh_command_streams.after_command_exec(at)
+
+    def process_descriptors_at(
+        self, identity: ProcessIdentity, *, event_time: datetime
+    ) -> MacosDescriptorTable | None:
+        """Read exact event-time lifetime descriptor state; missing history remains unknown."""
+        if (
+            type(identity) is not ProcessIdentity
+            or type(event_time) is not datetime
+            or event_time.utcoffset() is None
+        ):
+            raise StateError("Descriptor lookup requires an exact process and aware time")
+        at = ensure_utc(event_time)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or self._pid_os.get(identity.hostname) != "macos":
+                raise StateError("Descriptor lookup has stale, inactive or non-Mac process facts")
+            process = self._processes_by_object_id.get(identity.object_id)
+            if process is None:
+                process = self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                raise StateError("Descriptor lookup lost its exact process lifetime")
+            return self._descriptor_table_from_history(process, at)
+
+    def macos_filesystem_directory(
+        self, hostname: str, path: str, at: datetime
+    ) -> MacosExecutionDirectory | None:
+        """Observe shared directory truth; retired history never falls back to old stat."""
+        with self._lock:
+            history = self._macos_filesystem_directories.get((hostname.casefold(), path))
+            if history is None:
+                return None
+            fact = next((item for item in reversed(history) if item.observed_at <= at), None)
+            if fact is None:
+                raise StateError("Mac filesystem directory history is unavailable at this time")
+            return replace(
+                fact,
+                hostname=hostname,
+                observed_at=at,
+                metadata=type(fact.metadata).model_validate_json(fact.metadata.canonical_json()),
+            )
+
+    def macos_filesystem_next_inode(self, hostname: str, first_inode: int) -> int:
+        """Plan, without consuming, the next host-owned runtime inode."""
+        if type(first_inode) is not int or not 0 < first_inode < 2**63:
+            raise StateError("Mac filesystem inode policy requires a positive bounded integer")
+        with self._lock:
+            base, previous = self._macos_filesystem_inodes.get(
+                hostname.casefold(), (first_inode, first_inode - 1)
+            )
+            if base != first_inode or previous >= 2**63 - 1:
+                raise StateError("Mac filesystem inode policy changed or is exhausted")
+            return previous + 1
+
+    def _validate_macos_filesystem_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        change = patch.filesystem_change
+        if type(patch.target) is not ProcessIdentity or type(change) is not MacosFilesystemChange:
+            raise StateError("Filesystem change requires its exact live actor and typed facts")
+        change.__post_init__()
+        actor = patch.target
+        self._validate_action_live_process_identity(actor)
+        key = (actor.hostname.casefold(), change.after.native_path)
+        if (
+            change.after.hostname != actor.hostname
+            or change.after.observed_at != patch.activity_time
+            or self._pid_os.get(actor.hostname) != "macos"
+        ):
+            raise StateError("Filesystem directory change must belong to its actor and time")
+        history = self._macos_filesystem_directories.get(key)
+        if history is not None and (
+            history[-1].observed_at >= patch.activity_time
+            or history[-1].metadata != change.before.metadata
+        ):
+            raise StateError(
+                "Filesystem directory change lost its exact chronological before state"
+            )
+        if (
+            history is None
+            and sum(host == key[0] for host, _ in self._macos_filesystem_directories)
+            >= MAX_FILESYSTEM_DIRECTORIES_PER_HOST
+        ):
+            raise StateError("Mac filesystem directory inventory exceeds its per-host bound")
+        if change.allocation is not None:
+            first, previous, _ = change.allocation
+            if self._macos_filesystem_inodes.get(key[0], (first, first - 1)) != (first, previous):
+                raise StateError("Filesystem inode allocation lost its exact prior counter")
+
+    def _validate_macos_process_directory_patch(
+        self, patch: ActionCohortProcessActivityPatch
+    ) -> None:
+        """Require an exact successful, chronologically ordered Mac directory fact."""
+        if type(patch.target) is not ProcessIdentity or patch.directory_change is None:
+            raise StateError("Directory change requires an existing process")
+        process = self._validate_action_live_process_identity(patch.target)
+        try:
+            validate_macos_execution_directory(
+                patch.directory_change,
+                hostname=patch.target.hostname,
+                observed_at=patch.activity_time,
+                platform=self._pid_os.get(patch.target.hostname, "unknown"),
+            )
+        except ValueError as error:
+            raise StateError("Directory change requires exact Mac host, time and stat") from error
+        frontier = process.last_activity_time or process.executed_at or process.start_time
+        if patch.activity_time < frontier or (
+            process.directory_history
+            and patch.activity_time <= process.directory_history[-1].observed_at
+        ):
+            raise StateError(
+                "Directory change must follow its process activity and directory history"
+            )
+
+    @staticmethod
+    def _append_process_directory(
+        process: RunningProcess, directory: MacosExecutionDirectory
+    ) -> None:
+        """Keep bounded observations without changing the immutable execution snapshot."""
+        history = process.directory_history
+        if history and history[-1].observed_at == directory.observed_at:
+            history = history[:-1]
+        process.directory_history = (*history, directory)[-_MAX_RETAINED_PROCESS_DIRECTORIES:]
+
+    def process_directory_at(
+        self, identity: ProcessIdentity, *, event_time: datetime
+    ) -> MacosExecutionDirectory | None:
+        """Return the latest retained directory fact, preserving its actual observation time.
+
+        None means unknown or retired history. This does not refresh filesystem
+        stat or create a new execution-time observation. Producers must supply
+        fresh explicit facts when an output contract requires them. The lookup
+        uses an exact event-time execution and lifetime, never a recycled PID.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(event_time) is not datetime
+            or event_time.utcoffset() is None
+        ):
+            raise StateError("Directory lookup requires an exact process and aware time")
+        at = ensure_utc(event_time)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or self._pid_os.get(identity.hostname) != "macos":
+                raise StateError("Directory lookup has stale, inactive or non-Mac process facts")
+            process = self._processes_by_object_id.get(identity.object_id)
+            if process is None:
+                process = self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                raise StateError("Directory lookup lost its exact process lifetime")
+            return next(
+                (item for item in reversed(process.directory_history) if item.observed_at <= at),
+                None,
+            )
+
+    def observe_process_responsibility(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessResponsibilityObservation:
+        """Freeze responsible execution or explicit self fallback at event time.
+
+        Unknown ownership or expired history cannot become an absent or exited
+        owner. Capture before collection delay; no numeric-PID lookup is used.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("Responsibility observation requires exact process and aware time")
+        at = ensure_utc(observed_at)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or identity.responsibility is None:
+                raise StateError("Responsibility observation has stale, inactive or unknown facts")
+            return self._observe_process_responsibility_locked(identity, at)
+
+    def _observe_process_responsibility_locked(
+        self, identity: ProcessIdentity, at: datetime
+    ) -> ProcessResponsibilityObservation:
+        if identity.responsibility is None:
+            raise StateError("Responsibility observation requires known process facts")
+        reference = identity.responsibility.responsible
+        if reference is None:
+            return ProcessResponsibilityObservation(identity, identity, at, "absent")
+        target = self._processes_by_object_id.get(reference.object_id) or (
+            self._ended_processes_by_object_id.get(reference.object_id)
+        )
+        if (
+            target is None
+            or ResponsibleProcessReference(
+                target.system, target.ecar_object_id, target.pid, target.start_time
+            )
+            != reference
+        ):
+            raise StateError("Responsibility observation lost exact retained lifetime history")
+        if target.end_time is not None and at >= target.end_time:
+            return ProcessResponsibilityObservation(
+                identity, identity, at, "exited", target.end_time
+            )
+        responsible = self._process_execution_active_at(target, at)
+        if responsible is None:
+            raise StateError("Responsibility observation lost active execution history")
+        return ProcessResponsibilityObservation(identity, responsible, at, "active")
+
+    def observe_process_relationships(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessRelationshipObservation:
+        """Capture both exact relationship owners under one State read boundary."""
+        with self._lock:
+            return ProcessRelationshipObservation(
+                self.observe_process_parent(identity, observed_at=observed_at),
+                self.observe_process_responsibility(identity, observed_at=observed_at),
+            )
+
+    def validate_macos_process_observation_plan(
+        self, plan: ActionCohortMaterializationPlan | MaterializationBatchPlan
+    ) -> None:
+        """Authenticate a process cohort or the exact initial deferred SSH fork.
+
+        This is a read-only source projection boundary. A session batch gains
+        no action-cohort commit capability and cannot substitute exec/exit plans.
+        """
+        if type(plan) is ActionCohortMaterializationPlan:
+            self.validate_action_cohort_materialization(plan)
+            return
+        if type(plan) is not MaterializationBatchPlan:
+            raise StateError("Mac process observation requires an exact canonical State plan")
+        self.validate_materialization_batch(plan)
+        session = plan.session
+        if session is None or len(plan.processes) != 1:
+            raise StateError("Deferred Mac source observation requires one SSH session and fork")
+        birth = plan.processes[0]
+        parent, child = birth.parent_identity, birth.identity
+        if (
+            not birth.forked
+            or parent is None
+            or parent.pid != 1
+            or parent.image != "/sbin/launchd"
+            or parent.principal != "root"
+            or parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or self._pid_os.get(parent.hostname) != "macos"
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.identity.hostname != child.hostname
+            or session.identity.logon_id != child.logon_id
+            or child.execution_ordinal != 0
+            or child.image != parent.image
+            or child.arguments != parent.arguments
+            or child.credentials != parent.credentials
+            or child.job_control != parent.job_control
+            or child.executable_version != parent.executable_version
+        ):
+            raise StateError("Deferred Mac source observation lost its inherited boot-parent fork")
+
+    def _observe_planned_relationships_locked(
+        self,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+        identity: ProcessIdentity,
+        at: datetime,
+    ) -> ProcessRelationshipObservation:
+        """Project one selected subject after its cohort has passed State validation."""
+        birth = next((item for item in cohort.processes if item.identity == identity), None)
+        platform = (
+            self._action_cohort_process_pid_namespaces(cohort.processes)[id(birth)]
+            if birth is not None and type(cohort) is ActionCohortMaterializationPlan
+            else self._pid_os.get(identity.hostname)
+        )
+        if platform != "macos":
+            raise StateError("Planned observation requires a modeled Mac execution")
+        return MacosProcessRelationshipOverlay(self, cohort).observe(identity, at)
+
+    def observe_planned_process_relationships(
+        self,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+        *,
+        process: ProcessIdentity | None = None,
+    ) -> ProcessRelationshipObservation:
+        """Freeze an exact selected birth using a read-only mixed-cohort overlay.
+
+        Canonical State admission still owns allowed dependencies. Strictly
+        earlier related exec, credential, adoption and close transitions affect
+        observations; equal-time transitions retain the pre-transition view.
+        Explicit staged birth references retain their authenticated ordering.
+        """
+        with self._lock:
+            self.validate_macos_process_observation_plan(cohort)
+            if process is None:
+                if len(cohort.processes) != 1:
+                    raise StateError("Planned observation requires an exact selected birth")
+                plan = cohort.processes[0]
+            else:
+                if type(process) is not ProcessIdentity:
+                    raise StateError("Planned observation requires an exact selected birth")
+                plan = next((item for item in cohort.processes if item.identity == process), None)
+                if plan is None:
+                    raise StateError("Planned birth observation is not a member of this cohort")
+            return self._observe_planned_relationships_locked(
+                cohort, plan.identity, plan.identity.started_at
+            )
+
+    def observe_planned_fork_parent_relationships(
+        self,
+        cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+        *,
+        child: ProcessIdentity,
+    ) -> ProcessRelationshipObservation:
+        """Freeze the exact performing parent of a selected authenticated fork."""
+        if type(child) is not ProcessIdentity:
+            raise StateError("Planned fork source requires its exact selected fork birth")
+        with self._lock:
+            self.validate_macos_process_observation_plan(cohort)
+            birth = next((item for item in cohort.processes if item.identity == child), None)
+            if (
+                type(child) is not ProcessIdentity
+                or birth is None
+                or not birth.forked
+                or birth._payload.parent_identity is None
+            ):
+                raise StateError("Planned fork source requires its exact selected fork birth")
+            return self._observe_planned_relationships_locked(
+                cohort, birth._payload.parent_identity, child.started_at
+            )
+
+    def observe_planned_execution_relationships(
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        *,
+        process: ProcessIdentity | None = None,
+        source: bool = False,
+    ) -> ProcessRelationshipObservation:
+        """Freeze a selected exec source/target without publishing any cohort member.
+
+        The selected transition supplies its exact before/after identity. Related
+        mixed-cohort transitions use the same event-time overlay as births and
+        exits. This read grants no authority to commit State or native output.
+        """
+        with self._lock:
+            self.validate_action_cohort_materialization(cohort)
+            if type(source) is not bool:
+                raise StateError("Planned exec observation requires an exact source/target choice")
+            if process is None:
+                if len(cohort.process_executions) != 1:
+                    raise StateError(
+                        "Planned exec observation requires an exact selected execution"
+                    )
+                execution = cohort.process_executions[0]
+            else:
+                if type(process) is not ProcessIdentity:
+                    raise StateError(
+                        "Planned exec observation requires an exact selected execution"
+                    )
+                execution = next(
+                    (
+                        item
+                        for item in cohort.process_executions
+                        if (item.target if source else item.after) == process
+                    ),
+                    None,
+                )
+                if execution is None:
+                    raise StateError("Planned exec observation is not a member of this cohort")
+            return self._observe_planned_relationships_locked(
+                cohort,
+                execution.target if source else execution.after,
+                execution.after.execution_started_at,
+            )
+
+    def observe_planned_termination_relationships(
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        *,
+        process: ProcessIdentity | None = None,
+    ) -> ProcessRelationshipObservation:
+        """Freeze a selected exit at its pre-close boundary in a mixed cohort.
+
+        Earlier planned closes/adoptions and related executions or credential
+        transitions affect owners. Equal-time changes remain pre-transition.
+        Canonical lifecycle admission is unchanged and must pass before reading.
+        """
+        with self._lock:
+            self.validate_action_cohort_materialization(cohort)
+            if process is None:
+                if len(cohort.process_terminations) != 1:
+                    raise StateError(
+                        "Planned terminal observation requires an exact selected termination"
+                    )
+                terminal = cohort.process_terminations[0]
+            else:
+                if type(process) is not ProcessIdentity:
+                    raise StateError(
+                        "Planned terminal observation requires an exact selected termination"
+                    )
+                terminal = next(
+                    (item for item in cohort.process_terminations if item.identity == process), None
+                )
+                if terminal is None:
+                    raise StateError("Planned terminal observation is not a member of this cohort")
+            return self._observe_planned_relationships_locked(
+                cohort, terminal.identity, terminal.end_time
+            )
+
+    def observe_process_parent(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessParentObservation:
+        """Capture exact event-time parent execution before source delay or retention.
+
+        Lookup uses durable object identities and historical execution, credential
+        and parentage state. Missing/expired facts reject instead of consulting a
+        reused PID. Callers must retain this immutable value with their occurrence;
+        reconstructing it later cannot restore already-retired history.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("Parent observation requires exact process identity and aware time")
+        at = ensure_utc(observed_at)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or identity.parentage is None:
+                raise StateError("Parent observation has stale, inactive or unknown process facts")
+            return self._observe_process_parent_locked(identity, at)
+
+    def _observe_process_parent_locked(
+        self, identity: ProcessIdentity, at: datetime
+    ) -> ProcessParentObservation:
+        if identity.parentage is None:
+            raise StateError("Parent observation requires known process facts")
+        reference = identity.parentage.current
+        parent = None
+        if reference is not None:
+            parent = self.get_process_identity_by_object_id(reference.object_id, event_time=at)
+            if parent is None:
+                raise StateError("Parent observation lost its exact active parent history")
+        try:
+            return ProcessParentObservation(identity, parent, at)
+        except ValueError as error:
+            raise StateError(
+                "Parent observation disagrees with canonical parent ownership"
+            ) from error
+
+    def _validate_macos_process_service_drop(
+        self, target: ProcessIdentity, drop: MacosProcessServiceDrop
+    ) -> None:
+        """Bind one service drop to an exact privileged parent and unauthenticated child."""
+        if type(target) is not ProcessIdentity or type(drop) is not MacosProcessServiceDrop:
+            raise StateError("Service privilege drop requires exact immutable facts")
+        drop.__post_init__()
+        process = self._validate_action_live_process_identity(target)
+        parent = self.get_process_identity(target.hostname, target.parent_pid)
+        if parent is not None:
+            self._validate_action_live_process_identity(parent)
+        parent_at_fork = self.get_process_identity_at(
+            target.hostname, target.parent_pid, target.started_at
+        )
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or parent is None
+            or parent_at_fork is None
+            or parent.object_id != drop.parent_object_id
+            or parent_at_fork.object_id != drop.parent_object_id
+            or parent.execution_id != drop.parent_execution_id
+            or parent_at_fork.execution_id != drop.parent_execution_id
+            or target.execution_ordinal != drop.execution_ordinal
+            or parent.credentials != drop.before
+            or parent_at_fork.credentials != drop.before
+            or parent.logon_id != target.logon_id
+            or parent.object_id == target.object_id
+            or process.credentials != drop.before
+            or process.username != drop.before_principal
+            or process.integrity_level != drop.before_integrity
+            or (drop.after_principal != "_sshd" and drop.gui_session is None)
+            or drop.after_integrity != "Medium"
+            or process.audit_binding is not None
+            or process.privilege_drop is not None
+            or process.service_drop is not None
+        ):
+            raise StateError("Service privilege drop lost its unauthenticated Mac child authority")
+        if drop.dropped_at <= target.execution_started_at or drop.dropped_at < (
+            process.last_activity_time or process.start_time
+        ):
+            raise StateError("Service privilege drop is outside its live child interval")
+        if drop.gui_session is not None:
+            owner = drop.gui_session
+            session = self.get_session_at(owner.logon_id, drop.dropped_at)
+            if (
+                self.get_session_identity(owner.logon_id) != owner
+                or session is None
+                or owner.hostname != target.hostname
+                or session.logon_type != 2
+                or session.auth_protocol != "local"
+                or session.audit_origin is None
+                or target.image != "/usr/libexec/xpcproxy"
+                or target.parent_pid != 1
+                or parent.image != "/sbin/launchd"
+                or target.execution_ordinal != 1
+                or drop.before_logon_id != target.logon_id
+                or drop.after_logon_id != owner.logon_id
+                or drop.after_principal != session.username
+                or drop.gui_audit_origin != session.audit_origin
+                or (drop.after.real_uid, drop.after.real_gid)
+                != (session.effective_uid, session.effective_gid)
+            ):
+                raise StateError(
+                    "GUI service drop lost its exact local login and launcher authority"
+                )
+            return
+        session = self.get_session(target.logon_id)
+        if session is not None and (
+            (
+                session.audit_origin is not None
+                and drop.dropped_at >= session.audit_origin.created_at
+            )
+            or (
+                session.network_close_time is not None
+                and drop.dropped_at >= session.network_close_time
+            )
+        ):
+            raise StateError(
+                "Service privilege drop must precede authentication and transport close"
+            )
+
+    def _validate_macos_process_privilege_drop(
+        self, target: ProcessIdentity, drop: MacosProcessPrivilegeDrop
+    ) -> None:
+        """Bind one permanent drop to its exact authenticated SSH or local-login child."""
+        if type(target) is not ProcessIdentity or type(drop) is not MacosProcessPrivilegeDrop:
+            raise StateError("SSH privilege drop requires exact immutable facts")
+        drop.__post_init__()
+        process = self._validate_action_live_process_identity(target)
+        session = self.get_session(target.logon_id)
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session is None
+            or session.system != target.hostname
+            or session.session_kind not in {"ssh", "interactive"}
+            or session.audit_origin != drop.origin
+            or session.effective_uid != drop.after.real_uid
+            or session.effective_gid != drop.after.real_gid
+            or session.username != drop.after_principal
+            or process.username != drop.before_principal
+            or process.integrity_level != drop.before_integrity
+            or drop.after_integrity != "Medium"
+            or process.credentials != drop.before
+            or process.privilege_drop is not None
+            or process.service_drop is not None
+            or target.execution_ordinal != 0
+            or process.audit_binding is not None
+        ):
+            raise StateError("SSH privilege drop lost its authenticated Mac child authority")
+        parent = self.get_process(target.hostname, target.parent_pid)
+        parent_at_fork = self.get_process_identity_at(
+            target.hostname, target.parent_pid, target.started_at
+        )
+        if (
+            parent is None
+            or parent_at_fork is None
+            or parent.ecar_object_id != parent_at_fork.object_id
+            or parent.logon_id != target.logon_id
+            or parent_at_fork.credentials != drop.before
+        ):
+            raise StateError(
+                "Process privilege drop lost its authenticated Mac child authority at fork"
+            )
+        if session.session_kind == "ssh":
+            if (
+                session.auth_protocol != "ssh"
+                or session.transport_pid != target.parent_pid
+                or session.transport_pid == target.pid
+                or parent.audit_binding is None
+                or parent.audit_binding.origin != drop.origin
+                or parent.audit_binding.bound_at > target.started_at
+                or drop.before.real_uid != 0
+            ):
+                raise StateError("SSH privilege drop lost its authenticated Mac child authority")
+        elif (
+            session.logon_type != 2
+            or session.username != target.principal
+            or parent_at_fork.image != "/usr/bin/login"
+            or parent_at_fork.execution_ordinal < 1
+            or parent_at_fork.executable_version is None
+            or parent_at_fork.executable_version.identity_kind != "installed_release"
+            or parent_at_fork.responsibility is None
+            or parent_at_fork.responsibility.responsible is None
+            or parent_at_fork.responsibility != target.responsibility
+            or parent_at_fork.job_control != target.job_control
+            or drop.before.real_uid != session.effective_uid
+            or drop.before.effective_uid != 0
+            or drop.before.real_gid != session.effective_gid
+            or drop.before.effective_gid != session.effective_gid
+            or drop.before_principal != drop.after_principal
+        ):
+            raise StateError(
+                "Login privilege drop requires its authenticated setuid parent at fork"
+            )
+        if (
+            drop.dropped_at <= target.started_at
+            or drop.dropped_at < (process.last_activity_time or process.start_time)
+            or (
+                session.network_close_time is not None
+                and drop.dropped_at >= session.network_close_time
+            )
+        ):
+            raise StateError("SSH privilege drop is outside its live child interval")
+
+    def _validate_macos_process_audit_binding(
+        self, target: ProcessIdentity, binding: MacosProcessAuditBinding
+    ) -> None:
+        """Validate one exact audit adoption against live process/session authority."""
+        if type(binding) is not MacosProcessAuditBinding or type(target) is not ProcessIdentity:
+            raise StateError("Process audit-origin adoption requires exact immutable facts")
+        process = self._validate_action_live_process_identity(target)
+        session = self.get_session(target.logon_id)
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session is None
+            or session.system != target.hostname
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.audit_origin != binding.origin
+            or session.transport_pid != target.pid
+            or process.audit_binding is not None
+            or process.service_drop is not None
+            or process.credentials != binding.before
+        ):
+            raise StateError("Process audit-origin adoption lost its Mac SSH session authority")
+        binding.__post_init__()
+        if (
+            binding.bound_at < target.execution_started_at
+            or binding.bound_at < (process.last_activity_time or process.start_time)
+            or (
+                session.network_close_time is not None
+                and binding.bound_at >= session.network_close_time
+            )
+        ):
+            raise StateError("Process audit-origin adoption is outside its live receiver interval")
+
+    def _process_execution_active_at(
+        self, process: RunningProcess, event_time: datetime
+    ) -> ProcessIdentity | None:
+        if event_time < process.start_time or (
+            process.end_time is not None and event_time >= process.end_time
+        ):
+            return None
+        current = self._process_identity(process)
+        selected = (
+            current
+            if event_time >= current.execution_started_at
+            else next(
+                (
+                    prior
+                    for prior in reversed(process.prior_executions)
+                    if prior.execution_started_at <= event_time
+                ),
+                None,
+            )
+        )
+        if selected is not None and process.parentage_history:
+            parentage = process.parentage
+            for change in reversed(process.parentage_history):
+                if event_time < change.changed_at:
+                    parentage = change.before
+            assert parentage is not None
+            selected = replace(selected, parentage=parentage, parent_pid=parentage.current_pid)
+        if selected is not None and process.job_control_history:
+            membership = process.job_control
+            for change in reversed(process.job_control_history):
+                if event_time < change.changed_at:
+                    membership = change.before
+            selected = replace(selected, job_control=membership)
+        drop = process.privilege_drop or process.service_drop
+        if (
+            selected is not None
+            and drop is not None
+            and event_time < drop.dropped_at
+            and (
+                type(drop) is not MacosProcessServiceDrop
+                or selected.execution_ordinal == drop.execution_ordinal
+            )
+        ):
+            selected = replace(
+                selected,
+                principal=drop.before_principal,
+                credentials=drop.before,
+                logon_id=drop.before_logon_id
+                if type(drop) is MacosProcessServiceDrop and drop.gui_session is not None
+                else selected.logon_id,
+            )
+        binding = process.audit_binding
+        if selected is not None and binding is not None and event_time < binding.bound_at:
+            if selected.credentials is not None:
+                return replace(
+                    selected,
+                    credentials=replace(
+                        selected.credentials,
+                        audit_uid=binding.before.audit_uid,
+                        audit_session_id=binding.before.audit_session_id,
+                    ),
+                )
+        return selected
 
     def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
         """Project mutable runtime process state to an immutable identity snapshot."""
@@ -14201,6 +19122,21 @@ class StateManager:
             lifecycle_group_id=process.lifecycle_group_id,
             parent_lifecycle_group_id=process.parent_lifecycle_group_id,
             primary_thread=primary_thread,
+            execution_ordinal=process.execution_ordinal,
+            lifetime_image=process.lifetime_image,
+            executed_at=process.executed_at,
+            credentials=process.credentials,
+            arguments=process.arguments,
+            environment=process.environment,
+            image_security=process.image_security,
+            exec_image=process.exec_image,
+            exec_script=process.exec_script,
+            executable_version=process.executable_version,
+            execution_directory=process.execution_directory,
+            responsibility=process.responsibility,
+            parentage=process.parentage,
+            job_control=process.job_control,
+            audit_pid_version=process.audit_pid_version,
         )
 
     @staticmethod
@@ -14219,6 +19155,21 @@ class StateManager:
             identity.started_at,
             identity.lifecycle_group_id,
             identity.parent_lifecycle_group_id,
+            identity.execution_ordinal,
+            identity.executed_at,
+            identity.lifetime_image,
+            identity.credentials,
+            identity.audit_pid_version,
+            identity.arguments,
+            identity.environment,
+            identity.image_security,
+            identity.exec_image,
+            identity.exec_script,
+            identity.executable_version,
+            identity.execution_directory,
+            identity.parentage,
+            identity.responsibility,
+            identity.job_control,
         )
 
     def _process_identity_active_at_locked(
@@ -14242,8 +19193,75 @@ class StateManager:
             if process.start_time <= effective_time and (
                 process.end_time is None or effective_time < process.end_time
             ):
-                return self._process_identity(process)
+                return self._process_execution_active_at(process, effective_time)
         return None
+
+    def get_process_identity_at(
+        self, system: str, pid: int, event_time: datetime
+    ) -> ProcessIdentity | None:
+        """Resolve an execution without crossing a reused PID's retired incarnation.
+
+        Delayed observations across PID reuse must use the durable object-ID lookup.
+        """
+
+        with self._lock:
+            return self._process_identity_active_at_locked(system, pid, event_time)
+
+    def get_process_at(self, system: str, pid: int, event_time: datetime) -> RunningProcess | None:
+        """Return a detached view of the exact live or retained execution at a time.
+
+        This is a read query. It neither revives a terminated process nor exposes
+        a later execution's image, credentials or executable version to a caller.
+        """
+        with self._lock:
+            identity = self._process_identity_active_at_locked(system, pid, event_time)
+            if identity is None:
+                return None
+            process = self._processes_by_object_id.get(
+                identity.object_id
+            ) or self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                return None
+            return replace(
+                process,
+                parent_pid=identity.parent_pid,
+                image=identity.image,
+                command_line=identity.command_line,
+                username=identity.principal,
+                logon_id=identity.logon_id,
+                start_time=identity.started_at,
+                execution_ordinal=identity.execution_ordinal,
+                executed_at=identity.executed_at,
+                primary_tid=identity.primary_thread.tid
+                if identity.primary_thread is not None
+                else -1,
+                credentials=identity.credentials,
+                audit_pid_version=identity.audit_pid_version,
+                arguments=identity.arguments,
+                job_control=identity.job_control,
+                environment=identity.environment,
+                parentage=identity.parentage,
+                responsibility=identity.responsibility,
+                image_security=identity.image_security,
+                execution_directory=identity.execution_directory,
+                executable_version=identity.executable_version,
+                exec_image=identity.exec_image,
+                exec_script=identity.exec_script,
+            )
+
+    @staticmethod
+    def process_history_retained_until(end_time: datetime) -> datetime:
+        """Return the existing process-history boundary for an explicit lifecycle horizon.
+
+        Content owners use the same interval as retained process identities. A
+        generation end is a valid conservative horizon, not an inferred exit.
+        """
+        if type(end_time) is not datetime or end_time.utcoffset() is None:
+            raise StateError("Process history horizon requires an aware datetime")
+        try:
+            return ensure_utc(end_time) + _ENDED_IDENTITY_RETENTION
+        except OverflowError as exc:
+            raise StateError("Process history horizon lacks retention headroom") from exc
 
     def _validate_process_parent_identity_locked(
         self,
@@ -14320,19 +19338,15 @@ class StateManager:
     def is_process_active_at(self, system: str, pid: int, time: datetime) -> bool:
         """Return whether a live or retained process identity spans ``time``."""
         with self._lock:
-            process = self.state.running_processes.get((system, pid))
-            if process is None:
-                process = self._ended_processes_by_key.get((system, pid))
+            effective_time = ensure_utc(time)
+            process = self._process_identity_active_at_locked(system, pid, effective_time)
             if process is None:
                 return False
-            effective_time = ensure_utc(time)
             if process.logon_id:
                 session = self.state.active_sessions.get(self._resolve_logon_id(process.logon_id))
                 if session is not None and not _session_valid_at(session, effective_time):
                     return False
-            return process.start_time <= effective_time and (
-                process.end_time is None or effective_time < process.end_time
-            )
+            return True
 
     def get_session_object_id(self, logon_id: str) -> str:
         """Get the eCAR objectID for a session."""
@@ -14492,22 +19506,35 @@ class StateManager:
         with self._lock:
             return self._running_processes.find("username", username)
 
-    def get_processes_on_system(self, system: str) -> list[RunningProcess]:
+    def get_processes_on_system(
+        self, system: str, *, include_retained: bool = False
+    ) -> list[RunningProcess]:
         """Get all running processes on a system.
 
         Args:
             system: System hostname to search for
+            include_retained: Include bounded closed lifetimes for historical queries.
 
         Returns:
             List of running processes on the system (may be empty)
         """
         with self._lock:
-            return self._running_processes.find("system", system)
+            processes = self._running_processes.find("system", system)
+            if include_retained:
+                processes = list(processes)
+                processes.extend(
+                    process
+                    for process in self._ended_processes_by_object_id.values()
+                    if process.system == system
+                )
+            return processes
 
     def get_processes_for_session(
         self,
         logon_id: str,
         system: str | None = None,
+        *,
+        include_retained: bool = False,
     ) -> list[RunningProcess]:
         """Get running processes owned by one session.
 
@@ -14521,11 +19548,20 @@ class StateManager:
         with self._lock:
             resolved_logon_id = self._resolve_logon_id(logon_id)
             logon_ids = {logon_id, resolved_logon_id}
-            processes: dict[tuple[str, int], RunningProcess] = {}
+            processes: dict[tuple[str, int, str], RunningProcess] = {}
             for candidate_logon_id in logon_ids:
                 for process in self._running_processes.find("logon_id", candidate_logon_id):
                     if system is None or process.system == system:
-                        processes[(process.system, process.pid)] = process
+                        processes[(process.system, process.pid, process.ecar_object_id)] = process
+            if include_retained:
+                # Authored scheduling may visit an earlier time after baseline
+                # children have closed. Reuse bounded retained identities rather
+                # than interpreting the latest shell watermark as occupancy.
+                for process in self._ended_processes_by_object_id.values():
+                    if process.logon_id in logon_ids and (
+                        system is None or process.system == system
+                    ):
+                        processes[(process.system, process.pid, process.ecar_object_id)] = process
             return list(processes.values())
 
     def mark_story_process(self, system: str, pid: int) -> None:
@@ -14611,6 +19647,8 @@ class StateManager:
             if self._ended_processes_by_object_id.get(process.ecar_object_id) is process:
                 self._ended_processes_by_object_id.pop(process.ecar_object_id, None)
         self._ended_threads.expire_before(cutoff, inclusive=True)
+        self._macos_policy_refusals.expire_before(cutoff, inclusive=True)
+        self._macos_policy_refusals.trim_earliest(_MAX_RETAINED_PROCESS_IDENTITIES)
 
     def _clear_session_process_references(self, system: str, pid: int) -> None:
         """Clear active-session pointers to a process that has ended."""
@@ -15829,7 +20867,7 @@ class StateManager:
         protocol: DeferredSessionProtocol,
         binding_disposition: DeferredSessionBindingDisposition,
         bound_at: datetime,
-        batch: MaterializationBatchPlan,
+        batch: MaterializationBatchPlan | None,
         existing_session_patch: ConnectionExistingSessionPatch | None = None,
         existing_session_process_roles_patch: (
             ConnectionExistingSessionProcessRolesPatch | None
@@ -15840,7 +20878,13 @@ class StateManager:
         with self._capability_minting_guard("prepare_deferred_session_state_authority"):
             capability = _DeferredSessionStateAuthorityCapability()
             owner_identity = id(self)
-            admission_epoch = batch.admission_epoch
+            if batch is None and type(existing_session_patch) is not ConnectionExistingSessionPatch:
+                raise StateError("Allocation-free deferred State requires an exact session patch")
+            admission_epoch = (
+                batch.admission_epoch
+                if batch is not None
+                else existing_session_patch._admission_epoch
+            )
             integrity = _deferred_session_state_authority_integrity_token(
                 self._materialization_secret,
                 protocol=protocol,
@@ -15949,7 +20993,14 @@ class StateManager:
             raise StateError("Deferred session State authority belongs to another owner")
         if payload._capability.payload is not payload:
             raise StateError("Deferred session State authority is not its exact capability")
-        if payload._admission_epoch != payload.batch.admission_epoch:
+        expected_epoch = (
+            payload.batch.admission_epoch
+            if payload.batch is not None
+            else payload.existing_session_patch._admission_epoch
+            if payload.allocation_free_rdp_reconnect
+            else -1
+        )
+        if payload._admission_epoch != expected_epoch:
             raise StateError("Deferred session State authority changed its admission epoch")
         expected = _deferred_session_state_authority_integrity_token(
             self._materialization_secret,
@@ -15965,9 +21016,12 @@ class StateManager:
         )
         if not _authority_values_match(payload.publication_token, expected):
             raise StateError("Deferred session State authority integrity validation failed")
-        self.validate_materialization_batch(payload.batch)
-        if not payload.batch.processes:
-            raise StateError("Deferred session State authority requires process members")
+        if payload.batch is not None:
+            self.validate_materialization_batch(payload.batch)
+            if not payload.batch.processes:
+                raise StateError("Deferred session State authority requires process members")
+        elif not payload.allocation_free_rdp_reconnect:
+            raise StateError("Deferred State without allocation requires an ACTIVE RDP patch")
         self._validate_deferred_session_state_authority_semantics(payload)
         if outer_authority is None:
             if payload._capability.outer_authority is not None and not allow_bound_without_outer:
@@ -15993,6 +21047,18 @@ class StateManager:
         batch = payload.batch
         patch = payload.existing_session_patch
         roles = payload.existing_session_process_roles_patch
+        if batch is None:
+            if not payload.allocation_free_rdp_reconnect or patch is None:
+                raise StateError("Allocation-free deferred State requires ACTIVE RDP")
+            if (
+                patch.lifecycle_disposition
+                is not ConnectionExistingSessionLifecycleDisposition.EXISTING
+                or patch.after.identity.session_kind != "rdp"
+                or payload.bound_at != patch.after.source_ready_time
+            ):
+                raise StateError("Allocation-free RDP reconnect changed its live-session binding")
+            self._validate_connection_existing_session_patch_preimage(patch)
+            return
         if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
             if patch is not None or roles is not None or batch.session is None:
                 raise StateError(
@@ -16086,6 +21152,7 @@ class StateManager:
             links.winlogon,
             links.explorer,
             links.process_tree_root,
+            links.session_manager,
         )
         linked_plans = {id(batch.processes[index]) for index in ordered_indexes if index >= 0}
         if linked_plans != {id(plan) for plan in target_plans}:
@@ -17193,6 +22260,8 @@ class StateManager:
 
         if type(session) is not ActiveSession:
             raise StateError("SMB connection runtime session has an invalid exact type")
+        if session.audit_origin is not None:
+            raise StateError("SMB connection runtime session cannot establish native audit origin")
 
         def optional_int(value: int | None, label: str) -> bytes:
             if value is None:
@@ -20634,6 +25703,9 @@ class StateManager:
                     bytes_sent=transaction.traffic.orig.payload_bytes,
                     bytes_received=transaction.traffic.resp.payload_bytes,
                     traffic_ledger=transaction.traffic,
+                    http_capture_transaction=(
+                        transaction if transaction.service in {"http", "ssl"} else None
+                    ),
                     transaction_id=transaction.stable_id,
                     conn_state=transaction.conn_state,
                     history=transaction.history,
@@ -21003,6 +26075,9 @@ class StateManager:
                 bytes_sent=transaction.traffic.orig.payload_bytes,
                 bytes_received=transaction.traffic.resp.payload_bytes,
                 traffic_ledger=transaction.traffic,
+                http_capture_transaction=(
+                    transaction if transaction.service in {"http", "ssl"} else None
+                ),
                 transaction_id=transaction.stable_id,
                 conn_state=transaction.conn_state,
                 history=transaction.history,
@@ -23418,6 +28493,23 @@ class StateManager:
         with self._lock:
             return self._system_boot_times.get(system)
 
+    def get_macos_boot_clock(self, system: str, *, timebase: MachTimebase) -> MacosBootClock:
+        """Project registered Mac boot truth without allocating another clock or identity.
+
+        The source profile must supply its explicit timebase. Unknown hosts, OS
+        classification or boot times cannot become inferred native clock facts.
+        """
+        with self._lock:
+            boot_time = self._system_boot_times.get(system)
+            if self._pid_os.get(system) != "macos" or boot_time is None:
+                raise StateError("Native Mac clock requires an established Mac host and boot time")
+            return MacosBootClock(
+                hostname=system,
+                boot_time=boot_time,
+                boot_uuid=modeled_boot_id(system, boot_time),
+                timebase=timebase,
+            )
+
     def validate_event_time(self, system: str, event_time: datetime) -> bool:
         """Check if an event timestamp is after the system's boot time.
 
@@ -23472,6 +28564,20 @@ class StateManager:
         admission_epoch = self._reject_mutation_during_action_cohort_claim("apply")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim("apply", admitted_at=admission_epoch)
+            if event.macos_policy_refusal is not None:
+                refusal = event.macos_policy_refusal
+                if not self.validates_macos_policy_refusal(
+                    refusal.target,
+                    kernel_thread_id=refusal.native.thread_id if refusal.native else None,
+                    initiator_object_id=refusal.initiator.object_id,
+                ):
+                    raise StateError("Policy refusal requires its exact committed State receipt")
+                if refusal.native is not None and (
+                    self.get_boot_time(refusal.target.hostname) != refusal.native.boot_time
+                    or modeled_boot_id(refusal.target.hostname, refusal.native.boot_time).upper()
+                    != refusal.native.boot_uuid
+                ):
+                    raise StateError("Policy refusal kernel writer requires the exact State boot")
             if event.network is not None and event.network.conn_id:
                 self._authorize_pinned_connection_mutation_locked(event.network.conn_id)
             if event.event_type == "logoff" and event.auth is not None:
@@ -23536,6 +28642,8 @@ class StateManager:
                                     (conn.close_time - conn.start_time).total_seconds(),
                                 )
                         else:
+                            if transaction.service in {"http", "ssl"}:
+                                conn.http_capture_transaction = transaction
                             conn.traffic_ledger = transaction.traffic
                             conn.bytes_sent = transaction.traffic.orig.payload_bytes
                             conn.bytes_received = transaction.traffic.resp.payload_bytes

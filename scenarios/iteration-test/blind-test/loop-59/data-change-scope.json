@@ -1,0 +1,20 @@
+{
+  "compared_prior_loop": 58,
+  "before_files": 117,
+  "after_files": 117,
+  "changed_data_files": [
+    "DC-01.meridianhcs.local/windows_event_security.xml",
+    "DC-02.meridianhcs.local/windows_event_security.xml",
+    "FILE-SRV-01.meridianhcs.local/windows_event_security.xml",
+    "MAIL-FIN-01.meridianhcs.local/windows_event_security.xml",
+    "WS-AJOHNSON-01.meridianhcs.local/windows_event_security.xml",
+    "WS-DRAMIREZ-01.meridianhcs.local/windows_event_security.xml",
+    "WS-EBROOKS-01.meridianhcs.local/windows_event_security.xml",
+    "WS-MCHEN-01.meridianhcs.local/windows_event_security.xml",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml",
+    "WS-SMARTINEZ-01.meridianhcs.local/windows_event_security.xml"
+  ],
+  "unchanged_data_files": 107,
+  "added_files": [],
+  "removed_files": []
+}

@@ -28,10 +28,14 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from inspect import getattr_static
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
+from evidenceforge.events.identity import ProcessIdentity, validate_process_arguments
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
+from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
@@ -46,6 +50,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
 )
 from evidenceforge.generation.deployment_registry import LocalArtifactPublishToken
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -143,6 +148,8 @@ class ProcessExecutionPreparedEffects:
         repr=False,
     )
 
+    root_script_publication: LocalArtifactPublishToken | None = field(default=None, repr=False)
+
     def __post_init__(self) -> None:
         if self.root_anchor.family != "process_execution":
             raise ExecutionEffectPlanError(
@@ -199,9 +206,12 @@ class ProcessExecutionPreparedEffects:
             if isinstance(effect.payload, PreparedFileEffectPayload)
             if (publication := effect.payload.artifact_publication) is not None
         )
-        if self.root_binary_publication is None:
-            return endpoint_publications
-        return (self.root_binary_publication, *endpoint_publications)
+        roots = tuple(
+            token
+            for token in (self.root_binary_publication, self.root_script_publication)
+            if token is not None
+        )
+        return (*roots, *endpoint_publications)
 
     @property
     def process_binary_publication(self) -> LocalArtifactPublishToken | None:
@@ -272,6 +282,18 @@ class ProcessExecutionRequest:
     lifecycle_group_id: str = ""
     source_visible_by: datetime | None = None
     require_exact_parent: bool = field(default=False, kw_only=True)
+    preserve_requested_time: bool = field(default=False, kw_only=True)
+    new_posix_session: bool = field(default=False, kw_only=True)
+    arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
+    exec_script: MacosExecScript | None = field(default=None, kw_only=True)
+    macos_launch_kind: Literal["user", "system", "finder"] | None = field(
+        default=None, kw_only=True
+    )
+    macos_terminal: Literal["allocate", "absent"] | None = field(default=None, kw_only=True)
+    macos_standard_io: Literal["terminal", "null", "inherit"] | None = field(
+        default=None, kw_only=True
+    )
+    macos_responsibility: ProcessResponsibility | None = field(default=None, kw_only=True)
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -289,6 +311,86 @@ class ProcessExecutionRequest:
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
 
+        if self.macos_responsibility is not None and (
+            type(self.macos_responsibility) is not ProcessResponsibility
+            or self.macos_launch_kind != "user"
+            or platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.arguments is None
+            or self.reuse_intent is not None
+        ):
+            raise ValueError("Mac responsibility requires a fresh literal exact-parent user launch")
+        if any(
+            value is not None
+            for value in (self.macos_launch_kind, self.macos_terminal, self.macos_standard_io)
+        ):
+            if (
+                platform_for_os(self.system.os) != "macos"
+                or not self.require_exact_parent
+                or self.arguments is None
+                or self.reuse_intent is not None
+                or self.macos_launch_kind not in {"user", "system", "finder", None}
+                or self.macos_terminal not in {"allocate", "absent", None}
+                or self.macos_standard_io not in {"terminal", "null", "inherit", None}
+                or (self.macos_terminal is not None and not self.new_posix_session)
+            ):
+                raise ValueError(
+                    "Modeled Mac launch metadata requires a fresh literal exact-parent intent"
+                )
+        if self.macos_launch_kind == "finder" and (
+            type(self.parent_pid) is not int
+            or self.parent_pid != 1
+            or self.exec_script is not None
+            or self.macos_terminal is not None
+            or self.macos_standard_io is not None
+            or not self.process_name.startswith("/")
+            or canonical_native_path(self.process_name, "macos") != self.process_name
+            or ".app/Contents/MacOS/" not in self.process_name
+            or not self.process_name.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or "/" in self.process_name.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or not self.arguments
+            or self.arguments[0] != self.process_name
+        ):
+            raise ValueError(
+                "Finder relationship intent requires launchd and a literal app-bundle executable; "
+                "script, descriptor and controlling-terminal facts remain separate"
+            )
+
+        validate_macos_exec_script(
+            self.exec_script,
+            platform=platform_for_os(self.system.os),
+            hostname=self.system.hostname,
+        )
+        if self.exec_script is not None and (
+            not self.require_exact_parent or self.reuse_intent is not None
+        ):
+            raise ValueError("Explicit Mac script requires a fresh exact-parent launch")
+        validate_process_arguments(self.arguments, command_line=self.command_line)
+        if self.arguments is not None and (
+            platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.reuse_intent is not None
+        ):
+            raise ValueError("Explicit Mac process argv requires a fresh exact-parent launch")
+        if type(self.new_posix_session) is not bool:
+            raise ValueError("New POSIX launch session requires an exact boolean")
+        if type(self.preserve_requested_time) is not bool:
+            raise ValueError("Exact process start-time intent requires an exact boolean")
+        if self.preserve_requested_time and (
+            platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.source_visible_by is not None
+            or self.reuse_intent is not None
+        ):
+            raise ValueError(
+                "Exact process start-time intent requires a fresh exact-parent Mac launch"
+            )
+        if self.new_posix_session and (
+            not self.require_exact_parent
+            or self.reuse_intent is not None
+            or platform_for_os(self.system.os) not in {"macos", "linux"}
+        ):
+            raise ValueError("New POSIX launch session requires a fresh exact-parent launch")
         requested_effects = tuple(self.requested_endpoint_effects)
         if any(not isinstance(effect, PreparedEndpointEffect) for effect in requested_effects):
             raise ExecutionEffectPlanError(
@@ -310,6 +412,23 @@ class ProcessExecutionRequest:
         concurrency_suffix = f":{self.concurrency_group_id}" if self.concurrency_group_id else ""
         lifecycle_suffix = f":{self.lifecycle_group_id}" if self.lifecycle_group_id else ""
         exact_parent_suffix = ":exact_parent" if self.require_exact_parent else ""
+        preserve_time_suffix = ":preserve_time" if self.preserve_requested_time else ""
+        session_suffix = ":new_posix_session" if self.new_posix_session else ""
+        arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
+        script_suffix = f":script={self.exec_script!r}" if self.exec_script is not None else ""
+        responsibility_suffix = (
+            f":responsibility={self.macos_responsibility!r}"
+            if self.macos_responsibility is not None
+            else ""
+        )
+        native_suffix = (
+            f":macos={self.macos_launch_kind}:{self.macos_terminal}:{self.macos_standard_io}"
+            if any(
+                value is not None
+                for value in (self.macos_launch_kind, self.macos_terminal, self.macos_standard_io)
+            )
+            else ""
+        )
         endpoint_effect_signature = tuple(
             (
                 effect.spec.instance_key,
@@ -329,7 +448,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{preserve_time_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}{responsibility_suffix}"
         )
         return f"process-execution-{seed:016x}"
 
@@ -347,17 +466,52 @@ class ProcessTerminationRequest:
     from_storyline: bool = False
     session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
+    exit_outcome: PosixProcessExit | None = None
+    expected_process: ProcessIdentity | None = None
+    macos_command_completed: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.macos_command_completed) is not bool:
+            raise ValueError("Mac command completion requires an exact bool")
+        if self.exit_outcome is not None:
+            if type(self.exit_outcome) is not PosixProcessExit:
+                raise ValueError("Process termination requires an exact terminal result")
+            self.exit_outcome.__post_init__()
+            if type(self.expected_process) is not ProcessIdentity:
+                raise ValueError("An explicit terminal result requires its exact process execution")
+        if self.expected_process is not None and (
+            type(self.expected_process) is not ProcessIdentity
+            or self.expected_process.hostname != self.system.hostname
+            or self.expected_process.pid != self.pid
+        ):
+            raise ValueError("Process termination expected identity disagrees with host/PID")
+        if (self.exit_outcome is not None or self.macos_command_completed) and platform_for_os(
+            self.system.os
+        ) != "macos":
+            raise ValueError(
+                "Explicit process completion is currently supported only for Mac hosts"
+            )
 
     @property
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
+        completion_suffix = ""
+        if (
+            self.exit_outcome is not None
+            or self.expected_process is not None
+            or self.macos_command_completed
+        ):
+            completion_suffix = (
+                f":completion:{self.exit_outcome!r}:{self.macos_command_completed}:"
+                f"{self.expected_process.execution_id if self.expected_process is not None else ''}"
+            )
         seed = _stable_seed(
             "action_bundle:process_termination:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.pid}:{self.process_name}:{self.logon_id}:{self.from_storyline}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
-            f"{self.source}"
+            f"{self.source}{completion_suffix}"
         )
         return f"process-termination-{seed:016x}"
 

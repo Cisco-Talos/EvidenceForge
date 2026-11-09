@@ -504,7 +504,19 @@ def _validate_binding_disposition(
     batch = state_plan.batch
     patch = state_plan.existing_session_patch
     roles = state_plan.existing_session_process_roles_patch
-    if batch is None or not batch.processes:
+    if batch is None:
+        if (
+            not state_authority.allocation_free_rdp_reconnect
+            or kind is not DeferredSessionKind.RDP
+            or disposition is not DeferredSessionBindingDisposition.ACTIVE_SESSION
+            or patch is None
+            or roles is not None
+            or patch.lifecycle_disposition
+            is not ConnectionExistingSessionLifecycleDisposition.EXISTING
+        ):
+            raise StateError("Allocation-free composition requires an exact ACTIVE RDP patch")
+        return
+    if not batch.processes:
         raise StateError("Strict deferred session composition requires process members")
     if disposition is DeferredSessionBindingDisposition.NEW_SESSION:
         if batch.session is None or patch is not None or roles is not None:
@@ -732,6 +744,7 @@ def _validate_state_and_lifecycle(
         state_plan.session_activity,
         request.process_holds,
         fingerprint.closed_at,
+        batch=state_plan.batch,
     )
 
 
@@ -781,6 +794,8 @@ def _validate_connection_holds(
     session_activity: tuple[SessionActivityPatch, ...],
     holds: tuple[LifecycleHold, ...],
     closed_at: datetime | None,
+    *,
+    batch: MaterializationBatchPlan | None = None,
 ) -> None:
     if type(process_activity) is not tuple or type(session_activity) is not tuple:
         raise StateError("Deferred State activity patches must be exact tuples")
@@ -814,7 +829,12 @@ def _validate_connection_holds(
         if closed_at is None or hold.hold_until < closed_at:
             raise StateError("Deferred session process hold ends before transport close")
         patch = process_patches[hold.subject.object_id]
-        if patch.activity_time != hold.hold_until:
+        expected_activity = (
+            batch.process_hold_activity_time(patch.identity, hold.hold_until)
+            if batch is not None
+            else hold.hold_until
+        )
+        if patch.activity_time != expected_activity:
             raise StateError("Deferred process hold and State activity deadline disagree")
         if not patch.identity.logon_id:
             continue
@@ -958,12 +978,20 @@ def _validate_ssh_token(
         raise StateError("Deferred SSH lifecycle and manager session bindings disagree")
     if not transport.opened_at <= binding.ready_at < transport.closes_at:
         raise StateError("Deferred SSH readiness must lie inside the transport")
-    _validate_ssh_process_holds(root.state_plan.process_activity, transport)
+    _validate_ssh_process_holds(
+        root.state_plan.process_activity,
+        transport,
+        batch=root.state_plan.batch,
+        lifecycle_holds=lifecycle_token.request.process_holds,
+    )
 
 
 def _validate_ssh_process_holds(
     process_activity: tuple[ProcessActivityPatch, ...],
     transport: SshTransportPlan,
+    *,
+    lifecycle_holds: tuple[LifecycleHold, ...],
+    batch: MaterializationBatchPlan | None = None,
 ) -> None:
     manager_holds = tuple(
         hold for hold in (transport.source_process, transport.receiver_process) if hold is not None
@@ -971,9 +999,14 @@ def _validate_ssh_process_holds(
     patches = {patch.identity.object_id: patch for patch in process_activity}
     if {hold.process_object_id for hold in manager_holds} != set(patches):
         raise StateError("Deferred SSH process holds disagree with State activity owners")
+    retained = {hold.subject.object_id: hold for hold in lifecycle_holds}
+    if set(retained) != set(patches) or len(retained) != len(lifecycle_holds):
+        raise StateError("Deferred SSH manager and lifecycle hold owners disagree")
     for hold in manager_holds:
         if type(hold) is not SshProcessHold:
             raise StateError("Deferred SSH transport has an unsupported process hold")
+        if hold.required_until != retained[hold.process_object_id].hold_until:
+            raise StateError("Deferred SSH manager and lifecycle retention deadlines disagree")
         patch = patches[hold.process_object_id]
         identity = patch.identity
         if (
@@ -987,7 +1020,9 @@ def _validate_ssh_process_holds(
             hold.pid,
             hold.process_object_id,
             hold.started_at,
-            hold.required_until,
+            batch.process_hold_activity_time(identity, hold.required_until)
+            if batch is not None
+            else hold.required_until,
         ):
             raise StateError("Deferred SSH process hold disagrees with State identity")
 
@@ -1198,7 +1233,9 @@ def _composition_integrity_preimage(
             state_authority.binding_disposition,
             state_authority.bound_at,
             id(state_authority.batch),
-            state_authority.batch.publication_token,
+            state_authority.batch.publication_token
+            if state_authority.batch is not None
+            else "allocation-free-rdp",
             id(state_authority.existing_session_patch),
             id(state_authority.existing_session_process_roles_patch),
         )

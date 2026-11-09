@@ -18,16 +18,20 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
+from evidenceforge.generation.activity.generator import _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
-from evidenceforge.generation.activity.process_network import get_service_to_exes
+from evidenceforge.generation.activity.process_network import (
+    ambient_network_allowed,
+    get_service_to_exes,
+)
 from evidenceforge.generation.activity.ssh_identity import (
     baseline_ssh_auth_method,
     baseline_ssh_client_key,
 )
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -371,6 +375,23 @@ class WorldModel:
         self.users_by_username: dict[str, User] = {
             user.username: user for user in scenario.environment.users
         }
+        # An unparented authored root process assumes an existing foothold, not
+        # a newly inferred authentication or service installation. Its selected
+        # pre-window shell is materialized by the shared initial fleet owner.
+        self.preexisting_macos_root_shell_hosts: frozenset[str] = frozenset(
+            step.system
+            for step in scenario.storyline or ()
+            if step.actor == "root"
+            and step.system in self.systems_by_hostname
+            and _get_os_category(self.systems_by_hostname[step.system].os) == "macos"
+            and any(
+                event.type == "process"
+                and event.outcome == "success"
+                and event.parent_ref is None
+                and event.launch_method is None
+                for event in step.events or ()
+            )
+        )
         self.hosts: dict[str, HostWorld] = {
             system.hostname: self._compile_host(system) for system in scenario.environment.systems
         }
@@ -435,16 +456,22 @@ class WorldModel:
         if os_category == "windows":
             capabilities.add(HostCapability.RDP_CLIENT)
             capabilities.add(HostCapability.SMB_CLIENT)
-        if os_category == "linux" and (
-            system.type in ("server", "domain_controller")
-            or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
-        ):
+        if (
+            os_category == "linux"
+            and (
+                system.type in ("server", "domain_controller")
+                or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
+            )
+        ) or (os_category == "macos" and normalized_services.intersection(_SSH_RECEIVER_SERVICES)):
             capabilities.add(HostCapability.SSH_RECEIVER)
         if os_category == "windows" and (
             system.type in ("server", "domain_controller")
             or normalized_services.intersection(_RDP_RECEIVER_SERVICES)
         ):
             capabilities.add(HostCapability.RDP_RECEIVER)
+
+        if os_category == "macos":
+            capabilities.add(HostCapability.SMB_CLIENT)
 
         has_explicit_smb_client = bool(normalized_services & _SMB_CLIENT_SERVICES)
         has_explicit_smb_server = bool(normalized_services & _SMB_SERVER_SERVICES)
@@ -501,6 +528,8 @@ class WorldModel:
             if host.is_server:
                 services.append("smb-server")
             return services
+        if host.os_category == "macos":
+            return ["dns-client", "ntp-client", "smb-client"]
         if host.supports(HostCapability.SMB_SERVER):
             return ["dns-client", "ntp-client", "syslog", "smb-server"]
         return ["dns-client", "ntp-client", "syslog"]
@@ -584,6 +613,20 @@ class WorldModel:
             if host.supports(capability)
             and host.system.hostname != excluded_hostname
             and host.system.ip != excluded_ip
+        ]
+
+    def windows_management_targets(
+        self, source_system: System, *, servers_only: bool = False
+    ) -> list[System]:
+        """Place automatic native Windows management on compatible remote hosts."""
+
+        return [
+            host.system
+            for host in self.hosts.values()
+            if host.os_category == "windows"
+            and host.system.hostname != source_system.hostname
+            and host.system.ip != source_system.ip
+            and (not servers_only or host.is_server)
         ]
 
     def _collect_db_servers(self) -> list[DatabaseEndpoint]:
@@ -1286,7 +1329,18 @@ class WorldPlanner:
         ids_alerts: list[IdsAlertPlan] | None = None,
         rdp_transport_time: datetime | None = None,
         _prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
+        ssh_pty: bool = False,
     ) -> SessionBootstrapResult:
+        if type(ssh_pty) is not bool:
+            raise StateError("SSH PTY bootstrap intent requires an exact boolean")
+        if ssh_pty:
+            if session_kind != "ssh" or _get_os_category(target_system.os) != "macos":
+                raise StateError(
+                    "SSH PTY bootstrap requires its explicit qualified Mac SSH session"
+                )
+            # The bounded producer owns a fresh receiver/shell; it cannot reuse
+            # an existing non-PTY or unclassified session by username alone.
+            allow_existing = False
         if _prepared_rdp_bootstrap is not None:
             self._validate_prepared_rdp_session_bootstrap(
                 _prepared_rdp_bootstrap,
@@ -1297,6 +1351,18 @@ class WorldPlanner:
                 source_ip_override=source_ip_override,
                 session_kind=session_kind,
             )
+
+        host = self.world_model.hosts.get(target_system.hostname)
+        if session_kind is None and host is not None and host.os_category == "macos":
+            # Resolve Mac workstation intent before considering existing sessions.
+            # A newer network/service/SSH login cannot stand in for the GUI owner.
+            session_kind = self.world_model.plan_session(
+                user=user,
+                target_system=target_system,
+                rng=rng,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+            ).session_kind
 
         reconnect_logon_id: str | None = None
         if session_kind == "rdp":
@@ -1388,7 +1454,7 @@ class WorldPlanner:
                 existing.last_activity_time = time
                 if session_end_plan is not None:
                     self.state_manager.plan_session_end(existing.logon_id, session_end_plan)
-                if existing.session_kind == "ssh":
+                if existing.session_kind == "ssh" and _get_os_category(target_system.os) == "linux":
                     ensure_shell = getattr(
                         self.activity_generator,
                         "ensure_linux_ssh_session_shell",
@@ -1424,6 +1490,14 @@ class WorldPlanner:
                 # process evidence. Give that source-native sequence room before
                 # the first user-visible command tied to the session.
                 logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+                # Automatic bootstrap may place its prerequisite before the
+                # first warm-up instant. The canonical runtime cannot admit
+                # that history; retain the available lead inside its fence.
+                network_runtime = getattr(
+                    self.activity_generator, "_network_transaction_runtime", None
+                )
+                if network_runtime is not None:
+                    logon_time = max(logon_time, network_runtime.watermark)
             elif (
                 plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux"
             ):
@@ -1445,6 +1519,7 @@ class WorldPlanner:
                 required_until=required_until,
                 session_end_plan=session_end_plan,
                 ids_alerts=ids_alerts,
+                **({"pty": True} if ssh_pty else {}),
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -1493,6 +1568,7 @@ class WorldPlanner:
         effective_persona: str | None = None,
         destination_hostname: str | None = None,
         application_ids: list[str] | None = None,
+        browser_intent: bool = False,
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
@@ -1505,6 +1581,8 @@ class WorldPlanner:
             application_ids: Exact application-catalog IDs compiled from a pack
                 application binding. When supplied, these replace the legacy
                 service-to-executable inference.
+            browser_intent: Restrict inferred ownership to installed browsers for
+                a browsing action. Explicit application bindings remain authoritative.
         """
         os_cat = self.world_model.hosts[system.hostname].os_category
         persona = (user.persona or "default").lower()
@@ -1538,7 +1616,22 @@ class WorldPlanner:
                     )
                 )
             else:
+                from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+                # The compiled POSIX executable index preserves case. The legacy
+                # inverse index folds every name, losing native Mac applications
+                # such as Google Chrome while accidentally retaining zoom.us.
                 compatible_executables = get_service_to_exes().get(service, ())
+                if deployment_platform == "macos":
+                    canonical_spellings = {
+                        executable.casefold(): executable
+                        for executable, mapping in get_exe_to_service().items()
+                        if mapping["service"] == service and mapping.get("ambient", True)
+                    }
+                    compatible_executables = [
+                        canonical_spellings.get(executable.casefold(), executable)
+                        for executable in compatible_executables
+                    ]
                 requested_ids: set[str] = set()
                 for executable in sorted(
                     set(compatible_executables),
@@ -1568,7 +1661,15 @@ class WorldPlanner:
                 image = deployment_registry.application_executable_for_assignment(assignment)
                 if descriptor is None or image is None:
                     continue
+                if (
+                    browser_intent
+                    and not explicit_applications
+                    and "browser" not in descriptor.categories
+                ):
+                    continue
                 if descriptor.executable.casefold() in _SHELL_EXES:
+                    continue
+                if not ambient_network_allowed(descriptor.executable):
                     continue
                 if is_server_admin and server_excluded_categories.intersection(
                     descriptor.categories
@@ -1798,8 +1899,16 @@ class WorldPlanner:
         if not compatible_exes:
             return -1
         compatible_exes = [
-            exe for exe in compatible_exes if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES
+            exe
+            for exe in compatible_exes
+            if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES and ambient_network_allowed(exe)
         ]
+        if browser_intent and not application_ids:
+            from evidenceforge.generation.activity.proxy_user_agents import (
+                _browser_family_for_process,
+            )
+
+            compatible_exes = [exe for exe in compatible_exes if _browser_family_for_process(exe)]
         if not compatible_exes:
             return -1
 
@@ -2091,13 +2200,8 @@ class WorldPlanner:
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        pty: bool = False,
     ) -> SessionBootstrapResult:
-        source_os = (
-            self.world_model.hosts[plan.source_system.hostname].os_category
-            if plan.source_system is not None
-            else "windows"
-        )
-        source_port = _ephemeral_port(rng, source_os)
         min_duration = max(
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
@@ -2126,7 +2230,9 @@ class WorldPlanner:
             time=logon_time,
             source_ip=plan.source_ip,
             source_system=plan.source_system,
-            source_port=source_port,
+            # This is automatic intent, not an authored exact port. The SSH
+            # bundle owns collision-aware allocation against canonical leases.
+            source_port=None,
             min_duration=min_duration,
             auth_method=auth_method,
             public_key_type=key_type if auth_method == "publickey" else "",
@@ -2135,6 +2241,7 @@ class WorldPlanner:
             defer_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
+            **({"pty": True} if pty else {}),
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -2150,7 +2257,7 @@ class WorldPlanner:
         # (privilege separation) and bash PID so user commands have distinct
         # parent PIDs and eCAR can observe the parent lifecycle.
         ensure_shell = getattr(self.activity_generator, "ensure_linux_ssh_session_shell", None)
-        if ensure_shell is not None:
+        if ensure_shell is not None and _get_os_category(plan.target_system.os) == "linux":
             ensure_shell(
                 user=user,
                 target_system=plan.target_system,

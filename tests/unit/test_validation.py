@@ -2082,8 +2082,7 @@ class TestFormatOsCompatibility:
         ]
         assert len(errors) >= 1
 
-    def test_linux_system_no_linux_format_warning(self):
-        """Linux system with only Windows formats should warn."""
+    def test_linux_system_no_endpoint_format_is_informational(self):
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -2105,12 +2104,13 @@ class TestFormatOsCompatibility:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [
+        notes = [
             i
             for i in issues
-            if i.severity == "warning" and "LNX-01" in i.message and "linux" in i.message.lower()
+            if "LNX-01" in i.message and "no observable host endpoint source" in i.message
         ]
-        assert len(warnings) >= 1
+        assert len(notes) == 1
+        assert notes[0].severity == "info"
 
     def test_matching_os_and_formats_no_issues(self):
         """Systems matching output formats should produce no OS compatibility issues."""
@@ -2680,7 +2680,7 @@ class TestNoiseFeasibility:
 
 
 class TestStorylineFormatCoverage:
-    """Tests for _validate_storyline_format_coverage."""
+    """Storyline coverage follows behavior contracts rather than OS bundles."""
 
     def test_linux_system_no_linux_format_warning(self):
         """Storyline Linux system with only Windows formats should warn."""
@@ -2718,9 +2718,11 @@ class TestStorylineFormatCoverage:
         warnings = [
             i
             for i in issues
-            if i.severity == "warning" and "LNX-01" in i.message and "format" in i.message.lower()
+            if i.severity == "warning"
+            and "authored SSH authentication/session evidence" in i.message
         ]
-        assert len(warnings) >= 1
+        assert len(warnings) == 1
+        assert warnings[0].field_path == "storyline.0.events.0"
 
 
 class TestStorylineOsPlausibility:

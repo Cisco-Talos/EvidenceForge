@@ -1,0 +1,766 @@
+{
+  "pid_hosts": {
+    "APP-INT-01": {
+      "create_count": 92,
+      "min": 2931365,
+      "median": 2968419,
+      "max": 2989591,
+      "unique": 92,
+      "sample": [
+        [
+          2931365,
+          1793624401077,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          2931366,
+          1793624401198,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          2931562,
+          1793624519907,
+          "aisha.johnson",
+          "/bin/bash"
+        ],
+        [
+          2931792,
+          1793624586936,
+          "aisha.johnson",
+          "/usr/bin/sudo"
+        ]
+      ]
+    },
+    "DB-PROD-01": {
+      "create_count": 61,
+      "min": 1043548,
+      "median": 1047572,
+      "max": 1094432,
+      "unique": 61,
+      "sample": [
+        [
+          1043548,
+          1793624459109,
+          "lina.nguyen",
+          "/bin/bash"
+        ],
+        [
+          1043642,
+          1793624515972,
+          "lina.nguyen",
+          "/usr/bin/sudo"
+        ],
+        [
+          1043643,
+          1793624516209,
+          "root",
+          "/usr/bin/du"
+        ],
+        [
+          1043655,
+          1793624521390,
+          "lina.nguyen",
+          "/usr/bin/sudo"
+        ]
+      ]
+    },
+    "DC-01": {
+      "create_count": 161,
+      "min": 3612,
+      "median": 4996,
+      "max": 6084,
+      "unique": 161,
+      "sample": [
+        [
+          3652,
+          1793624678337,
+          "SYSTEM",
+          "C:\\Windows\\System32\\dllhost.exe"
+        ],
+        [
+          3840,
+          1793624851813,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ],
+        [
+          3864,
+          1793625227666,
+          "SYSTEM",
+          "C:\\Windows\\System32\\MpCmdRun.exe"
+        ],
+        [
+          3656,
+          1793625309399,
+          "SYSTEM",
+          "C:\\Windows\\System32\\dllhost.exe"
+        ]
+      ]
+    },
+    "DC-02": {
+      "create_count": 138,
+      "min": 7216,
+      "median": 8352,
+      "max": 9396,
+      "unique": 138,
+      "sample": [
+        [
+          7340,
+          1793624593145,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+        ],
+        [
+          7680,
+          1793624669597,
+          "SYSTEM",
+          "C:\\Program Files\\Eclipse Adoptium\\jdk-17\\bin\\java.exe"
+        ],
+        [
+          7480,
+          1793624691566,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ],
+        [
+          7408,
+          1793624723421,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+        ]
+      ]
+    },
+    "FILE-LNX-01": {
+      "create_count": 188,
+      "min": 2664231,
+      "median": 2709697,
+      "max": 2735184,
+      "unique": 188,
+      "sample": [
+        [
+          2664231,
+          1793624407774,
+          "root",
+          "/bin/login"
+        ],
+        [
+          2664329,
+          1793624419819,
+          "aisha.johnson",
+          "/bin/bash"
+        ],
+        [
+          2664670,
+          1793624461576,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          2664671,
+          1793624461814,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ]
+      ]
+    },
+    "FILE-SRV-01": {
+      "create_count": 107,
+      "min": 4856,
+      "median": 5708,
+      "max": 6556,
+      "unique": 107,
+      "sample": [
+        [
+          4972,
+          1793624639814,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ],
+        [
+          4912,
+          1793625011580,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+        ],
+        [
+          4976,
+          1793625038073,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ],
+        [
+          4980,
+          1793625580266,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ]
+      ]
+    },
+    "LOG-MON-01": {
+      "create_count": 101,
+      "min": 685352,
+      "median": 711508,
+      "max": 740881,
+      "unique": 101,
+      "sample": [
+        [
+          685352,
+          1793624401247,
+          "marcus.chen",
+          "/bin/bash"
+        ],
+        [
+          685354,
+          1793624401297,
+          "root",
+          "/usr/bin/tail"
+        ],
+        [
+          685355,
+          1793624401403,
+          "root",
+          "/bin/login"
+        ],
+        [
+          685360,
+          1793624406075,
+          "marcus.chen",
+          "/usr/bin/sudo"
+        ]
+      ]
+    },
+    "LT-MRIVERA-02": {
+      "create_count": 39,
+      "min": 3170148,
+      "median": 3187375,
+      "max": 3211335,
+      "unique": 39,
+      "sample": [
+        [
+          3170148,
+          1793624520374,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          3170149,
+          1793624520479,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          3172914,
+          1793625638250,
+          "root",
+          "/usr/sbin/anacron"
+        ],
+        [
+          3174611,
+          1793626320303,
+          "sysstat",
+          "/bin/sh"
+        ]
+      ]
+    },
+    "MAC-MROSS-01": {
+      "create_count": 38,
+      "min": 42177,
+      "median": 54201,
+      "max": 78094,
+      "unique": 38,
+      "sample": [
+        [
+          42177,
+          1793624869043,
+          "root",
+          "/sbin/launchd"
+        ],
+        [
+          42178,
+          1793624869086,
+          "maya.ross",
+          "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+        ],
+        [
+          42179,
+          1793624869123,
+          "maya.ross",
+          "/usr/bin/login"
+        ],
+        [
+          42185,
+          1793624873433,
+          "maya.ross",
+          "/bin/zsh"
+        ]
+      ]
+    },
+    "MAC-MROSS-02": {
+      "create_count": 59,
+      "min": 18668,
+      "median": 37365,
+      "max": 65759,
+      "unique": 59,
+      "sample": [
+        [
+          18668,
+          1793624917004,
+          "root",
+          "/sbin/launchd"
+        ],
+        [
+          18973,
+          1793625111844,
+          "root",
+          "/sbin/launchd"
+        ],
+        [
+          18974,
+          1793625111881,
+          "maya.ross",
+          "/Applications/iTerm.app/Contents/MacOS/iTerm2"
+        ],
+        [
+          18975,
+          1793625111906,
+          "maya.ross",
+          "/Users/maya.ross/Library/Application Support/iTerm2/iTermServer-3.7.6"
+        ]
+      ]
+    },
+    "MAIL-CLIN-01": {
+      "create_count": 132,
+      "min": 451815,
+      "median": 492226,
+      "max": 518860,
+      "unique": 132,
+      "sample": [
+        [
+          451815,
+          1793624640532,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          451816,
+          1793624640685,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          455055,
+          1793625558619,
+          "marcus.chen",
+          "/bin/bash"
+        ],
+        [
+          455760,
+          1793625754462,
+          "marcus.chen",
+          "/usr/bin/sudo"
+        ]
+      ]
+    },
+    "MAIL-EDGE-01": {
+      "create_count": 94,
+      "min": 1986445,
+      "median": 2001240,
+      "max": 2048381,
+      "unique": 94,
+      "sample": [
+        [
+          1986445,
+          1793624760060,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          1986446,
+          1793624760409,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          1986480,
+          1793624786060,
+          "root",
+          "/usr/sbin/anacron"
+        ],
+        [
+          1986837,
+          1793624936243,
+          "postfix",
+          "/usr/lib/postfix/sbin/smtp"
+        ]
+      ]
+    },
+    "MAIL-FIN-01": {
+      "create_count": 75,
+      "min": 3384,
+      "median": 4124,
+      "max": 4680,
+      "unique": 75,
+      "sample": [
+        [
+          3404,
+          1793624482606,
+          "SYSTEM",
+          "C:\\Windows\\System32\\svchost.exe"
+        ],
+        [
+          3500,
+          1793624667132,
+          "SYSTEM",
+          "C:\\Windows\\System32\\taskhostw.exe"
+        ],
+        [
+          3416,
+          1793624716600,
+          "SYSTEM",
+          "C:\\Windows\\System32\\inetsrv\\w3wp.exe"
+        ],
+        [
+          3624,
+          1793625433738,
+          "SYSTEM",
+          "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe"
+        ]
+      ]
+    },
+    "PROXY-01": {
+      "create_count": 82,
+      "min": 2369229,
+      "median": 2387238,
+      "max": 2435889,
+      "unique": 82,
+      "sample": [
+        [
+          2369229,
+          1793624421483,
+          "priya.patel",
+          "/bin/bash"
+        ],
+        [
+          2369285,
+          1793624445192,
+          "priya.patel",
+          "/usr/bin/sudo"
+        ],
+        [
+          2369286,
+          1793624445321,
+          "root",
+          "/usr/sbin/iptables"
+        ],
+        [
+          2369542,
+          1793624568047,
+          "marcus.chen",
+          "/bin/bash"
+        ]
+      ]
+    },
+    "WEB-EXT-01": {
+      "create_count": 136,
+      "min": 2693877,
+      "median": 2705086,
+      "max": 2747410,
+      "unique": 136,
+      "sample": [
+        [
+          2693877,
+          1793624403060,
+          "lina.nguyen",
+          "/bin/bash"
+        ],
+        [
+          2693908,
+          1793624425815,
+          "lina.nguyen",
+          "/usr/bin/curl"
+        ],
+        [
+          2693949,
+          1793624449039,
+          "lina.nguyen",
+          "/usr/bin/df"
+        ],
+        [
+          2693967,
+          1793624459637,
+          "sysstat",
+          "/bin/sh"
+        ]
+      ]
+    },
+    "WS-AJOHNSON-01": {
+      "create_count": 86,
+      "min": 5168,
+      "median": 5788,
+      "max": 6476,
+      "unique": 86,
+      "sample": [
+        [
+          5188,
+          1793624805516,
+          "SYSTEM",
+          "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
+        ],
+        [
+          5192,
+          1793624920531,
+          "SYSTEM",
+          "C:\\Windows\\System32\\svchost.exe"
+        ],
+        [
+          5220,
+          1793625120317,
+          "SYSTEM",
+          "C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe"
+        ],
+        [
+          5180,
+          1793625253519,
+          "SYSTEM",
+          "C:\\Windows\\System32\\SearchFilterHost.exe"
+        ]
+      ]
+    },
+    "WS-DRAMIREZ-01": {
+      "create_count": 66,
+      "min": 6544,
+      "median": 7064,
+      "max": 7588,
+      "unique": 66,
+      "sample": [
+        [
+          6696,
+          1793624625845,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+        ],
+        [
+          6624,
+          1793624642569,
+          "SYSTEM",
+          "C:\\Windows\\System32\\SearchFilterHost.exe"
+        ],
+        [
+          6716,
+          1793624662759,
+          "SYSTEM",
+          "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"
+        ],
+        [
+          6548,
+          1793624989944,
+          "diego.ramirez",
+          "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+        ]
+      ]
+    },
+    "WS-EBROOKS-01": {
+      "create_count": 61,
+      "min": 4108,
+      "median": 4720,
+      "max": 5268,
+      "unique": 61,
+      "sample": [
+        [
+          4292,
+          1793624769583,
+          "evelyn.brooks",
+          "C:\\Users\\evelyn.brooks\\AppData\\Local\\Temp\\dotnet-sdk-installer.exe"
+        ],
+        [
+          4116,
+          1793624799780,
+          "evelyn.brooks",
+          "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+        ],
+        [
+          4216,
+          1793624977813,
+          "SYSTEM",
+          "C:\\Windows\\System32\\dllhost.exe"
+        ],
+        [
+          4300,
+          1793625327570,
+          "evelyn.brooks",
+          "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        ]
+      ]
+    },
+    "WS-LNGUYEN-01": {
+      "create_count": 106,
+      "min": 2942712,
+      "median": 2968467,
+      "max": 2999604,
+      "unique": 106,
+      "sample": [
+        [
+          2942712,
+          1793624580693,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          2942713,
+          1793624580874,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          2942921,
+          1793624715661,
+          "lina.nguyen",
+          "/usr/bin/smbclient"
+        ],
+        [
+          2942972,
+          1793624747110,
+          "lina.nguyen",
+          "/usr/bin/smbclient"
+        ]
+      ]
+    },
+    "WS-MCHEN-01": {
+      "create_count": 80,
+      "min": 6848,
+      "median": 7980,
+      "max": 8828,
+      "unique": 80,
+      "sample": [
+        [
+          7204,
+          1793624489524,
+          "SYSTEM",
+          "C:\\Windows\\System32\\usoclient.exe"
+        ],
+        [
+          7208,
+          1793624821086,
+          "SYSTEM",
+          "C:\\Windows\\System32\\svchost.exe"
+        ],
+        [
+          7264,
+          1793624909801,
+          "marcus.chen",
+          "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        ],
+        [
+          7292,
+          1793624912669,
+          "marcus.chen",
+          "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
+        ]
+      ]
+    },
+    "WS-OHADDAD-01": {
+      "create_count": 86,
+      "min": 4030931,
+      "median": 4063353,
+      "max": 4087686,
+      "unique": 86,
+      "sample": [
+        [
+          4030931,
+          1793624787954,
+          "root",
+          "/usr/sbin/anacron"
+        ],
+        [
+          4031064,
+          1793624819919,
+          "sysstat",
+          "/bin/sh"
+        ],
+        [
+          4031065,
+          1793624820201,
+          "sysstat",
+          "/usr/lib/sysstat/debian-sa1"
+        ],
+        [
+          4033093,
+          1793625184973,
+          "omar.haddad",
+          "/usr/bin/firefox"
+        ]
+      ]
+    },
+    "WS-PPATEL-01": {
+      "create_count": 53,
+      "min": 5868,
+      "median": 6316,
+      "max": 6760,
+      "unique": 53,
+      "sample": [
+        [
+          6016,
+          1793624576605,
+          "SYSTEM",
+          "C:\\Windows\\System32\\dllhost.exe"
+        ],
+        [
+          6020,
+          1793624861542,
+          "SYSTEM",
+          "C:\\Windows\\System32\\svchost.exe"
+        ],
+        [
+          5868,
+          1793625007762,
+          "priya.patel",
+          "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        ],
+        [
+          5896,
+          1793625541317,
+          "SYSTEM",
+          "C:\\Windows\\System32\\spoolsv.exe"
+        ]
+      ]
+    },
+    "WS-SMARTINEZ-01": {
+      "create_count": 66,
+      "min": 6712,
+      "median": 7320,
+      "max": 7856,
+      "unique": 66,
+      "sample": [
+        [
+          6752,
+          1793624748006,
+          "SYSTEM",
+          "C:\\Windows\\System32\\dllhost.exe"
+        ],
+        [
+          6792,
+          1793625089250,
+          "SYSTEM",
+          "C:\\Windows\\System32\\SearchFilterHost.exe"
+        ],
+        [
+          6968,
+          1793625287469,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wsqmcons.exe"
+        ],
+        [
+          6748,
+          1793625405965,
+          "SYSTEM",
+          "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
+        ]
+      ]
+    }
+  },
+  "pid_over_1m_hosts": 9,
+  "pid_hosts_count": 23,
+  "repeated_sequences": []
+}

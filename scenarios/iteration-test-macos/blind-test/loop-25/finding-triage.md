@@ -1,0 +1,5 @@
+# Verified finding triage
+
+The Mac process batches use authored event_spacing mode explicit_offsets. Chrome helper launches at +2/+3/+5 seconds are explicitly listed in scenario.yaml near lines2200–2240. Inventory activation/exit pairs explicitly use 0s/2s near lines1684–1744 and corresponding second-Mac entries. Shell batches also explicitly specify integer-second offsets. These concrete log-visible timing patterns can affect blind scores, but the owning layer is explicit scenario intent; they are not engine defaults to randomize. Preserve the scenario unchanged. Installed stat fractions remain a separate canonical metadata defect, fixed in loop25. This supersedes treating these precise examples as unverified generated scaffolds in loop22's recommendations.
+
+The stale PID checkpoint declarations were inherited from the earlier assessment and absent from the runtime. Recovery tests exposed them; loop25 removes only the unowned inventory/temporal entry and its obsolete restore validation. Schema12 and supported legacy readers remain. Native PID-version allocation is unchanged.

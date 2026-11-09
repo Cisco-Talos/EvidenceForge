@@ -1,0 +1,60 @@
+{
+  "policy": "complete",
+  "totals": {
+    "expected_forks": 89,
+    "published_forks": 89,
+    "expected_execs": 107,
+    "published_execs": 107,
+    "expected_exits": 87,
+    "published_exits": 87,
+    "aggregate_births": 0
+  },
+  "hosts": [
+    {
+      "hostname": "MAC-MROSS-01",
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 40,
+        "expected_execs": 47,
+        "published_forks": 40,
+        "published_execs": 47,
+        "fork_identities_match": true,
+        "exec_identities_match": true,
+        "aggregate_births": 0,
+        "aggregate_examples": [],
+        "complete": true,
+        "expected_exits": 39,
+        "observed_exits": 39,
+        "known_exits": 39,
+        "published_exits": 39,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": true
+      }
+    },
+    {
+      "hostname": "MAC-MROSS-02",
+      "process_census": {
+        "window_start": "2026-11-02T13:00:00Z",
+        "window_end": "2026-11-02T19:00:00Z",
+        "expected_forks": 49,
+        "expected_execs": 60,
+        "published_forks": 49,
+        "published_execs": 60,
+        "fork_identities_match": true,
+        "exec_identities_match": true,
+        "aggregate_births": 0,
+        "aggregate_examples": [],
+        "complete": true,
+        "expected_exits": 48,
+        "observed_exits": 48,
+        "known_exits": 48,
+        "published_exits": 48,
+        "exit_accounting_complete": true,
+        "known_exit_identities_match": true,
+        "exit_complete": true
+      }
+    }
+  ]
+}

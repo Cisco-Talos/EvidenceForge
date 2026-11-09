@@ -32,6 +32,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.macos_audit_identity import MacosAuditIdentityLedger
 from evidenceforge.generation.source_timing import (
     compatibility_ecar_flow_identity_deadline,
     compatibility_endpoint_event_times,
@@ -65,9 +66,8 @@ _ECAR_FAILURE_REASON_BY_SUBSTATUS = {
 }
 
 _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
-    "%%2304": "account_locked",
-    "%%2307": "account_disabled",
-    "%%2313": "bad_password",
+    "%%2307": "account_locked",
+    "%%2313": "authentication_failure",
 }
 
 _PORT_BEARING_PROTOCOLS = {"tcp", "udp", "sctp"}
@@ -78,7 +78,15 @@ def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     try:
         record = json.loads(line)
         priority = _ECAR_SORT_PRIORITY.get((record.get("object"), record.get("action")), 50)
-        return int(record.get("timestamp_ms", 0)), priority, line
+        properties = record.get("properties", {})
+        # Native generations are resolved after immutable journal admission.
+        # Tie ordering must depend on the stable occurrence, not a late-bound field.
+        tie = (
+            str(record.get("id", ""))
+            if any(key in properties for key in ("pid_version", "previous_pid_version"))
+            else line
+        )
+        return int(record.get("timestamp_ms", 0)), priority, tie
     except (TypeError, ValueError, json.JSONDecodeError):
         return 0, 50, line
 
@@ -161,7 +169,10 @@ def _ecar_non_windows_session_type(event: CanonicalOccurrence) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
     if _is_linux_smb_event(event):
         return "smb"
-    if event.event_type == "ssh_session":
+    if event.event_type == "ssh_session" or (
+        event.auth is not None
+        and (event.auth.session_kind == "ssh" or event.auth.auth_protocol == "ssh")
+    ):
         return "ssh"
     if event.event_type == "failed_logon":
         source_ip = _ecar_session_source_ip(event)
@@ -188,7 +199,14 @@ def _ecar_session_source_ip(event: CanonicalOccurrence) -> str:
     if not source_ip or source_ip == "-":
         return "-"
     host = event.dst_host
-    if host is not None and source_ip == getattr(host, "ip", ""):
+    if (
+        host is not None
+        and source_ip == getattr(host, "ip", "")
+        and not (
+            event.auth is not None
+            and (event.auth.session_kind == "ssh" or event.auth.auth_protocol == "ssh")
+        )
+    ):
         return "-"
     return source_ip
 
@@ -217,6 +235,12 @@ class EcarEmitter(HostMultiplexEmitter):
         "logoff",
         "failed_logon",
         "process_create",
+        "process_fork",
+        "process_exec",
+        "process_audit_bind",
+        "process_privilege_drop",
+        "process_service_drop",
+        "process_job_control",
         "process_terminate",
         "system_process_create",
         "ssh_session",
@@ -225,6 +249,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "file_create",
         "file_modify",
         "file_delete",
+        "file_rename",
+        "file_close",
         "registry_modify",
         "image_load",
         "create_remote_thread",
@@ -267,6 +293,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
+            "process_fork": self._render_process_create,
+            "process_exec": self._render_process_transition,
+            "process_audit_bind": self._render_process_transition,
+            "process_privilege_drop": self._render_process_transition,
+            "process_service_drop": self._render_process_transition,
+            "process_job_control": self._render_process_transition,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
@@ -275,6 +307,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_create": self._render_file_event,
             "file_modify": self._render_file_event,
             "file_delete": self._render_file_event,
+            "file_rename": self._render_file_event,
+            "file_close": self._render_file_event,
             "registry_modify": self._render_registry_event,
             "image_load": self._render_module_event,
             "create_remote_thread": self._render_create_remote_thread,
@@ -321,6 +355,9 @@ class EcarEmitter(HostMultiplexEmitter):
         """Project canonical identity roles into eCAR."""
         plan = event.identity_plan
         if plan is not None:
+            if isinstance(plan.subject, ProcessIdentity) and plan.subject.job_control is not None:
+                event_data["process_group_id"] = plan.subject.job_control.pgid
+                event_data["posix_session_id"] = plan.subject.job_control.session.sid
             if plan.object_id:
                 event_data["objectID"] = plan.object_id
             if plan.actor_id:
@@ -333,7 +370,17 @@ class EcarEmitter(HostMultiplexEmitter):
             elif (
                 isinstance(plan.subject, ProcessIdentity)
                 and event.event_type
-                in {"process_create", "system_process_create", "process_terminate"}
+                in {
+                    "process_create",
+                    "system_process_create",
+                    "process_terminate",
+                    "process_fork",
+                    "process_exec",
+                    "process_audit_bind",
+                    "process_privilege_drop",
+                    "process_service_drop",
+                    "process_job_control",
+                }
                 and plan.subject.primary_thread is not None
             ):
                 event_data["tid"] = plan.subject.primary_thread.tid
@@ -535,8 +582,8 @@ class EcarEmitter(HostMultiplexEmitter):
             not source_is_client
             and not destination_is_client
             and (not copy_or_move or smb.phase == "rename")
-            and smb.client_access == "cifs_mount"
-            and host.os_category == "linux"
+            and (smb.client_access, host.os_category)
+            in {("cifs_mount", "linux"), ("macos_mount", "macos")}
             and smb.client_path.startswith("/")
             and local_process is not None
             and local_process.pid > 0
@@ -698,9 +745,73 @@ class EcarEmitter(HostMultiplexEmitter):
             "command_line": proc.command_line,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if event.event_type == "process_fork":
+            from evidenceforge.events.process import process_fork_identities
+
+            parent, child = process_fork_identities(event)
+            event_data["operation"] = "fork"
+            event_data["execution_id"] = child.execution_id
+            event_data["parent_execution_id"] = parent.execution_id
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
         self._apply_session_properties(event_data, event)
+        self._apply_edr_context(event_data, event)
+        self._emit_canonical_event(event_data, event)
+
+    def _render_process_transition(self, event: CanonicalOccurrence) -> None:
+        """Render bounded EvidenceForge PROCESS/MODIFY transition extensions."""
+        from evidenceforge.events.process import (
+            process_credential_identities,
+            process_exec_identities,
+            process_job_control_identities,
+        )
+
+        before, after = (
+            process_exec_identities(event)
+            if event.event_type == "process_exec"
+            else process_job_control_identities(event)
+            if event.event_type == "process_job_control"
+            else process_credential_identities(event)
+        )
+        event_data = {
+            "timestamp": self._after_process_create_timestamp(event, after),
+            "hostname": self._host_name(event.src_host),
+            "object": "PROCESS",
+            "action": "MODIFY",
+            "pid": after.pid,
+            "ppid": after.parent_pid,
+            "principal": event.identity_plan.actor.principal,
+            "image_path": after.image,
+            "command_line": after.command_line,
+            "operation": event.event_type.removeprefix("process_"),
+            "execution_id": after.execution_id,
+            "previous_execution_id": before.execution_id,
+            "previous_image_path": before.image,
+            "previous_command_line": before.command_line,
+            "_host_fqdn": self._host_fqdn(event.src_host),
+        }
+        if event.event_type != "process_exec":
+            event_data["process_principal"] = after.principal
+            event_data["previous_process_principal"] = before.principal
+        self._apply_session_properties(event_data, event)
+        for prefix, identity in (("previous_", before), ("", after)):
+            if identity.job_control is not None:
+                event_data[prefix + "process_group_id"] = identity.job_control.pgid
+                event_data[prefix + "posix_session_id"] = identity.job_control.session.sid
+            credentials = identity.credentials
+            if credentials is not None:
+                for field, value in (
+                    ("real_uid", credentials.real_uid),
+                    ("effective_uid", credentials.effective_uid),
+                    ("real_gid", credentials.real_gid),
+                    ("effective_gid", credentials.effective_gid),
+                    ("audit_uid", credentials.audit_uid),
+                    ("audit_session_id", credentials.audit_session_id),
+                ):
+                    if value is not None:
+                        event_data[prefix + field] = value
+            if identity.audit_pid_version is not None:
+                event_data[prefix + "pid_version"] = identity.audit_pid_version
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
@@ -739,6 +850,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_create": "CREATE",
             "file_modify": "WRITE",
             "file_delete": "DELETE",
+            "file_rename": "RENAME",
+            "file_close": "CLOSE",
         }
         event_data = {
             "timestamp": self._after_process_create_timestamp(event, process_identity),
@@ -746,11 +859,13 @@ class EcarEmitter(HostMultiplexEmitter):
             "object": "FILE",
             "action": action_map.get(event.event_type, "CREATE"),
             "pid": event.file.pid if event.file else -1,
-            "principal": event.auth.username if event.auth else "",
+            "principal": event.auth.username if event.auth else (proc.username if proc else ""),
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_process_provenance(event_data, proc)
+        if event.file is not None and event.file.previous_path is not None:
+            event_data["source_file_path"] = event.file.previous_path
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
@@ -1360,6 +1475,16 @@ class EcarEmitter(HostMultiplexEmitter):
         host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
+    def resolve_native_audit_identities(self, ledger: MacosAuditIdentityLedger) -> None:
+        """Resolve native properties from the sealed canonical allocation owner."""
+        if self.threaded:
+            self.stop_thread()
+        with self._writers_lock:
+            for writer in self._writers.values():
+                if writer._sorted_writer is None:
+                    raise RuntimeError("Native audit resolution requires deferred sorted output")
+                writer._sorted_writer.set_export_projection(ledger.project_ecar)
+
     def flush(self, force: bool = False) -> None:
         """Serialize buffered records in source-timestamp order without semantic mutation."""
 
@@ -1367,6 +1492,30 @@ class EcarEmitter(HostMultiplexEmitter):
 
     # Property keys that belong in the eCAR properties map.
     _PROPERTY_KEYS = (
+        "process_group_id",
+        "posix_session_id",
+        "previous_process_group_id",
+        "previous_posix_session_id",
+        "real_uid",
+        "real_gid",
+        "audit_uid",
+        "audit_session_id",
+        "pid_version",
+        "previous_real_uid",
+        "previous_effective_uid",
+        "previous_real_gid",
+        "previous_effective_gid",
+        "previous_audit_uid",
+        "previous_audit_session_id",
+        "previous_pid_version",
+        "operation",
+        "execution_id",
+        "parent_execution_id",
+        "previous_execution_id",
+        "process_principal",
+        "previous_process_principal",
+        "previous_image_path",
+        "previous_command_line",
         "command_line",
         "image_path",
         "parent_image_path",

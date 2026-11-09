@@ -1,0 +1,7 @@
+{
+  "focused": "503 passed, 2 deselected; tests/unit/test_scheduled_task_principal_xml.py plus test_activity.py",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "test_correction": "First new fixture omitted mandatory HostContext fields; corrected; all 503 pass on rerun.",
+  "scope": "shared builder and reserved/user/SID/UPN siblings; no authored edits"
+}

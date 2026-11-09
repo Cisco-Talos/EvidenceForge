@@ -1,0 +1,64 @@
+{
+  "matching_rows": [
+    {
+      "source": "zeek-core/files.json",
+      "line": 625,
+      "record": {
+        "ts": 1793643515.43716,
+        "fuid": "FZgEgCqVzTxAGQgCiu",
+        "tx_hosts": [
+          "10.10.2.30"
+        ],
+        "rx_hosts": [
+          "10.10.2.21"
+        ],
+        "conn_uids": [
+          "CjC6URGfRxvboYEdC2"
+        ],
+        "source": "SMB",
+        "depth": 0,
+        "filename": "Integration\\DB-Staging\\rpt_0318.sql.gz",
+        "analyzers": [
+          "MIME",
+          "MD5",
+          "SHA1",
+          "SHA256"
+        ],
+        "mime_type": "application/octet-stream",
+        "duration": 2e-06,
+        "local_orig": true,
+        "is_orig": true,
+        "seen_bytes": 0,
+        "total_bytes": 0,
+        "missing_bytes": 0,
+        "overflow_bytes": 0,
+        "timedout": false,
+        "md5": "764c0b9cf699b8690bc946daddb4a123",
+        "sha1": "751456b7adda9aa0fc41da943a55c5cfa62c86fd",
+        "sha256": "4762093d05edb921cef281ceae02e73c226c0ce5aa96227505c6aaadca440ace"
+      }
+    },
+    {
+      "source": "zeek-core/smb_files.json",
+      "line": 181,
+      "record": {
+        "ts": 1793643515.324193,
+        "uid": "CjC6URGfRxvboYEdC2",
+        "id.orig_h": "10.10.2.30",
+        "id.orig_p": 45723,
+        "id.resp_h": "10.10.2.21",
+        "id.resp_p": 445,
+        "action": "SMB::FILE_WRITE",
+        "path": "\\\\FILE-LNX-01\\ClinicalResearch",
+        "name": "Integration\\DB-Staging\\rpt_0318.sql.gz",
+        "size": 0,
+        "fuid": "FZgEgCqVzTxAGQgCiu"
+      }
+    }
+  ],
+  "empty_hashes": {
+    "md5": "d41d8cd98f00b204e9800998ecf8427e",
+    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -416,7 +416,7 @@ when the stable ID is `chrome`.
 
 - `id`: stable custom process ID, unique across the owning pack.
 - `display_name`: human-readable application/process name.
-- `platforms`: one or both of `windows` and `linux`.
+- `platforms`: one or more of `windows`, `linux`, and `macos`.
 - `image_path`: fully qualified, OS-native executable path. Bare filenames are invalid.
 - `command_templates`: non-empty realistic commands for that platform.
 - `pe_metadata`: Windows PE identity containing `file_version`, `description`, `product`,
@@ -429,7 +429,7 @@ when the stable ID is `chrome`.
 - `singleton_per_session`: whether overlapping copies are suppressed in one user session; default
   is false.
 
-Linux platforms cannot contain Windows PE metadata or loaded modules. OS-specific values must not
+Linux and macOS platforms cannot contain Windows PE metadata or loaded modules. OS-specific values must not
 cross platform boundaries.
 
 Custom categories must include at least one schedulable category: `user_app`, `code`, `build`, or
@@ -701,7 +701,7 @@ Fields:
 - `proto`: `tcp` or `udp`; default `tcp`.
 - `service`: optional source-native service hint.
 - `weight`: positive selection weight; default 1.
-- `os`: optional `windows` or `linux` source restriction.
+- `os`: optional `windows`, `linux`, or `macos` source restriction.
 - `emit_dns`: whether to emit prerequisite DNS; default false.
 - `dns_tags`: DNS registry tags used only when DNS selection is requested.
 

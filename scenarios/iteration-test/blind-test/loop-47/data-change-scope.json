@@ -1,0 +1,26 @@
+{
+  "compared_prior_loop": 46,
+  "before_files": 117,
+  "after_files": 117,
+  "changed_data_files": [
+    "MAC-MROSS-01.meridianhcs.local/ecar.json",
+    "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "PROXY-01.meridianhcs.local/ecar.json",
+    "PROXY-01.meridianhcs.local/proxy_access.log",
+    "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+    "WS-PPATEL-01.meridianhcs.local/ecar.json",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_sysmon.xml",
+    "fw-perimeter/cisco_asa.log",
+    "zeek-core/conn.json",
+    "zeek-dmz/conn.json",
+    "zeek-dmz/files.json",
+    "zeek-dmz/http.json",
+    "zeek-dmz/ocsp.json",
+    "zeek-dmz/ssl.json",
+    "zeek-dmz/x509.json"
+  ],
+  "unchanged_data_files": 101,
+  "added_files": [],
+  "removed_files": []
+}

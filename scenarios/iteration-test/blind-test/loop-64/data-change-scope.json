@@ -1,0 +1,14 @@
+{
+  "compared_prior_loop": 63,
+  "before_files": 119,
+  "after_files": 119,
+  "changed_data_files": [
+    "MAC-MROSS-01.meridianhcs.local/ecar.json",
+    "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+    "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson"
+  ],
+  "unchanged_data_files": 115,
+  "added_files": [],
+  "removed_files": []
+}

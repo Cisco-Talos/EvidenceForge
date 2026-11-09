@@ -1,5 +1,5 @@
 environment:
-  description: "Meridian Healthcare Solutions corporate HQ and on-prem data center with redundant directory services, cross-platform research storage, and centralized monitoring"
+  description: "Meridian Healthcare Solutions corporate HQ and on-prem data center with redundant directory services, cross-platform research storage, centralized monitoring, and two locally managed engineering Macs"
   domain: "meridianhcs.local"
 
   timezone:
@@ -64,6 +64,14 @@ environment:
       groups: ["sales"]
       browsing_intensity: light
 
+    - username: maya.ross
+      full_name: "Maya Ross"
+      email: "maya.ross@meridianhcs.com"
+      persona: developer
+      primary_system: MAC-MROSS-01
+      groups: ["engineering"]
+      browsing_intensity: heavy
+
   service_accounts:
     - svc_backup
     - svc_monitor
@@ -78,7 +86,7 @@ environment:
 
   groups:
     - name: engineering
-      members: ["lina.nguyen"]
+      members: ["lina.nguyen", "maya.ross"]
     - name: analytics
       members: ["omar.haddad"]
     - name: it-admins
@@ -280,6 +288,34 @@ environment:
       services: ["mysql", "ssh"]
       roles: ["database"]
 
+    - hostname: MAC-MROSS-01
+      ip: "10.10.1.41"
+      os: "macOS 27"
+      architecture: arm64
+      type: workstation
+      assigned_user: maya.ross
+      roles: [workstation]
+      services: [ssh, smb-client, smbfs]
+
+    - hostname: MAC-MROSS-02
+      ip: "10.10.1.42"
+      os: "macOS 27"
+      architecture: arm64
+      type: workstation
+      assigned_user: maya.ross
+      roles: [workstation]
+      services: [ssh, smb-client, smbfs]
+
+  deployment_overrides:
+    - system: MAC-MROSS-01
+      user_applications:
+        - user: maya.ross
+          applications: [macos-terminal, macos-ssh, chrome, slack, mysql, psql]
+    - system: MAC-MROSS-02
+      user_applications:
+        - user: maya.ross
+          applications: [macos-iterm2, macos-ssh, chrome, word, outlook, dbeaver, zoom]
+
   storage:
     population: medium
     activity: normal
@@ -416,6 +452,51 @@ environment:
         principal: svc_mhsync
         lifecycle: on_demand
 
+      - id: mac-research
+        share: FILE-LNX-01.clinical-research
+        audience:
+          systems:
+          - MAC-MROSS-01
+          - MAC-MROSS-02
+          users:
+          - maya.ross
+        mount: /Volumes/ClinicalResearch
+        credential_mode: per_user
+        lifecycle: persistent
+      - id: mac-shared
+        share: FILE-SRV-01.collaboration
+        audience:
+          systems:
+          - MAC-MROSS-01
+          - MAC-MROSS-02
+          users:
+          - maya.ross
+        mount: /Volumes/Shared
+        credential_mode: per_user
+        lifecycle: persistent
+      - id: mac-homes
+        share: FILE-SRV-01.homes
+        audience:
+          systems:
+          - MAC-MROSS-01
+          - MAC-MROSS-02
+          users:
+          - maya.ross
+        mount: /Volumes/Users
+        credential_mode: per_user
+        lifecycle: persistent
+      - id: mac-research-shared
+        share: FILE-LNX-01.collaboration
+        audience:
+          systems:
+          - MAC-MROSS-01
+          - MAC-MROSS-02
+          users:
+          - maya.ross
+        mount: /Volumes/ResearchShared
+        credential_mode: per_user
+        lifecycle: persistent
+
   network:
     public_cidrs: ["203.14.220.0/28"]
     segments:
@@ -432,6 +513,8 @@ environment:
           - WS-AJOHNSON-01
           - WS-SMARTINEZ-01
           - LT-MRIVERA-02
+          - MAC-MROSS-01
+          - MAC-MROSS-02
         exposure: internal
       - name: server_vlan
         cidr: "10.10.2.0/24"

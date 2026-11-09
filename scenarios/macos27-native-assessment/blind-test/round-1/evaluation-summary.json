@@ -1,0 +1,64 @@
+{
+  "status": "SUPERSEDED_PRE_FIX_DIAGNOSTIC",
+  "scenario": "source/scenario.yaml",
+  "generation_seed": 327,
+  "behavior_revision": 342,
+  "acceptance_passed": true,
+  "overall_score": 89.82918805036275,
+  "total_records": 9232,
+  "source_counts": {
+    "bash_history": 26,
+    "ecar": 3530,
+    "macos_endpoint_security": 3,
+    "macos_unified_log": 3,
+    "syslog": 495,
+    "windows_event_security": 505,
+    "windows_event_sysmon": 357,
+    "zeek_conn": 1824,
+    "zeek_dns": 833,
+    "zeek_files": 376,
+    "zeek_http": 34,
+    "zeek_ntp": 12,
+    "zeek_ocsp": 24,
+    "zeek_smb_files": 98,
+    "zeek_smb_mapping": 54,
+    "zeek_ssl": 759,
+    "zeek_x509": 282,
+    "zsh_history": 17
+  },
+  "pillar_scores": {
+    "Parseability": 100.0,
+    "Plausibility": 90.77421422528266,
+    "Causality": 96.6884531590414,
+    "Timing": 64.81760602140862
+  },
+  "flags": [
+    "Anomaly Rate: 34/100 (17/5000 events anomalous (0.3%), target 1-5%)",
+    "System Process Regularity: 49/100 (Interval CV: 1.510 (1 service groups, 270 events))",
+    "Volume Adequacy: 0/100 (Noise:signal 354:1 (target 2000:1 for medium))"
+  ],
+  "skipped_added_commands": [
+    {
+      "storyline_id": "remote-nested-id",
+      "reason": "no_live_parent_ref"
+    },
+    {
+      "storyline_id": "remote-nested-ps",
+      "reason": "no_live_parent_ref"
+    },
+    {
+      "storyline_id": "remote-nested-query",
+      "reason": "no_live_parent_ref"
+    },
+    {
+      "storyline_id": "remote-nested-shell",
+      "reason": "foreground_shell_unavailable"
+    },
+    {
+      "storyline_id": "remote-nested-version",
+      "reason": "no_live_parent_ref"
+    }
+  ],
+  "blind_review": "NOT_STARTED",
+  "native_reference_qualification": "Existing bounded subset only; unchanged gates"
+}

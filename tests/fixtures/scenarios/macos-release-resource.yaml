@@ -1,0 +1,83 @@
+# Resource probe derived from the committed mixed-fleet example; no authored commands execute.
+version: '1.0'
+name: macos-mixed-fleet-release-resource
+description: Bounded 26-hour resource probe; same invented three-host mixed fleet,
+  medium baseline and native Mac sources
+environment:
+  description: Three independent invented users; no remote-access or persistence claims
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-01
+  - username: robin
+    full_name: Robin Example
+    email: robin@example.test
+    persona: developer
+    primary_system: WIN-01
+  - username: sam
+    full_name: Sam Example
+    email: sam@example.test
+    persona: developer
+    primary_system: LINUX-01
+  systems:
+  - hostname: MAC-01
+    ip: 192.0.2.10
+    os: macOS 27
+    os_build: modeled-macos27-arm64
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+  - hostname: WIN-01
+    ip: 192.0.2.20
+    os: Windows 11
+    architecture: x64
+    type: workstation
+    assigned_user: robin
+  - hostname: LINUX-01
+    ip: 192.0.2.30
+    os: Ubuntu 24.04
+    architecture: x64
+    type: workstation
+    assigned_user: sam
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-01
+      - WIN-01
+      - LINUX-01
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 26h
+  warmup: 1h
+baseline_activity:
+  description: Medium developer activity across two business days and an overnight
+    interval
+  intensity: medium
+  variation: low
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: zsh_history
+  - format: bash_history
+  - format: windows
+  - format: syslog
+  - format: macos_endpoint_security
+  - format: macos_unified_log
+  destination: ./output
+  compression: false

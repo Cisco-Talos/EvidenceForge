@@ -4,13 +4,53 @@ description: "Scenario Schema Reference"
 
 # Scenario Schema Reference
 
-This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
+This document describes the authored EvidenceForge Scenario 1.0, 2.0 and 3.0 schemas and their
+current semantics. Older phase labels identify when individual fields were introduced.
 
 This is the consolidated human manual. Installed authoring skills use smaller topic references
 under `commands/eforge/references/` so they can load the complete schema and semantics relevant to
 one change without loading this entire document. `eforge info` reports installation- and
 project-dependent inventories. Use `eforge schema <selector> --json` for an exact focused
 installed-version contract and executable minimal example.
+
+## Native macOS process completeness
+
+`macos_process_coverage: complete` requires every modeled Mac start and successful image
+activation in the simulation window to reconcile with native ES publication. Selecting
+`macos_endpoint_security` defaults to this policy; runtime format filtering preserves that
+request. Missing native output, collection loss, disabled process collection and gaps in the
+collection window fail preflight. Unknown execution metadata, unresolved aggregate starts or
+missing/duplicate native records fail generation before a complete bundle is accepted.
+
+Use `macos_process_coverage: partial` explicitly for exploratory or intentionally incomplete
+workloads. `GROUND_TRUTH.json` then reports independent canonical fork/exec counts, native
+publication counts, identity reconciliation and up to eight unresolved-start examples under
+`macos_native_coverage.hosts[].process_census`. It includes baseline, helper and service starts,
+even when they bypass the native source factory. A passing individual command does not imply
+complete launcher/session coverage. Existing processes gain no retrospective exec records;
+an in-window exec in an existing process still counts.
+
+The supported target remains macOS 27 arm64. Ordinary literal local/non-PTY commands have a
+qualified fork/exec path. Fresh Apple Terminal/iTerm2, qualified Finder app mains, selected Chrome/Code helpers, bounded
+non-PTY/PTY SSH and the explicit root system-job preset also have qualified producers.
+Other app/helper activations and unsupported job definitions retain gates; complete requests containing unresolved starts reject. See the
+[producer inventory and acceptance matrix](../design/macos-workstation-feasibility/process-producer-inventory.md).
+
+## Simulated platforms and source selection
+
+A simulated system's OS determines its eligible host logs; it is independent of the OS running
+EvidenceForge. See the [platform/source matrix](EVIDENCE_FORMATS.md#platform-and-source-matrix)
+for Windows, Linux, experimental macOS 27 arm64, network and application/server sources.
+Selecting a format does not deploy the source or guarantee a record; roles, activity, collection
+and sensor visibility still apply.
+
+The native Mac ES profile also supports bounded create/close/rename/unlink observations.
+Its ordinary Code-owned document workload uses existing deployment and baseline activity,
+with nominal policy in `macos_execution_metadata.yaml.filesystem_workload`. It adds no authored
+filesystem event type and does not automatically project all file, SMB, download or launch-item
+operations into ES. The process-start completeness policy remains a process census, separate
+from file-event coverage. See [Simulating macOS workstations](../macos.md) for the current
+source-tree capability boundaries and examples.
 
 ## Naming metadata
 
@@ -529,7 +569,7 @@ storage:
       lifecycle: persistent
 ```
 
-File sets require a unique `id`, modeled Windows or Linux `system`, platform-native absolute
+File sets require a unique `id`, modeled Windows, Linux or macOS `system`, platform-native absolute
 `root`, one exact built-in or pack-qualified storage preset, optional population, and optional
 seed files. They compile persistent bounded local file/content identities without granting an SMB
 listener, server role, or network exposure. Presets provide a realistic population; seed files add
@@ -549,10 +589,15 @@ the backing volume is ext4 or XFS, following Samba's version-sensitive
 at most 64 characters and cannot contain control characters or path separators. Access is
 effective access: deny wins, admin implies modify/read, and modify implies read.
 
-Mappings may carry a Windows `drive`, a Linux `mount`, both for a mixed audience, or neither for
+Mappings may carry a Windows `drive`, a POSIX `mount`, both for a mixed audience, or neither for
 platform-aware allocation. Explicit drives may use `D:` through `Z:`; `A:` and `B:` are reserved
 and `C:` remains the local system drive. Automatic Windows allocation uses `H:` through `Z:`;
-automatic Linux allocation uses `/mnt/<mapping-id>`. `credential_mode: per_user` is the default and
+automatic Linux allocation uses `/mnt/<mapping-id>` and Mac allocation uses `/Volumes/<mapping-id>`.
+A mixed Linux/Mac audience needs an explicit common `mount` or separate audience mappings.
+Mac workstation clients use the existing `client_access: auto` and `path_style: auto|mounted`
+with a compatible mapping. Native operation actors, eCAR and existing network/server evidence
+are experimental; native Mac SMB logs and Mac SMB serving remain unavailable.
+`credential_mode: per_user` is the default and
 uses the activity's resolved SMB principal. `credential_mode: fixed` requires `principal`; a
 per-user mapping forbids it. A fixed mapping principal is a credential identity, not proof that the
 initiating process runs as that account.
@@ -1152,17 +1197,18 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
-| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `supplementary` (auto/none) |
+| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `launch_method` (finder on Mac), `outcome` (success/denied/exec_failed/policy_refused), `supplementary` (auto/none) |
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN; Type 9 uses the host's active/assigned desktop user as the local caller and the event actor as outbound credentials | | `logon_type` (default 3), `source_ip` (ignored for local Type 9) |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3), `target_username` |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `orig_bytes`, `resp_bytes`, `conn_state`, `ids_alerts` |
 | `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, platform-eligible Windows or Samba audit, eCAR | `operation` plus its share/client location shape | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, `client_access`, `auth_protocol`, `smb_principal`, external `client`, `ids_alerts` |
-| `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip`, `ids_alerts` |
+| `ssh_session` | canonical SSH connection (Zeek conn) + platform receiver evidence + EDR/eCAR | | `source_ip`, `ids_alerts`, `pty` (qualified Mac receiver) |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip`, `ids_alerts` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
 | `group_member_added` | 4728/4732/4756 (on DC) | `group_name`, `member_name` | `scope` (global/local/universal) |
+| `macos_launch_item` | eCAR file/process stages; selected native job fork/exec; registration unobserved | `operation`, `label`, `caller_ref` | Stage-specific `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `launch_profile`, `process_ref`, `exit_code` |
 | `service_installed` | 4697, eCAR SERVICE/CREATE | `service_name`, `service_file_name` | `service_account`, `source_ip` (modeled remote-administration source) |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
@@ -1181,7 +1227,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `explicit_credentials` | Windows 4648; materialized `runas.exe /netonly` also emits a correlated local Type 9 NewCredentials session | `target_username` | `target_server`, `process_name`, `source_ip` |
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
-| `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
+| `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → Linux Bash or Mac interactive zsh history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
 | `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; optional live-callback mode requires a fresh matching `--oob-host` on each `resolve`, `validate`, or `generate` invocation — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/reference/adversarial_payload.md) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
@@ -1866,12 +1912,21 @@ output:
 writes the bundle beside the scenario by default; pass `eforge generate --output <bundle-root>` to
 choose another location explicitly.
 
-Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `zsh_history` (experimental Mac history), `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Output formats here are canonical and target-neutral. Choose target-specific
 file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
 syslog, with `eforge generate --target default|sof-elk|splunk`; do not encode a parser
 target in scenario YAML.
+
+Windows, Linux, and macOS do not require a particular endpoint format or every format in an OS
+group. Validation checks each host's effective collection deployment, including source
+applicability, capabilities, enablement, missingness, and collection windows. No observable
+endpoint source produces an informational note; network/application-only exercises are valid.
+Specific authored actions without a supported evidence projection still produce actionable
+reachability findings. eCAR is an endpoint alternative on all three platforms. Native and shell
+history sources have narrower coverage: selecting one does not imply complete process, session,
+or file visibility, guarantee records, or waive native-source eligibility and evidence gates.
 
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
@@ -1938,3 +1993,134 @@ validation. Studio's conversion review shows blocking findings before saving.
 The environment must retain at least one regular user. Queued generation inputs
 remain immutable; resolved scenarios contain the effective accounts and directory
 links rather than authoring history, so generation needs no transition-specific logic.
+
+## Experimental modeled macOS workstations
+
+The application catalog contains Apple Terminal (`macos-terminal`) and iTerm2
+(`macos-iterm2`, `/Applications/iTerm.app/Contents/MacOS/iTerm2`). Both use the shared
+terminal/login/zsh session bootstrap, audit origin, terminal-device ownership, command
+publication and session-close path. An explicit `environment.deployment_overrides` entry
+with `user_applications: [{user: alex, applications: [macos-iterm2, macos-zsh]}]` selects
+iTerm2 for that user's automatically bootstrapped terminal. With both terminals eligible,
+Apple Terminal is the stable default; an existing active session shell is reused. This
+models one primary terminal shell per GUI session. App identities remain distinct, and
+iTerm2 does not inherit Apple's signing metadata. App reuse creates no new process start.
+Native command output works beneath either app. Their bounded fresh startup chains include
+the terminal app, login and initial shell, with iTermServer/ShellLauncher for iTerm2 3.7.6.
+New windows/restored jobs in an already running app remain outside this startup model.
+
+Use existing system fields (`os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
+
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
+
+Authored interactive commands keep their shell scheduling and history. Qualified direct launches
+use canonical fork/exec transitions. Native v11 output requires complete per-phase facts;
+unsupported descriptors or other missing facts reject complete coverage rather than accepting
+missing starts. A partial request reports omitted rows separately. Known
+canonical terminal outcomes can render exit rows; unknown results remain unexported. An
+unexecuted command is reported as skipped. Complete coverage applies to the modeled in-window
+starts and eligible collection, not an arbitrary real endpoint's entire process vocabulary.
+
+The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Explicit `process.outcome: policy_refused` adds the bounded kernel app-policy refusal described below. Qualified native SSH receivers also emit accepted authentication through the same action in both PTY modes: observed keyboard-interactive/PAM success for password intent, or source-derived plain-public-key success with complete canonical type/SHA256 fingerprint. The latter reuses the native-qualified common logger envelope; it is not a separate local public-key observation. Certificates, incomplete keys, PAM open/close, disconnect and launchd messages remain gated. Ordinary SSH daemon verbosity is preserved; VERBOSE session messages are outside this profile. Other Unified Log families remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
+
+History requires canonical interactive invocation: terminal-backed stdin or an explicit
+interactive shell flag. Login mode such as `-zsh` alone does not make a non-PTY shell
+interactive. Unknown or unsupported invocation facts omit history while retaining process
+telemetry; a controlling tty or vnode descriptor alone is insufficient.
+
+The internal `process_fork` and `process_exec` canonical occurrences are not authored event types. Existing `process` authoring remains unchanged; bundles must own any image replacement, and native-source support must not be inferred from the eCAR exec extension.
+
+Set `pty: true` on a Mac receiver's `ssh_session` to request the qualified initial zsh login
+PTY; omission preserves the existing non-PTY behavior. The source-side modeled Mac client
+uses `ssh -tt`. A later literal `process` event on the receiver uses that shell's terminal,
+forks, enters its own foreground process group and execs while staying in the shell's POSIX
+session. Use `supplementary: none` for this bounded command path. Installed executable
+metadata must be complete. Effects, pipelines, redirections, background jobs and commands
+inside shell strings require separate execution plans; unsupported requests reject before
+allocating their command child. Alternate SSH login shells and SCP/SFTP helpers are not
+qualified by this PTY reference. Explicit PTY intent on other receiver OS types rejects.
+Known command results remain separate from generic session-teardown outcomes. The same
+canonical startup supports complete native coverage, output filtering and checkpoint/resume.
+
+The engine-only `process_audit_bind`, `process_privilege_drop` and `process_service_drop` observations are likewise unavailable in authored `events`. Existing UID/GID, identity and session semantics supply their facts; they introduce no Mac configuration block. The SSH bundle owns these internal transitions; their eCAR extensions do not admit additional native Endpoint Security event families.
+
+### Bounded Mac process denial
+A `process` event defaults to `outcome: success`. Explicit `outcome: denied` on a modeled Mac rejects a launch before child allocation. Supply an absolute `process_name` and `parent_ref` naming an earlier process for the same host and storyline actor. Do not set `process_ref`: the rejected attempt creates no child. The canonical caller remains active; command-derived file/network effects and shell history are suppressed. Author legitimate precursor activities separately. Ground truth records the denial with `execution_denied_before_spawn` and no expected source; no native Gatekeeper or Endpoint Security denial message is generated. For a returning image-replacement failure in that existing caller, use `outcome: exec_failed` with the same path/reference constraints. It preserves the caller's image, execution identity, credentials, threads and descriptors; no child, replacement image, automatic command effect or native message is produced. The specific errno remains unknown. Ground truth records `exec_failed_caller_preserved`. A later caller exit is a separate event. Neither outcome represents prompting, an irreversible post-replacement failure or a named security product decision. See [executable example](../../scenarios/macos-denied-launch-example/scenario.yaml). The [returning exec-failure example](../../scenarios/macos-failed-exec-example/scenario.yaml) keeps the same caller available to launch a later child. Both examples use invented identities.
+
+
+`process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image, a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
+
+
+### `macos_launch_item` — experimental system-domain persistence
+This typed event supports explicit root-owned stages on modeled macOS 27 arm64 workstations. It reuses the environment's deployment, collection and observation configuration. No native plist file is exported.
+| Field | Meaning |
+| --- | --- |
+| `operation` | Required: `write`, `bootstrap`, `activate`, `exit`, `unload`, or `remove`. |
+| `label` | Required launchd job label. |
+| `caller_ref` | Required earlier same-host/root `process_ref`; retains exact caller lifetime. |
+| `path` | Required only for write/bootstrap/remove; canonical `/Library/LaunchDaemons/*.plist` path. |
+| `program`, `arguments`, `size_bytes` | Required only for write: executable path, exact argument vector and positive modeled file size. |
+| `version`, `run_at_load` | Write-only definition metadata. Version defaults to 1 and increases on replacement. RunAtLoad does not implicitly activate the job. |
+| `launch_profile` | Write-only optional `root_xpcproxy_v11`. Explicitly freezes the root/cwd/null-stdio/clean-environment preset into the definition, with RunAtLoad false. Current compatible policy also uses that canonical launch mechanism for installed native root targets when the field is omitted; each target still needs its own native metadata. |
+| `process_ref` | Activate-only reference for the resulting process. |
+| `exit_code` | Optional normal completed exit status, 0–255; exit only. |
+
+For a successful literal `/bin/sleep N` job exit, the canonical completion must occur
+at least `N` seconds after the actual target exec. The authored timing planner constrains
+independent jitter within its existing window and collection horizon; impossible bounds
+fail rather than inventing early success. Direct lifecycle callers must supply a valid
+completion time. Unknown, signal and nonzero results are not promoted to success.
+
+A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. Compatible explicit root/native activation adds one launchd fork, xpcproxy exec, setsid and target exec, preserving root credentials, boot audit origin, self responsibility and three non-TTY vnode standards. Explicit preset inputs stay frozen in the loaded definition after file removal/replacement; omitted inputs use the run's frozen execution policy. Native metadata qualification stays separate from canonical startup. `/bin/sleep 600` can retain its real arguments and separately authored completed exit. Unknown signing facts remain unavailable and fail complete coverage. Examples are in `scenarios/macos-persistence-example/`. GUI agents, automatic activation/respawn and native launchd Unified Log messages remain outside this mechanism.
+
+Under the current execution policy, an unparented authored Mac `root` process assumes a pre-existing root shell in initial inventory. Its in-window child receives a canonical fork/exec without adding an elevation or authentication event. Use `parent_ref` to supply a different explicit parent. The selected root audit origin, non-TTY standards and runtime validation are model choices, not captured attack facts. See the [catalog metadata boundaries](../design/macos-workstation-feasibility/catalog-native-metadata.md).
+
+Experimental `output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
+v11 fork/exec/known-exit profile. Selecting ES defaults `macos_process_coverage` to `complete`:
+every eligible in-window canonical fork/exec must reconcile with native output or generation
+fails with the missing requirements. Missing signing, entitlement or descriptor facts cannot
+silently omit a required start. Explicit `macos_process_coverage: partial` admits a narrower
+diagnostic/lossy request without that guarantee; output filtering cannot silently remove a
+complete request. Exit has its own requirement: independent State/native accounting covers
+all in-window terminations and known results. `exit_complete` requires a known native result
+for each such termination. Unknown completed results remain reported limitations and omit
+native exit without becoming success. The current frozen policy selects ordinary completed
+GUI quits, terminal/shell/login returns and separate SSH worker/receiver/client returns;
+unfinished supported queries are cancelled with signal 15. Natural query success requires
+an exact declared invocation and completion after owned work. These are explicit simulation
+choices, not measured automatic macOS logoff behavior. Unsupported command results and legacy
+profiles remain unknown. Collection cutoff does not itself terminate surviving processes.
+Existing collection settings govern
+eligibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
+for remaining gaps and the distinction between decoding and generation admission.
+
+Existing `process` events for qualified literal local-terminal and non-PTY SSH commands can
+produce native fork/exec records without a new authoring field. A quoted shell command argument
+can produce the shell's own exec, but its inner commands are not automatically expanded into
+child events. Author those activities explicitly when needed. Baseline activity uses the same
+process owner. The fixed two-Mac workload and its positive-background recovery companion
+pass independent State/native census reconciliation for all modeled starts; this is bounded
+acceptance, not qualification of every application or launch mechanism.
+
+For a fresh regular-app launch on a supported Mac, `process.launch_method: finder` selects the
+bounded complete startup producer. Supply the absolute `.app/Contents/MacOS/<executable>` path,
+a literal command line and `supplementary: none`; `parent_ref` and unsuccessful outcomes are
+incompatible. The existing local GUI login owns the app's audit identity. The producer owns
+the launchd fork, root xpcproxy exec, GUI credential/audit binding and app exec through retained
+phased publication. The launcher/app replacements share one PID/lifetime; the app is not a
+new child of xpcproxy. Native fork comes from the actual canonical fork. Native app exec
+requires complete deployed launcher/app, image-security, descriptor and other source facts;
+unknown signing/entitlement classes stay unavailable.
+
+The installed invented `macos-reference-app` provides an explicit ad-hoc/no-entitlements test
+workload. Its narrow image selector also routes baseline launches through the same process
+owner. Ordinary personas are not assigned this test app; a baseline acceptance workload must
+explicitly select it in its effective catalog. Its identifiers, clean environment, timing, installed stat and opaque vnode
+objects are declared model inputs, not private captured values or another application's facts.
+The qualified producer includes the launcher's initial activation; it has no unresolved
+aggregate start in that path. Dock/Spotlight attribution, arbitrary app/signing classes and
+generic GUI Unified Log messages remain outside qualification. Unselected GUI paths retain
+their explicit limits and cannot quietly bypass a complete ES request.

@@ -128,8 +128,8 @@ def _network_event(
         resp_bytes=8400,
         orig_pkts=12,
         resp_pkts=24,
-        orig_ip_bytes=1536,
-        resp_ip_bytes=9072,
+        orig_ip_bytes=1680 if protocol == "tcp" else 1536,
+        resp_ip_bytes=9360 if protocol == "tcp" else 9072,
         conn_state="SF",
         history="Dd",
         ip_proto=6 if protocol == "tcp" else 17,
@@ -387,13 +387,13 @@ def test_persistent_smb_binding_rejects_sensor_traffic_above_canonical() -> None
     tiny = replace(
         transport,
         traffic=NetworkTrafficLedger(
-            orig=DirectionalTrafficLedger(11, 1, 40),
-            resp=DirectionalTrafficLedger(11, 1, 40),
+            orig=DirectionalTrafficLedger(11, 4, 171),
+            resp=DirectionalTrafficLedger(11, 4, 171),
         ),
     )
     sensor_10k = NetworkTrafficLedger(
         orig=DirectionalTrafficLedger(10_000, 10, 10_400),
-        resp=DirectionalTrafficLedger(10, 1, 40),
+        resp=DirectionalTrafficLedger(10, 4, 170),
     )
     observation = _persistent_smb_observation(sensor_10k, sensor_identity="sensor-a")
 
@@ -534,7 +534,7 @@ def test_capture_loss_projects_file_and_http_completeness_with_gap_history() -> 
 
     assert history.endswith("g")
     assert request_body == 0
-    assert response_body == 4_000
+    assert response_body == 8_000
     assert files[0].seen_bytes == 4_000
     assert files[0].missing_bytes == 4_000
     assert not files[0].analyzers_visible
@@ -545,6 +545,13 @@ def test_capture_loss_projects_originator_http_file_from_originator_traffic() ->
     """Request entities use originator capture ratios and retain canonical totals."""
 
     event = _network_event(protocol="tcp")
+    event.network = replace(
+        event.network,
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(payload_bytes=8_400, packets=12, ip_bytes=8_880),
+            resp=event.network.traffic.resp,
+        ),
+    )
     event.http = HttpContext(
         method="PUT",
         host="ingest.example.com",
@@ -563,9 +570,9 @@ def test_capture_loss_projects_originator_http_file_from_originator_traffic() ->
         sha1="a" * 40,
     )
     observed = NetworkTrafficLedger(
-        orig=DirectionalTrafficLedger(payload_bytes=600, packets=6, ip_bytes=768),
+        orig=DirectionalTrafficLedger(payload_bytes=4_200, packets=6, ip_bytes=4_440),
         resp=event.network.traffic.resp,
-        missed_orig_bytes=600,
+        missed_orig_bytes=4_200,
     )
 
     history, files, request_body, response_body = NetworkObservationPlanner._observed_protocol(
@@ -573,7 +580,7 @@ def test_capture_loss_projects_originator_http_file_from_originator_traffic() ->
     )
 
     assert history.endswith("G")
-    assert request_body == 4_000
+    assert request_body == 8_000
     assert response_body == 0
     assert files[0].seen_bytes == 4_000
     assert files[0].missing_bytes == 4_000
@@ -617,9 +624,9 @@ def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() ->
         source_visible_close_time=T0 + timedelta(seconds=2),
         orig_bytes=200,
         resp_bytes=800,
-        orig_pkts=3,
+        orig_pkts=4,
         resp_pkts=4,
-        orig_ip_bytes=320,
+        orig_ip_bytes=360,
         resp_ip_bytes=960,
         conn_state="SF",
         history="ShADadFf",
@@ -1379,12 +1386,26 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
         {"cisco_asa"},
     )[0]
 
-    assert observation.firewall_teardown_reason == "TCP Reset-O"
+    assert observation.firewall_teardown_reason == "Unknown"
     assert observation.firewall_teardown_reason != "Conn-timeout"
     assert observation.observed_close_time < observation.firewall_teardown_time
     assert observation.firewall_teardown_time - observation.observed_close_time < timedelta(
         milliseconds=12.5
     )
+
+
+def test_datagram_firewall_state_expiry_is_distinct_from_transport_close() -> None:
+    """Datagram state expires after idle time, using ASA's second-scale precision."""
+
+    event = _network_event(protocol="udp")
+    event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
+
+    observation = NetworkObservationPlanner(None).plan(event, {"cisco_asa"})[0]
+
+    assert observation.observed_close_time is not None
+    assert observation.firewall_teardown_time is not None
+    teardown_delay = observation.firewall_teardown_time - observation.observed_close_time
+    assert timedelta(seconds=1) <= teardown_delay <= timedelta(minutes=2)
 
 
 def test_firewall_teardown_after_export_window_is_marked_unobserved() -> None:
@@ -1647,3 +1668,78 @@ def test_raw_entry_at_end_is_suppressed() -> None:
     dispatcher.dispatch_raw(RawProjectionRequest(T0, "syslog", {"message": "at end"}))
 
     emitter.emit_raw.assert_not_called()
+
+
+@pytest.mark.parametrize("is_orig", [False, True])
+def test_http_children_share_physical_capture_budget(is_orig: bool) -> None:
+    root = _network_event(protocol="tcp")
+    physical = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=10_000, packets=20, ip_bytes=10_800),
+        resp=DirectionalTrafficLedger(payload_bytes=10_000, packets=20, ip_bytes=10_800),
+    )
+    root.network = replace(root.network, traffic=physical)
+    observed = NetworkTrafficLedger(
+        orig=(
+            DirectionalTrafficLedger(payload_bytes=9_001, packets=19, ip_bytes=9_761)
+            if is_orig
+            else physical.orig
+        ),
+        resp=(
+            physical.resp
+            if is_orig
+            else DirectionalTrafficLedger(payload_bytes=9_001, packets=19, ip_bytes=9_761)
+        ),
+        missed_orig_bytes=999 if is_orig else 0,
+        missed_resp_bytes=0 if is_orig else 999,
+    )
+    total_missing = 0
+    for ordinal in range(10):
+        event = _network_event(protocol="tcp", stable_id=f"application-child:{ordinal}")
+        event.network = replace(event.network, application_layer_only=True)
+        event.http = HttpContext(
+            request_body_len=1_000 if is_orig else 0,
+            response_body_len=0 if is_orig else 1_000,
+            capture_traffic=physical,
+            capture_history="ShADadFf",
+            capture_transaction_id=root.network.stable_id,
+            request_stream_offset=ordinal * 1_000,
+            response_stream_offset=ordinal * 1_000,
+        )
+        event.file_transfer = FileTransferContext(
+            source="HTTP",
+            fuid=f"F{ordinal}",
+            is_orig=is_orig,
+            seen_bytes=1_000,
+            total_bytes=1_000,
+        )
+        history, files, request_len, response_len = NetworkObservationPlanner._observed_protocol(
+            event, observed
+        )
+        total_missing += files[0].missing_bytes
+        assert files[0].seen_bytes + files[0].missing_bytes == 1_000
+        assert (request_len if is_orig else response_len) == 1_000
+        assert history.endswith("G" if is_orig else "g")
+    assert total_missing == 999
+
+
+def test_http_capture_preserves_canonical_incompleteness_without_opposite_gap() -> None:
+    event = _network_event(protocol="tcp")
+    event.http = HttpContext(response_body_len=8_000)
+    event.file_transfer = FileTransferContext(
+        source="HTTP",
+        fuid="Fpartial",
+        is_orig=False,
+        seen_bytes=7_000,
+        total_bytes=8_000,
+        missing_bytes=1_000,
+    )
+    observed = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=600, packets=6, ip_bytes=840),
+        resp=event.network.traffic.resp,
+        missed_orig_bytes=600,
+    )
+    _, files, _, response_len = NetworkObservationPlanner._observed_protocol(event, observed)
+    assert files[0].seen_bytes == 7_000
+    assert files[0].missing_bytes == 1_000
+    assert not files[0].analyzers_visible
+    assert response_len == 8_000

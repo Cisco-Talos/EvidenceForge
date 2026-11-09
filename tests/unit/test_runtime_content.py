@@ -138,8 +138,8 @@ def test_prepared_file_payload_binds_exact_runtime_artifact_token() -> None:
     assert registry.cancel_prepared(token)
 
 
-def test_effect_publication_centralizes_profile_content_and_unknown_size_policy() -> None:
-    """Runtime effects share path-free content while retaining exact local ownership."""
+def test_effect_publication_sizes_unresolved_executables_deterministically() -> None:
+    """Unresolved executable artifacts get positive canonical sizes across placements."""
 
     start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
     profiles = (
@@ -176,13 +176,38 @@ def test_effect_publication_centralizes_profile_content_and_unknown_size_policy(
     assert first.record.content.content_id == second.record.content.content_id
     assert first.record.content.digests == second.record.content.digests
     assert first.record.artifact.artifact_id != second.record.artifact.artifact_id
-    assert first.record.content.size_bytes == 0
+    assert first.record.content.size_bytes > 0
+    assert first.record.content.size_bytes == second.record.content.size_bytes
     assert first.record.content.mime_type == "application/vnd.microsoft.portable-executable"
     assert first.record.binary is not None
     assert first.record.binary.pe_version_info is None
     assert first.record.artifact.user_profile_id == profiles[0].profile_id
     assert registry.cancel_prepared(first)
     assert registry.cancel_prepared(second)
+
+
+def test_effect_publication_preserves_explicit_executable_size() -> None:
+    """An authored executable length remains authoritative over fallback sizing."""
+
+    token = RuntimeContentIdentityManager(
+        LocalArtifactVersionRegistry(capacity=2)
+    ).prepare_effect_publication(
+        root_action_id="process-action-sized",
+        stable_source_id="payload-sized",
+        hostname="WS-01",
+        principal="SYSTEM",
+        platform="windows",
+        architecture="x64",
+        native_path=r"C:\Temp\payload.exe",
+        action="create",
+        observed_at=datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
+        owner_kind="system",
+        authored_size_bytes=123_456,
+        executable=True,
+    )
+
+    assert token is not None
+    assert token.record.content.size_bytes == 123_456
 
 
 def test_effect_publication_rejects_uncompiled_user_and_skips_nonmutating_actions() -> None:

@@ -29,8 +29,9 @@ Spillage models a synthetic credential appearing on a semantic surface.
 - Put the poison marker inside every credential-shaped token, not beside it.
 - Embedded hosts must be reserved/private allowlisted values. Prefer a configured family when a
   safe literal would be hard to prove.
-- `shell_history` and `syslog_message` are Linux-modeled. `process_command_line` and HTTP surfaces
-  are cross-platform subject to their host requirements.
+- `shell_history` uses Linux Bash or the bounded Mac interactive zsh profile; Mac requires
+  a usable `zsh_history` source on the actor host. `syslog_message` remains Linux-only.
+  `process_command_line` and HTTP surfaces are cross-platform subject to their host requirements.
 - The selected surface's output format must be collected or the credential would be ground-truthed
   without emitted evidence.
 

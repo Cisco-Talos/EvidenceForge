@@ -62,6 +62,7 @@ _PHASE_KEYS = (
     "policy_decision_after_request_ms",
     "dns_query_after_decision_ms",
     "tls_after_origin_connect_ms",
+    "origin_request_after_setup_ms",
     "origin_service_ms",
     "client_flush_after_response_ms",
     "terminal_response_after_decision_ms",
@@ -543,7 +544,7 @@ def test_http_absolute_close_bound_matches_shipped_planner_floor() -> None:
         caller_duration,
     )
 
-    assert planned_duration == 0.480001
+    assert planned_duration == 1.955
     assert (
         http_completed_transport_close_bound_seconds(
             caller_duration_maximum=caller_duration,
@@ -579,7 +580,7 @@ def test_http_absolute_close_bound_matches_extreme_valid_overlay_floor(
         caller_duration,
     )
 
-    assert planned_duration == 86_400.030001
+    assert planned_duration == 86_401.505
     assert (
         http_completed_transport_close_bound_seconds(
             caller_duration_maximum=caller_duration,
@@ -933,6 +934,14 @@ def test_proxy_owner_includes_overlay_dominant_dns_family_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A proxy lookup reserves companion and MX-address DNS teardown headroom."""
+
+    from evidenceforge.config.schemas import HttpTransportFloorSlackConfig
+    from evidenceforge.generation.activity import network_params
+
+    # Keep the transport profile below the DNS tail this case is testing.
+    monkeypatch.setattr(
+        network_params, "http_transport_floor_slack_config", HttpTransportFloorSlackConfig
+    )
 
     _install_proxy_profiles(
         monkeypatch,

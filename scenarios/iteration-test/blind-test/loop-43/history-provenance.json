@@ -1,0 +1,223 @@
+{
+  "history_view": "/private/tmp/iteration-mac-series43-scores-27q2son4",
+  "prior_series": "Mac-inclusive loops 1\u201342",
+  "next_loop": 43,
+  "boundary": "Canonical promotion and authored timing change before loop 43",
+  "sources": [
+    {
+      "loop": 1,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-1/scores.json",
+      "sha256": "8aaa0385f10ad40bec879f05078bde113728c802cf5d9bb69a1fc42ef325bac1"
+    },
+    {
+      "loop": 2,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-2/scores.json",
+      "sha256": "1630e4a1f49e858bec98d7bf56978f371f4131a26c37da08dff05cde37d1d9f1"
+    },
+    {
+      "loop": 3,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-3/scores.json",
+      "sha256": "9b0f512c87f79b7bd465b8431c11d48c89c7f760cec90f7c2db08c121bef809f"
+    },
+    {
+      "loop": 4,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-4/scores.json",
+      "sha256": "b1b4b7377d229d9fb86985889d439141af0a68599f655d79d0d58e313ba8073c"
+    },
+    {
+      "loop": 5,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-5/scores.json",
+      "sha256": "8b7905b4e12df771cf88edd5d79571ab75bbf5dfa6c2d0ed34bc0e67ae1250d5"
+    },
+    {
+      "loop": 6,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-6/scores.json",
+      "sha256": "66c8a5ff73f784c797a69efaf0053f9ee93398dab1cb01377e216477a268cb00"
+    },
+    {
+      "loop": 7,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-7/scores.json",
+      "sha256": "12177f7d1a4232a12a2190f1e681169119b0d21ccdb24850aed3eab0aa02eaaa"
+    },
+    {
+      "loop": 8,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-8/scores.json",
+      "sha256": "9d2b0af8016b9cfdc40ea08d00f5f21c09e22c77e07022dbb90a70319400a1ce"
+    },
+    {
+      "loop": 9,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-9/scores.json",
+      "sha256": "d284b2f6bab0cd1aebfb695e0d100560e59f7a6930bc44af9fab5c120d3f1b11"
+    },
+    {
+      "loop": 10,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-10/scores.json",
+      "sha256": "db034df1feac3075e7365b356d475a08902dd4c52284ac471f1ed9fc9d901f31"
+    },
+    {
+      "loop": 11,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-11/scores.json",
+      "sha256": "01fb76d9e05282df03cb99feada7902e02a77c46bcf6b5bbf19b21c6d05bad25"
+    },
+    {
+      "loop": 12,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-12/scores.json",
+      "sha256": "4b80d3e8d588f85efe89f28a8e99b60641630c738ade316b648881e6da02f15e"
+    },
+    {
+      "loop": 13,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-13/scores.json",
+      "sha256": "0fe333e7b62a2f862ef6beefc479e2958875cbe707433230330f82bff3bbc298"
+    },
+    {
+      "loop": 14,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-14/scores.json",
+      "sha256": "efd37071f0ec35bbbce1579a7e4fdf71a8253d905d38a2f7d5a98dc483bf9468"
+    },
+    {
+      "loop": 15,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-15/scores.json",
+      "sha256": "043837edb374bc972621f60f093ebfa1044dcf03d60cdba3301f5b9cf9c1be28"
+    },
+    {
+      "loop": 16,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-16/scores.json",
+      "sha256": "f113059b94a9218d0699502c6ce857da296675f95573a0b76a932c938744bd3e"
+    },
+    {
+      "loop": 17,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-17/scores.json",
+      "sha256": "1a6ad8a67ed3d27e40371c57bf75c37520536110ecaa35894cd04a08f7d2de4c"
+    },
+    {
+      "loop": 18,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-18/scores.json",
+      "sha256": "874dd464cf2d7b577c1ccb9a1ff9c3d9f02afda5be6da96a635d119378a15407"
+    },
+    {
+      "loop": 19,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-19/scores.json",
+      "sha256": "51f8fa29dacaa72c07308bb0f33bc1757596601248d3ccab53843da356f08064"
+    },
+    {
+      "loop": 20,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-20/scores.json",
+      "sha256": "ce95bb23eef59a7ff148d8b1d9830eac947a79acf92b3a9906e8cbd8012b62a0"
+    },
+    {
+      "loop": 21,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-21/scores.json",
+      "sha256": "56dab8848069c9d8806e6ba4c0792fef7246a852482946c92c3c1aff54e55d3d"
+    },
+    {
+      "loop": 22,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-22/scores.json",
+      "sha256": "8a45ee1d2ba902b3bdda0c1ec630edd99d68cc754f66df621d27a6c6fb57810c"
+    },
+    {
+      "loop": 23,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-23/scores.json",
+      "sha256": "835ed756e8ce2fc6cdb065d7cc736f02a7fb9ad592a23341d57412560102a00b"
+    },
+    {
+      "loop": 24,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-24/scores.json",
+      "sha256": "1574d99952510f50b0598481621746d75427b241c2b3e37c921c254bb48cee3f"
+    },
+    {
+      "loop": 25,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-25/scores.json",
+      "sha256": "aee1e10adf1d57dc54d13b0f274fb6dfd23193681a146f74f4678ec75dfa2efa"
+    },
+    {
+      "loop": 26,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-26/scores.json",
+      "sha256": "cfdeac5b1a8b4ef54a50fd77488b2d49cfc84b3edcd976bec7f895495a0852eb"
+    },
+    {
+      "loop": 27,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-27/scores.json",
+      "sha256": "62652a5d4cd4aa069eab38bb6c7c68f59f91a19f612acec1f73c3eea21356cbe"
+    },
+    {
+      "loop": 28,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-28/scores.json",
+      "sha256": "68484006ee38229391fca85fb4b37704540022de7d71f5c44c351dd7edf1324d"
+    },
+    {
+      "loop": 29,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-29/scores.json",
+      "sha256": "202f435604013117d5e190d4d4cfb2ae64d1afc7d0b5a9ed7e5044d57741f9a4"
+    },
+    {
+      "loop": 30,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-30/scores.json",
+      "sha256": "aebb25962bfb9d54eb1463ae87f3f312a1e60795c22d4be2195a53250353f14f"
+    },
+    {
+      "loop": 31,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-31/scores.json",
+      "sha256": "a534a96e58437076e2d3f804e8437e106bbc63245bb8c1ce7926c5d607eff888"
+    },
+    {
+      "loop": 32,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-32/scores.json",
+      "sha256": "3379f95dede0ce5b5080027cd0c907357523c42fce67e8bf30e18c74cef3db74"
+    },
+    {
+      "loop": 33,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-33/scores.json",
+      "sha256": "2c36012fb4ee2df89f64b333a4360213908c2ad9e992f40628f1e26b907213ae"
+    },
+    {
+      "loop": 34,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-34/scores.json",
+      "sha256": "84cb58766b881bdec127409fa6dfd7f46e24817edbb04f5a3bde5179e0bb9409"
+    },
+    {
+      "loop": 35,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-35/scores.json",
+      "sha256": "7a7d19c8635f07364f60d17184f54c7705d1ac386c38ebd684e6e660bbead3f0"
+    },
+    {
+      "loop": 36,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-36/scores.json",
+      "sha256": "3a8ac08f7ea430145d27f2d48c5f153a3a28dd1eb3a1d43450a0caff089ea0bc"
+    },
+    {
+      "loop": 37,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-37/scores.json",
+      "sha256": "b6333a4157a3f1d9db1b453e96162f0d8049bddc224fce31cbf8a09f43d0641c"
+    },
+    {
+      "loop": 38,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-38/scores.json",
+      "sha256": "ab2e1a597a0b9173e526a85a08e7f621a6ccf40fdcf48cf2c660ab46bd49d920"
+    },
+    {
+      "loop": 39,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-39/scores.json",
+      "sha256": "f1b28ac473bf33a9c7dba241dea5538c6d8794caae97b70b621e47bd3aadd261"
+    },
+    {
+      "loop": 40,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-40/scores.json",
+      "sha256": "1411c67427a1835512c171c27ddfec9e734721d8a0ddf8aff1c6119f370d7551"
+    },
+    {
+      "loop": 41,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-41/scores.json",
+      "sha256": "14ad525ae346ee6bcd6e113b53a7186739abc04f2f5f1cb68f1a9e1f32fcb46f"
+    },
+    {
+      "loop": 42,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/blind-test/loop-42/scores.json",
+      "sha256": "511398370e9b68b73068c0f0422d231bebd0626e834af01fd0f4956a259a2a6f"
+    },
+    {
+      "loop": 43,
+      "source": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/blind-test/loop-43/scores.json",
+      "sha256": "3b22860319d0854086b64a9422073c034094e9ab1ca45610d0117bd56bf2c7c9"
+    }
+  ]
+}

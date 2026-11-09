@@ -1,0 +1,76 @@
+{
+  "series": "Mac-inclusive assessment",
+  "inputs": [
+    {
+      "loop": 31,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-31/scores.json",
+      "sha256": "a534a96e58437076e2d3f804e8437e106bbc63245bb8c1ce7926c5d607eff888"
+    },
+    {
+      "loop": 32,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-32/scores.json",
+      "sha256": "3379f95dede0ce5b5080027cd0c907357523c42fce67e8bf30e18c74cef3db74"
+    },
+    {
+      "loop": 33,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-33/scores.json",
+      "sha256": "2c36012fb4ee2df89f64b333a4360213908c2ad9e992f40628f1e26b907213ae"
+    },
+    {
+      "loop": 34,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-34/scores.json",
+      "sha256": "84cb58766b881bdec127409fa6dfd7f46e24817edbb04f5a3bde5179e0bb9409"
+    },
+    {
+      "loop": 35,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-35/scores.json",
+      "sha256": "7a7d19c8635f07364f60d17184f54c7705d1ac386c38ebd684e6e660bbead3f0"
+    },
+    {
+      "loop": 36,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-36/scores.json",
+      "sha256": "3a8ac08f7ea430145d27f2d48c5f153a3a28dd1eb3a1d43450a0caff089ea0bc"
+    },
+    {
+      "loop": 37,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-37/scores.json",
+      "sha256": "b6333a4157a3f1d9db1b453e96162f0d8049bddc224fce31cbf8a09f43d0641c"
+    },
+    {
+      "loop": 38,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-38/scores.json",
+      "sha256": "ab2e1a597a0b9173e526a85a08e7f621a6ccf40fdcf48cf2c660ab46bd49d920"
+    },
+    {
+      "loop": 39,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-39/scores.json",
+      "sha256": "f1b28ac473bf33a9c7dba241dea5538c6d8794caae97b70b621e47bd3aadd261"
+    },
+    {
+      "loop": 40,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-40/scores.json",
+      "sha256": "1411c67427a1835512c171c27ddfec9e734721d8a0ddf8aff1c6119f370d7551"
+    },
+    {
+      "loop": 41,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-41/scores.json",
+      "sha256": "14ad525ae346ee6bcd6e113b53a7186739abc04f2f5f1cb68f1a9e1f32fcb46f"
+    },
+    {
+      "loop": 42,
+      "path": "scenarios/iteration-test-macos/blind-test/loop-42/scores.json",
+      "sha256": "511398370e9b68b73068c0f0422d231bebd0626e834af01fd0f4956a259a2a6f"
+    },
+    {
+      "loop": 43,
+      "path": "scenarios/iteration-test/blind-test/loop-43/scores.json",
+      "sha256": "3b22860319d0854086b64a9422073c034094e9ab1ca45610d0117bd56bf2c7c9"
+    },
+    {
+      "loop": 44,
+      "path": "scenarios/iteration-test/blind-test/loop-44/scores.json",
+      "sha256": "001ff440d43f96e65927f2dc5d04829c89d41e4f19eef0a7fd8d52489389b28d"
+    }
+  ],
+  "excluded": "historical canonical v2-loop series"
+}

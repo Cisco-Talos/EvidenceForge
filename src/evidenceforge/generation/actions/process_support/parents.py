@@ -19,6 +19,7 @@ from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS a
 from evidenceforge.generation.activity.process_helpers import (
     _is_bare_windows_explorer_launch as _is_bare_windows_explorer_launch,
 )
+from evidenceforge.generation.activity.process_helpers import _macos_process_uses_shell
 from evidenceforge.generation.activity.service_process_profiles import (
     ServiceProcessFamily,
     ServiceProcessSpec,
@@ -37,6 +38,7 @@ from .capabilities import (
     CreateWindowsSessionShellLifecycleCapability,
     EnsureLinuxSessionShellCapability,
     EnsureLinuxVisibleShellParentCapability,
+    EnsureMacosSessionShellCapability,
     GenerateProcessCapability,
     GenerateSystemProcessCapability,
     ProcessIdentityCapabilities,
@@ -74,6 +76,7 @@ class ProcessParentResolver:
     sources: ProcessSourceTiming
     queries: ProcessStateQueries
     identity: ProcessIdentityCapabilities
+    ensure_macos_session_shell: EnsureMacosSessionShellCapability | None = None
 
     @property
     def history(self) -> ProcessParentHistory:
@@ -104,6 +107,69 @@ class ProcessParentResolver:
             self.ensure_linux_session_shell,
             self.ensure_linux_visible_shell_parent,
         )
+
+    def _macos_existing_parent(
+        self,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int = 0,
+        *,
+        process_name: str = "",
+        materialize_shell: bool = True,
+    ) -> int:
+        """Select or request the canonical local shell; SSH retains its own startup owner."""
+        if parent_pid not in {0, 4} and self.queries._is_pid_active_at(system, parent_pid, time):
+            parent = self.state_manager.get_process(system.hostname, parent_pid)
+            if parent is not None and (not parent.logon_id or parent.logon_id == logon_id):
+                return parent_pid
+        session = self.state_manager.get_session(logon_id) if logon_id else None
+        ssh_session = session is not None and session.session_kind == "ssh"
+        if logon_id and (ssh_session or _macos_process_uses_shell(process_name)):
+            if (
+                session is not None
+                and session.session_kind == "interactive"
+                and ensure_utc(session.start_time) <= ensure_utc(time)
+                and session.session_shell_pid is not None
+            ):
+                bound = self.state_manager.get_process(system.hostname, session.session_shell_pid)
+                if (
+                    bound is not None
+                    and bound.logon_id == logon_id
+                    and bound.image in {"/bin/zsh", "/bin/bash"}
+                    and bound.execution_ordinal > 0
+                    and bound.end_time is None
+                ):
+                    # A just-completed startup may be ahead of the request. The
+                    # launch scheduler consumes its execution-readiness boundary.
+                    return bound.pid
+            for process in self.state_manager.get_processes_for_session(logon_id):
+                if (
+                    process.system == system.hostname
+                    and process.image in {"/bin/zsh", "/bin/bash"}
+                    and self.queries._is_pid_active_at(system, process.pid, time)
+                ):
+                    return process.pid
+            if (
+                not ssh_session
+                and session is not None
+                and session.session_kind == "interactive"
+                and materialize_shell
+                and self.ensure_macos_session_shell is not None
+            ):
+                user = self.identity.user_for_username(session.username)
+                pid = self.ensure_macos_session_shell(
+                    user, system, logon_id, time, allow_deferred_start=True
+                )
+                if pid is None:
+                    raise StateError("Mac local command requires a ready canonical terminal shell")
+                return pid
+        if ssh_session:
+            raise StateError("Mac SSH process creation requires its live session shell")
+        init = self.state_manager.get_process(system.hostname, 1)
+        if init is None or init.image != "/sbin/launchd" or init.start_time > time:
+            raise StateError("Mac process creation requires its modeled launchd boot identity")
+        return 1
 
     def _ensure_session_explorer_pid(
         self,
@@ -168,6 +234,10 @@ class ProcessParentResolver:
     ) -> int:
         """Resolve a live parent PID before process state allocation."""
         os_category = _get_os_category(system.os)
+        if os_category == "macos":
+            return self._macos_existing_parent(
+                system, time, logon_id, parent_pid, process_name=process_name
+            )
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         user_context = process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith(
             "$"
@@ -444,6 +514,10 @@ class ProcessParentResolver:
         """Resolve an existing parent for a required bundle without materializing helpers."""
 
         os_category = _get_os_category(system.os)
+        if os_category == "macos":
+            return self._macos_existing_parent(
+                system, time, logon_id, parent_pid, materialize_shell=False
+            )
         if parent_pid not in {0, 4}:
             if (
                 os_category == "windows"
@@ -543,6 +617,8 @@ class ProcessParentResolver:
 
         rng = _get_rng()
         os_cat = _get_os_category(system.os)
+        if os_cat == "macos":
+            return self._macos_existing_parent(system, time, logon_id, process_name=process_name)
         sys_pids = policy.system_process_roles(self._system_pids).get(system.hostname, {})
 
         # Extract basename for rule lookup
@@ -1042,6 +1118,13 @@ class ProcessParentResolver:
         rng = _get_rng()
         sys_pids = policy.system_process_roles(self._system_pids).get(system.hostname, {})
         os_cat = _get_os_category(system.os)
+        if os_cat == "macos":
+            effective_time = time or self.state_manager.state.current_time
+            if effective_time is None:
+                raise StateError("Mac parent selection requires a modeled time")
+            return self._macos_existing_parent(
+                system, effective_time, logon_id, process_name=process_name
+            )
         effective_time = time or self.state_manager.state.current_time or datetime.now(UTC)
         history = self.history._prune_user_process_history(
             system=system,

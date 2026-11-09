@@ -132,6 +132,7 @@ class TestLogonIdSystemScoping:
 
         spec = Mock()
         spec.type = "process"
+        spec.outcome = "success"
         spec.process_name = r"C:\Windows\System32\cmd.exe"
         spec.command_line = "cmd.exe /c whoami"
         spec.supplementary = None
@@ -196,7 +197,8 @@ class TestLogonIdSystemScoping:
         assert type9 is not None
         assert type9.username == local_user.username
         assert type9.source_ip == "-"
-        assert type9.session_id == 0
+        caller = state_manager.get_session(caller_logon_id)
+        assert type9.session_id == caller.session_id > 0
         assert type9.logon_guid != "{00000000-0000-0000-0000-000000000000}"
         controller = state_manager.get_process(system.hostname, type9.process_tree_root or -1)
         assert controller is not None
@@ -290,6 +292,7 @@ class TestLogonIdSystemScoping:
 
         spec = Mock()
         spec.type = "process"
+        spec.outcome = "success"
         spec.process_name = r"C:\Windows\System32\cmd.exe"
         spec.command_line = "cmd.exe"
         spec.supplementary = None
@@ -789,8 +792,9 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
         future_specs=(),
         authored_time_shift: timedelta = timedelta(0),
         session_required_until: datetime | None = None,
+        authored_nominal_time: datetime | None = None,
     ):
-        del authored_time_shift, session_required_until
+        del authored_time_shift, session_required_until, authored_nominal_time
         observed_times.append(time)
         return None
 

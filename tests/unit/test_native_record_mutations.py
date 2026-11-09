@@ -148,7 +148,14 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
     for case, field, mode in MUTATIONS:
         name = case["format"]
         raw = rendered[(name, case.get("variant"))]
-        path = tmp_path / (name + (".xml" if name.startswith("windows_") else ".json"))
+        extension = (
+            ".xml"
+            if name.startswith("windows_")
+            else ".ndjson"
+            if name in {"macos_unified_log", "macos_endpoint_security"}
+            else ".json"
+        )
+        path = tmp_path / (name + extension)
         with path.open("a") as stream:
             stream.write(mutate_native(raw, name, field, mode) + "\n")
         expected[name] = expected.get(name, 0) + 1
@@ -157,7 +164,10 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         obj = json.loads(rendered[(name, case.get("variant"))])
         container = obj["properties"] if name == "ecar" and field.name not in obj else obj
         container[field.name] = {"wrong": "type"}
-        with (tmp_path / (name + ".json")).open("a") as stream:
+        extension = (
+            ".ndjson" if name in {"macos_unified_log", "macos_endpoint_security"} else ".json"
+        )
+        with (tmp_path / (name + extension)).open("a") as stream:
             stream.write(json.dumps(obj) + "\n")
         expected[name] = expected.get(name, 0) + 1
     for name in (
@@ -177,7 +187,8 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         )
         path.write_text(raw + "\n")
         expected[name] = len(list(get_parser(name).parse_file(path)))
-    assert len(expected) == 25
+    assert len(expected) == 27
+    assert {"macos_unified_log", "macos_endpoint_security"} <= expected.keys()
     result = CliRunner().invoke(
         app,
         [
@@ -257,6 +268,8 @@ def test_rule_witness_through_native_parser(tmp_path: Path, witness: dict, outco
             raw = f"<30>1 2024-01-15T10:00:00Z {fields.get('hostname', 'ws01')} sshd 1 - - {fields.get('message', 'accepted')}"
         elif definition.name == "snort_alert":
             raw = f"06/15-15:06:40.000000 [**] [1:1:1] test [**] [Classification: test] [Priority: {fields.get('priority', 1)}] {{TCP}} {fields.get('src_ip', '10.0.0.1') if witness['rule'].endswith('-1') else fields.get('src_ip', '')} -> {fields.get('dst_ip', '10.0.0.2')}"
+        elif definition.name == "zsh_history":
+            raw = ": 1750000000:0;" + fields.get("command", "ls")
         else:
             assert definition.name == "bash_history"
             if witness["rule"] == "bash_history.legacy-2" and outcome == "fail":

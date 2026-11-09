@@ -1,0 +1,38 @@
+[
+  {
+    "host": "MAC-MROSS-01.meridianhcs.local",
+    "macos_endpoint_security.ndjson": {
+      "records": 136,
+      "event_types": {
+        "11": 44,
+        "9": 50,
+        "15": 42
+      }
+    },
+    "macos_unified_log.ndjson": {
+      "records": 3,
+      "event_types": {
+        "logEvent": 3
+      }
+    },
+    "zsh_history_entries": 25
+  },
+  {
+    "host": "MAC-MROSS-02.meridianhcs.local",
+    "macos_endpoint_security.ndjson": {
+      "records": 171,
+      "event_types": {
+        "11": 54,
+        "9": 65,
+        "15": 52
+      }
+    },
+    "macos_unified_log.ndjson": {
+      "records": 2,
+      "event_types": {
+        "logEvent": 2
+      }
+    },
+    "zsh_history_entries": 25
+  }
+]

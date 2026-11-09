@@ -1,0 +1,12 @@
+{
+  "compared_prior_loop": 56,
+  "before_files": 117,
+  "after_files": 117,
+  "changed_data_files": [
+    "zeek-core/http.json",
+    "zeek-dmz/http.json"
+  ],
+  "unchanged_data_files": 115,
+  "added_files": [],
+  "removed_files": []
+}

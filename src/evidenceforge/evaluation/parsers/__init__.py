@@ -240,6 +240,10 @@ from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # n
 from evidenceforge.evaluation.parsers.cisco_asa import CiscoAsaParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.email_artifacts import EmailArtifactsParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.macos_native import (  # noqa: E402
+    MacosEndpointSecurityParser,  # noqa: F401
+    MacosUnifiedLogParser,  # noqa: F401
+)
 from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
@@ -268,3 +272,4 @@ from evidenceforge.evaluation.parsers.zeek_smtp import ZeekSmtpParser  # noqa: E
 from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zsh_history import ZshHistoryParser  # noqa: E402,F401

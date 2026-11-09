@@ -8,13 +8,47 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 
 ## Contents
 
-[Output layout](#output-directory-structure) · [targets](#output-targets) ·
+[Platform/source matrix](#platform-and-source-matrix) · [Output layout](#output-directory-structure) · [targets](#output-targets) ·
 [email](#email-artifacts-and-zeek-smtp) · [Windows Security](#windows-security-events) ·
 [Sysmon](#windows-sysmon-events) · [Zeek](#zeek-network-logs) ·
 [eCAR](#ecar-format-simulated-edr-telemetry) · [Linux syslog](#linux-syslog) ·
-[bash](#bash-history) · [IDS](#snortsuricata-ids-alerts) ·
+[bash](#bash-history) · [zsh](#zsh-history-experimental) · [IDS](#snortsuricata-ids-alerts) ·
 [Cisco ASA](#cisco-asa-firewall-syslog) · [web](#web-access-log) ·
-[proxy](#http-proxy-log)
+[proxy](#http-proxy-log) · [Mac ULF](#experimental-macos-unified-log-ndjson) ·
+[Mac ES](#experimental-macos-endpoint-security-ndjson)
+
+## Platform and source matrix
+
+This reference describes the current source checkout. Release notes define a published
+installer's capabilities. The simulated platform is independent of the generation host;
+macOS generation currently admits only macOS 27 arm64 workstations. See the
+[Mac guide](../macos.md) for its experimental scope.
+
+| Canonical format ID | Windows host | Linux host | Mac host | Other source owner |
+| --- | --- | --- | --- | --- |
+| `windows_event_security` | Yes | — | — | — |
+| `windows_event_sysmon` | Yes | — | — | — |
+| `ecar` | Yes | Yes | Yes | Object families vary by platform. |
+| `syslog` | — | Yes | — | Linux syslog, including eligible Samba server audit. |
+| `bash_history` | — | Yes | Explicit interactive Bash | A live interactive shell owns submissions. |
+| `zsh_history` | — | — | Yes | Bounded interactive zsh history. |
+| `macos_endpoint_security` | — | — | Yes | Qualified v11 process and bounded regular-file observations. |
+| `macos_unified_log` | — | — | Yes | Selected workspace, policy-refusal and SSH authentication messages. |
+| `web_access` | `web_server` role | `web_server` role | — | Server-side HTTP evidence for clients of any supported OS. |
+| `proxy_access` | `forward_proxy` role | `forward_proxy` role | — | Proxy-side evidence for configured client routing. |
+| `zeek_*` (16 concrete formats) | — | — | — | Network sensor; any eligible simulated OS's visible traffic. |
+| `snort_alert` | — | — | — | IDS sensor; fast-format Snort/Suricata alerts. |
+| `cisco_asa` | — | — | — | Firewall sensor/control point, independent of endpoint OS. |
+
+The `windows` group expands to its two Windows formats; `zeek` expands to the
+16 concrete formats listed below. Email `.eml` artifacts and their manifest are
+scenario-wide artifacts rather than another `output.logs` format.
+
+Selection controls enabled renderers, not guaranteed presence. Source deployment,
+roles, activity, collection and network visibility decide whether records exist.
+For example, a Mac accessing a Windows SMB server can leave Mac endpoint records,
+Windows server audit and sensor-local Zeek records, without Windows logs on the Mac.
+A source's generation support is separate from external parser/normalization support.
 
 ## Output Directory Structure
 
@@ -42,8 +76,11 @@ output/
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
       ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
+      macos_endpoint_security.ndjson       # Experimental v11 process and bounded file events
+      macos_unified_log.ndjson             # Experimental selected workspace/policy/SSH messages
       syslog.log                           # Linux syslog (default/splunk target; RFC5424)
-      bash_history/<username>.bash_history # Per-user bash history (Linux only)
+      bash_history/<username>.bash_history # Per-user explicit Bash history (Linux/Mac)
+      zsh_history/<username>.zsh_history   # Experimental Mac extended incremental history
       web_access.log                       # Web server access log on web_server hosts
       proxy_access.log                     # Forward proxy access log on forward_proxy hosts
       <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
@@ -110,7 +147,7 @@ Current target-specific behavior:
 | Zeek | `<sensor>/<logtype>.json` only when Zeek sensors are configured | Unchanged | Unchanged |
 | `web_access` | `<host>/web_access.log` as combined text | Combined text | `<host>/web_access.log` as Apache TA-compatible JSON |
 | `proxy_access` | `<host>/proxy_access.log` as extended combined text | Plain combined text | `<host>/proxy_access.log` as Apache TA-compatible proxy JSON with CIM tagging |
-| IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
+| IDS, eCAR, Bash/zsh history, Mac ES/ULF | Unchanged | Unchanged | Unchanged |
 
 ---
 
@@ -309,7 +346,7 @@ Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access, target_pid, target_image_path, and target_process_uuid in properties. |
 | THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, target_pid, target_process_uuid, start_address, and stack addresses matching OpTC eCAR format. Thread ID, target PID, and start address are generated once in `RemoteThreadContext` and rendered consistently across Sysmon and eCAR. |
-| FILE | READ, CREATE, WRITE, RENAME, DELETE | Generated alongside process activity, canonical SMB server operations and required client-local copy/move effects, and modeled transfer receiver evidence such as SCP target-side file creation. Windows server objects use Windows paths; Samba server objects use POSIX backing paths and live `smbd` worker provenance. Linux client-local effects use POSIX paths and the initiating client process when attributable. Remote share objects never fabricate a client Sysmon Event 11. |
+| FILE | READ, CREATE, WRITE, CLOSE, RENAME, DELETE | Generated alongside process activity, canonical SMB server operations and required client-local copy/move effects, and modeled transfer receiver evidence such as SCP target-side file creation. Windows server objects use Windows paths; Samba server objects use POSIX backing paths and live `smbd` worker provenance. Linux client-local effects use POSIX paths and the initiating client process when attributable. Remote share objects never fabricate a client Sysmon Event 11. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
@@ -320,10 +357,14 @@ Modeled successful SSH and RDP sessions have complete terminal ownership: their 
 
 For bounded Linux foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
 
+The bounded Mac filesystem bundle uses FILE/CLOSE for its explicit close occurrence, an
+EvidenceForge extension. It preserves the resulting canonical content/file version; it does
+not claim that every close is a separate write operation or an upstream eCAR standard action.
+
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
 - FLOW events carry endpoint process attribution only when the platform owns one. Examples include svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for Windows-native SMB, mstsc.exe for RDP, a direct `smbclient` operation process, or the active Samba `smbd` worker. Mounted CIFS transport is kernel-owned and must not be attributed to `mount.cifs` for every operation. GVFS remains opaque background TCP/445/process texture and does not produce typed SMB file/auth/session semantics. Unavailable pid/tid identity is omitted rather than rendered as a placeholder
-- Linux coverage focuses on PROCESS, USER_SESSION, FLOW, and FILE evidence rather than every endpoint object family
+- Linux and Mac coverage focuses on PROCESS, USER_SESSION, FLOW, and FILE evidence rather than every Windows endpoint object family
 - File paths come from curated, OS-aware profiles rather than a complete endpoint inventory
 
 ---
@@ -634,3 +675,142 @@ companions appear according to normal visibility rules.
 
 See [the shared record contract](RECORD_VALIDATION.md) for typed predicates, Windows aliases,
 parser failure accounting, and exact schema/correctness acceptance gates.
+
+## Zsh history (experimental)
+
+`<host>/zsh_history/<username>.zsh_history` contains independently modeled interactive submissions in native `: epoch:0;command` form. The initial profile represents EXTENDED_HISTORY with incremental append, so zero elapsed time means persistence at submission. Canonical session/shell ownership is required; arbitrary or noninteractive process creation never implies history. Only single-line ASCII records are supported. Multiline/metafied records, history clearing, session-exit-only persistence and SIEM ingestion mappings remain unvalidated. The parser reports unsupported records explicitly. See [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History).
+
+Mac Bash uses the existing Bash format only for explicitly modeled interactive Bash sessions. Native zsh and Bash share the durable per-host/per-user journal, chronological export and checkpoint route mechanism. These evidence types are log-source exports; no native filesystem artifact or user history is copied.
+
+### EvidenceForge eCAR process transition extensions
+
+The internal POSIX `process_fork` occurrence uses `PROCESS/CREATE` with the EvidenceForge extension `operation=fork`. Its `objectID` identifies the new child lifetime, `actorID` the existing parent, and optional `execution_id`/`parent_execution_id` distinguish the inherited executions. It requires an explicit State fork plan; a same-image generic launch does not imply fork. This extension has internal parser and correlation tests, without an external SIEM or native Endpoint Security compatibility claim.
+
+The internal POSIX `process_exec` occurrence renders as `PROCESS/MODIFY` with `operation=exec`. This is an EvidenceForge extension: upstream [OpTC eCAR](https://github.com/FiveDirections/OpTC-data/blob/master/ecar.md) supplies the object/action envelope, while [MITRE CAR process](https://car.mitre.org/data_model/process) documents create, terminate and access, without defining exec. No external SIEM compatibility is claimed for this extension.
+
+The PID and `objectID` remain those of the existing lifetime; `actorID` identifies that same process before replacement. `image_path`, `command_line`, `execution_id` and optional `tid` describe the new execution. `previous_image_path`, `previous_command_line` and `previous_execution_id` preserve the old execution. Known POSIX credentials and native PID versions appear as string properties, with `previous_` counterparts; unknown facts stay absent. `principal` identifies the pre-exec actor. Source timing and collection use the existing dependent process lifecycle. Exec does not create another process or close the previous lifetime. The internal action requires an authenticated State exec cohort and is not an authored storyline type.
+
+The internal Mac `process_audit_bind` and `process_privilege_drop` occurrences use the same `PROCESS/MODIFY` extension, with `operation=audit_bind` and `operation=privilege_drop`. Audit adoption changes audit attribution while preserving privileged POSIX credentials. A child privilege drop changes the process principal and real/effective IDs while preserving its authenticated audit origin. Both preserve PID, object identity, execution identity, image and thread identity. `principal` remains the acting pre-transition principal; `process_principal` and `previous_process_principal` expose the resulting and previous process principals. Known numeric credentials remain string properties and unknown audit facts are absent. These are aggregate canonical transitions, not a claim about individual native setuid callbacks, Endpoint Security collection, or external SIEM compatibility. Each observation must match its exact authenticated State patch; neither is an authored event type. Source timing orders activity using the resulting credential snapshot after the transition without applying that barrier to historical snapshots. The separate internal `process_service_drop` uses `operation=service_drop` for pre-authentication `_sshd` adoption; it changes the principal and real/effective IDs while keeping audit UID/session absent. It shares the exact publication, omission and recovery contract without implying user authentication.
+
+The experimental Mac SSH receiver projects canonical login/logout, flow and helper-process transitions through eCAR and existing network sources. It emits no Linux PAM/systemd-logind messages. Qualified native SSH authentication also has the separately described Unified Log projection. Its shared continuation executes automatic or paired authored logout, including recovery after interrupted publication and checkpoint restore. SCP/SFTP receiver helpers remain unavailable. Native-format validation remains separate from this canonical/eCAR coverage.
+
+### Experimental macOS Unified Log NDJSON
+
+`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]` and explicit app-policy refusals. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not request a workspace entry. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
+
+The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Source/backtrace fields stay absent for workspace/policy observations; the SSH profile below supplies an explicit modeled main-image backtrace. No completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
+
+Successful password-intent SSH authentication on the qualified native receiver also
+renders `Accepted keyboard-interactive/pam for ... from ... port ... ssh2`. The SSH
+action owns the actual peer tuple, local user and root `sshd-session` writer at its
+authenticated audit transition; this is distinct from shell readiness and session
+close. Both PTY modes share this path. The record uses Info, empty subsystem/category,
+static `%.500s`, the native private-data flag, zero activities and explicit synthetic
+build offsets/frames. The observed reference exported unredacted authentication text;
+this profile models that collection visibility, not every collector's privacy policy.
+The emitter renders frozen facts without looking up a later PID or manufacturing an
+auth event from ES output. Exact publication includes eCAR and ULF in the same retry
+journal. Plain public-key intent uses a distinct `Accepted publickey ... ssh2: TYPE SHA256:...`
+message with its canonical type and complete SHA256 fingerprint. This payload is
+derived from Apple's public OpenSSH authentication function and reuses its common
+Info/`%.500s` logger and the qualified native envelope; public-key text was not
+separately observed locally. Missing/noncanonical fingerprints and certificates do
+not produce invented key metadata or native rows. Historical frozen PAM-only profiles
+remain PAM-only. The shared SSH client-identity owner supplies the same canonical
+Base64 fingerprint to all sources. PAM open/close, disconnect and launchd messages
+remain unqualified. Ordinary daemon verbosity is preserved; VERBOSE session-start/
+close messages are outside this profile, independently of the collector's Info setting.
+
+The import decoder also preserves optional macOS 27 `personaID`, `personaName`, `personaType`,
+`launchPersonaID`, `launchPersonaName` and `launchPersonaType` metadata. Private fixed-output
+shape review confirmed these spellings and primitive types: IDs use unsigned 32-bit integers,
+types use signed 32-bit integers and names use strings. Present null values, coercions, overflow
+and unknown extra fields fail the bounded profile. Omitted metadata stays omitted. These fields
+are not normalized to `userID`, audit identities or each other, and generation does not invent
+them. Apple's [kernel persona definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/persona.h)
+provide type context, not proof of the export fields' identity relationships. Structural decoding
+does not by itself establish Gatekeeper denial meaning. Separately reviewed refusal evidence supports the bounded app-policy family below.
+
+
+`process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image exported as `/kernel` (separate from its installed artifact path), a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
+
+### Experimental macOS Endpoint Security NDJSON
+
+The active generation target is an explicit **macOS 27 arm64 workstation**. An optional
+`os_build` identifies a modeled build; other unqualified Mac targets, including macOS 26,
+reject independently of selected output. Historical decoding is separate from generation.
+
+`macos_endpoint_security` writes `<host>/macos_endpoint_security.ndjson` as strict v11
+NDJSON. The current `modeled-macos27-arm64-process-files-v2` source profile subscribes to:
+
+| Event | Native event type | Generated scope |
+| --- | --- | --- |
+| fork | 11 | Authenticated canonical child lifetime with inherited execution facts. |
+| exec | 9 | Successful image activation, preserving the lifetime/PID across exec. |
+| exit | 15 | Explicit completed status or signal/core result; unknown stays unavailable. |
+| create | 13 | Empty, single-link regular file before writing. |
+| close | 12 | Explicit modified/unmodified, unmapped close; modified close can publish a new content version. |
+| rename | 25 | Same-directory placement change, including replacement of an existing destination. |
+| unlink | 32 | Exact placement withdrawal with pre-removal file and parent stat. |
+
+The modeled boot collector's argv is `/usr/bin/eslogger fork exec exit create close rename
+unlink`. It is a simulated process, not a command EvidenceForge runs on the generating
+computer. Older frozen process-only profiles retain their narrower subscription and counters.
+The boot clock, client inventory and chronological source counters share checkpoint ownership.
+
+Process records require the exact actor/subject, audit and responsibility relationships,
+installed file/signature, runtime validation, thread and terminal facts. Exec additionally
+requires literal argv, ordered environment, cwd, native slice and complete post-exec
+file descriptors. Entitlements are explicit null or bounded property dictionaries: Boolean,
+signed-64-bit integer, string, string-array and nested dictionary values, preserving distinct
+empty objects/arrays. The bounds are 128 entries per object, 128 strings per array, depth 8,
+4,096 nodes and 1 MiB text. Unknown, floating-point and unsupported array values do not qualify;
+older frozen policies retain their previous restrictions.
+
+Qualified startup includes Apple Terminal, iTerm2, fresh Finder app mains, Chrome's selected
+renderer/GPU/network roles, Code's GPU/network/shared-Node subset, both SSH receiver modes
+and the selected root system-job preset. Exact build and launch-method qualification varies;
+a catalog entry does not admit every auxiliary process. See the [Mac guide](../macos.md)
+and [authoring contracts](../../commands/eforge/references/evidence-endpoint-macos.md).
+
+#### Filesystem observations
+
+The ordinary supported workload selects a live Code main for configured nominal document
+activity: empty create, modified close, optional atomic rename/replacement and cleanup.
+In-place modification preserves object/inode; replacement creates a different object while
+its rename preserves that new object's content. Native rename reports the old source stat
+and either the pre-existing destination object or the containing directory/new name. Unlink
+reports the target's pre-removal link count and parent-directory stat. The controlled
+macOS 27 references qualify these pre-operation stat views.
+
+Canonical file/content versions, volume/device/inode, caller execution and mutable directory
+state belong to the shared State/artifact/action owners. eCAR FILE CREATE/CLOSE/RENAME/DELETE
+uses the same facts; the native emitter derives none of them independently. Placements and
+current-version leases survive checkpoint recovery, and failed publication rolls back or
+resumes the authenticated exact phase without replaying a committed operation.
+
+Counts, sizes, allocation, timings and save/cleanup probabilities in
+`activity/macos_execution_metadata.yaml.filesystem_workload` are explicit nominal model
+policy. They are not an empirical Code save strategy or APFS calibration. No eligible live
+app means no document workload. This is not automatic native coverage of generic file effects,
+SMB, downloads or launch-item writes, and adds no authored filesystem event type. No broad
+reads, writable mappings, cross-volume moves, file payloads, APFS image or FSEvents artifact
+are generated by this layer.
+
+#### Coverage, ordering and interpretation
+
+Selecting ES defaults `macos_process_coverage` to `complete`: eligible lossless collection must
+reconcile every modeled in-window fork and successful exec against independent State or
+generation fails. Explicit `partial` requests keep unavailable phases diagnostic. The process
+census in `GROUND_TRUTH.json.macos_native_coverage` distinguishes expected/published starts,
+expected/observed/known/published exits, unknown results and collection decisions. File events
+do not count as process births and do not establish complete filesystem capture. Existing
+processes get no retrospective birth; surviving processes have no in-window exit obligation.
+Studio exposes the saved host process census separately from the general evaluation result.
+
+Source policy owns missingness/windows/delay. Canonical publication retains immutable native
+facts, source delivery allocates counters in occurrence order, and retries reuse retained
+facts without executing another operation or allocating a new identity. Native-only filtering
+and exact resume preserve the selected native bytes. A passing codec or evaluation is not a
+claim of full native fidelity or external SIEM ingestion. Unqualified launch/helper families,
+other ES events and detailed policy-refusal causes remain outside this profile.

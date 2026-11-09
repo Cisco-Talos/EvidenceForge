@@ -1,0 +1,19 @@
+{
+  "totals": {
+    "mounted_helpers": 3,
+    "native_exits": 3,
+    "missing_native_exits": 0
+  },
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "mounted_helpers": 3,
+      "native_exits": 3,
+      "missing_native_exits": 0
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "mounted_helpers": 0,
+      "native_exits": 0,
+      "missing_native_exits": 0
+    }
+  }
+}

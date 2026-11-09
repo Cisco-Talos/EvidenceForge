@@ -1,0 +1,43 @@
+{
+  "connections": 2095,
+  "duplicate_once_only_history": {
+    "tcp": 0,
+    "udp": 0
+  },
+  "tls": {
+    "records": 852,
+    "histories": {
+      "Cs": 564,
+      "CsxknGIi": 143,
+      "CsiI": 107,
+      "CsxknGIti": 33,
+      "C": 5
+    },
+    "uppercase_server_hello": 0,
+    "client_only_negotiated_version": 0
+  },
+  "native": {
+    "counts": {
+      "fork": 8,
+      "exec": 4,
+      "exit": 2
+    },
+    "paired_exec_exit": 2,
+    "exec_exit_seconds": [
+      0.092647,
+      0.093163
+    ],
+    "nonpositive_duration": 0
+  },
+  "simple_queries": {
+    "pairs": 6,
+    "min_seconds": 0.097,
+    "median_seconds": 0.18,
+    "max_seconds": 0.379,
+    "subsecond": 6
+  },
+  "nested_commands": {
+    "steps": 5,
+    "emitted": 5
+  }
+}

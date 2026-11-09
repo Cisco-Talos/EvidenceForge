@@ -1,0 +1,16 @@
+{
+  "finding": "Fork and exit notification records serialize action_type=1 and action.notify.result_type=0/result.auth=0",
+  "classification": "false_positive_or_unproven",
+  "evidence": {
+    "sample": "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson: event_type=11, action_type=1, action.result.result_type=0, action.result.result.auth=0",
+    "meaning": "Apple defines action_type to select the action union: AUTH uses action.auth; NOTIFY uses action.notify, whose es_result_t has result_type selecting auth or flags. The nested auth result is not itself an authorization-event request. Here it is a notification with an auth-result value (ALLOW).",
+    "generator_model": "EndpointSecurityRecord accepts action_type=1; ESAction contains ESNotificationResult(result_type=0) and ESAuthorizationResult(auth=0), matching the NOTIFY union + AUTH result branch."
+  },
+  "disposition": "No macOS action-union change. The reviewer interpreted action.notify.result.auth as though it were action.auth.",
+  "sources": [
+    "https://developer.apple.com/documentation/endpointsecurity/es_message_t/action_type",
+    "https://developer.apple.com/documentation/endpointsecurity/es_message_t/action",
+    "https://developer.apple.com/documentation/endpointsecurity/es_result_t/result_type",
+    "https://developer.apple.com/documentation/endpointsecurity/es_result_t/result"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "zeek-core": {
+    "rsa_2048_ecdhe_rows": 82,
+    "insufficient_signature_plus_framing": 0,
+    "smallest_non_certificate_payload": 805
+  },
+  "zeek-dmz": {
+    "rsa_2048_ecdhe_rows": 370,
+    "insufficient_signature_plus_framing": 0,
+    "smallest_non_certificate_payload": 694
+  },
+  "zeek-db": {
+    "rsa_2048_ecdhe_rows": 8,
+    "insufficient_signature_plus_framing": 0,
+    "smallest_non_certificate_payload": 1456
+  }
+}

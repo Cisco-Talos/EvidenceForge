@@ -1,0 +1,1 @@
+{"focused_passed":257,"skipped":1,"new_cases":7,"coverage":"health/relay TCP and UDP, Linux/Windows/Mac forwarding identity, network/source-observation/terminal-admission siblings","ruff_check":"PASS","ruff_format":"PASS","scope":"No global port514 rewrite or observation-policy change; fresh native control-packet probe required."}

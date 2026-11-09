@@ -52,7 +52,7 @@ The advertised label follows Samba's version-sensitive
 
 The `storage` object supports exactly `population: auto|small|medium|large` (default auto),
 `activity: low|normal|high` (default normal), `file_sets`, `servers`, and `mappings` (each default
-`[]`). A file set models persistent files on any Windows or Linux host without granting that host
+`[]`). A file set models persistent files on a Windows, Linux or macOS host without granting that host
 SMB server capability:
 
 ```yaml
@@ -233,11 +233,12 @@ may be a client, server, or both. Only a declared share exposes files over SMB.
 
 Keep one case-insensitive, share-relative namespace using `\` separators, distinct from Windows
 UNC/drive presentation, Linux mount or `smbclient` presentation, and Windows/POSIX server-local
-paths. A `type: client` location uses a drive-absolute Windows `path` or POSIX-absolute Linux path,
+paths. A `type: client` location uses a drive-absolute Windows `path` or POSIX-absolute Linux/macOS path,
 validated against the initiating OS.
 
-Mappings may carry a Windows `drive`, a Linux `mount`, or both for a mixed audience. Automatic
-allocation uses `H:` through `Z:` or `/mnt/<mapping-id>`. `credential_mode: per_user` uses the
+Mappings may carry a Windows `drive`, a POSIX `mount`, or both for a mixed audience. Automatic
+allocation uses `H:` through `Z:`, Linux `/mnt/<mapping-id>`, or Mac `/Volumes/<mapping-id>`.
+A mixed Linux/Mac mount audience requires an explicit common `mount` or separate mappings. `credential_mode: per_user` uses the
 activity SMB principal; `fixed` requires a declared `principal`. A fixed credential is separate
 from the local application actor and Samba's effective UID/GID.
 
@@ -253,3 +254,5 @@ These mount and credential-ownership rules follow the upstream
 Validate storage after composition. In a pack-backed scenario, inspect resolved storage and field
 origins before adding scenario-local overrides. Keep reusable storage vocabulary or organization
 modeling in its owning pack rather than copying it into one storyline.
+
+Experimental Mac workstation clients use `client_access: auto`, `path_style: auto|mounted`, and an eligible storage mapping. Existing `smb-client`/`smbfs` service markers express client capability. Operations use Mac paths and native per-operation actors; mounted transport does not claim a user-space socket owner. Mac-local eCAR, network sensors and actual Windows/Samba server logs can correlate. Native Mac SMB messages and Mac SMB serving remain unavailable. Automatic `/Volumes/<mapping-id>` is a modeled presentation policy, not Finder discovery or mount execution.

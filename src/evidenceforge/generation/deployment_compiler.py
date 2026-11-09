@@ -30,6 +30,7 @@ from evidenceforge.config.schemas import (
     ScheduledTaskEntry,
     SystemdScheduleEntry,
     SystemServiceEntry,
+    validate_application_installation_dependencies,
 )
 from evidenceforge.events.content_identity import (
     ApplicationProfileIdentity,
@@ -38,12 +39,15 @@ from evidenceforge.events.content_identity import (
     BinaryReleaseKey,
     FileContentIdentity,
     InstalledSoftwareReleaseIdentity,
+    MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     SoftwareInstallationIdentity,
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_entitlements import freeze_entitlements
 from evidenceforge.generation.activity.application_catalog import (
     child_image_from_command,
     load_catalog,
@@ -87,12 +91,7 @@ def infer_system_platform(system: System) -> Platform | None:
     """Return the supported deployment platform without guessing an unknown OS."""
 
     os_category = _get_os_category(system.os)
-    if os_category in {"windows", "linux"}:
-        return os_category
-    os_name = system.os.casefold()
-    if "macos" in os_name or "mac os" in os_name or "darwin" in os_name:
-        return "macos"
-    return None
+    return os_category if os_category in {"windows", "linux", "macos"} else None
 
 
 def resolve_system_architecture(system: System) -> Architecture:
@@ -146,7 +145,13 @@ def _release_for_descriptor(
             company=descriptor.company,
             original_filename=descriptor.original_filename,
         )
-    return BinaryReleaseIdentity(key=key, pe_version_info=pe_version_info)
+    return BinaryReleaseIdentity(
+        key=key,
+        pe_version_info=pe_version_info,
+        mach_o_image=MachOImageIdentity.derive(key)
+        if descriptor.executable_format == "mach_o"
+        else None,
+    )
 
 
 def _native_descriptor_applies_to_system(
@@ -210,6 +215,7 @@ def _deployment_application_entries(
             for persona in raw_entry.get("personas", [])
         }
         configured = tuple(ApplicationEntry.model_validate(raw_entry) for raw_entry in raw_entries)
+    validate_application_installation_dependencies(configured)
     enabled = tuple(
         sorted(
             (
@@ -252,8 +258,19 @@ def _compiled_application_descriptor(
             (name, tuple(values))
             for name, values in sorted((platform_config.command_parameter_pools or {}).items())
         ),
-        singleton_per_session=application.singleton_per_session,
+        singleton_per_session=(
+            platform_config.singleton_per_session
+            if platform_config.singleton_per_session is not None
+            else application.singleton_per_session
+        ),
         selection_ordinal=selection_ordinal,
+        child_commands=tuple(
+            (
+                child_image_from_command(platform, command, platform_config.image_path),
+                command,
+            )
+            for command in platform_config.children or ()
+        ),
     )
 
 
@@ -364,17 +381,47 @@ def _release_for_application_artifact(
         and deployment.release_policy == "host_build"
         else _pe_version_info(metadata)
     )
+    key = BinaryReleaseKey(
+        product_id=product_id,
+        version=version,
+        build=build,
+        architecture=architecture,
+        platform=platform,
+        artifact_name=_artifact_name(artifact_path, platform),
+        variant=variant,
+    )
+    signature = platform_config.code_signature
+    is_main_executable = canonical_native_path(artifact_path, platform) == canonical_native_path(
+        platform_config.image_path, platform
+    )
+    mach_o_image = (
+        MachOImageIdentity.derive(key)
+        if platform_config.executable_format == "mach_o" and is_main_executable
+        else None
+    )
+    signing_id = signature.signing_id if signature is not None else None
+    if signing_id is not None and "{macho_uuid_hex}" in signing_id and is_main_executable:
+        if mach_o_image is None:
+            raise ValueError("UUID-based signing identifier requires the selected native image")
+        signing_id = signing_id.replace(
+            "{macho_uuid_hex}", mach_o_image.build_uuid.replace("-", "").lower()
+        )
     return BinaryReleaseIdentity(
-        key=BinaryReleaseKey(
-            product_id=product_id,
-            version=version,
-            build=build,
-            architecture=architecture,
-            platform=platform,
-            artifact_name=_artifact_name(artifact_path, platform),
-            variant=variant,
-        ),
+        key=key,
         pe_version_info=pe_version_info,
+        mach_o_image=mach_o_image,
+        code_signature=(
+            MachOCodeSignature.derive(
+                key,
+                signing_id=signing_id,
+                team_id=signature.team_id,
+                entitlements=freeze_entitlements(signature.entitlements)
+                if type(signature.entitlements) is dict
+                else signature.entitlements,
+            )
+            if signature is not None and is_main_executable
+            else None
+        ),
     )
 
 
@@ -582,15 +629,26 @@ def _intern_release(
     if existing is None:
         releases[key] = release
         return release
-    if (
-        existing.pe_version_info is not None
-        and release.pe_version_info is not None
-        and existing.pe_version_info != release.pe_version_info
+    for field_name in ("pe_version_info", "code_signature", "mach_o_image"):
+        previous = getattr(existing, field_name)
+        incoming = getattr(release, field_name)
+        if previous is not None and incoming is not None and previous != incoming:
+            label = "PE" if field_name == "pe_version_info" else field_name
+            raise ValueError(
+                f"binary release {release.content_id!r} has contradictory {label} metadata"
+            )
+    if any(
+        getattr(existing, name) is None and getattr(release, name) is not None
+        for name in ("pe_version_info", "code_signature", "mach_o_image")
     ):
-        raise ValueError(f"binary release {release.content_id!r} has contradictory PE metadata")
-    if existing.pe_version_info is None and release.pe_version_info is not None:
-        releases[key] = release
-        return release
+        enriched = replace(
+            existing,
+            pe_version_info=existing.pe_version_info or release.pe_version_info,
+            code_signature=existing.code_signature or release.code_signature,
+            mach_o_image=existing.mach_o_image or release.mach_o_image,
+        )
+        releases[key] = enriched
+        return enriched
     return existing
 
 
@@ -806,6 +864,7 @@ def compile_deployment_registry(
     applications, known_personas, application_selection_ordinals = _deployment_application_entries(
         application_entries
     )
+    applications_by_id = {entry.id.casefold(): entry for entry in applications}
     scenario_date = scenario.time_window.start.astimezone(UTC).date()
     compiled_application_descriptors: list[CompiledApplicationDescriptor] = []
     application_descriptor_text_bytes = 0
@@ -890,6 +949,7 @@ def compile_deployment_registry(
     overrides = _deployment_overrides(scenario)
 
     release_by_key: dict[tuple[str, ...], BinaryReleaseIdentity] = {}
+    binary_available_from: dict[str, date] = {}
     profiles_by_owner: dict[tuple[str, str, Platform], UserProfileIdentity] = {}
     for user_world in sorted(
         world_model.users.values(),
@@ -918,6 +978,26 @@ def compile_deployment_registry(
                     profile_root=_profile_root(user.username, activity_platform),
                 ),
             )
+    # Remote session eligibility is broader than local application placement.
+    # Compile the target profile without installing the user's desktop software
+    # there; runtime command/file publication still requires this exact owner.
+    for system in sorted(
+        scenario.environment.systems,
+        key=lambda item: item.hostname.casefold(),
+    ):
+        platform = infer_system_platform(system)
+        if platform is None:
+            continue
+        for user in world_model.get_ssh_admin_users(system):
+            profiles_by_owner.setdefault(
+                (system.hostname.casefold(), user.username.casefold(), platform),
+                UserProfileIdentity(
+                    hostname=system.hostname,
+                    principal=user.username,
+                    platform=platform,
+                    profile_root=_profile_root(user.username, platform),
+                ),
+            )
     users_by_name = {
         user.username.casefold(): user for user in scenario.environment.users if user.enabled
     }
@@ -926,7 +1006,10 @@ def compile_deployment_registry(
     }
     authored_events = tuple(scenario.storyline or ()) + tuple(scenario.red_herrings)
     for authored in sorted(authored_events, key=lambda item: item.id):
-        if not any(event.type == "process" for event in authored.events):
+        if not any(
+            event.type in {"process", "logon", "ssh_session", "rdp_session"}
+            for event in authored.events
+        ):
             continue
         user = users_by_name.get(authored.actor.casefold())
         system = systems_by_name.get(authored.system.casefold())
@@ -1179,24 +1262,43 @@ def compile_deployment_registry(
 
         for application in applications:
             platform_config = application.platforms.get(platform)
+            selection_application = (
+                applications_by_id[application.installed_with.casefold()]
+                if application.installed_with is not None
+                else application
+            )
+            selection_platform = selection_application.platforms.get(platform)
             if (
                 platform_config is None
                 or platform_config.deployment is None
                 or not _platform_release_available(platform_config, scenario_date)
+                or selection_platform is None
+                or selection_platform.deployment is None
+                or not _platform_release_available(selection_platform, scenario_date)
             ):
                 continue
             if application.system_types is not None and system.type not in application.system_types:
+                continue
+            if (
+                selection_application.system_types is not None
+                and system.type not in selection_application.system_types
+            ):
                 continue
             selected_architecture = _selected_application_architecture(
                 platform_config,
                 architecture,
             )
-            if selected_architecture is None:
+            if (
+                selected_architecture is None
+                or _selected_application_architecture(selection_platform, architecture) is None
+            ):
                 continue
             if application_replacement is not None:
-                if application.id.casefold() not in application_replacement:
+                if selection_application.id.casefold() not in application_replacement:
                     continue
-            elif not _prevalence_selects(system.hostname, application, platform_config):
+            elif not _prevalence_selects(
+                system.hostname, selection_application, selection_platform
+            ):
                 continue
 
             deployment = platform_config.deployment
@@ -1218,11 +1320,11 @@ def compile_deployment_registry(
             eligible_users = tuple(
                 user
                 for user in users_by_host.get(system.hostname.casefold(), ())
-                if _persona_allows_application(user, application, known_personas)
-                and application.id.casefold()
+                if _persona_allows_application(user, selection_application, known_personas)
+                and selection_application.id.casefold()
                 in user_replacements.get(
                     user.username.casefold(),
-                    {application.id.casefold()},
+                    {selection_application.id.casefold()},
                 )
             )
             if scope == "user" and not eligible_users:
@@ -1318,6 +1420,14 @@ def compile_deployment_registry(
                     )
                 )
             )
+            if platform == "macos" and platform_config.available_from is not None:
+                for _path, release, _is_module in shared_artifacts:
+                    known = binary_available_from.get(release.content_id)
+                    binary_available_from[release.content_id] = (
+                        platform_config.available_from
+                        if known is None
+                        else max(known, platform_config.available_from)
+                    )
             release_ids = {release.release_id for _path, release, _module in shared_artifacts}
             if len(release_ids) != 1:  # pragma: no cover - schema owns one deployment release
                 raise ValueError(f"application {application.id!r} artifacts span releases")
@@ -1676,6 +1786,7 @@ def compile_deployment_registry(
 
     return DeploymentContentRegistry(
         binary_releases=sorted(release_by_key.values(), key=lambda item: item.canonical_key),
+        binary_available_from=sorted(binary_available_from.items()),
         installed_software_releases=sorted(
             installed_software_releases,
             key=lambda item: item.canonical_key,

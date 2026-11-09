@@ -225,7 +225,7 @@ class TestBaselineLinuxBashHistory:
 
         assert _get_role_pool("help_desk", "generic", workstation_like=True) == "help_desk"
         assert _get_role_pool("data_analyst", "generic", workstation_like=True) == "data_analyst"
-        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "sysadmin"
+        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "help_desk_server"
         assert _get_role_pool("data_analyst", "generic", workstation_like=False) == "dba"
 
     def test_short_history_typo_cap_suppresses_extra_typos(self, monkeypatch):

@@ -26,6 +26,7 @@ from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.generation.dns_rdata import dns_txt_character_strings
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
@@ -34,6 +35,23 @@ from evidenceforge.generation.network_observation import network_source_timing_k
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
+
+
+def zeek_dns_answer(query_type: str, answer: str) -> str:
+    """Project canonical RDATA into Zeek's native per-type answer summary."""
+    parts = answer.split()
+    if query_type == "SRV" and len(parts) == 4 and all(p.isdecimal() for p in parts[:3]):
+        return parts[3]
+    if query_type == "MX" and len(parts) == 2 and parts[0].isdecimal():
+        return parts[1]
+    if query_type == "SOA" and len(parts) == 7:
+        return parts[0]
+    if query_type in {"TXT", "SPF"}:
+        return " ".join(
+            f"{query_type} {len(part.encode('utf-8'))} {part}"
+            for part in dns_txt_character_strings(answer)
+        )
+    return answer
 
 
 class ZeekDnsEmitter(SensorMultiplexEmitter):
@@ -148,7 +166,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         if dns.rtt is not None:
             event_data["rtt"] = conn_lifetime if single_exchange_udp else dns.rtt
         if dns.answers:
-            event_data["answers"] = dns.answers
+            event_data["answers"] = [zeek_dns_answer(dns.query_type, a) for a in dns.answers]
         if dns.TTLs:
             event_data["TTLs"] = dns.TTLs
         event_data.update(

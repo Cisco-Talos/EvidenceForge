@@ -1,0 +1,7 @@
+{
+  "primary_url": "https://github.com/zeek/zeek/blob/v8.0.5/src/analyzer/protocol/http/HTTP.cc",
+  "tag": "v8.0.5",
+  "owner": "HTTP_Entity::Undelivered",
+  "lines": "216\u2013270",
+  "qualification": "Recognized gaps in supported content-length/chunk bodies add gap length to HTTP body accounting. This does not assert arbitrary analyzer omissions or decompression failures are TCP loss. File observed content remains distinct from message extent."
+}

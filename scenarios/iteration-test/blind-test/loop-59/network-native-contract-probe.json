@@ -1,0 +1,31 @@
+{
+  "loop": 59,
+  "qualification": "ICMP native OTH per pinned Zeek8.0.5 Conn::conn_state. Conservative TCP check only distinct observed SYN/SYNACK, pure ACK and data packet branches; ignores FIN/RST/retransmission/gap flags. Sensor observations overlap; counts are not unique physical sessions.",
+  "totals": {
+    "icmp_observations": 722,
+    "icmp_non_native_state": 0
+  },
+  "sensors": {
+    "zeek-db": {
+      "counts": {
+        "icmp_observations": 13,
+        "icmp_non_native_state": 0
+      },
+      "examples": []
+    },
+    "zeek-core": {
+      "counts": {
+        "icmp_observations": 398,
+        "icmp_non_native_state": 0
+      },
+      "examples": []
+    },
+    "zeek-dmz": {
+      "counts": {
+        "icmp_observations": 311,
+        "icmp_non_native_state": 0
+      },
+      "examples": []
+    }
+  }
+}

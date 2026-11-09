@@ -328,8 +328,8 @@ def test_normalize_logind_session_ids_preserves_monotonic_canonical_ids() -> Non
     assert normalized == lines
 
 
-def test_normalize_logind_session_ids_repairs_backward_new_session() -> None:
-    """Out-of-order generator paths still need final source-native monotonicity."""
+def test_normalize_logind_session_ids_does_not_reassign_source_identity() -> None:
+    """Source finalization must never renumber shared canonical session IDs."""
     lines = [
         "<86>1 2024-03-18T12:04:40.000000Z linux01 systemd-logind 22523 - - New session 7616 of user root.",
         "<86>1 2024-03-18T12:10:09.000000Z linux01 systemd-logind 22523 - - New session 7608 of user admin.",
@@ -347,9 +347,8 @@ def test_normalize_logind_session_ids_repairs_backward_new_session() -> None:
         if "New session" in line
     ]
     removed_session = int(normalized[2].split("Removed session ", 1)[1].rstrip("."))
-    assert new_sessions == sorted(new_sessions)
-    assert new_sessions[0] == 7616
-    assert new_sessions[1] > 7616
+    assert normalized == lines
+    assert new_sessions == [7616, 7608]
     assert removed_session == 7616
 
 

@@ -1,0 +1,271 @@
+{
+  "scope": "Carried issues rechecked on this fresh loop. TCP joins require unique five-tuples, SF, visible SYN/SYN-ACK and both FINs, and starts within one second. Capture may differ; native stream versus captured-byte semantics need separate ledgers.",
+  "proxy_fragment_requests": [
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 1579,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:16:04:07 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 67306 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=764 wire_sc_bytes=67455 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-858b329b3c46b09e client_src_port=50465\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 1595,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:16:04:31 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 77093 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=665 wire_sc_bytes=77271 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-4aebb1188d37d224 client_src_port=61666\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2283,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.32 - MERIDIANHCS\\priya.patel [02/Nov/2026:16:46:45 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 41977 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=747 wire_sc_bytes=42188 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-1465a2240e455862 client_src_port=57308\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2316,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.32 - MERIDIANHCS\\priya.patel [02/Nov/2026:16:47:02 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 19575 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=549 wire_sc_bytes=19760 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-b26ddf1e090635cf client_src_port=50440\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2658,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:17:24:27 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 10712 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=585 wire_sc_bytes=10909 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-2a6dff15a308501e client_src_port=51060\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2681,
+      "target": "https://teams.microsoft.com/v2/#/conversations",
+      "record": "10.10.1.42 - maya.ross@meridianhcs.local [02/Nov/2026:17:25:07 +0000] \"GET https://teams.microsoft.com/v2/#/conversations HTTP/1.1\" 200 62914 \"https://teams.microsoft.com/\" \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0\" \"cs_bytes=634 wire_sc_bytes=63163 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-9fd47ccd81deb1a2 client_src_port=59201\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2893,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:03 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 51300 \"https://outlook.office365.com/owa/\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=660 wire_sc_bytes=51378 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-d4f305c7ea2e45ca client_src_port=52543\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2901,
+      "target": "https://outlook.office365.com/owa/#/mail",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:22 +0000] \"GET https://outlook.office365.com/owa/#/mail HTTP/1.1\" 200 44866 \"https://outlook.office365.com/owa/#/calendar\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=690 wire_sc_bytes=45037 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-58dee47cfc94c91b client_src_port=52024\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 2911,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.41 - maya.ross@meridianhcs.local [02/Nov/2026:17:43:29 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 9079 \"https://outlook.office365.com/owa/#/mail\" \"Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148\" \"cs_bytes=614 wire_sc_bytes=9202 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-6baaf4f9fb79250a client_src_port=56213\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3051,
+      "target": "https://outlook.office365.com/owa/#/calendar",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:11 +0000] \"GET https://outlook.office365.com/owa/#/calendar HTTP/1.1\" 200 76129 \"https://outlook.office365.com/owa/\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=776 wire_sc_bytes=76200 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-43450cf80b458c16 client_src_port=57387\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3076,
+      "target": "https://outlook.office365.com/owa/#/mail/compose",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:30 +0000] \"GET https://outlook.office365.com/owa/#/mail/compose HTTP/1.1\" 200 50053 \"https://outlook.office365.com/owa/#/calendar\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=735 wire_sc_bytes=50230 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-375b01610be01323 client_src_port=60586\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3116,
+      "target": "https://outlook.office365.com/owa/#/mail",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:11:47 +0000] \"GET https://outlook.office365.com/owa/#/mail HTTP/1.1\" 200 51523 \"https://outlook.office365.com/owa/#/mail/compose\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=591 wire_sc_bytes=51649 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-682525c19b6d2069 client_src_port=60529\""
+    },
+    {
+      "file": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 3155,
+      "target": "https://outlook.office365.com/owa/#/mail/compose",
+      "record": "10.10.1.21 - lina.nguyen@meridianhcs.local [02/Nov/2026:18:12:08 +0000] \"GET https://outlook.office365.com/owa/#/mail/compose HTTP/1.1\" 200 33392 \"https://outlook.office365.com/owa/#/mail\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" \"cs_bytes=714 wire_sc_bytes=33563 proxy_action=ssl-inspect ssl_bump=bump tunnel_id=PT-f9f316861d5ff85f client_src_port=56929\""
+    }
+  ],
+  "tcp_comparisons": [
+    {
+      "left": "zeek-core",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 2188,
+      "stream_difference_equals_capture_gap": 514,
+      "examples": [
+        {
+          "tuple": [
+            "10.10.2.40",
+            36572,
+            "10.10.3.20",
+            8080,
+            "tcp"
+          ],
+          "left_line": 11348,
+          "right_line": 8757,
+          "left_uid": "C9vZpkJfT4bBHIsJR",
+          "right_uid": "CJjSOVVg5bJnVB50Z",
+          "left_stream_bytes": 11458,
+          "right_stream_bytes": 11363,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 95
+        },
+        {
+          "tuple": [
+            "10.10.1.22",
+            36556,
+            "10.10.3.20",
+            8080,
+            "tcp"
+          ],
+          "left_line": 6253,
+          "right_line": 4968,
+          "left_uid": "CtLffRxADnL2b29Da",
+          "right_uid": "CLtSLAKzLZMvBRZWa",
+          "left_stream_bytes": 183866,
+          "right_stream_bytes": 185134,
+          "left_missed_bytes": 1268,
+          "right_missed_bytes": 0
+        },
+        {
+          "tuple": [
+            "10.10.1.22",
+            59625,
+            "10.10.3.20",
+            8080,
+            "tcp"
+          ],
+          "left_line": 655,
+          "right_line": 334,
+          "left_uid": "CfbuO2vnxuLzB2Kanlm",
+          "right_uid": "CrBAX7VKEI5EfNtliuw",
+          "left_stream_bytes": 36983,
+          "right_stream_bytes": 36958,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 25
+        },
+        {
+          "tuple": [
+            "10.10.1.35",
+            50688,
+            "10.10.3.10",
+            443,
+            "tcp"
+          ],
+          "left_line": 11684,
+          "right_line": 8971,
+          "left_uid": "CfYkolj75S8hgIwjvR",
+          "right_uid": "Co37TYvL6XsFWAMg01",
+          "left_stream_bytes": 22292,
+          "right_stream_bytes": 22281,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 11
+        },
+        {
+          "tuple": [
+            "10.10.1.22",
+            56919,
+            "10.10.3.20",
+            8080,
+            "tcp"
+          ],
+          "left_line": 8242,
+          "right_line": 6719,
+          "left_uid": "CQiPAJhdM9MHaepRwX",
+          "right_uid": "CQUusOc87CHkFGG9lo",
+          "left_stream_bytes": 127905,
+          "right_stream_bytes": 127911,
+          "left_missed_bytes": 6,
+          "right_missed_bytes": 0
+        }
+      ]
+    },
+    {
+      "left": "zeek-db",
+      "right": "zeek-dmz",
+      "unique_completed_pairs_compared": 223,
+      "stream_difference_equals_capture_gap": 56,
+      "examples": [
+        {
+          "tuple": [
+            "10.10.3.10",
+            51303,
+            "10.10.4.10",
+            3306,
+            "tcp"
+          ],
+          "left_line": 85,
+          "right_line": 1552,
+          "left_uid": "CY0jCTIJa8AEEU0TcP",
+          "right_uid": "C1ge0kTpChsfVWjOPD",
+          "left_stream_bytes": 39423,
+          "right_stream_bytes": 39311,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 112
+        },
+        {
+          "tuple": [
+            "10.10.3.10",
+            55357,
+            "10.10.4.10",
+            3306,
+            "tcp"
+          ],
+          "left_line": 399,
+          "right_line": 8759,
+          "left_uid": "CNu2VMdBmICJlDUh7uA",
+          "right_uid": "C8qGBlJeTX8SI6wPIsF",
+          "left_stream_bytes": 30668,
+          "right_stream_bytes": 30666,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 2
+        },
+        {
+          "tuple": [
+            "10.10.3.10",
+            47281,
+            "10.10.4.10",
+            3306,
+            "tcp"
+          ],
+          "left_line": 202,
+          "right_line": 5230,
+          "left_uid": "CvWXGf1ucCOYGqeDHgY",
+          "right_uid": "C5YJHQTpGSzwAcGY8e4",
+          "left_stream_bytes": 45985,
+          "right_stream_bytes": 45472,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 513
+        },
+        {
+          "tuple": [
+            "10.10.3.10",
+            48454,
+            "10.10.4.10",
+            3306,
+            "tcp"
+          ],
+          "left_line": 123,
+          "right_line": 3947,
+          "left_uid": "CMxlHV51AufUPQXh1wE",
+          "right_uid": "CnLRzTJParjuChBDHZU",
+          "left_stream_bytes": 27903,
+          "right_stream_bytes": 27730,
+          "left_missed_bytes": 0,
+          "right_missed_bytes": 173
+        },
+        {
+          "tuple": [
+            "10.10.3.10",
+            44104,
+            "10.10.4.10",
+            3306,
+            "tcp"
+          ],
+          "left_line": 94,
+          "right_line": 1599,
+          "left_uid": "CEv1eRsoOjhVs1DBy0",
+          "right_uid": "CWZBrEzLdO4rLwqiXA",
+          "left_stream_bytes": 11223,
+          "right_stream_bytes": 11291,
+          "left_missed_bytes": 68,
+          "right_missed_bytes": 0
+        }
+      ]
+    }
+  ]
+}

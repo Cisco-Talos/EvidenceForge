@@ -1,0 +1,55 @@
+{
+  "baseline_loop": 61,
+  "before": {
+    "counts": {
+      "tcp_rows": 99,
+      "udp_rows": 243,
+      "tcp_positive_responder_payload": 29,
+      "tcp_control_response_present": 99,
+      "udp_positive_responder_payload": 0
+    },
+    "examples": [
+      {
+        "sensor": "zeek-db",
+        "line": 34,
+        "resp_bytes": 171,
+        "protocol": "tcp"
+      },
+      {
+        "sensor": "zeek-db",
+        "line": 35,
+        "resp_bytes": 169,
+        "protocol": "tcp"
+      },
+      {
+        "sensor": "zeek-db",
+        "line": 36,
+        "resp_bytes": 47,
+        "protocol": "tcp"
+      },
+      {
+        "sensor": "zeek-db",
+        "line": 42,
+        "resp_bytes": 116,
+        "protocol": "tcp"
+      },
+      {
+        "sensor": "zeek-db",
+        "line": 53,
+        "resp_bytes": 102,
+        "protocol": "tcp"
+      }
+    ]
+  },
+  "after": {
+    "counts": {
+      "tcp_rows": 113,
+      "udp_rows": 281,
+      "tcp_positive_responder_payload": 0,
+      "tcp_control_response_present": 113,
+      "udp_positive_responder_payload": 0
+    },
+    "examples": []
+  },
+  "qualification": "Native source observations of modeled plain syslog service; retain responder TCP control packets/IP bytes while application backchannel is zero. Independent sensors may repeat one transport."
+}

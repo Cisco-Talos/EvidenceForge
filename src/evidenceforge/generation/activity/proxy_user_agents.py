@@ -4,6 +4,7 @@
 """Proxy User-Agent selection backed by activity YAML config."""
 
 import random
+import re
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.config import get_activity_directory
@@ -165,8 +166,8 @@ def _generic_agent_pool_for_source(source_system: "System", data: dict[str, Any]
         server_pool = _pool(data, "server", "generic")
         if server_pool:
             return server_pool
-    if _get_os_category(source_system.os) == "linux":
-        return _pool(data, "workstation", "linux")
+    if _get_os_category(source_system.os) in {"linux", "macos"}:
+        return _pool(data, "workstation", _get_os_category(source_system.os))
     return _pool(data, "workstation", "windows")
 
 
@@ -251,6 +252,14 @@ def normalize_proxy_user_agent_for_os(
             return rng.choice(generic_pool) if generic_pool else user_agent
 
     os_category = _get_os_category(source_system.os)
+    # Edge is also a native Mac browser. Its product token alone says nothing
+    # about the operating system; retain the legacy classifier for other hosts.
+    mac_incompatible = any(
+        token in user_agent.lower() for token in ("windows nt", "win64", "wow64", "trident/")
+    ) or _ua_looks_linux(user_agent)
+    if os_category == "macos" and mac_incompatible:
+        native_pool = _pool(data, "workstation", "macos")
+        return rng.choice(native_pool) if native_pool else ""
     if os_category == "linux" and _ua_looks_windows(user_agent):
         linux_pool = _pool(data, "workstation", "linux")
         return (
@@ -281,12 +290,35 @@ def normalize_proxy_user_agent_for_os(
 def _browser_family_for_process(process_image: str) -> str:
     """Return the browser family implied by a process image, if any."""
     exe = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-    if exe in {"chrome.exe", "chrome", "google-chrome", "chromium", "chromium-browser"}:
+    data = load_proxy_user_agents()
+    if "browser_process_families" not in data:
+        # Frozen inputs predating the alias catalog retain the exact historical
+        # engine classification. Do not silently import today's helper aliases.
+        return _legacy_browser_family_for_process(exe)
+    families = data["browser_process_families"]
+    for family, executables in families.items():
+        if exe in executables:
+            return family
+    return ""
+
+
+def _legacy_browser_family_for_process(exe: str) -> str:
+    """Preserve pre-catalog semantics only for historical frozen configurations."""
+    if exe in {
+        "chrome.exe",
+        "chrome",
+        "google-chrome",
+        "google chrome",
+        "chromium",
+        "chromium-browser",
+    }:
         return "chrome"
-    if exe in {"msedge.exe", "microsoft-edge", "edge"}:
+    if exe in {"msedge.exe", "microsoft-edge", "edge", "microsoft edge"}:
         return "edge"
     if exe in {"firefox.exe", "firefox"}:
         return "firefox"
+    if exe == "safari":
+        return "safari"
     if exe in {"opera.exe", "opera"}:
         return "opera"
     return ""
@@ -301,6 +333,8 @@ def _user_agent_matches_browser_family(user_agent: str, family: str) -> bool:
         return "edg/" in ua or "edge/" in ua
     if family == "firefox":
         return "firefox/" in ua
+    if family == "safari":
+        return "safari/" in ua and "chrome/" not in ua and "version/" in ua
     if family == "opera":
         return "opr/" in ua or "opera/" in ua
     return False
@@ -321,7 +355,7 @@ def browser_user_agent_for_process(
 
     data = load_proxy_user_agents()
     os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
-    pool_key = "linux" if os_category == "linux" else "windows"
+    pool_key = os_category if os_category in {"linux", "macos"} else "windows"
     candidates = [
         user_agent
         for user_agent in _pool(data, "workstation", pool_key)
@@ -345,6 +379,7 @@ def stable_browser_user_agent_for_process(
     *,
     hostname: str | None = None,
     domain_tags: list[str] | None = None,
+    release_version: str = "",
 ) -> str:
     """Return one browser User-Agent for the lifetime of a canonical process.
 
@@ -366,13 +401,26 @@ def stable_browser_user_agent_for_process(
             f"process_browser_user_agent:{source_key}:{process_image.casefold()}:{process_identity}"
         )
     )
-    return browser_user_agent_for_process(
+    user_agent = browser_user_agent_for_process(
         stable_rng,
         source_system,
         process_image,
         hostname=hostname,
         domain_tags=domain_tags,
     )
+    if re.fullmatch(r"\d+(?:\.\d+)*", release_version):
+        major = release_version.split(".", 1)[0]
+        family = _browser_family_for_process(process_image)
+        if family == "chrome":
+            # Chromium's reduced UA retains the installed major version.
+            user_agent = re.sub(r"Chrome/\d+(?:\.\d+)*", f"Chrome/{major}.0.0.0", user_agent)
+        elif family == "edge":
+            user_agent = re.sub(r"Edg/\d+(?:\.\d+)*", f"Edg/{major}.0.0.0", user_agent)
+            user_agent = re.sub(r"Chrome/\d+(?:\.\d+)*", f"Chrome/{major}.0.0.0", user_agent)
+        elif family == "firefox":
+            user_agent = re.sub(r"Firefox/\d+(?:\.\d+)*", f"Firefox/{major}.0", user_agent)
+            user_agent = re.sub(r"rv:\d+(?:\.\d+)*", f"rv:{major}.0", user_agent)
+    return user_agent
 
 
 def pick_proxy_domain_user_agent(
@@ -414,6 +462,9 @@ def pick_proxy_user_agent(
     if _is_server_source(source_system, data):
         server_pool = _pool(data, "server", "generic")
         return rng.choice(server_pool)
+
+    if _get_os_category(source_system.os) == "macos":
+        return rng.choice(_pool(data, "workstation", "macos"))
 
     if _get_os_category(source_system.os) == "linux":
         linux_pool = _pool(data, "workstation", "linux")

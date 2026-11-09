@@ -300,6 +300,57 @@ class TestFilePaths:
 
         assert effect is None
 
+    def test_powershell_temp_churn_requires_command_file_output(self):
+        temp_path = r"C:\Users\alice\AppData\Local\Temp\tmp{rand}.tmp"
+
+        diagnostic = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -Command Test-Connection -ComputerName dc01 -Count 2",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+            path_templates=[temp_path],
+            actions=["create"],
+            weights=[1],
+        )
+        file_output = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -Command Get-Process | Export-Csv C:\\temp\\processes.csv",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+            path_templates=[temp_path],
+            actions=["create"],
+            weights=[1],
+        )
+
+        assert diagnostic is None
+        assert file_output is not None
+        assert "tmp" in file_output[1]
+
+    def test_process_preflight_powershell_temp_effect_requires_file_output(self):
+        process = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        diagnostic = select_file_side_effect(
+            process_name=process,
+            command_line="powershell.exe -Command Test-Connection -ComputerName dc01 -Count 2",
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+        )
+        file_output = select_file_side_effect(
+            process_name=process,
+            command_line=(
+                "powershell.exe -Command Get-Process | Export-Csv C:\\temp\\processes.csv"
+            ),
+            os_category="windows",
+            rng=random.Random(3),
+            user="alice",
+        )
+
+        assert diagnostic is None
+        assert file_output is not None
+        assert "\\appdata\\local\\temp\\tmp" in file_output[1].lower()
+
     def test_generic_windows_paths_exclude_unowned_system_temp_template(self):
         """Generic churn must not assign one Windows Temp grammar to arbitrary processes."""
         paths = get_file_paths("windows")
@@ -1422,3 +1473,47 @@ class TestOverlayValidation:
         sanitized = _sanitize_edr_pools(defaults, merged)
 
         assert sanitized["group_policy_extension_guids"] == defaults["group_policy_extension_guids"]
+
+
+@pytest.mark.parametrize(
+    "image,command",
+    [
+        ("/Applications/Firefox.app/Contents/MacOS/firefox", "firefox"),
+        ("/bin/bash", "/bin/bash -l"),
+        ("/bin/sh", "/bin/sh -c id"),
+        ("/usr/bin/python3", "python3 -V"),
+    ],
+)
+def test_mac_launch_does_not_inherit_linux_ambient_files(image: str, command: str) -> None:
+    rng = random.Random(7)
+    before = rng.getstate()
+    assert select_file_side_effect(image, command, "macos", rng, user="alex") is None
+    assert rng.getstate() == before
+    assert get_file_paths("macos") == []
+
+
+def test_mac_explicit_command_effect_stays_owned_by_its_operand() -> None:
+    assert select_file_side_effect(
+        "/usr/bin/gzip",
+        "gzip -9 /Users/alex/Documents/report.txt",
+        "macos",
+        random.Random(7),
+        user="alex",
+    ) == ("create", "/Users/alex/Documents/report.txt.gz")
+    assert select_file_side_effect(
+        "/usr/bin/tar",
+        "tar -cf /Users/alex/Documents/archive.tar /Users/alex/Documents/source",
+        "macos",
+        random.Random(7),
+        user="alex",
+    ) == ("create", "/Users/alex/Documents/archive.tar")
+
+
+def test_linux_firefox_retains_its_native_profile_after_mac_isolation() -> None:
+    effect = select_file_side_effect(
+        "/usr/bin/firefox", "firefox", "linux", random.Random(7), user="alex"
+    )
+    assert effect is not None
+    assert effect[1].startswith("/home/alex/.cache/mozilla/")
+    assert get_file_paths("linux")
+    assert get_file_paths("windows")

@@ -909,6 +909,41 @@ class ProcessEventSpec(_EventSpecBase):
     process_ref: str | None = None  # Optional durable ref for explicit parent/child lineage
     parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
+    launch_method: Literal["finder"] | None = Field(
+        default=None, description="Explicit fresh regular-app Finder launch on a supported Mac"
+    )
+
+    outcome: Literal["success", "denied", "exec_failed", "policy_refused"] = "success"
+
+    @model_validator(mode="after")
+    def bounded_unsuccessful_process(self) -> "ProcessEventSpec":
+        """A no-new-execution outcome requires its existing caller, never a new child."""
+        if self.launch_method is not None and (
+            self.outcome != "success"
+            or self.parent_ref is not None
+            or not self.process_name.startswith("/")
+            or ".app/Contents/MacOS/" not in self.process_name
+        ):
+            raise ValueError("Finder launch requires a successful fresh app and no parent_ref")
+        if self.outcome != "success":
+            label = {
+                "denied": "Denied process launch",
+                "exec_failed": "Returning exec failure",
+                "policy_refused": "App-policy refusal",
+            }[self.outcome]
+            if not self.parent_ref or self.process_ref is not None:
+                raise ValueError(f"{label} requires parent_ref and forbids process_ref")
+            if (
+                not self.process_name.startswith("/")
+                or self.process_name == "/"
+                or "\0" in self.process_name
+            ):
+                raise ValueError(f"{label} requires an absolute Mac executable path")
+            if self.outcome == "policy_refused":
+                from evidenceforge.events.macos_policy import validate_policy_refusal_image
+
+                validate_policy_refusal_image(self.process_name)
+        return self
 
 
 class LogonEventSpec(_EventSpecBase):
@@ -1273,6 +1308,9 @@ class SshSessionEventSpec(_IdsAttachableEventSpec):
 
     type: Literal["ssh_session"] = "ssh_session"
     source_ip: str | None = None
+    pty: bool = Field(
+        default=False, strict=True, description="Request the qualified Mac SSH login PTY"
+    )
 
 
 class RdpSessionEventSpec(_IdsAttachableEventSpec):
@@ -2145,6 +2183,74 @@ class EmailReadEventSpec(_EventSpecBase):
         return v.lower()
 
 
+class MacosLaunchItemEventSpec(_EventSpecBase):
+    """Experimental explicit system-domain job stages; no native plist is emitted."""
+
+    type: Literal["macos_launch_item"] = "macos_launch_item"
+    operation: Literal["write", "bootstrap", "activate", "exit", "unload", "remove"]
+    label: str = Field(min_length=1)
+    caller_ref: str = Field(min_length=1, description="Earlier exact root process reference")
+    path: str | None = None
+    program: str | None = None
+    arguments: list[str] | None = None
+    size_bytes: int | None = Field(default=None, gt=0)
+    version: int = Field(default=1, ge=1)
+    run_at_load: bool = False
+    launch_profile: Literal["root_xpcproxy_v11"] | None = Field(
+        default=None,
+        description="Explicit root/cwd/null-stdio/environment preset for native activation",
+    )
+    process_ref: str | None = Field(default=None, min_length=1)
+    exit_code: int | None = Field(default=None, ge=0, le=255)
+
+    @model_validator(mode="after")
+    def consistent_stage(self) -> "MacosLaunchItemEventSpec":
+        """Require only the facts owned by this explicit stage."""
+        from evidenceforge.events.macos_launchd_spec import (
+            LaunchdSystemJobSpec,
+            validate_launchd_label,
+        )
+
+        validate_launchd_label(self.label)
+        if self.operation in {"write", "bootstrap", "remove"}:
+            if self.path is None:
+                raise ValueError("Launch-item file stages require an explicit plist path")
+            _validate_posix_absolute_path(self.path, "path")
+            if not self.path.startswith("/Library/LaunchDaemons/") or not self.path.endswith(
+                ".plist"
+            ):
+                raise ValueError("This launch-item profile requires /Library/LaunchDaemons/*.plist")
+        elif self.path is not None:
+            raise ValueError("Loaded-job stages use their retained definition, not a new path")
+        if self.operation == "write":
+            if self.program is None or self.arguments is None or self.size_bytes is None:
+                raise ValueError(
+                    "Launch-item write requires program, exact arguments and size_bytes"
+                )
+            LaunchdSystemJobSpec(
+                label=self.label,
+                program=self.program,
+                arguments=tuple(self.arguments),
+                principal="root",
+                run_at_load=self.run_at_load,
+                launch_profile=self.launch_profile,
+            )
+        elif (
+            self.program is not None
+            or self.arguments is not None
+            or self.size_bytes is not None
+            or self.version != 1
+            or self.run_at_load
+            or self.launch_profile is not None
+        ):
+            raise ValueError("Only a write may supply new definition or file-version facts")
+        if self.process_ref is not None and self.operation != "activate":
+            raise ValueError("Only activation creates a process_ref")
+        if self.exit_code is not None and self.operation != "exit":
+            raise ValueError("Only completed leader exit may declare an exit code")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -2191,6 +2297,7 @@ EventSpec = Annotated[
     | AdversarialPayloadEventSpec
     | EmailMessageEventSpec
     | EmailReadEventSpec
+    | MacosLaunchItemEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]
@@ -3145,6 +3252,7 @@ ObservationSourceFamily = Literal[
     "ecar",
     "syslog",
     "bash_history",
+    "zsh_history",
     "zeek",
     "proxy",
     "web",
@@ -3158,6 +3266,7 @@ ObservationFormatName = Literal[
     "ecar",
     "syslog",
     "bash_history",
+    "zsh_history",
     "zeek_conn",
     "zeek_dns",
     "zeek_http",
@@ -3186,6 +3295,7 @@ _OBSERVATION_FORMAT_FAMILIES: dict[str, str] = {
     "ecar": "ecar",
     "syslog": "syslog",
     "bash_history": "bash_history",
+    "zsh_history": "zsh_history",
     "zeek_conn": "zeek",
     "zeek_dns": "zeek",
     "zeek_http": "zeek",
@@ -3707,6 +3817,7 @@ class Environment(BaseModel):
             "ecar",
             "syslog",
             "bash_history",
+            "zsh_history",
             "proxy",
             "web",
         }
@@ -3897,6 +4008,14 @@ class Scenario(BaseModel):
             "training-friendly perfect source coverage."
         ),
     )
+    macos_process_coverage: Literal["complete", "partial"] | None = Field(
+        default=None,
+        description=(
+            "Native Mac process coverage policy. Omission requires completeness when native ES "
+            "output is selected. Partial explicitly permits unresolved launches and reports the "
+            "independent canonical process census without a completeness claim."
+        ),
+    )
     storyline: list[StorylineEvent] | None = Field(default_factory=list)
     red_herrings: list[RedHerringEvent] = Field(
         default_factory=list,
@@ -3920,6 +4039,15 @@ class Scenario(BaseModel):
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError("logon_grace_period must be a duration like '30m', '1h', '2h30m'")
         return v
+
+    @model_validator(mode="after")
+    def resolve_native_macos_coverage_policy(self) -> "Scenario":
+        """Retain an implicit complete request when runtime format filters narrow output."""
+        if self.macos_process_coverage is None and any(
+            entry.get("format") == "macos_endpoint_security" for entry in self.output.logs
+        ):
+            self.macos_process_coverage = "complete"
+        return self
 
     @field_validator("observation_profile")
     @classmethod

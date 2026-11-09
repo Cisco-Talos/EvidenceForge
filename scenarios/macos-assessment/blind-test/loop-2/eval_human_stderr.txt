@@ -1,0 +1,113 @@
+[10/21/26 17:52:58] INFO     Loaded format definition:             loader.py:114
+                             windows_event_security (version 1.0)               
+                    INFO     Loaded format definition:             loader.py:114
+                             windows_event_sysmon (version 1.0)                 
+                    INFO     Parsing bash_history:                 engine.py:570
+                             maya.chen.bash_history                             
+                    INFO     Parsing bash_history:                 engine.py:570
+                             nora.ellis.bash_history                            
+                    INFO     Parsing bash_history:                 engine.py:570
+                             owen.patel.bash_history                            
+                    INFO     Parsing ecar: ecar.json               engine.py:570
+                    INFO     Parsing ecar: ecar.json               engine.py:570
+                    INFO     Parsing ecar: ecar.json               engine.py:570
+                    INFO     Parsing ecar: ecar.json               engine.py:570
+                    INFO     Parsing macos_endpoint_security:      engine.py:570
+                             macos_endpoint_security.ndjson                     
+                    INFO     Parsing macos_unified_log:            engine.py:570
+                             macos_unified_log.ndjson                           
+                    INFO     Parsing macos_unified_log:            engine.py:570
+                             macos_unified_log.ndjson                           
+                    INFO     Parsing syslog: syslog.log            engine.py:570
+                    INFO     Parsing windows_event_security:       engine.py:570
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_sysmon:         engine.py:570
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing zeek_conn: conn.json          engine.py:570
+                    INFO     Parsing zeek_dns: dns.json            engine.py:570
+                    INFO     Parsing zeek_files: files.json        engine.py:570
+                    INFO     Parsing zeek_http: http.json          engine.py:570
+                    INFO     Parsing zeek_ntp: ntp.json            engine.py:570
+                    INFO     Parsing zeek_ocsp: ocsp.json          engine.py:570
+                    INFO     Parsing zeek_smb_files:               engine.py:570
+                             smb_files.json                                     
+                    INFO     Parsing zeek_smb_mapping:             engine.py:570
+                             smb_mapping.json                                   
+                    INFO     Parsing zeek_ssl: ssl.json            engine.py:570
+                    INFO     Parsing zeek_x509: x509.json          engine.py:570
+                    INFO     Parsing zsh_history:                  engine.py:570
+                             maya.chen.zsh_history                              
+                    INFO     Parsing zsh_history:                  engine.py:570
+                             owen.patel.zsh_history                             
+                    INFO     Parsed 10823 records across 18        engine.py:413
+                             sources                                            
+                    INFO     Loaded format definition:             loader.py:114
+                             bash_history (version 1.0)                         
+                    INFO     Loaded format definition: cisco_asa   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: ecar        loader.py:114
+                             (version 1.1)                                      
+                    INFO     Loaded format definition:             loader.py:114
+                             proxy_access (version 1.0)                         
+                    INFO     Loaded format definition: snort_alert loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: syslog      loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: web_access  loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_conn   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_dhcp   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_dns    loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_files  loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_http   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ntp    loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ocsp   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition:             loader.py:114
+                             zeek_packet_filter (version 1.0)                   
+                    INFO     Loaded format definition: zeek_pe     loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition:             loader.py:114
+                             zeek_reporter (version 1.0)                        
+                    INFO     Loaded format definition:             loader.py:114
+                             zeek_smb_files (version 1.0)                       
+                    INFO     Loaded format definition:             loader.py:114
+                             zeek_smb_mapping (version 1.0)                     
+                    INFO     Loaded format definition: zeek_smtp   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ssl    loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_weird  loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_x509   loader.py:114
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zsh_history loader.py:114
+                             (version 1.0)                                      
+                    INFO     Scoring Pillar 1: Parseability        engine.py:448
+                    WARNING  Unknown field in ecar:             validator.py:503
+                             auth_session_ref                                   
+                    WARNING  Unknown field in ecar:             validator.py:503
+                             auth_protocol                                      
+                    WARNING  Unknown field in ecar:             validator.py:503
+                             account_scope                                      
+[10/21/26 17:52:59] WARNING  Unknown field in zsh_history:      validator.py:503
+                             duration_seconds                                   
+                    INFO     Scoring Pillar 2: Plausibility        engine.py:448
+                    INFO     Network visibility engine network_visibility.py:202
+                             initialized: 1 segments,                           
+                             1 sensors, 4 mapped IPs,                           
+                             0 NAT rules, 0 VIPs, 0                             
+                             public CIDRs                                       
+                    INFO     Scoring Pillar 3: Causality           engine.py:448
+                    INFO     Network visibility engine network_visibility.py:202
+                             initialized: 1 segments,                           
+                             1 sensors, 4 mapped IPs,                           
+                             0 NAT rules, 0 VIPs, 0                             
+                             public CIDRs                                       
+                    INFO     Scoring Pillar 4: Timing              engine.py:448

@@ -1512,9 +1512,15 @@ class TestWeirdProtocolConstraint:
 
         state_manager.set_current_time(timestamp)
         monkeypatch.setattr(generator_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
-        monkeypatch.setattr(network_planner_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
+        original_distribution = network_planner_module.connection_state_distribution
+        monkeypatch.setattr(
+            network_planner_module,
+            "connection_state_distribution",
+            lambda protocol: (
+                (("S0", 1, "DD"),) if protocol == "udp" else original_distribution(protocol)
+            ),
+        )
         monkeypatch.setattr(generator_module, "_UDP_CONN_WEIGHTS", [1])
-        monkeypatch.setattr(network_planner_module, "_UDP_CONN_WEIGHTS", [1])
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -2524,3 +2530,53 @@ class TestDnsSupportQueryTypes:
         if nx_dns.query.startswith("_"):
             assert nx_dns.query_type == "SRV"
             assert nx_dns.qtype == 33
+
+
+@pytest.mark.parametrize("state", ["SF", "S2", "S3", "RSTO", "RSTR", "OTH"])
+@pytest.mark.parametrize("provided", [False, True])
+def test_final_decoded_tcp_dns_fits_transport_after_state_selection(
+    activity_gen, timestamp, state_manager, mock_emitters, state: str, provided: bool
+) -> None:
+    from evidenceforge.generation.activity.network_dns import _dns_payload_accounting
+
+    state_manager.set_current_time(timestamp)
+    context = (
+        DnsContext(
+            query="zone.example.com",
+            query_type="AAAA",
+            qtype=28,
+            rcode="NOERROR",
+            rcode_num=0,
+            answers=["2001:db8::20"],
+            rtt=0.02,
+        )
+        if provided
+        else None
+    )
+    activity_gen.generate_connection(
+        src_ip="10.0.1.50",
+        dst_ip="10.0.0.1",
+        time=timestamp,
+        dst_port=53,
+        proto="tcp",
+        service="dns",
+        hostname="zone.example.com",
+        orig_bytes=40,
+        resp_bytes=25,
+        duration=0.1,
+        conn_state=state,
+        dns=context,
+    )
+    event = mock_emitters["zeek_conn"].emit.call_args.args[0]
+    assert event.dns is not None
+    assert event.dns.rcode in {"NOERROR", "SERVFAIL"}
+    _, orig_floor, resp_floor = _dns_payload_accounting(
+        dns=event.dns, duration=event.network.duration, orig_bytes=0, resp_bytes=0, proto="tcp"
+    )
+    assert event.network.orig_bytes >= orig_floor
+    assert event.network.resp_bytes >= resp_floor
+    for payload, packets, ip_bytes in [
+        (event.network.orig_bytes, event.network.orig_pkts, event.network.orig_ip_bytes),
+        (event.network.resp_bytes, event.network.resp_pkts, event.network.resp_ip_bytes),
+    ]:
+        assert payload + packets * 40 <= ip_bytes <= packets * 1500

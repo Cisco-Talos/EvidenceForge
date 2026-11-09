@@ -327,7 +327,7 @@ class ProcessSourceTiming:
             or host.hostname != hostname
             or process_context.pid != pid
             or process_context.start_time is None
-            or host.os_category not in {"windows", "linux"}
+            or host.os_category not in {"windows", "linux", "macos"}
         ):
             return
         identity = self.state_manager.get_process_identity(hostname, pid)

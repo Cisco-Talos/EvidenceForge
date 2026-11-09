@@ -30,6 +30,8 @@ from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     direct_zeek_source_duration,
     direct_zeek_source_time,
+    native_zeek_connection_history,
+    native_zeek_connection_state,
 )
 from evidenceforge.generation.network_observation import network_source_timing_key
 
@@ -99,17 +101,13 @@ class ZeekEmitter(SensorMultiplexEmitter):
         dst_ip = net.dst_ip
         src_port = net.src_port
         dst_port = net.dst_port
-        conn_state = net.conn_state
-        history = self._normalize_history_for_state(net.conn_state, net.history)
+        conn_state = native_zeek_connection_state(net.protocol, net.conn_state)
+        history = native_zeek_connection_history(
+            net.protocol, self._normalize_history_for_state(conn_state, net.history)
+        )
         if net.protocol == "icmp":
             src_port = net.src_port if net.src_port else 8
             dst_port = net.dst_port if net.dst_port else 0
-            if (net.resp_bytes or 0) > 0:
-                conn_state = "SF"
-                history = "Dd"
-            else:
-                conn_state = "S0"
-                history = "D"
         if event.event_type == "dhcp_lease" and event.dhcp is not None:
             msg_types = set(event.dhcp.msg_types)
             if "DISCOVER" in msg_types:

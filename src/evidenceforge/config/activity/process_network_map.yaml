@@ -10,6 +10,7 @@
 #   port: destination port
 #   external: true if the connection targets external IPs, false for internal
 #   dns_tags: optional DNS registry tags that constrain external destinations
+#   ambient: allow generic connections/ownership; false requires concrete network intent
 #
 # Depended on by: generation engine (process-network correlation)
 # Depends on: application_catalog.yaml (exe basenames should match catalog entries)
@@ -110,11 +111,20 @@ mappings:
     dns_tags: [dev, background]
 
   # Dev tools → external HTTPS (registries, repos, CI/CD)
-  - exe: [Code.exe, git, npm, cargo, docker, kubectl]
+  - exe: [Code.exe]
     service: ssl
     port: 443
     external: true
     dns_tags: [dev, git]
+
+  # CLI queries may be local or use configured APIs. Their executable alone
+  # never authorizes an unrelated HTTPS connection or ambient PID attribution.
+  - exe: [git, npm, cargo, docker, kubectl, node, Python, python3, dotnet, pwsh]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [dev, git]
+    ambient: false
 
   # HTTP clients → external HTTPS
   - exe: [curl, wget]
@@ -183,3 +193,75 @@ mappings:
     service: ldap
     port: 389
     external: false
+
+  # Native Mac executable names. Existing platform indexes remain unchanged.
+  - exe: [Google Chrome, Safari, Microsoft Edge]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [web, saas, cdn, social]
+
+  - exe:
+    - Microsoft Outlook
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - outlook
+
+  - exe:
+    - MSTeams
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - teams
+
+  - exe:
+    - OneDrive
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - onedrive
+
+  - exe:
+    - Slack
+    - zoom.us
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - saas
+    - cdn
+
+  - exe:
+    - Dropbox
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - storage
+    - cdn
+    - background
+
+  - exe:
+    - Postman
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - dev
+    - saas
+
+  - exe: [Google Drive]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn, background]
+
+  - exe: [Citrix Workspace]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, background]

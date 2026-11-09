@@ -71,6 +71,7 @@ from evidenceforge.generation.actions.network_identity import (
 from evidenceforge.generation.activity.timing_profiles import (
     SshAcceptedAuthenticationTiming,
     SshAuthenticationTimingPlan,
+    plan_macos_ssh_startup_times,
     plan_ssh_authentication_timing,
 )
 from evidenceforge.generation.deferred_session_composition import (
@@ -272,6 +273,8 @@ class PersistentSmbRootIntent:
                     require_session=True,
                     auth_session_id=process.session_id,
                     auth_logon_type=process.logon_type,
+                    credentials=process.credentials,
+                    executable_version=process.executable_version,
                 )
             elif process.disposition == "reuse":
                 identity = state_manager.get_process_identity(process.hostname, process.pid)
@@ -284,6 +287,7 @@ class PersistentSmbRootIntent:
                     or identity.principal != process.username
                     or identity.logon_id != process.logon_id
                     or identity.started_at != process.started_at
+                    or not process.matches_process_metadata(identity)
                     or identity.lifecycle_group_id != process.lifecycle_group_id
                 ):
                     raise StateError("Persistent SMB client process reuse changed exact identity")
@@ -315,6 +319,7 @@ class PersistentSmbRootIntent:
             or identity.principal != process.username
             or identity.logon_id != process.logon_id
             or identity.started_at != process.started_at
+            or not process.matches_process_metadata(identity)
             or (process.disposition == "reuse" and identity.object_id != process.process_object_id)
         ):
             raise StateError("Persistent SMB root changed its frozen client actor")
@@ -713,6 +718,7 @@ class DeferredSshTimingIntent:
     transport_open_time: datetime
     ready_at: datetime
     receiver_bootstrap_headroom: timedelta = timedelta(seconds=2)
+    macos_startup_times: tuple[datetime, ...] = ()
 
     def __post_init__(self) -> None:
         """Require bounded inert inputs and an internally consistent ready time."""
@@ -775,6 +781,20 @@ class DeferredSshTimingIntent:
         expected_ready = pam_at + timedelta(milliseconds=max(1.0, self.expected_plan.logind_gap_ms))
         if ready_at != expected_ready:
             raise ValueError("Deferred SSH timing preview changed its authentication ready time")
+        phases = self.macos_startup_times
+        if type(phases) is not tuple or (
+            phases
+            and (
+                len(phases) not in {11, 12, 19}
+                or any(type(at) is not datetime or at.utcoffset() is None for at in phases)
+                or phases[0] <= open_time + receiver_bootstrap_headroom
+                or phases[13 if len(phases) == 19 else 6] != accepted_at
+                or phases[14 if len(phases) == 19 else 7] <= pam_at
+                or phases[-1] > ready_at
+                or any(left >= right for left, right in zip(phases, phases[1:], strict=False))
+            )
+        ):
+            raise ValueError("Deferred Mac SSH timing changed its ordered startup phases")
         object.__setattr__(self, "auth_method", self.auth_method.strip())
         object.__setattr__(self, "public_key_type", self.public_key_type.strip())
         object.__setattr__(self, "transport_open_time", open_time)
@@ -805,6 +825,27 @@ class DeferredSshTimingIntent:
         )
         if type(replayed) is not SshAuthenticationTimingPlan or replayed != self.expected_plan:
             raise StateError("Deferred SSH timing replay disagrees with its previewed plan")
+        if self.macos_startup_times:
+            connection_time = (
+                self.transport_open_time
+                + self.receiver_bootstrap_headroom
+                + timedelta(milliseconds=max(1.0, replayed.connection_gap_ms))
+            )
+            accepted_at = connection_time + timedelta(
+                milliseconds=max(250.0, replayed.accepted_gap_ms)
+            )
+            replayed_phases = plan_macos_ssh_startup_times(
+                connection_time=connection_time,
+                authenticated_at=accepted_at,
+                session_open_time=accepted_at
+                + timedelta(milliseconds=max(1.0, replayed.pam_gap_ms)),
+                ready_at=self.ready_at,
+                timing_runtime=runtime,
+                scope=self.scope,
+                phase_count=len(self.macos_startup_times),
+            )
+            if replayed_phases != self.macos_startup_times:
+                raise StateError("Deferred Mac SSH timing replay disagrees with its startup plan")
 
 
 @dataclass(frozen=True, slots=True)
@@ -881,6 +922,8 @@ class DeferredSshApplicationIntent:
         self,
         session_identity: SessionIdentity,
         transaction: NetworkTransactionPlan,
+        *,
+        state_batch: MaterializationBatchPlan | None = None,
     ) -> tuple[
         SshChannelAdmissionToken,
         tuple[ProcessActivityPatch, ...],
@@ -889,6 +932,15 @@ class DeferredSshApplicationIntent:
     ]:
         """Reserve the exact SSH/common admission without publishing either registry."""
 
+        if state_batch is not None and (
+            type(state_batch) is not MaterializationBatchPlan
+            or state_batch.session is None
+            or state_batch.session.identity != session_identity
+            or not any(
+                member.identity == self.receiver_identity for member in state_batch.processes
+            )
+        ):
+            raise StateError("Deferred SSH activity requires its exact State start batch")
         if transaction.closed_at is None:
             raise StateError("Deferred SSH application intent requires a closed transport")
         closes_at = transaction.closed_at
@@ -980,7 +1032,13 @@ class DeferredSshApplicationIntent:
             responder_bytes=transaction.resp_bytes,
         )
         process_activity = tuple(
-            ProcessActivityPatch(identity, closes_at) for identity in process_identities
+            ProcessActivityPatch(
+                identity,
+                state_batch.process_hold_activity_time(identity, closes_at)
+                if state_batch is not None
+                else closes_at,
+            )
+            for identity in process_identities
         )
         session_activity = (
             SessionActivityPatch(self.receiver_state_session_identity, closes_at),
@@ -1334,7 +1392,7 @@ class DeferredSessionNetworkAuthority:
                 self.existing_state_patch is not existing_state_patch
             ):
                 raise ValueError("Deferred network strict State patch was replaced")
-            session_plan = state_batch.session
+            session_plan = state_batch.session if state_batch is not None else None
             session_identity = (
                 session_plan.identity
                 if session_plan is not None
@@ -1499,6 +1557,11 @@ class DeferredSessionNetworkAuthority:
             if timing_auth_method != application_intent.auth_method:
                 raise ValueError("Deferred SSH timing changed its application auth method")
             receiver_plan = self.state_batch.processes[0]
+            if bool(self.ssh_timing_intent.macos_startup_times) != (
+                session_plan.audit_origin is not None
+            ):
+                raise ValueError("Deferred SSH startup timing changed its receiver platform")
+
             if receiver_plan.identity.started_at != (
                 self.ssh_timing_intent.transport_open_time
                 + self.ssh_timing_intent.receiver_bootstrap_headroom
@@ -1594,7 +1657,9 @@ class DeferredSessionNetworkAuthority:
                     raise ValueError("Deferred SSH login dependent changed semantic identity")
             elif spec.publication_ordinal != 1:
                 raise ValueError("Deferred SSH process dependent changed its publication ordinal")
-            elif spec.event_type is not EventKind.SYSTEM_PROCESS_CREATE:
+            elif spec.event_type is not (
+                EventKind.PROCESS_FORK if member.forked else EventKind.SYSTEM_PROCESS_CREATE
+            ):
                 raise ValueError("Deferred SSH process dependent requires system-process evidence")
             elif spec.canonical_time != identity.started_at:
                 raise ValueError("Deferred SSH process dependent changed its State start time")
@@ -1613,8 +1678,43 @@ class DeferredSessionNetworkAuthority:
 
         if type(self.bound_at) is not datetime:
             raise TypeError("Deferred RDP dependent authority changed its binding-time type")
-        if self.strict_state_authority is None or self.state_batch is None:
+        if self.strict_state_authority is None:
             raise ValueError("Deferred RDP dependent occurrences require strict State authority")
+        if self.state_batch is None:
+            patch = self.existing_state_patch
+            if (
+                not self.strict_state_authority.allocation_free_rdp_reconnect
+                or patch is None
+                or len(specs) != 1
+            ):
+                raise ValueError("Allocation-free RDP requires one exact reconnect occurrence")
+            spec = specs[0]
+            generation = (
+                self.application_intent.expected_generation
+                if type(self.application_intent) is DeferredRdpApplicationIntent
+                else self.application_token.expected_generation
+                if type(self.application_token) is RdpSessionAdmissionToken
+                else 0
+            )
+            if (
+                type(spec.event_type) is not EventKind
+                or spec.event_type is not EventKind.RDP_RECONNECT
+                or type(spec.canonical_time) is not datetime
+                or spec.canonical_time != ensure_utc(self.bound_at)
+                or type(spec.member_references) is not tuple
+                or spec.member_references != (patch.after.identity.object_id,)
+                or type(spec.publication_ordinal) is not int
+                or spec.publication_ordinal != 1
+                or type(spec.occurrence_id) is not str
+                or spec.occurrence_id
+                != stable_uuid(
+                    "rdp-deferred-reconnect-occurrence",
+                    patch.after.identity.object_id,
+                    str(generation),
+                )
+            ):
+                raise ValueError("Allocation-free RDP reconnect changed exact dependent semantics")
+            return specs
         session = self.state_batch.session
         processes = self.state_batch.processes
         if self.binding_disposition is DeferredSessionBindingDisposition.ACTIVE_SESSION:
@@ -1667,9 +1767,9 @@ class DeferredSessionNetworkAuthority:
             ):
                 raise ValueError("ACTIVE deferred RDP dependents changed exact semantics")
             return specs
-        if session is None or len(processes) != 3:
+        if session is None or len(processes) not in (3, 4):
             raise ValueError(
-                "Initial deferred RDP source cohort requires one session and three processes"
+                "Initial deferred RDP cohort requires one session and three or four processes"
             )
         state_members = (session, *processes)
         if len(specs) != len(state_members):
@@ -1700,8 +1800,9 @@ class DeferredSessionNetworkAuthority:
             member = members_by_object_id[spec.member_references[0]]
             identity = member.identity
             if member is session:
+                expected_logon_ordinal = 3 if len(processes) == 4 else 2
                 if (
-                    spec.publication_ordinal != 2
+                    spec.publication_ordinal != expected_logon_ordinal
                     or spec.event_type is not EventKind.LOGON
                     or spec.canonical_time != ensure_utc(self.bound_at)
                     or spec.occurrence_id
@@ -1843,10 +1944,17 @@ class DeferredSessionNetworkAuthority:
         )
         if session_identity is None:
             raise StateError("Deferred application authority has no exact State session")
-        token, process_activity, session_activity, process_holds = intent.prepare(
-            session_identity,
-            transaction,
-        )
+        if type(intent) is DeferredSshApplicationIntent:
+            token, process_activity, session_activity, process_holds = intent.prepare(
+                session_identity,
+                transaction,
+                state_batch=self.state_batch,
+            )
+        else:
+            token, process_activity, session_activity, process_holds = intent.prepare(
+                session_identity,
+                transaction,
+            )
         return replace(
             self,
             application_intent=None,

@@ -396,7 +396,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         owner for owner, _call in _calls("_baseline_persona_connection_close_bounds_seconds")
     ) == Counter(
         {
-            "_generate_profile_traffic": 2,
+            "_generate_profile_traffic": 3,
             "_generate_pack_persona_traffic": 2,
         }
     )
@@ -1657,6 +1657,10 @@ def test_terminal_user_activity_applies_selected_network_family_bound_before_exe
             return 0
 
         @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
+        @staticmethod
         def choice(values: list[object]) -> object:
             return values[0]
 
@@ -1698,6 +1702,7 @@ def test_terminal_user_activity_applies_selected_network_family_bound_before_exe
         set_current_time=Mock(),
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1745,6 +1750,10 @@ def test_terminal_user_activity_recomputes_rendered_bound_after_startup_pacing(
             return 0
 
         @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
+        @staticmethod
         def choice(values: list[object]) -> object:
             return values[0]
 
@@ -1765,6 +1774,7 @@ def test_terminal_user_activity_recomputes_rendered_bound_after_startup_pacing(
         explorer_pid=222,
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1826,10 +1836,15 @@ def test_terminal_user_activity_does_not_create_unowned_local_session(
         def randint(_minimum: int, _maximum: int) -> int:
             return 0
 
+        @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
     system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")
     end_time = _WINDOW_START + timedelta(minutes=10)
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity._proxy_mode = "transparent"
     activity._proxy_routes = {}
     activity.get_baseline_pattern.return_value = [("connection_web", 1.0)]
@@ -1862,11 +1877,13 @@ def test_terminal_user_activity_does_not_create_unowned_local_session(
 
 
 @pytest.mark.parametrize("activity_type", ["logon", "process_build", "process_user_apps"])
+@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu 24.04", "macOS 27"])
 def test_terminal_user_activity_omits_families_without_owner_deadlines(
     monkeypatch: pytest.MonkeyPatch,
     activity_type: str,
+    os_name: str,
 ) -> None:
-    """Terminal generic activity cannot realize an unbounded start/lifecycle family."""
+    """Mac process owners admit starts; other unbounded families keep their gates."""
 
     class SelectionRng:
         def __init__(self) -> None:
@@ -1883,8 +1900,12 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
         def randint(_minimum: int, _maximum: int) -> int:
             return 0
 
+        @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
-    system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")
+    system = System(hostname="WS-01", ip="10.0.0.20", os=os_name, type="workstation")
     end_time = _WINDOW_START + timedelta(minutes=10)
     session = SimpleNamespace(
         system=system.hostname,
@@ -1897,6 +1918,7 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
         network_close_time=None,
     )
     activity = Mock()
+    activity._sample_profile_activity_gap.return_value = timedelta()
     activity.get_baseline_pattern.return_value = [(activity_type, 1.0)]
     baseline = BaselineMixin()
     baseline.start_time = _WINDOW_START
@@ -1921,7 +1943,12 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
         current_hour=_WINDOW_START,
     )
 
-    activity.execute_baseline_activity.assert_not_called()
+    if os_name == "macOS 27" and activity_type.startswith("process_"):
+        activity.execute_baseline_activity.assert_called_once()
+        assert activity.execute_baseline_activity.call_args.kwargs["activity_type"] == activity_type
+        assert activity.execute_baseline_activity.call_args.kwargs["time"] < end_time
+    else:
+        activity.execute_baseline_activity.assert_not_called()
 
 
 def test_terminal_process_family_is_suppressed_before_real_generator_output(

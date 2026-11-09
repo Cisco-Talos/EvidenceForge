@@ -1,0 +1,3 @@
+# Loop 22 assessment contract
+
+The user requested comparison after changing the model. Keep generator and scenario unchanged through scoring; fresh generation, previous loop21 data, and neutral reviewer input must match byte for byte. Use four isolated reviewers with the current inherited model, no historical reports/scores/scenario context, and the existing persona/briefing rubric. Root-cause verification can reject false findings without modifying the benchmark. Only this adjacent same-data pair directly controls for generation changes; historical 20-loop scores use evolving datasets and one panel cannot measure model accuracy reliably.

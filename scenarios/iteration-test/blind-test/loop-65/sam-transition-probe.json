@@ -1,0 +1,39 @@
+{
+  "baseline_loop": 57,
+  "before": {
+    "counts": {
+      "account_change_rows": 1,
+      "known_enable_and_require_password_delta": 1,
+      "contradictory_descriptions": 1
+    },
+    "examples": [
+      {
+        "host": "DC-01.meridianhcs.local",
+        "record": "28256928",
+        "tokens": [
+          "%%2081"
+        ],
+        "bad": true
+      }
+    ]
+  },
+  "after": {
+    "counts": {
+      "account_change_rows": 1,
+      "known_enable_and_require_password_delta": 1,
+      "contradictory_descriptions": 0
+    },
+    "examples": [
+      {
+        "host": "DC-01.meridianhcs.local",
+        "record": "28256871",
+        "tokens": [
+          "%%2048",
+          "%%2050"
+        ],
+        "bad": false
+      }
+    ]
+  },
+  "invariant": "The visible native SAM0x15->0x10 transition clears account-disabled and password-not-required, requiring clear resources2048+2050, not2081."
+}

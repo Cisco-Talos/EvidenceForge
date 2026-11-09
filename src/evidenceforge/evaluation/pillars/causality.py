@@ -35,6 +35,7 @@ import ipaddress
 import logging
 import ntpath
 import re
+import shlex
 from collections import defaultdict
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -109,6 +110,27 @@ class CausalityScorer(DimensionScorer):
         self._spillage_gt = context.spillage_ground_truth or {}
         self._email_gt = context.email_ground_truth or {}
         self._smb_gt: dict[str, dict[str, Any]] = {}
+        self._macos_launch_gt: dict[str, list[dict[str, Any]]] = {}
+        self._macos_process_gt: dict[str, list[dict[str, Any]]] = {}
+        self._macos_trace_times: dict[tuple[str, str], list[datetime]] = {}
+        if context.ground_truth is not None:
+            for record in context.ground_truth.events:
+                if not record.storyline_id or not record.emitted:
+                    continue
+                facts = record.attributes.model_dump(mode="python")
+                if record.kind == "macos_launch_item":
+                    self._macos_launch_gt.setdefault(record.storyline_id, []).append(
+                        {**facts, "_canonical_time": record.time}
+                    )
+                elif record.kind == "process" and facts.get("native_process_model"):
+                    self._macos_process_gt.setdefault(record.storyline_id, []).append(
+                        {**facts, "_canonical_time": record.time}
+                    )
+                else:
+                    continue
+                self._macos_trace_times.setdefault((record.storyline_id, record.kind), []).append(
+                    record.time
+                )
         storage = scenario.environment.storage
         self._smb_mapping_principals = {
             mapping.id.casefold(): mapping.principal
@@ -254,13 +276,21 @@ class CausalityScorer(DimensionScorer):
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
 
+        supplementary = {"host_log_profile": host_log_profile}
+        if (
+            context.ground_truth is not None
+            and context.ground_truth.macos_native_coverage is not None
+        ):
+            supplementary["macos_native_coverage"] = (
+                context.ground_truth.macos_native_coverage.model_dump(mode="json")
+            )
         return PillarScore(
             number=self.number,
             name=self.name,
             weight=self.weight,
             score=dim_score,
             sub_scores=sub_scores,
-            supplementary={"host_log_profile": host_log_profile},
+            supplementary=supplementary,
         )
 
     @staticmethod
@@ -353,8 +383,28 @@ class CausalityScorer(DimensionScorer):
             f"Reconciliation missing-intent summary differs from rows: {value}"
             for value in missing_summary_drift
         )
-        invalid_ids = expected_missing | mismatched_metadata | missing_summary_drift
-        total_assertions = len(expected_ids) + len(unexpected_ids)
+        invalid_processes = [
+            event
+            for event in ground_truth.events
+            if event.kind == "process"
+            and event.emitted
+            and event.attributes.pid is not None
+            and event.attributes.pid <= 0
+            and event.attributes.outcome in {None, "success"}
+        ]
+        failures.extend(
+            f"Process reported successful emission with invalid PID {event.attributes.pid}: "
+            f"{event.record_id}"
+            for event in invalid_processes
+        )
+        invalid_process_ids = {event.intent_id for event in invalid_processes} & expected_ids
+        unlinked_invalid_processes = sum(
+            event.intent_id not in expected_ids for event in invalid_processes
+        )
+        invalid_ids = (
+            expected_missing | mismatched_metadata | missing_summary_drift | invalid_process_ids
+        )
+        total_assertions = len(expected_ids) + len(unexpected_ids) + unlinked_invalid_processes
         correct = max(0, len(expected_ids) - len(invalid_ids))
         score = 100.0 * correct / total_assertions if total_assertions else 0.0
         return SubScore(
@@ -673,11 +723,26 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
         event_type: str,
         host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        *,
+        _canonical_anchor: datetime | None = None,
     ) -> list[ParsedRecord]:
+        if _canonical_anchor is None and (
+            anchors := getattr(self, "_macos_trace_times", {}).get((event.storyline_id, event_type))
+        ):
+            # Search actual occurrences without changing authored timing assessment.
+            unique: dict[int, ParsedRecord] = {}
+            for anchor in anchors:
+                for record in self._search_for_event_indexed(
+                    event, event_type, host_time_index, _canonical_anchor=anchor
+                ):
+                    unique[id(record)] = record
+            return list(unique.values())
         found: list[ParsedRecord] = []
         # Prefer a per-type anchor time when set (a step carrying both spillage and
         # adversarial_payload anchors each type to its own emitted time); else event.time.
-        evt_time = event.details.get(f"_anchor_time_{event_type}") or event.time
+        evt_time = (
+            _canonical_anchor or event.details.get(f"_anchor_time_{event_type}") or event.time
+        )
         if evt_time.tzinfo is None:
             evt_time = evt_time.replace(tzinfo=UTC)
         evt_bucket = int(evt_time.timestamp()) // 60
@@ -802,6 +867,75 @@ class CausalityScorer(DimensionScorer):
                 continue
         return False
 
+    def _macos_native_process_trace_matches(
+        self, record: ParsedRecord, event: ResolvedEvent, event_type: str
+    ) -> bool:
+        """Match native execution roles against exact canonical occurrence facts."""
+        if record.parse_errors or not self._host_matches(record.source_host, event.system):
+            return False
+        facts_list = (
+            getattr(self, "_macos_process_gt", {}).get(event.storyline_id, [])
+            if event_type == "process"
+            else getattr(self, "_macos_launch_gt", {}).get(event.storyline_id, [])
+        )
+        fields = record.fields
+        for facts in facts_list:
+            operation = facts.get("launchd_operation", "activate")
+            expected_type = 9 if operation == "activate" else 15
+            if (
+                operation not in {"activate", "exit", "unload"}
+                or fields.get("event_type") != expected_type
+            ):
+                continue
+            expected = facts
+            if operation in {"exit", "unload"}:
+                object_ids = set(facts.get("process_object_ids", []))
+                expected = next(
+                    (
+                        item
+                        for item in facts_list
+                        if item.get("launchd_operation") == "activate"
+                        and object_ids.intersection(item.get("process_object_ids", []))
+                    ),
+                    {},
+                )
+            pid = expected.get("pid")
+            image = expected.get("process_name")
+            if type(pid) is not int or not image:
+                continue
+            native_process = (
+                fields.get("event", {}).get("exec", {}).get("target", {})
+                if expected_type == 9
+                else fields.get("process", {})
+            )
+            if (
+                native_process.get("audit_token", {}).get("pid") != pid
+                or native_process.get("executable", {}).get("path") != image
+            ):
+                continue
+            canonical_time = facts.get("_canonical_time")
+            if (
+                canonical_time is None
+                or record.timestamp is None
+                or abs(
+                    (
+                        _normalize_ts(record.timestamp) - _normalize_ts(canonical_time)
+                    ).total_seconds()
+                )
+                > TIME_TOLERANCE.total_seconds()
+            ):
+                continue
+            command = expected.get("command_line")
+            if expected_type == 9 and command:
+                try:
+                    arguments = shlex.split(command)
+                except ValueError:
+                    continue
+                if fields.get("event", {}).get("exec", {}).get("args") != arguments:
+                    continue
+            return True
+        return False
+
     def _record_matches(
         self,
         record: ParsedRecord,
@@ -829,6 +963,26 @@ class CausalityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                 )
         elif event_type == "process":
+            if event.details.get("outcome") == "policy_refused":
+                message = re.fullmatch(
+                    r"ASP: Security policy would not allow process: ([1-9][0-9]*), (.+)\n",
+                    str(f.get("eventMessage", "")),
+                )
+                return bool(
+                    format_name == "macos_unified_log"
+                    and not record.parse_errors
+                    and message
+                    and int(message.group(1)) < 100000
+                    and message.group(2) == event.details.get("process_name")
+                    and f.get("formatString")
+                    == "ASP: Security policy would not allow process: %d, %s\n"
+                    and type(f.get("processID")) is int
+                    and f["processID"] == 0
+                    and str(f.get("senderImagePath", "")).endswith("/AppleSystemPolicy")
+                    and self._host_matches(_extract_hostname(record), event.system)
+                )
+            if format_name == "macos_endpoint_security":
+                return self._macos_native_process_trace_matches(record, event, event_type)
             if format_name == "windows_event_security":
                 return (
                     f.get("EventID") == 4688
@@ -839,7 +993,7 @@ class CausalityScorer(DimensionScorer):
                         or self._user_matches(f.get("TargetUserName"), event.actor)
                     )
                 )
-            if format_name == "bash_history":
+            if format_name in {"bash_history", "zsh_history"}:
                 return (
                     self._host_matches(f.get("hostname"), event.system)
                     and self._user_matches(f.get("username"), event.actor)
@@ -848,7 +1002,10 @@ class CausalityScorer(DimensionScorer):
             if format_name == "ecar":
                 return (
                     f.get("object") == "PROCESS"
-                    and f.get("action") == "CREATE"
+                    and (
+                        f.get("action") == "CREATE"
+                        or (f.get("action") == "MODIFY" and f.get("operation") == "exec")
+                    )
                     and self._host_matches(f.get("hostname"), event.system)
                     and self._process_detail_matches(f, event)
                     and self._user_matches(f.get("principal"), event.actor)
@@ -916,6 +1073,31 @@ class CausalityScorer(DimensionScorer):
                     and self._process_detail_matches(f, event)
                     and self._user_matches(f.get("principal"), event.actor)
                 )
+        elif event_type == "macos_launch_item":
+            if format_name == "macos_endpoint_security":
+                return self._macos_native_process_trace_matches(record, event, event_type)
+            if format_name != "ecar" or not self._host_matches(f.get("hostname"), event.system):
+                return False
+            for facts in getattr(self, "_macos_launch_gt", {}).get(event.storyline_id, []):
+                operation = facts["launchd_operation"]
+                if operation in {"write", "remove"}:
+                    if (
+                        f.get("object") == "FILE"
+                        and f.get("action", "").lower() == facts.get("action")
+                        and f.get("file_path") == facts.get("file_path")
+                        and facts.get("actor_object_id") is not None
+                        and f.get("actorID") == facts["actor_object_id"]
+                    ):
+                        return True
+                elif operation in {"activate", "exit", "unload"}:
+                    if (
+                        f.get("object") == "PROCESS"
+                        and f.get("objectID") in facts.get("process_object_ids", [])
+                        and f.get("action")
+                        == ("CREATE" if operation == "activate" else "TERMINATE")
+                    ):
+                        return True
+            return False
         elif event_type == "service_installed":
             if format_name == "windows_event_security":
                 return f.get("EventID") in (4697, 7045) and self._host_matches(
@@ -1023,7 +1205,9 @@ class CausalityScorer(DimensionScorer):
             if format_name == "cisco_asa":
                 msg_id = f.get("msg_id")
                 if msg_id == 733100:
-                    return True
+                    # Generic appliance scan alarms do not identify every nearby
+                    # authored scanner. Only an attributable source can prove this scan.
+                    return f.get("src_ip") == scan_src
                 return (
                     msg_id in (302013, 302014, 106023)
                     and f.get("src_ip") == scan_src
@@ -1508,6 +1692,7 @@ class CausalityScorer(DimensionScorer):
     # carries the URL surface in `path` and the Referer surface in `referer`.
     _SPILLAGE_TEXT_FIELD = {
         "bash_history": ("command",),
+        "zsh_history": ("command",),
         "syslog": ("message",),
         "ecar": ("command_line",),
         "web_access": ("path", "referer"),
@@ -1535,7 +1720,7 @@ class CausalityScorer(DimensionScorer):
         if format_name not in self._SPILLAGE_HOST_AGNOSTIC:
             if not self._host_matches(f.get("hostname"), event.system):
                 return False
-            if format_name == "bash_history" and not self._user_matches(
+            if format_name in {"bash_history", "zsh_history"} and not self._user_matches(
                 f.get("username"), event.actor
             ):
                 return False
@@ -1788,9 +1973,14 @@ class CausalityScorer(DimensionScorer):
             or fields.get("SourceImage")
             or fields.get("image_path")
             or fields.get("process_name")
-            or fields.get("command")
             or ""
         ).lower()
+        if not record_image and isinstance(fields.get("command"), str):
+            try:
+                arguments = shlex.split(fields["command"])
+            except ValueError:
+                return False
+            record_image = arguments[0].lower() if arguments else ""
         record_command = str(
             fields.get("CommandLine") or fields.get("command_line") or fields.get("command") or ""
         ).lower()
@@ -1799,6 +1989,11 @@ class CausalityScorer(DimensionScorer):
             command_line = str(details.get("command_line") or "").lower()
             image_ok = not process_name or record_image.endswith(process_name.rsplit("\\", 1)[-1])
             command_ok = not command_line or command_line in record_command
+            if not command_ok:
+                try:
+                    command_ok = shlex.split(command_line) == shlex.split(record_command)
+                except ValueError:
+                    command_ok = False
             if image_ok and command_ok:
                 return True
         return False
@@ -2335,7 +2530,9 @@ class CausalityScorer(DimensionScorer):
                 key=lambda flow: abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()),
             )
             total += 1
-            if _normalize_ts(nearest_flow.timestamp) < login_time:
+            # eCAR timestamps serialize at millisecond precision; equal timestamps
+            # cannot establish which observation occurred first.
+            if _normalize_ts(nearest_flow.timestamp) <= login_time:
                 correct += 1
             elif len(failures) < 10:
                 failures.append(
@@ -2702,7 +2899,11 @@ class CausalityScorer(DimensionScorer):
     @staticmethod
     def _is_process_indicator_trace(fields: dict[str, Any]) -> bool:
         return fields.get("EventID") == 4688 or (
-            fields.get("object") == "PROCESS" and fields.get("action") == "CREATE"
+            fields.get("object") == "PROCESS"
+            and (
+                fields.get("action") == "CREATE"
+                or (fields.get("action") == "MODIFY" and fields.get("operation") == "exec")
+            )
         )
 
     def _is_explicit_proxy_client_trace(self, fields: dict, event: ResolvedEvent) -> bool:
@@ -2968,6 +3169,8 @@ class CausalityScorer(DimensionScorer):
     def _observed_indicator_values(self, event: ResolvedEvent) -> set[str]:
         values: set[str] = set()
         for trace in event.traces:
+            if trace.source_format in {"macos_endpoint_security", "macos_unified_log"}:
+                self._add_pivot_value(values, "host", trace.source_host)
             field_namespaces = {
                 "TargetUserName": "user",
                 "SubjectUserName": "user",
@@ -3125,7 +3328,10 @@ class CausalityScorer(DimensionScorer):
         failures: list[str] = []
         prev_expected: datetime | None = None
 
-        for event in resolved:
+        # Authors may group lifecycle steps in the YAML independently of their
+        # timestamps. Compare chronological neighbors, retaining original indices
+        # in diagnostics and leaving the resolved list available to other scorers.
+        for event in sorted(resolved, key=lambda item: _normalize_ts(item.time)):
             if not event.traces:
                 if self._event_observation_exempt(event, context):
                     excluded += 1
@@ -3340,14 +3546,36 @@ def _build_host_log_profile(
 ) -> dict[str, dict]:
     present: dict[str, set[str]] = defaultdict(set)
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    processes: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for format_name, record_list in records.items():
         for rec in record_list:
             hostname = _extract_hostname(rec)
+            if (
+                hostname is None
+                and format_name in {"macos_endpoint_security", "macos_unified_log"}
+                and rec.source_instance is not None
+            ):
+                # Native rows carry no hostname. Attribute this informational
+                # inventory only through the known host directory provenance.
+                hostname = vis.resolve_hostname(rec.source_instance)
             if hostname:
-                h = hostname.lower()
+                h = (vis.resolve_hostname(hostname) or hostname).lower()
                 present[h].add(format_name)
                 counts[h][format_name] += 1
+                if format_name == "ecar" and rec.fields.get("object") == "PROCESS":
+                    action = rec.fields.get("action")
+                    operation = rec.fields.get("operation")
+                    if action == "CREATE":
+                        processes[h]["ecar_process_creates"] += 1
+                        key = "ecar_forks" if operation == "fork" else "ecar_aggregate_creates"
+                        processes[h][key] += 1
+                    elif action == "MODIFY" and operation == "exec":
+                        processes[h]["ecar_execs"] += 1
+                elif format_name == "macos_endpoint_security":
+                    event_type = rec.fields.get("event_type")
+                    if isinstance(event_type, int):
+                        processes[h][f"native_es_event_{event_type}"] += 1
 
     profile: dict[str, dict] = {}
     all_hosts = set(present.keys())
@@ -3359,28 +3587,35 @@ def _build_host_log_profile(
             if canonical:
                 all_hosts.add(canonical.lower())
 
-    shell_hosts = {
-        event.system.lower()
-        for event in (
-            *((scenario.storyline or []) if scenario is not None else []),
-            *((scenario.red_herrings or []) if scenario is not None else []),
-        )
-        if any(spec.type in {"process", "ssh_session"} for spec in event.events)
-    }
-
     for hostname in sorted(all_hosts):
         expected = set(vis.get_expected_formats(hostname))
         if not expected:
             continue
         present_fmts = present.get(hostname, set())
-        if "bash_history" not in present_fmts and hostname not in shell_hosts:
-            expected.discard("bash_history")
-        missing = sorted(expected - present_fmts)
+        conditional = expected & {
+            "bash_history",
+            "zsh_history",
+            "macos_unified_log",
+            "macos_endpoint_security",
+        }
+        missing = sorted(expected - present_fmts - conditional)
         profile[hostname] = {
             "expected_formats": sorted(expected),
             "present_formats": sorted(present_fmts),
             "missing_formats": missing,
+            "conditional_formats": sorted(conditional),
+            "inactive_conditional_formats": sorted(conditional - present_fmts),
+            "deployment_verified": vis.deployment_verified,
             "volume_by_format": dict(counts.get(hostname, {})),
         }
+        if vis.get_os_category(hostname) == "macos":
+            profile[hostname]["process_coverage"] = dict(processes.get(hostname, {}))
+            profile[hostname]["coverage_notes"] = [
+                "Shell history requires an explicit interactive submission to its live shell.",
+                "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+                "Endpoint Security covers qualified v11 fork/exec/known-exit observations; "
+                "aggregate process CREATE is not a fork. App-policy refusal establishes "
+                "neither a target execution stage nor a specific refusal cause.",
+            ]
 
     return profile

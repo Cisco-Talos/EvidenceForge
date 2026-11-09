@@ -1,17 +1,14 @@
 ---
 name: eforge-scenario
 description: >
-  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0/3.0 YAML and attack-free
-  ENVIRONMENT.md briefings. Use when the user wants a threat-hunting exercise, attack simulation,
-  synthetic security dataset, or security training scenario. Do not run generation or edit
-  generated artifacts, reusable packs, or project configuration.
+  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0/3.0 YAML and attack-free ENVIRONMENT.md briefings. Use when the user wants a threat-hunting exercise, attack simulation, synthetic security dataset, or security training scenario. Do not run generation or edit generated artifacts, reusable packs, or project configuration.
 ---
 
 # EvidenceForge Scenario Author
 
-Default new work to Schema 3 drafts for deterministic `eforge generate`.
+Default new work to Schema 3 drafts.
 Lifecycle: read `/eforge:references:artifact-lifecycle`.
-Use file-based Properties for metadata and exact validation provenance without Studio.
+Use file Properties for metadata and exact validation provenance.
 Preserve Scenario 1.0/2.0 unless the user requests adoption or upgrade.
 
 In an EvidenceForge source checkout, use `uv run eforge`.
@@ -19,8 +16,10 @@ Outside a source checkout, use the installed `eforge` command. Read
 `/eforge:references:project-context` before selecting project context. Run from the intended working
 directory and omit `--project-root` unless the user explicitly selects a different root.
 
-Offer optional `display_name` at creation and edits when missing; respect refusal.
+Offer optional `display_name` at creation or when missing; respect refusal.
 Suggest editable titles on request, preserving `name` (`/eforge:references:artifact-lifecycle`).
+For Mac source capabilities, read `/eforge:references:evidence-endpoint-macos`.
+Do not author internal `process_audit_bind` events or raw ULF; the SSH bundle owns authentication.
 
 ## Maintain the trust boundary
 
@@ -83,8 +82,7 @@ Never load every scenario reference by default. Read these direct references con
 - `/eforge:references:scenario-payloads` — only for spillage, adversarial, or encoded content.
 - `/eforge:references:scenario-briefing` — only when creating or updating `ENVIRONMENT.md`.
 
-Load only the focused schema references needed for the fields being changed. They contain the
-supported structures, defaults, constraints, and authoring semantics.
+Load focused references only for changed fields.
 
 For exact expected evidence, conditionally read only the matching compact reference:
 
@@ -162,4 +160,4 @@ generated output.
 If the user wants logs, hand off to `/eforge generate`. If they want a focused validation or repair
 explanation, hand off to `/eforge validate`. Do not silently generate logs as part of authoring.
 
-Read `/eforge:references:record-validation` for validation policy and compatibility.
+Read `/eforge:references:record-validation` for validation policy; `process_exec` is internal-only.

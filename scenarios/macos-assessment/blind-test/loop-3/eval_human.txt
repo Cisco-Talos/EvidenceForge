@@ -1,0 +1,121 @@
+EvidenceForge Data Quality Evaluation
+Output directory: /private/tmp/eforge-macos-assessment-20261021-loop3-330
+Scenario comparison:
+scenarios/macos-assessment/revisions/02-native/source/scenario.yaml
+✓ Verified authoritative bundle: macos-assessment
+
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  Parsed 10,870 records from 18 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+
+=== EvidenceForge Data Quality Report ===
+Scenario: macos-assessment
+Evaluated: 2026-10-21T23:08:23Z
+Total records: 10,870 across 18 sources
+  (bash_history: 28, ecar: 4,183, macos_endpoint_security: 3, macos_unified_log:
+4, syslog: 474, windows_event_security: 582, windows_event_sysmon: 458,
+zeek_conn: 2,255, zeek_dns: 1,056, zeek_files: 381, zeek_http: 38, zeek_ntp: 12,
+zeek_ocsp: 27, zeek_smb_files: 89, zeek_smb_mapping: 49, zeek_ssl: 937,
+zeek_x509: 284, zsh_history: 10)
+
+Overall Quality Score: 89/100
+Aspirational targets: 15/20 (75%)
+
+Evaluation Categories:
+  Parseability & Source Schema:           100/100
+  Canonical Cross-Source Invariants:      100/100
+  Declared Scenario Completeness:         100/100
+  Distribution & Realism Diagnostics:     61/100
+  Optional Expert Comparison:             N/A
+
+Pillar Scores:
+  1. Parseability:                        100/100
+     Spec Conformance:                    100/100  [min:100 PASS] [asp:100 met]
+       10870/10870 records pass schema validation
+     Format Constraints:                  100/100  [min:100 PASS] [asp:100 met]
+       10870/10870 records pass constraint validation
+  2. Plausibility:                        90/100
+     Value & OS Plausibility:             100/100  [min:95 PASS] [asp:99 met]
+       1084/1084 records pass OS/value plausibility checks
+     Co-occurrence Rules:                 100/100
+       5635/5635 co-occurrence checks pass
+     Distribution Fit:                    81/100
+       ecar.object: 77; ecar.action: 70; windows_event_security.EventID: 55;
+zeek_conn.proto: 89; zeek_conn.conn_state: 76; zeek_dns.qtype_name: 94;
+zeek_dns.rcode_name: 99; zeek_http.method: 77; zeek_http.status_code: 81;
+zeek_ssl.version: 79; zeek_ssl.established: 95
+     Cross-Source Field Agreement:        100/100  [min:85 PASS] [asp:97 met]
+       651/652 matched pivot pairs agree
+     User Behavioral Diversity:           100/100
+       Avg pairwise similarity: 0.18 across 16 users
+     Anomaly Rate:                        24/100
+       12/5000 events anomalous (0.2%), target 1-5%
+     IDS Correlation Integrity:           N/A
+  3. Causality:                           100/100
+     Causal Ordering:                     100/100  [min:90 PASS] [asp:99 met]
+       1627/1627 causal pairs correctly ordered
+     Event Presence:                      100/100  [min:85 PASS] [asp:95 met]
+raw:84
+       16/16 expected-visible storyline events have traces in logs; raw 16/19
+(84.2/100), 3 excluded by generation/observation contract
+     Indicator Accuracy:                  100/100  [min:85 PASS] [asp:95 met]
+       48/48 indicator checks correct
+     Pivot Linkability:                   100/100  [min:80 PASS] [asp:95 met]
+       16/16 inferred expected-visible narrative edges retain a shared rendered
+pivot; 0 isolated events, 3 contract-exempt
+     Temporal Integrity:                  100/100  [min:85 PASS] [asp:95 met]
+raw:84
+       16/16 expected-visible events correctly timed and ordered; raw 16/19
+(84.2/100), 3 excluded by generation/observation contract
+     Storyline Trace Coverage:            100/100  [min:80 PASS] [asp:95 met]
+       20/20 expected-visible format-traces found
+     Intent Reconciliation:               100/100  [min:100 PASS] [asp:100 met]
+       20/20 authored/planner reconciliation assertions pass; 17 intents
+dispatched canonical events and 17 had visible or delayed source evidence
+     Effect Reconciliation:               N/A
+  4. Timing:                              59/100
+     Attack Chain Timing:                 100/100
+       18/18 storyline transitions within bounds
+     Human Burstiness:                    87/100
+       CV scores for 5 users (target CV 1.0-3.0)
+     System Process Regularity:           34/100
+       Interval CV: 1.661 (1 service groups, 314 events)
+     Diurnal Pattern:                     N/A
+     Volume Adequacy:                     0/100
+       Noise:signal 571:1 (target 2000:1 for medium)
+     Rate Plausibility:                   100/100
+       2639/2640 timing checks plausible
+
+Acceptance: PASS (all hard requirements met)
+
+All acceptance criteria:
+  PASS parseability.spec_conformance: 100.0 vs min 100  aspirational: 100
+  PASS parseability.format_constraints: 100.0 vs min 100  aspirational: 100
+  PASS plausibility.value_plausibility: 100.0 vs min 95  aspirational: 99
+  PASS plausibility.field_agreement: 99.8 vs min 85  aspirational: 97
+  N/A plausibility.ids_integrity: N/A vs min 100  aspirational: 100
+  PASS causality.causal_ordering: 100.0 vs min 90  aspirational: 99
+  PASS causality.event_presence: 100.0 vs min 85  aspirational: 95
+  PASS causality.intent_reconciliation: 100.0 vs min 100  aspirational: 100
+  N/A causality.effect_reconciliation: N/A vs min 100  aspirational: 100
+  PASS causality.indicator_accuracy: 100.0 vs min 85  aspirational: 95
+  PASS causality.pivot_linkability: 100.0 vs min 80  aspirational: 95
+  PASS causality.temporal_integrity: 100.0 vs min 85  aspirational: 95
+  PASS causality.storyline_trace_coverage: 100.0 vs min 80  aspirational: 95
+
+Flags:
+  - Anomaly Rate: 24/100 (12/5000 events anomalous (0.2%), target 1-5%)
+  - System Process Regularity: 34/100 (Interval CV: 1.661 (1 service groups, 314
+events))
+  - Volume Adequacy: 0/100 (Noise:signal 571:1 (target 2000:1 for medium))
+
+Host Log Profile (informational):
+  ns-build-01: all expected formats present
+  ns-mac-01: missing formats: bash_history
+  ns-mac-02: missing formats: bash_history
+  ns-win-01: all expected formats present
+
+Sample failures (Cross-Source Field Agreement):
+  OCSP HTTP request does not match its ocsp.log response identity
+
+Sample failures (Rate Plausibility):
+  User 'nora.ellis': 38 events in 5s window at 2026-10-20 13:05:56.145000+00:00

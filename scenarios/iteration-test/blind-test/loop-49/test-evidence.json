@@ -1,0 +1,10 @@
+{
+  "owner_checkpoint_tests": 245,
+  "projection_protocol_tests": 115,
+  "selected_slow_network_timing_tests": 95,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "behavior_revision": 448,
+  "behavior_digest": "06715290c671e3f5f6c399c1df9de5a55d72e9145b91cb2f11399a4de01b4dbe",
+  "full_routine_suite": "Pre-push gate/reconciliation; not repeated per uncommitted loop"
+}

@@ -109,7 +109,11 @@ def production_checkpoint_participants(
     source_timing = engine.source_timing_planner
     if generator is None or timing is None or source_timing is None:
         raise RuntimeError("checkpoint participants require a fully initialized engine")
-    for emitter in engine.emitters.values():
+    checkpoint_emitters = dict(engine.emitters)
+    ingress = engine.dispatcher.macos_es_ingress
+    if ingress is not None:
+        checkpoint_emitters["macos_es_ingress"] = ingress.spool
+    for emitter in checkpoint_emitters.values():
         emitter.enable_incremental_checkpointing()
     participants: list[IncrementalCheckpointParticipant] = [
         StateManagerParticipant(engine.state_manager),
@@ -133,7 +137,7 @@ def production_checkpoint_participants(
         DispatcherObservationParticipant(engine.dispatcher),
         ActivityGeneratorStateParticipant(generator),
         BashCommandMemoryParticipant(),
-        EmitterSpoolParticipant(emitters=engine.emitters, output_root=engine.output_dir),
+        EmitterSpoolParticipant(emitters=checkpoint_emitters, output_root=engine.output_dir),
         GenerationEngineParticipant(engine),
         GenerationRngParticipant(),
     ]

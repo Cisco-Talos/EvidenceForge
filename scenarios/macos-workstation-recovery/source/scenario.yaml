@@ -1,0 +1,416 @@
+# Synthetic recovery companion. The thirty-minute acceptance source is unchanged.
+name: macos-workstation-recovery
+description: Three-hour companion to the fixed two-Mac acceptance workload; live Chrome
+  and SSH work across exact recovery, with an app-policy refusal negative control
+status: draft
+draft_id: e58b1160-9cce-4556-9680-c141ba36b9ae
+publisher: davidjbianco
+parents: []
+schema_version: '3.0'
+environment:
+  description: 'Invented development lab: one developer, two Macs, no industry or
+    organization packs. No local inventory.'
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-APPLE
+  systems:
+  - hostname: MAC-APPLE
+    ip: 192.0.2.10
+    os: macOS 27
+    os_build: modeled-macos27-arm64
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+    services:
+    - ssh
+  - hostname: MAC-ITERM
+    ip: 192.0.2.20
+    os: macOS 27
+    os_build: modeled-macos27-arm64
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+    services:
+    - ssh
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-APPLE
+      - MAC-ITERM
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+  network_identities:
+  - id: development-portal
+    hosts:
+    - portal.example.test
+    ips:
+    - 203.0.113.80
+    tags:
+    - web
+  deployment_overrides:
+  - system: MAC-APPLE
+    user_applications:
+    - user: alex
+      applications:
+      - macos-terminal
+      - chrome
+      - vscode
+  - system: MAC-ITERM
+    user_applications:
+    - user: alex
+      applications:
+      - macos-iterm2
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 3h
+  warmup: 1h
+baseline_activity:
+  description: Ordinary medium-intensity developer activity, including installed applications
+    and their helpers; no process-family suppression.
+  intensity: medium
+  variation: medium
+  suspicious_noise: low
+output:
+  logs:
+  - format: ecar
+  - format: macos_endpoint_security
+  - format: macos_unified_log
+  - format: zeek
+  - format: zsh_history
+  destination: ./output
+  compression: false
+generation_seed: 373
+observation_profile: complete
+macos_process_coverage: complete
+storyline:
+- id: setup-provisioner
+  time: '2026-10-19T13:40:00Z'
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit pre-existing fixture control; its startup is outside the acceptance
+    window
+  events:
+  - type: process
+    process_name: /usr/local/libexec/lab-provisioner
+    command_line: /usr/local/libexec/lab-provisioner
+    supplementary: none
+    process_ref: preexisting-provisioner
+- id: setup-job-file
+  time: '2026-10-19T13:41:00Z'
+  actor: root
+  system: MAC-APPLE
+  activity: Install the OS inventory job before collection
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: write
+    path: /Library/LaunchDaemons/org.example.os-inventory.plist
+    program: /usr/bin/sw_vers
+    arguments:
+    - /usr/bin/sw_vers
+    size_bytes: 512
+    launch_profile: root_xpcproxy_v11
+- id: setup-job-registration
+  time: '2026-10-19T13:42:00Z'
+  actor: root
+  system: MAC-APPLE
+  activity: Register, without starting, the inventory job before collection
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: bootstrap
+    path: /Library/LaunchDaemons/org.example.os-inventory.plist
+- id: close-warmup-mac-apple
+  time: +5s
+  actor: alex
+  system: MAC-APPLE
+  activity: End any warmup GUI session before the measured fresh start
+  events:
+  - type: logoff
+- id: close-warmup-mac-iterm
+  time: +10s
+  actor: alex
+  system: MAC-ITERM
+  activity: End any warmup GUI session before the measured fresh start
+  events:
+  - type: logoff
+- id: login-mac-apple
+  time: +40s
+  actor: alex
+  system: MAC-APPLE
+  activity: Fresh GUI login and terminal startup inside collection
+  events:
+  - type: logon
+    logon_type: 2
+- id: login-mac-iterm
+  time: +55s
+  actor: alex
+  system: MAC-ITERM
+  activity: Fresh GUI login and terminal startup inside collection
+  events:
+  - type: logon
+    logon_type: 2
+- id: apple-id
+  time: +2m
+  actor: alex
+  system: MAC-APPLE
+  activity: Ordinary local terminal command
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id
+    supplementary: none
+- id: iterm-version
+  time: +2m30s
+  actor: alex
+  system: MAC-ITERM
+  activity: Ordinary local terminal command
+  events:
+  - type: process
+    process_name: /usr/bin/sw_vers
+    command_line: /usr/bin/sw_vers
+    supplementary: none
+- id: apple-list
+  time: +3m
+  actor: alex
+  system: MAC-APPLE
+  activity: Ordinary local terminal command
+  events:
+  - type: process
+    process_name: /bin/ls
+    command_line: /bin/ls -la /Users/alex/Documents
+    supplementary: none
+- id: iterm-uname
+  time: +3m30s
+  actor: alex
+  system: MAC-ITERM
+  activity: Ordinary local terminal command
+  events:
+  - type: process
+    process_name: /usr/bin/uname
+    command_line: /usr/bin/uname -a
+    supplementary: none
+- id: compound-unknown
+  time: +20m
+  actor: alex
+  system: MAC-APPLE
+  activity: Explicit unknown-result shell control; its inner commands are not modeled
+  events:
+  - type: process
+    process_name: /bin/zsh
+    command_line: /bin/zsh -c 'id; groups'
+    supplementary: none
+- id: ssh-nonpty-open
+  time: +50m
+  actor: alex
+  system: MAC-ITERM
+  activity: Non-PTY SSH from Apple Terminal to the other Mac
+  events:
+  - type: ssh_session
+    source_ip: 192.0.2.10
+- id: ssh-nonpty-query
+  time: +2h5m
+  actor: alex
+  system: MAC-ITERM
+  activity: Query the remote identity through the non-PTY shell
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id
+    supplementary: none
+- id: ssh-nonpty-close
+  time: +2h15m
+  actor: alex
+  system: MAC-ITERM
+  activity: Close the measured non-PTY remote session
+  events:
+  - type: logoff
+- id: ssh-pty-open
+  time: +55m
+  actor: alex
+  system: MAC-APPLE
+  activity: PTY SSH from iTerm2 to the other Mac
+  events:
+  - type: ssh_session
+    source_ip: 192.0.2.20
+    pty: true
+- id: ssh-pty-query
+  time: +2h10m
+  actor: alex
+  system: MAC-APPLE
+  activity: Query OS inventory through the remote PTY shell
+  events:
+  - type: process
+    process_name: /usr/bin/sw_vers
+    command_line: /usr/bin/sw_vers
+    supplementary: none
+- id: ssh-pty-close
+  time: +2h20m
+  actor: alex
+  system: MAC-APPLE
+  activity: Close the measured PTY remote session
+  events:
+  - type: logoff
+- id: chrome-main
+  time: +10m
+  actor: alex
+  system: MAC-APPLE
+  activity: Fresh Finder launch of the real catalog browser, without substituting
+    the reference app
+  events:
+  - type: process
+    process_name: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    command_line: '''/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'''
+    supplementary: none
+    launch_method: finder
+    process_ref: chrome
+- id: chrome-renderer
+  time: +10m3s
+  actor: alex
+  system: MAC-APPLE
+  activity: Browser renderer helper inside the collection window
+  events:
+  - type: process
+    process_name: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google
+      Chrome Helper (Renderer)
+    command_line: '''/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google
+      Chrome Helper (Renderer)'' --type=renderer'
+    supplementary: none
+    parent_ref: chrome
+- id: chrome-gpu
+  time: +10m4s
+  actor: alex
+  system: MAC-APPLE
+  activity: Browser gpu helper inside the collection window
+  events:
+  - type: process
+    process_name: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google
+      Chrome Helper
+    command_line: '''/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google
+      Chrome Helper'' --type=gpu-process'
+    supplementary: none
+    parent_ref: chrome
+- id: chrome-network
+  time: +10m5s
+  actor: alex
+  system: MAC-APPLE
+  activity: Browser network helper inside the collection window
+  events:
+  - type: process
+    process_name: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google
+      Chrome Helper
+    command_line: '''/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome
+      Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google
+      Chrome Helper'' --type=utility --utility-sub-type=network.mojom.NetworkService'
+    supplementary: none
+    parent_ref: chrome
+- id: policy-refusal
+  time: +10m8s
+  actor: alex
+  system: MAC-APPLE
+  activity: Observe the bounded ASP refusal without allocating a running child
+  events:
+  - type: process
+    process_name: /Applications/ExampleRefused.app/Contents/MacOS/ExampleRefused
+    command_line: /Applications/ExampleRefused.app/Contents/MacOS/ExampleRefused https://never-executed.example.test/payload
+    parent_ref: chrome
+    outcome: policy_refused
+    supplementary: none
+- id: chrome-browse
+  time: +11m
+  actor: alex
+  system: MAC-APPLE
+  activity: Browse the invented development portal over TLS
+  events:
+  - type: connection
+    dst_ip: 203.0.113.80
+    dst_port: 443
+    hostname: portal.example.test
+    service: ssl
+- id: inventory-first
+  time: +15m
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit background OS inventory activate
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: activate
+- id: inventory-first-exit
+  time: '2026-10-19T14:15:00.200Z'
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit background OS inventory exit
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: exit
+    exit_code: 0
+- id: inventory-second
+  time: +2h40m
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit background OS inventory activate
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: activate
+- id: inventory-second-exit
+  time: '2026-10-19T16:40:00.200Z'
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit background OS inventory exit
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: exit
+    exit_code: 0
+- id: inventory-unload
+  time: +2h45m
+  actor: root
+  system: MAC-APPLE
+  activity: Explicit background OS inventory unload
+  events:
+  - type: macos_launch_item
+    label: org.example.os-inventory
+    caller_ref: preexisting-provisioner
+    operation: unload
+- id: logout-mac-apple
+  time: +2h58m
+  actor: alex
+  system: MAC-APPLE
+  activity: Close the measured local session
+  events:
+  - type: logoff
+- id: logout-mac-iterm
+  time: +2h58m30s
+  actor: alex
+  system: MAC-ITERM
+  activity: Close the measured local session
+  events:
+  - type: logoff

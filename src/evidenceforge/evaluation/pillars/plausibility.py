@@ -240,8 +240,10 @@ class PlausibilityScorer(DimensionScorer):
         failures: list[str] = []
         for format_name, record_list in records.items():
             route = get_validation_route(format_name)
-            if route.kind == "artifact":
-                continue  # Structural checks run in parseability; email joins run below.
+            if route.kind != "native":
+                # Nested codecs own structural validation in parseability. They
+                # have no flat-schema diagnostic rules; email joins run below.
+                continue
             definition = load_format(route.validator)
             diagnostic_rules = [r for r in definition.validators or [] if r.severity == "warning"]
             if not diagnostic_rules:
@@ -832,6 +834,14 @@ def _extract_event_type(record: ParsedRecord) -> str:
         act = f.get("action", "?")
         if obj == "PROCESS" and act == "CREATE":
             return f"ecar_PROCESS_CREATE_{_process_category(f.get('image_path', ''))}"
+        if obj == "PROCESS" and act == "MODIFY" and f.get("operation") == "exec":
+            return f"ecar_PROCESS_EXEC_{_process_category(f.get('image_path', ''))}"
+        if (
+            obj == "PROCESS"
+            and act == "MODIFY"
+            and f.get("operation") in {"audit_bind", "privilege_drop", "service_drop"}
+        ):
+            return f"ecar_PROCESS_{f['operation'].upper()}"
         if obj == "PROCESS" and act == "TERMINATE":
             return "ecar_PROCESS_TERMINATE"
         if obj == "THREAD" and act == "REMOTE_CREATE":

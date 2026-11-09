@@ -7,12 +7,14 @@ import base64
 import fnmatch
 import hashlib
 import random
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.schemas import PublicLeafValidityConfig, TlsWireBudgetConfig
+from evidenceforge.events.contexts import SslContext, X509Context
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
 from evidenceforge.generation.timing import (
@@ -53,6 +55,22 @@ def reset_tls_realism_cache() -> None:
     """Clear cached TLS realism config. Intended for tests."""
     global _CACHED_DATA
     _CACHED_DATA = None
+
+
+def public_leaf_validity_period(issuance_time: datetime) -> tuple[int, int]:
+    """Return the effective epoch-day and recommended public leaf lifetime.
+
+    The planner uses the epoch-day to anchor modeled issuance rotations. This
+    policy does not apply to private leaves or to CA certificates.
+    """
+    config = PublicLeafValidityConfig.model_validate(load_tls_realism()["public_leaf_validity"])
+    selected = config.periods[0]
+    for period in config.periods:
+        if period.effective_date > issuance_time.astimezone(UTC).date():
+            break
+        selected = period
+    epoch = datetime.combine(selected.effective_date, datetime.min.time(), tzinfo=UTC)
+    return int(epoch.timestamp()) // 86400, selected.recommended_days
 
 
 def multi_label_public_suffixes() -> set[str]:
@@ -576,7 +594,11 @@ def _tls_profile_domains(
     source_system_type: str = "",
 ) -> list[str]:
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
-    from evidenceforge.generation.activity.dns_registry import get_domain_tags, get_domains_by_tag
+    from evidenceforge.generation.activity.dns_registry import (
+        get_domain_tags,
+        get_domains_by_tag,
+        get_os_tags,
+    )
     from evidenceforge.generation.activity.proxy_uri import (
         get_proxy_domain_class,
         proxy_domain_allows_source_system_type,
@@ -607,12 +629,13 @@ def _tls_profile_domains(
             if domain:
                 domains.append(str(domain))
 
+    platform_tags = get_os_tags()
     seen: set[str] = set()
     unique_domains: list[str] = []
     for domain in domains:
         domain_tags = set(get_domain_tags(domain))
-        os_tags = domain_tags & {"windows", "linux"}
-        if source_os in {"windows", "linux"} and os_tags and source_os not in os_tags:
+        os_tags = domain_tags & platform_tags
+        if source_os in {"windows", "linux", "macos"} and os_tags and source_os not in os_tags:
             continue
         if not proxy_domain_allows_source_system_type(domain, source_system_type):
             continue
@@ -622,3 +645,100 @@ def _tls_profile_domains(
             seen.add(domain)
             unique_domains.append(domain)
     return unique_domains
+
+
+def tls13_application_payload_budget(plaintext_bytes: int, *, message_count: int = 1) -> int:
+    """Budget TLS1.3 AEAD records for complete plaintext messages.
+
+    Each record adds a five-byte header, one inner content-type byte and a
+    sixteen-byte authentication tag. Aggregate reservations allow a partial
+    final record per message; individual admissions consume their exact bound.
+    """
+    if type(plaintext_bytes) is not int or type(message_count) is not int:
+        raise ValueError("TLS application budgets require exact integer sizes and counts")
+    if plaintext_bytes < 0 or message_count < 0 or (plaintext_bytes and not message_count):
+        raise ValueError("TLS application budgets require non-negative coherent sizes and counts")
+    if not plaintext_bytes:
+        return 0
+    records = (plaintext_bytes + 16383) // 16384 + message_count - 1
+    return plaintext_bytes + records * 22
+
+
+def inspected_tls_handshake_budget(transport_identity: str) -> tuple[int, int]:
+    """Plan one scoped fresh client-leg TLS1.3 handshake byte budget.
+
+    This is canonical transport sizing, not an assertion of a recovered packet
+    transcript. Opaque CONNECT and denied setup paths use their own contracts.
+    """
+    if not transport_identity:
+        raise ValueError("Inspected TLS handshake requires a physical transport identity")
+    profile = TlsWireBudgetConfig.model_validate(load_tls_realism().get("wire_budget", {}))
+    rng = random.Random(_stable_seed(f"inspected-client-tls-handshake:{transport_identity}"))
+    return (
+        rng.randint(
+            profile.inspected_client_handshake_bytes_min,
+            profile.inspected_client_handshake_bytes_max,
+        ),
+        rng.randint(
+            profile.inspected_server_handshake_bytes_min,
+            profile.inspected_server_handshake_bytes_max,
+        ),
+    )
+
+
+def tls_server_payload_budget(
+    *,
+    zeek_uid: str,
+    ssl: SslContext,
+    chain: tuple[X509Context, ...] | list[X509Context],
+    service: str = "",
+    application_bytes: int = 0,
+) -> int:
+    """Compute a conservative full TLS 1.2 responder payload budget.
+
+    Protocol sizes follow RFC 5246 and the signed ECDHE structures in RFC 4492.
+    Optional extension/ticket bytes are scoped to the connection so repeat
+    reconciliation returns the same budget, without sharing RNG state.
+    """
+    if not chain or ssl.resumed or ssl.version == "TLSv13":
+        return max(0, application_bytes)
+    profile = TlsWireBudgetConfig.model_validate(load_tls_realism().get("wire_budget", {}))
+    rng = random.Random(_stable_seed(f"tls-server-wire:{zeek_uid}:{ssl.cipher}"))
+    cert_bytes = sum(certificate_file_size(cert) for cert in chain)
+    # Handshake header + vector length + each certificate's uint24 length.
+    certificate_message = 4 + 3 + 3 * len(chain) + cert_bytes
+    # ServerHello header, fixed fields, a full session ID and extension vector.
+    server_hello = (
+        4 + 38 + 32 + 2 + rng.randint(profile.extension_bytes_min, profile.extension_bytes_max)
+    )
+    cipher = ssl.cipher or ""
+    key_exchange = 0
+    if "DHE" in cipher:
+        leaf = chain[0]
+        key_bytes = (leaf.certificate_key_length + 7) // 8
+        signature = key_bytes if "RSA" in cipher else 2 * key_bytes + 8
+        # Bounded named-curve public point or finite-field prime/public values.
+        parameters = 133 + 4 if "ECDHE" in cipher else 2 * 256 + 7
+        key_exchange = 4 + parameters + 4 + signature
+    # ServerHelloDone + CCS + Finished (verify data, nonce and AEAD tag),
+    # with five record headers. This is a conservative bound, not a PCAP.
+    completion = 4 + 1 + 4 + 12 + 8 + 16 + 5 * 5
+    ticket = 4 + 6 + rng.randint(profile.ticket_bytes_min, profile.ticket_bytes_max)
+    dialogue = (
+        rng.randint(profile.starttls_dialogue_bytes_min, profile.starttls_dialogue_bytes_max)
+        if service in {"smtp", "imap", "pop3", "ftp"}
+        else 0
+    )
+    # Encrypted application data needs a record header, nonce and authentication tag.
+    application = max(0, application_bytes)
+    if application:
+        application += ((application + 16383) // 16384) * (5 + 8 + 16)
+    return (
+        certificate_message
+        + server_hello
+        + key_exchange
+        + completion
+        + ticket
+        + dialogue
+        + application
+    )

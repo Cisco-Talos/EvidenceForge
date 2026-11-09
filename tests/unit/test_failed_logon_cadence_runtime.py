@@ -365,3 +365,29 @@ def test_failed_logon_cache_and_pending_reservation_have_closed_retention_polici
     assert policies["_failed_logon_attempt_pending"].disposition is (
         ActivityGeneratorRetentionDisposition.TRANSIENT
     )
+
+
+@pytest.mark.parametrize(
+    "enabled,target,substatus",
+    [
+        (False, None, "0xc0000072"),
+        (True, None, "0xc000006a"),
+        (True, "unknown-target", "0xc0000064"),
+    ],
+)
+def test_canonical_failed_logon_account_condition_reaches_all_sources(
+    enabled: bool, target: str | None, substatus: str
+) -> None:
+    generator, emitters = _generator()
+    user = _user().model_copy(update={"enabled": enabled})
+    generator.generate_failed_logon(
+        user, _workstation(), _START, logon_type=2, target_username=target
+    )
+    event = _failed_events(emitters)[0]
+    assert event.auth.failure_status == "0xc000006d"
+    assert event.auth.failure_substatus == substatus
+    assert event.auth.failure_reason == "%%2313"
+    assert any(
+        call.args[0].occurrence_id == event.occurrence_id
+        for call in emitters["ecar"].emit.call_args_list
+    )

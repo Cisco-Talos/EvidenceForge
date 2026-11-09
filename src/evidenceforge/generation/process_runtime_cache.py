@@ -1292,6 +1292,8 @@ _SCENARIO_COMPILED_FIELDS = (
     "_proxy_routes",
 )
 _OCCURRENCE_OR_DRAIN_FIELDS = (
+    "_macos_finder_startups",
+    "_macos_terminal_startups",
     "_process_close_in_progress",
     "_expanding_types",
     "_postfix_queue_states",
@@ -1399,6 +1401,18 @@ ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES: tuple[
             evidence="balanced add/remove recursion guard or one active close page",
         )
         for field_name in _OCCURRENCE_OR_DRAIN_FIELDS
+    )
+    + (
+        ActivityGeneratorMutableRetentionPolicy(
+            field_name="_macos_filesystem_workflows",
+            owner="macos_filesystem_hour_batch",
+            horizon="current host/hour batch; removed after all committed operations drain",
+            disposition=ActivityGeneratorRetentionDisposition.TRANSIENT,
+            evidence=(
+                "configured task count bounds each batch; an incomplete batch retains exact retry "
+                "state and blocks hour completion/checkpoint capture"
+            ),
+        ),
     )
     + tuple(
         ActivityGeneratorMutableRetentionPolicy(

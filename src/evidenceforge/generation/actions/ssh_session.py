@@ -35,13 +35,14 @@ import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from evidenceforge.events.application import (
     ApplicationChannelIdentity,
     ApplicationChannelSnapshot,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalArtifactBinaryIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     HostContext,
@@ -57,13 +58,20 @@ from evidenceforge.events.dispatcher import (
     StateNeutralProjectionPublicationReceipt,
     StateNeutralProjectionPublicationResult,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    ProcessIdentity,
+    SessionIdentity,
+)
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
     ProcessLifecycleSnapshot,
     SessionEndPlan,
 )
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
     source_observation_delay_difference,
@@ -78,6 +86,7 @@ from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     SshAuthenticationTimingPlan,
     get_timing_window,
+    plan_macos_ssh_startup_times,
     plan_ssh_authentication_timing,
     ssh_authentication_timing_support,
     sysmon_envelope_timing,
@@ -128,6 +137,10 @@ from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
+    from evidenceforge.generation.actions.macos_ssh_receiver import (
+        MacosSshReceiverStartup,
+        MacosSshReceiverStartupRequest,
+    )
     from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 
 logger = logging.getLogger(__name__)
@@ -324,6 +337,7 @@ def _ssh_action_deadline_runtime_headrooms(
     source_ip: str,
     target_ip: str,
     source_os_categories: tuple[str, ...],
+    target_os_category: str = "linux",
     source_clock_headroom: timedelta,
     network_sensor_headroom: timedelta,
     ecar_observation_headroom: timedelta,
@@ -332,12 +346,16 @@ def _ssh_action_deadline_runtime_headrooms(
 ) -> tuple[timedelta, timedelta, timedelta, timedelta, timedelta]:
     """Resolve conservative source and sensor bounds without allocating timing state."""
 
+    if target_os_category not in {"linux", "macos"}:
+        raise ValueError("SSH deadline target OS must be Linux or macOS")
     if type(source_ip) is not str or type(target_ip) is not str:
         raise TypeError("SSH deadline endpoints must be strings")
     if (
         type(source_os_categories) is not tuple
         or not source_os_categories
-        or any(os_category not in {"linux", "windows"} for os_category in source_os_categories)
+        or any(
+            os_category not in {"linux", "windows", "macos"} for os_category in source_os_categories
+        )
     ):
         raise ValueError("SSH deadline source OS categories must be a non-empty exact tuple")
     headrooms = (
@@ -446,6 +464,7 @@ def ssh_action_deadline_transport_headroom_seconds(
     source_ip: str = "",
     target_ip: str = "",
     source_os_categories: tuple[str, ...] = ("linux", "windows"),
+    target_os_category: str = "linux",
     source_clock_headroom: timedelta = timedelta(0),
     network_sensor_headroom: timedelta = timedelta(0),
     ecar_observation_headroom: timedelta = timedelta(0),
@@ -478,6 +497,7 @@ def ssh_action_deadline_transport_headroom_seconds(
         source_ip=source_ip,
         target_ip=target_ip,
         source_os_categories=source_os_categories,
+        target_os_category=target_os_category,
         source_clock_headroom=source_clock_headroom,
         network_sensor_headroom=network_sensor_headroom,
         ecar_observation_headroom=ecar_observation_headroom,
@@ -488,7 +508,7 @@ def ssh_action_deadline_transport_headroom_seconds(
     if source_deadline is not None and source_timing_planner is not None:
         target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
             ensure_utc(source_deadline),
-            "linux",
+            target_os_category,
         )
         if type(
             target_clock_negative_headroom
@@ -696,13 +716,24 @@ class SshSessionRequest:
     session_end_plan: SessionEndPlan | None = None
     ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
+    pty: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.pty) is not bool:
+            raise TypeError("SSH PTY intent requires an exact boolean")
+        if self.pty and _get_os_category(self.target_system.os) != "macos":
+            raise StateError(
+                "Explicit SSH PTY generation currently requires a qualified Mac receiver"
+            )
 
     @property
     def bundle_owns_close(self) -> bool:
-        """Return whether this action, rather than explicit intent, owns closure."""
+        """Return whether the SSH continuation owns terminal execution."""
 
         return self.emit_session_close and not (
-            self.session_end_plan is not None and self.session_end_plan.is_authoritative
+            self.session_end_plan is not None
+            and self.session_end_plan.is_authoritative
+            and _get_os_category(self.target_system.os) != "macos"
         )
 
     @property
@@ -724,6 +755,7 @@ class SshSessionRequest:
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
+            f"{':pty' if self.pty else ''}"
         )
         return f"ssh-session-{seed:016x}"
 
@@ -742,6 +774,7 @@ class SshSessionRequest:
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.emit_session_close}:{self.defer_session_close}:"
             f"{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
+            f"{':pty' if self.pty else ''}"
         )
         return f"ssh-session-exec-{seed:016x}"
 
@@ -776,16 +809,104 @@ class _SshTransportState:
 
 
 @dataclass(frozen=True, slots=True)
-class _SshLinuxAuthState:
-    """Source-native Linux SSH authentication lifecycle timestamps."""
+class SshReceiverAuthentication:
+    """Receiver authentication and readiness facts independent of native logging."""
 
-    sshd_pid: int
-    logind_session_id: int
-    syslog_seed: tuple[Any, ...]
+    responder_pid: int
+    session_id: int
     connection_time: datetime
-    accepted_time: datetime
-    pam_time: datetime
-    logind_time: datetime
+    authenticated_at: datetime
+    session_open_time: datetime
+    ready_at: datetime
+
+    def __post_init__(self) -> None:
+        """Reject identity-free receivers and inverted authentication phases."""
+        if type(self.responder_pid) is not int or self.responder_pid <= 0:
+            raise ValueError("SSH authentication requires an explicit receiver process")
+        if type(self.session_id) is not int or self.session_id < 0:
+            raise ValueError("SSH authentication requires a non-negative session identity")
+        times = (self.connection_time, self.authenticated_at, self.session_open_time, self.ready_at)
+        if any(type(value) is not datetime or value.utcoffset() is None for value in times):
+            raise ValueError("SSH authentication phases require aware timestamps")
+        if (
+            not self.connection_time
+            <= self.authenticated_at
+            <= self.session_open_time
+            <= self.ready_at
+        ):
+            raise ValueError(
+                "SSH authentication phases must preserve connection/auth/open/readiness order"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _SshLinuxAuthState:
+    """Linux observation mapping around source-independent authentication facts."""
+
+    receiver: SshReceiverAuthentication
+    syslog_seed: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.receiver) is not SshReceiverAuthentication
+            or type(self.syslog_seed) is not tuple
+        ):
+            raise ValueError("Linux SSH observations require exact authentication facts and seed")
+
+    @property
+    def sshd_pid(self) -> int:
+        return self.receiver.responder_pid
+
+    @property
+    def logind_session_id(self) -> int:
+        return self.receiver.session_id
+
+    @property
+    def connection_time(self) -> datetime:
+        return self.receiver.connection_time
+
+    @property
+    def accepted_time(self) -> datetime:
+        return self.receiver.authenticated_at
+
+    @property
+    def pam_time(self) -> datetime:
+        return self.receiver.session_open_time
+
+    @property
+    def logind_time(self) -> datetime:
+        return self.receiver.ready_at
+
+
+@dataclass(frozen=True, slots=True)
+class _SshMacAuthState:
+    """Mac receiver facts without Linux PAM/logind observation aliases."""
+
+    receiver: SshReceiverAuthentication
+    initial_receiver_image: str
+    receiver_image: str
+    owns_posix_session: bool = False
+    pty: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.receiver) is not SshReceiverAuthentication:
+            raise TypeError("Mac SSH close requires exact receiver authentication facts")
+        if type(self.owns_posix_session) is not bool:
+            raise TypeError("Mac SSH session ownership requires an exact boolean")
+        if type(self.pty) is not bool or (
+            self.pty
+            and (not self.owns_posix_session or self.initial_receiver_image != "/sbin/launchd")
+        ):
+            raise TypeError("Mac SSH PTY ownership requires its explicit POSIX session")
+        for image in (self.initial_receiver_image, self.receiver_image):
+            if (
+                type(image) is not str
+                or not image.startswith("/")
+                or image.endswith("/")
+                or len(image) > 4_096
+                or any(character in image for character in "\x00\r\n")
+            ):
+                raise ValueError("Mac SSH close requires compiled absolute receiver image paths")
 
 
 @dataclass(frozen=True, slots=True)
@@ -956,7 +1077,11 @@ class _SshCloseHostFacts:
         )
         if any(type(value) is not str or len(value) > 4_096 for value in values):
             raise ValueError("Exact SSH close host contains malformed or oversized text")
-        if not host.hostname or not host.ip or host.os_category not in {"linux", "windows"}:
+        if (
+            not host.hostname
+            or not host.ip
+            or host.os_category not in {"linux", "windows", "macos"}
+        ):
             raise ValueError("Exact SSH close host has incomplete canonical identity")
         return cls(
             hostname=host.hostname,
@@ -1002,7 +1127,7 @@ class _PreparedSshClosePlan:
     receiver_started_at: datetime
     receiver_terminate_time: datetime
     session_close_time: datetime
-    logind_remove_time: datetime
+    logind_remove_time: datetime | None
     terminal_window_end: datetime
     action_source_deadline: datetime | None
     session_object_id: str
@@ -1017,8 +1142,9 @@ class _PreparedSshClosePlan:
     source_host: _SshCloseHostFacts | None
     target_host: _SshCloseHostFacts
     source_identity: ProcessIdentity | None
-    auth_state: _SshLinuxAuthState
+    auth_state: _SshLinuxAuthState | _SshMacAuthState
     source_tag: str
+    authoritative_end_plan: SessionEndPlan | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete, mutable, or temporally impossible close facts."""
@@ -1059,13 +1185,24 @@ class _PreparedSshClosePlan:
             raise TypeError("Exact SSH close plan source-host facts changed type")
         if self.source_identity is not None and type(self.source_identity) is not ProcessIdentity:
             raise TypeError("Exact SSH close plan source process changed type")
-        if type(self.auth_state) is not _SshLinuxAuthState:
+        if type(self.auth_state) not in {_SshLinuxAuthState, _SshMacAuthState}:
             raise TypeError("Exact SSH close plan authentication state changed type")
+        macos = type(self.auth_state) is _SshMacAuthState
+        if self.authoritative_end_plan is not None and (
+            type(self.authoritative_end_plan) is not SessionEndPlan
+            or not self.authoritative_end_plan.is_authoritative
+            or not self.authoritative_end_plan.storyline_event_id
+        ):
+            raise ValueError("Exact SSH authored closure requires a storyline end owner")
+        if self.target_host.os_category != ("macos" if macos else "linux"):
+            raise ValueError("Exact SSH close authentication crossed its platform owner")
+        if macos != (self.logind_remove_time is None):
+            raise ValueError("Exact SSH close must retain logind observations only on Linux")
         terminal_times = (
             self.receiver_started_at,
             self.receiver_terminate_time,
             self.session_close_time,
-            self.logind_remove_time,
+            *((self.logind_remove_time,) if self.logind_remove_time is not None else ()),
             self.terminal_window_end,
         )
         if (
@@ -1086,7 +1223,9 @@ class _PreparedSshClosePlan:
         receiver_started_at = ensure_utc(self.receiver_started_at)
         receiver_terminate_time = ensure_utc(self.receiver_terminate_time)
         session_close_time = ensure_utc(self.session_close_time)
-        logind_remove_time = ensure_utc(self.logind_remove_time)
+        logind_remove_time = (
+            ensure_utc(self.logind_remove_time) if self.logind_remove_time is not None else None
+        )
         terminal_window_end = ensure_utc(self.terminal_window_end)
         action_source_deadline = (
             ensure_utc(self.action_source_deadline)
@@ -1100,9 +1239,9 @@ class _PreparedSshClosePlan:
         )
         if (
             session_started_at < open_time
-            or session_started_at > self.auth_state.logind_time
+            or session_started_at > self.auth_state.receiver.ready_at
             or close_time <= open_time
-            or self.auth_state.logind_time >= close_time
+            or self.auth_state.receiver.ready_at >= close_time
         ):
             raise ValueError("Exact SSH close plan does not contain its authenticated session")
         if self.target_host.ip != self.target_ip:
@@ -1157,24 +1296,30 @@ class _PreparedSshClosePlan:
             username=self.username,
             source_ip=self.source_ip,
             source_port=self.source_port,
-            sshd_pid=self.auth_state.sshd_pid,
+            sshd_pid=self.auth_state.receiver.responder_pid,
             transport_close_time=self.close_time,
         )
+        if self.authoritative_end_plan is not None:
+            expected_session_close = ensure_utc(self.authoritative_end_plan.canonical_end)
         expected_receiver_terminate = _ssh_receiver_process_terminate_time(
             target_hostname=self.target_system.hostname,
             source_ip=self.source_ip,
             source_port=self.source_port,
-            sshd_pid=self.auth_state.sshd_pid,
+            sshd_pid=self.auth_state.receiver.responder_pid,
             receiver_started_at=self.receiver_started_at,
             session_close_time=expected_session_close,
         )
-        expected_logind_remove = _ssh_logind_removed_time(
-            target_hostname=self.target_system.hostname,
-            username=self.username,
-            source_ip=self.source_ip,
-            source_port=self.source_port,
-            logind_session_id=self.auth_state.logind_session_id,
-            session_close_time=expected_session_close,
+        expected_logind_remove = (
+            _ssh_logind_removed_time(
+                target_hostname=self.target_system.hostname,
+                username=self.username,
+                source_ip=self.source_ip,
+                source_port=self.source_port,
+                logind_session_id=self.auth_state.receiver.session_id,
+                session_close_time=expected_session_close,
+            )
+            if type(self.auth_state) is _SshLinuxAuthState
+            else None
         )
         expected_source_terminate = (
             _ssh_source_process_terminate_time(
@@ -1196,11 +1341,12 @@ class _PreparedSshClosePlan:
             raise StateError("Exact SSH terminal tail changed after precommit preparation")
         if (
             canonical_window_end - self.close_time < _SSH_TERMINAL_TAIL_RESERVATION
-            or not self.close_time
-            < self.session_close_time
-            < self.logind_remove_time
-            < canonical_window_end
-            or not self.auth_state.logind_time
+            or not self.close_time < self.session_close_time < canonical_window_end
+            or (
+                self.logind_remove_time is not None
+                and not self.session_close_time < self.logind_remove_time < canonical_window_end
+            )
+            or not self.auth_state.receiver.ready_at
             < self.receiver_terminate_time
             < self.session_close_time
             or (
@@ -1211,6 +1357,24 @@ class _PreparedSshClosePlan:
             raise StateError(
                 "Exact SSH terminal tail does not fit inside its half-open generation window"
             )
+
+    @property
+    def initial_receiver_image(self) -> str:
+        """Return the executable belonging to the immutable receiver lifetime."""
+        return (
+            self.auth_state.initial_receiver_image
+            if type(self.auth_state) is _SshMacAuthState
+            else "/usr/sbin/sshd"
+        )
+
+    @property
+    def receiver_image(self) -> str:
+        """Return the expected final privileged receiver executable."""
+        return (
+            self.auth_state.receiver_image
+            if type(self.auth_state) is _SshMacAuthState
+            else "/usr/sbin/sshd"
+        )
 
     def session_identity(self) -> SessionIdentity:
         """Rebuild the exact immutable target-session identity from scalar facts."""
@@ -1607,6 +1771,12 @@ class _SshCloseContinuationBinding:
                 raise StateError("Prepared exact SSH close changed its bound transaction")
             return self._continuation
 
+    def require_bound(self, transaction: NetworkTransactionPlan) -> None:
+        """Require an already-bound committed transport before receiver startup."""
+        with self._lock:
+            if self._transaction is not transaction or self._continuation is None:
+                raise StateError("Mac SSH startup requires its bound committed transport")
+
     def authenticates(self, continuation: _SshCloseContinuation) -> bool:
         """Return whether a carrier is the sole object produced by this binding."""
 
@@ -1681,7 +1851,7 @@ class _SshApplicationRetirementBinding:
             or binding.session_object_id != plan.session_object_id
             or binding.lifecycle_group_id != plan.session_lifecycle_group_id
             or binding.principal != plan.username.casefold()
-            or binding.ready_at != plan.auth_state.logind_time
+            or binding.ready_at != plan.auth_state.receiver.ready_at
             or session.affinity.server_identity != plan.target_system.hostname.casefold()
             or session.affinity.server_session_object_id != plan.session_object_id
             or session.affinity.principal != plan.username.casefold()
@@ -2018,6 +2188,237 @@ class _SshApplicationRetirementBinding:
             self._retired = False
 
 
+class _SshReceiverStartupBinding:
+    """Retain one Mac startup coordinator on its existing terminal owner."""
+
+    __slots__ = ("_lock", "_prepared", "_coordinator", "_restored_complete")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._prepared: _PreparedSshCloseContinuation | None = None
+        self._coordinator: MacosSshReceiverStartup | None = None
+        self._restored_complete = False
+
+    def claim(self, prepared: _PreparedSshCloseContinuation) -> None:
+        from evidenceforge.generation.actions.macos_ssh_receiver import (
+            MacosSshReceiverStartupRequest,
+        )
+
+        request = prepared.startup_request
+        if request is not None:
+            plan = prepared.plan
+            if (
+                type(request) is not MacosSshReceiverStartupRequest
+                or type(plan.auth_state) is not _SshMacAuthState
+                or request.receiver.hostname != plan.target_host.hostname
+                or request.receiver.pid != plan.auth_state.receiver.responder_pid
+                or request.receiver.logon_id != plan.logon_id
+                or request.receiver.started_at != plan.receiver_started_at
+                or request.receiver.image != plan.initial_receiver_image
+                or (
+                    request.launcher is None
+                    and request.wrapper.image_path != plan.initial_receiver_image
+                )
+                or request.session_worker.image_path != plan.receiver_image
+                or request.phase_times[request.audit_phase]
+                != plan.auth_state.receiver.authenticated_at
+                or request.phase_times[-1] > plan.auth_state.receiver.ready_at
+                or (len(request.phase_times) in {12, 19}) != plan.auth_state.owns_posix_session
+                or request.pty != plan.auth_state.pty
+            ):
+                raise StateError("Mac SSH retained startup crossed its exact close facts")
+            request.__post_init__()
+        with self._lock:
+            if self._prepared is not None and self._prepared is not prepared:
+                raise StateError("Mac SSH retained startup copied its one-shot owner")
+            self._prepared = prepared
+
+    def drain(self, prepared: _PreparedSshCloseContinuation, executor: SshSessionExecutor) -> None:
+        from evidenceforge.generation.actions.macos_ssh_receiver import MacosSshReceiverStartup
+
+        prepared.require_projection_owner(executor)
+        with self._lock:
+            if self._prepared is not prepared:
+                raise StateError("Mac SSH startup crossed its retained owner")
+            request = prepared.startup_request
+            if request is None:
+                self._verify_completed_state(prepared, executor.state_manager)
+                return
+            prepared._binding.require_bound(prepared.identity_capture.require())
+            # Construction requires the committed live receiver. Keep the exact
+            # coordinator after failures, including committed source failures.
+            if self._coordinator is None:
+                from evidenceforge.generation.actions.macos_ssh_native_startup import (
+                    MacosNativeSshReceiverStartup,
+                )
+
+                coordinator_type = (
+                    MacosNativeSshReceiverStartup
+                    if request.launcher is not None
+                    else MacosSshReceiverStartup
+                )
+                self._coordinator = coordinator_type(
+                    request,
+                    state=executor.state_manager,
+                    dispatcher=executor.dispatcher,
+                    host=prepared.plan.target_host.materialize(),
+                    metadata=getattr(executor, "macos_execution_metadata", None),
+                )
+            while self._coordinator.result is None:
+                self._coordinator.advance()
+
+    def verify_completed_state(
+        self, prepared: _PreparedSshCloseContinuation, state: StateManager
+    ) -> None:
+        """Authenticate a restored Mac graph instead of inferring a startup marker."""
+        with self._lock:
+            self._verify_completed_state(prepared, state)
+
+    def _verify_completed_state(
+        self, prepared: _PreparedSshCloseContinuation, state: StateManager
+    ) -> None:
+        if self._prepared is not prepared:
+            raise StateError("Mac SSH startup completion crossed its owner")
+        if type(prepared.plan.auth_state) is not _SshMacAuthState or self._restored_complete:
+            return
+        if self._coordinator is not None and self._coordinator.result is not None:
+            return
+        plan = prepared.plan
+        session = state.get_session(plan.logon_id)
+        if (
+            session is None
+            or state.get_session_identity(plan.logon_id) != plan.session_identity()
+            or session.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or session.transport_pid != plan.auth_state.receiver.responder_pid
+            or session.source_ready_time != plan.auth_state.receiver.ready_at
+            or session.network_close_time != plan.close_time
+            or not session.session_shell_pid
+            or state._pid_os.get(plan.target_system.hostname) != "macos"
+        ):
+            raise StateError("Restored Mac SSH startup lost its authenticated session roles")
+        root = state.get_process_identity(session.system, session.transport_pid)
+        shell = state.get_process_identity(session.system, session.session_shell_pid)
+        parent = (
+            state.get_process_identity(session.system, shell.parent_pid)
+            if shell is not None
+            else None
+        )
+        shell_state = state.get_process(session.system, session.session_shell_pid)
+        native_graph = plan.initial_receiver_image == "/sbin/launchd"
+        if (
+            root is None
+            or shell is None
+            or parent is None
+            or shell_state is None
+            or root.image != plan.receiver_image
+            or root.initial_image != plan.initial_receiver_image
+            or root.execution_ordinal != (4 if native_graph else 2)
+            or root.started_at != plan.receiver_started_at
+            or root.credentials is None
+            or root.credentials.effective_uid != 0
+            or root.principal != "root"
+            or parent.parent_pid != root.pid
+            or parent.image != plan.receiver_image
+            or shell.initial_image != plan.receiver_image
+        ):
+            raise StateError("Restored Mac SSH startup lost its receiver execution graph")
+        for identity in (root, parent, shell):
+            if (
+                identity.hostname != session.system
+                or identity.logon_id != plan.logon_id
+                or identity.credentials is None
+                or identity.credentials.audit_uid != session.audit_origin.audit_uid
+                or identity.credentials.audit_session_id != session.audit_origin.audit_session_id
+            ):
+                raise StateError("Restored Mac SSH startup lost its process audit ownership")
+        first_shell_exec = next(
+            (
+                identity
+                for identity in (*shell_state.prior_executions, shell)
+                if identity.execution_ordinal == 1
+            ),
+            None,
+        )
+        if (
+            first_shell_exec is None
+            or first_shell_exec.principal != plan.username
+            or first_shell_exec.credentials is None
+            or first_shell_exec.credentials.effective_uid != session.effective_uid
+            or first_shell_exec.credentials.effective_gid != session.effective_gid
+            or first_shell_exec.execution_started_at > plan.auth_state.receiver.ready_at
+            or first_shell_exec.execution_started_at < session.audit_origin.created_at
+        ):
+            raise StateError("Restored Mac SSH startup lacks its authenticated initial shell exec")
+        if plan.auth_state.owns_posix_session:
+            root_group = root.job_control
+            shell_group = first_shell_exec.job_control
+            if (
+                root_group is None
+                or shell_group is None
+                or root_group.pgid != root.pid
+                or root_group.session.sid != root.pid
+                or root_group.leader_object_id != root.object_id
+                or root_group.session.leader_object_id != root.object_id
+                or root_group.started_at != root_group.session.started_at
+                or (not native_graph and root_group.started_at != root.started_at)
+                or (native_graph and root_group.started_at <= root.started_at)
+                or parent.job_control != root_group
+                or shell_group == root_group
+                or shell_group.pgid != shell.pid
+                or shell_group.session.sid != shell.pid
+                or shell_group.leader_object_id != shell.object_id
+                or shell_group.session.leader_object_id != shell.object_id
+                or shell_group.started_at != shell_group.session.started_at
+                or not shell.started_at
+                < shell_group.started_at
+                < first_shell_exec.execution_started_at
+            ):
+                raise StateError("Restored Mac SSH startup lost its exact POSIX session ownership")
+            if native_graph:
+                terminal = state.known_macos_terminal(
+                    shell_group.session, first_shell_exec.execution_started_at
+                )
+                if (
+                    plan.auth_state.pty
+                    and (
+                        type(terminal) is not MacosTerminalObservation
+                        or session.ssh_command_streams is not None
+                        or first_shell_exec.image != "/bin/zsh"
+                    )
+                    or not plan.auth_state.pty
+                    and (terminal != "absent" or session.ssh_command_streams is None)
+                ):
+                    raise StateError(
+                        "Restored native SSH startup changed its PTY/channel ownership"
+                    )
+                running = state.get_process(session.system, root.pid)
+                history = {item.execution_ordinal: item for item in running.prior_executions}
+                launcher, wrapper = history.get(1), history.get(2)
+                if (
+                    launcher is None
+                    or wrapper is None
+                    or launcher.image != "/usr/libexec/xpcproxy"
+                    or wrapper.image != "/usr/libexec/sshd-keygen-wrapper"
+                    or not launcher.execution_started_at
+                    < root_group.started_at
+                    < wrapper.execution_started_at
+                ):
+                    raise StateError(
+                        "Restored native SSH startup lost its launcher/setsid boundary"
+                    )
+        self._restored_complete = True
+
+    def require_checkpoint_ready(self, prepared: _PreparedSshCloseContinuation) -> None:
+        with self._lock:
+            if self._prepared is not prepared:
+                raise StateError("Mac SSH startup checkpoint crossed its owner")
+            if prepared.startup_request is not None and (
+                self._coordinator is None or self._coordinator.result is None
+            ):
+                raise StateError("Mac SSH startup must finish publication before checkpoint")
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedSshCloseContinuation:
     """Scalar-only close payload plus its exact precommit transaction capture."""
@@ -2029,6 +2430,16 @@ class _PreparedSshCloseContinuation:
     zeek_owner: object = field(compare=False, repr=False)
     ssh_manager_owner: SshApplicationChannelManager = field(compare=False, repr=False)
     application_registry_owner: ApplicationChannelRegistry = field(compare=False, repr=False)
+    startup_request: MacosSshReceiverStartupRequest | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    _startup: _SshReceiverStartupBinding = field(
+        default_factory=_SshReceiverStartupBinding,
+        compare=False,
+        repr=False,
+    )
     _binding: _SshCloseContinuationBinding = field(
         default_factory=_SshCloseContinuationBinding,
         compare=False,
@@ -2060,6 +2471,24 @@ class _PreparedSshCloseContinuation:
         self.require_projection_owner_shape()
         self._binding.claim(self)
         self._application_retirement.claim(self)
+        self._startup.claim(self)
+
+    def drain_receiver_startup(self, executor: SshSessionExecutor) -> None:
+        """Finish retained process startup before dependent work or terminal execution."""
+        if type(self.plan.auth_state) is _SshMacAuthState:
+            self._startup.drain(self, executor)
+
+    def require_startup_checkpoint_ready(self) -> None:
+        """Reject checkpoint serialization while live startup capabilities remain."""
+        self._startup.require_checkpoint_ready(self)
+
+    def verify_completed_receiver_startup(self, state: StateManager) -> None:
+        """Validate canonical Mac roles when no live startup coordinator is retained."""
+        self._startup.verify_completed_state(self, state)
+        if self.plan.authoritative_end_plan is not None:
+            session = state.get_session(self.plan.logon_id)
+            if session is None or session.end_plan != self.plan.authoritative_end_plan:
+                raise StateError("Exact SSH authored close lost its State end owner")
 
     def require_application_owner_shape(self) -> None:
         """Require the exact built-in manager and its original shared registry."""
@@ -2084,46 +2513,26 @@ class _PreparedSshCloseContinuation:
             and type(self.ecar_owner) is EcarEmitter
             and getattr(self.ecar_owner, "supports_exact_projection_publication", None) is True
         )
-        no_ecar_warmup_is_exact = bool(
+        no_ecar_owner_is_exact = bool(
+            type(emitters) is dict and "ecar" not in emitters and self.ecar_owner is None
+        )
+        zeek_owner_is_exact = bool(
             type(emitters) is dict
-            and "ecar" not in emitters
-            and self.ecar_owner is None
-            and self._all_projection_times_are_warmup_suppressed()
+            and dict.get(emitters, "zeek_conn") is self.zeek_owner
+            and type(self.zeek_owner) is ZeekEmitter
+            and getattr(self.zeek_owner, "supports_exact_projection_publication", None) is True
+        )
+        no_zeek_is_exact = bool(
+            type(emitters) is dict and "zeek_conn" not in emitters and self.zeek_owner is None
         )
         if (
             type(self.dispatcher_owner) is not EventDispatcher
             or type(emitters) is not dict
-            or not (ecar_owner_is_exact or no_ecar_warmup_is_exact)
-            or dict.get(emitters, "zeek_conn") is not self.zeek_owner
-            or type(self.zeek_owner) is not ZeekEmitter
-            or getattr(self.zeek_owner, "supports_exact_projection_publication", None) is not True
+            or not (ecar_owner_is_exact or no_ecar_owner_is_exact)
+            or not (zeek_owner_is_exact or no_zeek_is_exact)
         ):
             raise StateError("Exact SSH close requires its original eCAR/Zeek projection owners")
         self.require_application_owner_shape()
-
-    def _all_projection_times_are_warmup_suppressed(self) -> bool:
-        """Prove every open and terminal occurrence precedes the output gate."""
-
-        output_start = getattr(self.dispatcher_owner, "output_start_time", None)
-        if type(output_start) is not datetime:
-            return False
-        plan = self.plan
-        projection_times = (
-            plan.open_time,
-            plan.session_started_at,
-            plan.receiver_started_at,
-            plan.auth_state.connection_time,
-            plan.auth_state.accepted_time,
-            plan.auth_state.pam_time,
-            plan.auth_state.logind_time,
-            plan.close_time,
-            plan.receiver_terminate_time,
-            plan.session_close_time,
-            plan.logind_remove_time,
-            *((plan.source_terminate_time,) if plan.source_terminate_time is not None else ()),
-        )
-        gate = ensure_utc(output_start)
-        return all(ensure_utc(timestamp) < gate for timestamp in projection_times)
 
     def require_projection_owner(self, executor: SshSessionExecutor) -> None:
         """Identity-bind every close retry to its original runtime and dispatcher."""
@@ -2186,9 +2595,17 @@ class _PreparedSshCloseContinuation:
 
         return self._binding.authenticates(continuation)
 
+    def require_projection_phase(self, phase: str) -> None:
+        """Reject Linux-only terminal observations on a Mac continuation."""
+
+        self._progress._validate_phase(phase)
+        if phase == "logind-remove" and type(self.plan.auth_state) is _SshMacAuthState:
+            raise StateError("Mac SSH close cannot publish Linux logind observations")
+
     def retain_projection_failure(self, phase: str, error: BaseException) -> None:
         """Retain one exact terminal projection receipt on the prepared owner."""
 
+        self.require_projection_phase(phase)
         self._progress.retain_failure(phase, error)
 
     def retain_projection_publication(
@@ -2199,6 +2616,7 @@ class _PreparedSshCloseContinuation:
     ) -> None:
         """Retain one committed action cohort directly on its prepared owner."""
 
+        self.require_projection_phase(phase)
         self._progress.retain_publication(phase, receipt, result)
 
     def bind_projection_phase(
@@ -2212,6 +2630,7 @@ class _PreparedSshCloseContinuation:
     ) -> None:
         """Bind a terminal phase to its sole exact action-cohort preimage."""
 
+        self.require_projection_phase(phase)
         self._progress.bind_action_phase(
             phase,
             root_action_id=root_action_id,
@@ -2223,16 +2642,19 @@ class _PreparedSshCloseContinuation:
     def cancel_projection_phase(self, phase: str) -> None:
         """Release one uncommitted terminal action-cohort binding."""
 
+        self.require_projection_phase(phase)
         self._progress.cancel_action_phase(phase)
 
     def mark_projection_complete(self, phase: str) -> None:
         """Record one terminal phase whose publisher returned successfully."""
 
+        self.require_projection_phase(phase)
         self._progress.mark_complete(phase)
 
     def recover_projection(self, phase: str, dispatcher: EventDispatcher) -> bool:
         """Recover one terminal phase from its exact retained dispatcher receipt."""
 
+        self.require_projection_phase(phase)
         return self._progress.recover(phase, dispatcher)
 
     def receiver_descendant_terminations(
@@ -2437,6 +2859,8 @@ class _SshCloseContinuation:
             emit_session_close=True,
             defer_session_close=True,
             source=plan.source_tag,
+            session_end_plan=plan.authoritative_end_plan,
+            pty=plan.auth_state.pty if type(plan.auth_state) is _SshMacAuthState else False,
         )
         return SshSessionActionBundle(request=request, executor=executor)
 
@@ -2444,7 +2868,7 @@ class _SshCloseContinuation:
         """Build a fresh terminal input event without invoking a postcommit callback."""
 
         return OccurrenceBuilder(
-            timestamp=self.plan.auth_state.pam_time,
+            timestamp=self.plan.auth_state.receiver.session_open_time,
             event_type="ssh_session",
             src_host=state.src_host,
             dst_host=state.dst_host,
@@ -2453,7 +2877,7 @@ class _SshCloseContinuation:
                 source_ip=self.plan.source_ip,
                 source_port=self.plan.source_port,
                 logon_id=self.plan.logon_id,
-                session_id=self.plan.auth_state.logind_session_id,
+                session_id=self.plan.auth_state.receiver.session_id,
                 logon_type=10,
             ),
             process=state.source_process,
@@ -2528,7 +2952,7 @@ class _PreparedDeferredSshOpen:
     receiver_plan: ProcessMaterializationPlan
     source_identity: ProcessIdentity | None
     source_session_object_id: str
-    auth_state: _SshLinuxAuthState
+    auth_state: _SshLinuxAuthState | _SshMacAuthState
     close_continuation: _PreparedSshCloseContinuation | None
 
 
@@ -2643,6 +3067,7 @@ class SshSessionExecutor(Protocol):
         process_image: str,
         source_port: int,
         required_until: datetime | None = None,
+        pty: bool = False,
     ) -> tuple[int, str] | None:
         """Return the modeled source-side SSH client for any supported endpoint OS."""
         ...
@@ -2773,6 +3198,9 @@ class SshSessionExecutor(Protocol):
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
     ) -> None:
         """Generate source-native process termination evidence."""
         ...
@@ -2784,6 +3212,17 @@ class SshSessionActionBundle:
 
     request: SshSessionRequest
     executor: SshSessionExecutor
+
+    def _ordinary_macos_exit(
+        self,
+        process: ProcessIdentity,
+        at: datetime,
+        *,
+        owner: Literal["ssh_client", "ssh_receiver", "ssh_descendant"],
+    ) -> PosixProcessExit | None:
+        """Use the frozen explicit ordinary-close policy, independently of command status."""
+        provider = getattr(self.executor, "macos_execution_metadata", None)
+        return provider.ordinary_close(process, at, owner=owner) if provider is not None else None
 
     def _timing_planner(self) -> BaselineTimingPlanner:
         """Return the engine planner or one stateless direct-test adapter."""
@@ -2815,95 +3254,25 @@ class SshSessionActionBundle:
     def execute_with_identity(self) -> tuple[str, str]:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
+        if _get_os_category(self.request.target_system.os) == "macos":
+            if (
+                self.request.target_system.architecture != "arm64"
+                or self.request.target_system.type != "workstation"
+            ):
+                raise StateError("Mac SSH receivers require an explicit arm64 workstation")
+            if not self.request.emit_session_close:
+                return replace(
+                    self,
+                    request=replace(
+                        self.request, emit_session_close=True, defer_session_close=True
+                    ),
+                )._execute_macos_receiver()
+            return self._execute_macos_receiver()
         # Hard-deadline admission is read-only and must precede every RNG/state/
         # source-port/evidence side effect in exact and compatibility paths.
         self._hard_deadline_transport_close_limit()
         if self._uses_exact_deferred_publication():
-            owner_rng = _get_rng()
-            rng_state_before = owner_rng.getstate()
-            state: _SshTransportState | None = None
-            prepared: _PreparedDeferredSshOpen | None = None
-            transaction: NetworkTransactionPlan | None = None
-            continuation: _SshCloseContinuation | None = None
-            try:
-                state = self._plan_transport(deferred_publication=True)
-                self._fit_transport_to_source_session_end(state, self.request.source_pid)
-                prepared = self._prepare_deferred_open(state)
-                transaction = self._open_deferred_transport(state, prepared)
-                continuation = self._bind_deferred_close_continuation(
-                    prepared,
-                    transaction,
-                )
-                if continuation is not None:
-                    # This exact journal is the first postcommit owner.  Cache
-                    # publication and source teardown are consequences of an
-                    # already-durable terminal continuation.
-                    self.executor._defer_ssh_session_close(continuation)
-                self._remember_deferred_open_tuple(state, prepared)
-                if self.request.emit_session_close:
-                    close_bundle = (
-                        continuation.materialize_bundle(self.executor)
-                        if continuation is not None
-                        else self
-                    )
-                    close_bundle._terminate_source_ssh_client_process(
-                        state,
-                        continuation=continuation,
-                    )
-                if continuation is not None and not self.request.defer_session_close:
-                    self.executor._finalize_exact_ssh_close_continuation(continuation)
-            except BaseException as primary:
-                committed = bool(
-                    prepared is not None and prepared.identity_capture.transaction is not None
-                )
-                if not committed and prepared is not None:
-                    try:
-                        live_session = self.executor.state_manager.get_session(
-                            prepared.session_plan.identity.logon_id
-                        )
-                        committed = bool(
-                            live_session is not None
-                            and live_session.ecar_object_id
-                            == prepared.session_plan.identity.object_id
-                            and ensure_utc(live_session.start_time)
-                            == prepared.session_plan.identity.started_at
-                        )
-                    except BaseException as recovery_error:
-                        self._note_exact_recovery_error(
-                            primary,
-                            "commit detection",
-                            recovery_error,
-                        )
-                if not committed:
-                    if prepared is not None and prepared.close_continuation is not None:
-                        try:
-                            self.executor._cancel_exact_ssh_close_continuation_reservation(
-                                prepared.close_continuation
-                            )
-                        except BaseException as recovery_error:
-                            self._note_exact_recovery_error(
-                                primary,
-                                "close-reservation cancellation",
-                                recovery_error,
-                            )
-                    try:
-                        owner_rng.setstate(rng_state_before)
-                    except BaseException as recovery_error:
-                        self._note_exact_recovery_error(
-                            primary,
-                            "precommit RNG rollback",
-                            recovery_error,
-                        )
-                elif state is not None and prepared is not None:
-                    self._recover_committed_deferred_open(primary, state, prepared)
-                raise
-            logger.debug(
-                "Generated exact SSH session: %s -> %s (UID: %s)",
-                self.request.user.username,
-                self.request.target_system.hostname,
-                state.uid,
-            )
-            return (state.uid if state.network_visible else ""), state.logon_id
+            return self._execute_exact_deferred()
 
         ecar_after_accept = self._freeze_linux_ecar_readiness()
         state = self._plan_transport()
@@ -2915,7 +3284,9 @@ class SshSessionActionBundle:
         )
         planning_event = self._build_session_event(state)
         auth_state = self._plan_linux_auth(state, planning_event, auth_plan)
-        event = self._build_session_event(state, auth_state)
+        event = self._build_session_event(
+            state, auth_state.receiver if auth_state is not None else None
+        )
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             if auth_plan is None:
@@ -2923,7 +3294,7 @@ class SshSessionActionBundle:
             self._mark_edr_login_readiness(
                 state,
                 event,
-                auth_state,
+                auth_state.receiver,
                 ecar_after_accept_gap=auth_plan.ecar_after_accept.value,
             )
         self.executor.dispatcher.dispatch_builder(event)
@@ -2935,7 +3306,7 @@ class SshSessionActionBundle:
                 if self.request.defer_session_close:
                     self.executor._defer_ssh_session_close(self, state, event, auth_state)
                 else:
-                    self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                    self._dispatch_session_close_lifecycle(state, event, auth_state)
             if auth_plan is None:
                 raise StateError("SSH auth completion lost its frozen timing plan")
             auth_plan.ecar_after_accept.publish()
@@ -2947,6 +3318,187 @@ class SshSessionActionBundle:
             state.uid,
         )
         return (state.uid if state.network_visible else ""), state.logon_id
+
+    def _execute_exact_deferred(
+        self,
+        state: _SshTransportState | None = None,
+    ) -> tuple[str, str]:
+        """Commit the shared exact transport and retain every postcommit consequence.
+
+        A supplied transport has been planned before a separately materialized
+        source client. Rollback restores this owner's RNG boundary, never a prior
+        source action's committed work. RDP uses the same source-first convention.
+        """
+        owner_rng = _get_rng()
+        rng_state_before = owner_rng.getstate()
+        prepared: _PreparedDeferredSshOpen | None = None
+        transaction: NetworkTransactionPlan | None = None
+        continuation: _SshCloseContinuation | None = None
+        try:
+            if state is None:
+                state = self._plan_transport(deferred_publication=True)
+            self._fit_transport_to_source_session_end(state, self.request.source_pid)
+            prepared = self._prepare_deferred_open(state)
+            transaction = self._open_deferred_transport(state, prepared)
+            continuation = self._bind_deferred_close_continuation(
+                prepared,
+                transaction,
+            )
+            if continuation is not None:
+                # This exact journal is the first postcommit owner.  Cache
+                # publication and source teardown are consequences of an
+                # already-durable terminal continuation.
+                self.executor._defer_ssh_session_close(continuation)
+                continuation.prepared.drain_receiver_startup(self.executor)
+            if type(prepared.auth_state) is _SshLinuxAuthState:
+                # Exact deferred publication commits the canonical transport and
+                # session graph through the network contract, so it must also
+                # publish the bundle-owned Linux sshd/PAM lifecycle that the
+                # compatibility path emits after building the same session.
+                event = self._build_session_event(state, prepared.auth_state.receiver)
+                self._dispatch_linux_connection_message(state, event, prepared.auth_state)
+                self._dispatch_linux_auth_messages(state, event, prepared.auth_state)
+            self._remember_deferred_open_tuple(state, prepared)
+            if self.request.emit_session_close:
+                close_bundle = (
+                    continuation.materialize_bundle(self.executor)
+                    if continuation is not None
+                    else self
+                )
+                close_bundle._terminate_source_ssh_client_process(
+                    state,
+                    continuation=continuation,
+                )
+            if continuation is not None and not self.request.defer_session_close:
+                self.executor._finalize_exact_ssh_close_continuation(continuation)
+        except BaseException as primary:
+            committed = bool(
+                prepared is not None and prepared.identity_capture.transaction is not None
+            )
+            if not committed and prepared is not None:
+                try:
+                    live_session = self.executor.state_manager.get_session(
+                        prepared.session_plan.identity.logon_id
+                    )
+                    committed = bool(
+                        live_session is not None
+                        and live_session.ecar_object_id == prepared.session_plan.identity.object_id
+                        and ensure_utc(live_session.start_time)
+                        == prepared.session_plan.identity.started_at
+                    )
+                except BaseException as recovery_error:
+                    self._note_exact_recovery_error(
+                        primary,
+                        "commit detection",
+                        recovery_error,
+                    )
+            if not committed:
+                if prepared is not None and prepared.close_continuation is not None:
+                    try:
+                        self.executor._cancel_exact_ssh_close_continuation_reservation(
+                            prepared.close_continuation
+                        )
+                    except BaseException as recovery_error:
+                        self._note_exact_recovery_error(
+                            primary,
+                            "close-reservation cancellation",
+                            recovery_error,
+                        )
+                try:
+                    owner_rng.setstate(rng_state_before)
+                except BaseException as recovery_error:
+                    self._note_exact_recovery_error(
+                        primary,
+                        "precommit RNG rollback",
+                        recovery_error,
+                    )
+            elif state is not None and prepared is not None:
+                self._recover_committed_deferred_open(primary, state, prepared)
+            raise
+        logger.debug(
+            "Generated exact SSH session: %s -> %s (UID: %s)",
+            self.request.user.username,
+            self.request.target_system.hostname,
+            state.uid,
+        )
+        return (state.uid if state.network_visible else ""), state.logon_id
+
+    def _execute_macos_receiver(self) -> tuple[str, str]:
+        """Compose a source-client prerequisite with the exact native receiver.
+
+        Client creation uses the established process/session owners independently
+        of the following atomic transport/receiver publication. The public caller
+        admits only the bounded workstation profile and bundle-owned closure.
+        """
+        if _get_os_category(self.request.target_system.os) != "macos":
+            raise StateError("Mac receiver composition requires a modeled Mac target")
+        if self._deferred_operation_kind() is not SshOperationKind.SHELL:
+            raise StateError(
+                "Mac SSH receiver currently supports shell sessions, not SCP/SFTP helpers"
+            )
+        if (
+            self.request.session_end_plan is not None
+            and self.request.session_end_plan.is_authoritative
+            and not self.request.defer_session_close
+        ):
+            raise StateError("Authored Mac SSH close must retain its deferred continuation")
+        self._hard_deadline_transport_close_limit()
+        request = self.request
+        source = self._source_system()
+        needs_client = bool(
+            request.source_pid <= 0
+            and not request.source_process_image
+            and source is not None
+            and self.executor.has_implicit_ssh_client_owner(
+                user=request.user,
+                source_system=source,
+                time=request.time,
+            )
+        )
+        if not self._uses_exact_deferred_publication(allow_mac_source_prerequisite=needs_client):
+            raise StateError(
+                "Mac receiver requires exact sources and an authenticated source actor"
+            )
+        rng = _get_rng()
+        before = rng.getstate()
+        state: _SshTransportState | None = None
+        preview: _PreparedDeferredSshOpen | None = None
+        try:
+            state = self._plan_transport(deferred_publication=True)
+            self._fit_transport_to_source_session_end(state, request.source_pid)
+            # Validate accounts, parent, catalog, timing and journal capacity before
+            # a source-side prerequisite is allowed to materialize.
+            preview = self._prepare_deferred_open(state)
+        except BaseException:
+            rng.setstate(before)
+            raise
+        if preview.close_continuation is not None:
+            self.executor._cancel_exact_ssh_close_continuation_reservation(
+                preview.close_continuation
+            )
+        if not needs_client:
+            rng.setstate(before)
+            return self._execute_exact_deferred()
+        assert source is not None
+        client = self.executor.ensure_ssh_client_process(
+            user=request.user,
+            source_system=source,
+            target_system=request.target_system,
+            time=request.time,
+            process_image="",
+            source_port=state.source_port,
+            **({"pty": True} if request.pty else {}),
+            required_until=state.close_time
+            if _get_os_category(source.os) in {"linux", "macos"}
+            else None,
+        )
+        if client is None:
+            raise StateError("Mac receiver source session could not materialize its SSH client")
+        pid, image = client
+        bound = replace(self, request=replace(request, source_pid=pid, source_process_image=image))
+        if bound._deferred_source_process_binding() is None:
+            raise StateError("Mac receiver source client lost its canonical session identity")
+        return bound._execute_exact_deferred(state)
 
     def _remember_deferred_open_tuple(
         self,
@@ -2965,7 +3517,7 @@ class SshSessionActionBundle:
             self.request.source_ip,
             state.source_port,
             state.dst_host.ip,
-            prepared.auth_state.logind_time,
+            prepared.auth_state.receiver.ready_at,
         )
 
     def _bind_deferred_close_continuation(
@@ -3018,14 +3570,16 @@ class SshSessionActionBundle:
         # executes the same idempotent teardown after projection recovery and
         # before target-session retirement.
 
-    def _uses_exact_deferred_publication(self) -> bool:
+    def _uses_exact_deferred_publication(
+        self, *, allow_mac_source_prerequisite: bool = False
+    ) -> bool:
         """Return whether this call has the closed exact SSH source cohort."""
 
         if (
             self.request.logon_id
             or self.request.session_obj_id
             or self.request.sshd_pid is not None
-            or _get_os_category(self.request.target_system.os) != "linux"
+            or _get_os_category(self.request.target_system.os) not in {"linux", "macos"}
         ):
             return False
         source_system = self._source_system()
@@ -3042,80 +3596,30 @@ class SshSessionActionBundle:
             # Compatibility owns implicit source-process creation and teardown.
             # Exact preparation can bind a preexisting actor, but cannot publish
             # a new prerequisite outside its State/projection rollback authority.
-            return False
+            if not (
+                allow_mac_source_prerequisite
+                and _get_os_category(self.request.target_system.os) == "macos"
+            ):
+                return False
         if (self.request.source_pid > 0 or self.request.source_process_image) and (
             self._deferred_source_process_binding() is None
         ):
             return False
         dispatcher = getattr(self.executor, "dispatcher", None)
         emitters = getattr(dispatcher, "emitters", None)
-        if type(emitters) is not dict:
+        if type(dispatcher) is not EventDispatcher or type(emitters) is not dict:
             return False
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
-        if type(dict.get(emitters, "zeek_conn")) is not ZeekEmitter:
+        if "zeek_conn" in emitters and type(dict.get(emitters, "zeek_conn")) is not ZeekEmitter:
             return False
         if type(dict.get(emitters, "ecar")) is EcarEmitter:
             return True
-        return "ecar" not in emitters and self._no_ecar_cohort_is_provably_warmup()
-
-    def _no_ecar_cohort_is_provably_warmup(self) -> bool:
-        """Conservatively admit an exact no-eCAR cohort only when wholly suppressed."""
-
-        dispatcher = getattr(self.executor, "dispatcher", None)
-        output_start = getattr(dispatcher, "output_start_time", None)
-        if type(output_start) is not datetime:
-            return False
-        request = self.request
-        duration = 0.0
-        if request.bundle_owns_close:
-            duration = (
-                request.duration
-                if request.duration is not None
-                else self._preview_deferred_transport_duration()
-            )
-            if request.min_duration is not None:
-                duration = max(duration, request.min_duration)
-            duration = max(1.0, duration)
-        if request.session_end_plan is not None:
-            planned_duration = (
-                ensure_utc(request.session_end_plan.canonical_end) - ensure_utc(request.time)
-            ).total_seconds()
-            if planned_duration <= 0:
-                return False
-            duration = max(duration, planned_duration)
-        if not math.isfinite(duration):
-            return False
-        try:
-            required_headroom = ssh_action_deadline_transport_headroom_seconds(
-                min_duration_seconds=duration,
-                auth_method=request.auth_method,
-                public_key_type=request.public_key_type,
-                route_class="private" if self._source_system() is not None else "public",
-                **self._action_deadline_runtime_options(ensure_utc(output_start)),
-            )
-        except (StateError, TypeError, ValueError):
-            return False
-        return ensure_utc(request.time) + timedelta(seconds=required_headroom) < ensure_utc(
-            output_start
-        )
-
-    def _preview_deferred_transport_duration(self) -> float:
-        """Preview the exact upcoming random duration without advancing its owner RNG."""
-
-        request = self.request
-        preview_rng = random.Random(0)
-        preview_rng.setstate(_get_rng().getstate())
-        self.executor.preview_ssh_source_port(
-            request.source_ip,
-            request.target_system.ip,
-            request.source_port,
-            preview_rng,
-            self._source_os(),
-            request.time,
-        )
-        return preview_rng.uniform(30.0, 3600.0)
+        # An absent renderer is an exact empty projection cohort. Canonical SSH
+        # ownership must stay the same across source filtering; a present renderer
+        # still requires the concrete built-in owner checked above.
+        return "ecar" not in emitters
 
     def _source_os(self) -> str:
         """Return the source OS category used for source-port reservation."""
@@ -3435,7 +3939,7 @@ class SshSessionActionBundle:
         source_timing_planner = runtime_options["source_timing_planner"]
         target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
             ensure_utc(deadline),
-            "linux",
+            runtime_options["target_os_category"],
         )
         route_class = "private" if self._source_system() is not None else "public"
         return _ssh_minimum_transport_seconds(
@@ -3487,6 +3991,10 @@ class SshSessionActionBundle:
         ):
             raise StateError("SSH deadline admission requires observation-delay support")
         source_os = self._source_os()
+        target_os = _get_os_category(self.request.target_system.os)
+        source_os_categories = (target_os,)
+        if source_os != target_os:
+            source_os_categories += (source_os if source_os in {"linux", "macos"} else "windows",)
         return {
             "source_deadline": deadline,
             "source_timing_planner": source_timing_planner,
@@ -3494,7 +4002,8 @@ class SshSessionActionBundle:
             "observation_policy": observation_policy,
             "source_ip": self.request.source_ip,
             "target_ip": self.request.target_system.ip,
-            "source_os_categories": (("linux",) if source_os == "linux" else ("linux", "windows")),
+            "source_os_categories": source_os_categories,
+            "target_os_category": target_os,
         }
 
     def _action_rendered_source_tail(self, deadline: datetime) -> timedelta:
@@ -3528,11 +4037,11 @@ class SshSessionActionBundle:
         session_plan: SessionMaterializationPlan,
         receiver_identity: ProcessIdentity,
         source_identity: ProcessIdentity | None,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
     ) -> _PreparedSshClosePlan | None:
         """Freeze an action-owned close before the network owner may commit."""
 
-        if not self.request.bundle_owns_close:
+        if not self.request.emit_session_close:
             return None
         source_process = (
             None
@@ -3556,17 +4065,17 @@ class SshSessionActionBundle:
         )
         # This is deliberately the only exact-path invocation. Any custom or
         # malformed event construction fails before State/lifecycle transfer.
-        event = self._build_session_event(planned_state, auth_state)
+        event = self._build_session_event(planned_state, auth_state.receiver)
         if (
             type(event) is not OccurrenceBuilder
             or event.event_type != "ssh_session"
-            or event.timestamp != auth_state.pam_time
+            or event.timestamp != auth_state.receiver.session_open_time
             or type(event.auth) is not AuthContext
             or event.auth.username != self.request.user.username
             or event.auth.source_ip != self.request.source_ip
             or event.auth.source_port != state.source_port
             or event.auth.logon_id != session_plan.identity.logon_id
-            or event.auth.session_id != auth_state.logind_session_id
+            or event.auth.session_id != auth_state.receiver.session_id
             or type(event.dst_host) is not HostContext
             or event.dst_host.hostname != self.request.target_system.hostname
             or event.dst_host.ip != self.request.target_system.ip
@@ -3582,24 +4091,36 @@ class SshSessionActionBundle:
             username=self.request.user.username,
             source_ip=self.request.source_ip,
             source_port=state.source_port,
-            sshd_pid=auth_state.sshd_pid,
+            sshd_pid=auth_state.receiver.responder_pid,
             transport_close_time=transport_close_time,
         )
+        authoritative_end_plan = (
+            self.request.session_end_plan
+            if self.request.session_end_plan is not None
+            and self.request.session_end_plan.is_authoritative
+            else None
+        )
+        if authoritative_end_plan is not None:
+            session_close_time = ensure_utc(authoritative_end_plan.canonical_end)
         receiver_terminate_time = _ssh_receiver_process_terminate_time(
             target_hostname=self.request.target_system.hostname,
             source_ip=self.request.source_ip,
             source_port=state.source_port,
-            sshd_pid=auth_state.sshd_pid,
+            sshd_pid=auth_state.receiver.responder_pid,
             receiver_started_at=receiver_identity.started_at,
             session_close_time=session_close_time,
         )
-        logind_remove_time = _ssh_logind_removed_time(
-            target_hostname=self.request.target_system.hostname,
-            username=self.request.user.username,
-            source_ip=self.request.source_ip,
-            source_port=state.source_port,
-            logind_session_id=auth_state.logind_session_id,
-            session_close_time=session_close_time,
+        logind_remove_time = (
+            None
+            if type(auth_state) is _SshMacAuthState
+            else _ssh_logind_removed_time(
+                target_hostname=self.request.target_system.hostname,
+                username=self.request.user.username,
+                source_ip=self.request.source_ip,
+                source_port=state.source_port,
+                logind_session_id=auth_state.receiver.session_id,
+                session_close_time=session_close_time,
+            )
         )
         source_terminate_time = (
             _ssh_source_process_terminate_time(
@@ -3650,6 +4171,7 @@ class SshSessionActionBundle:
             source_identity=source_identity,
             auth_state=auth_state,
             source_tag=self.request.source,
+            authoritative_end_plan=authoritative_end_plan,
         )
 
     def _owned_terminal_window_end(self) -> datetime:
@@ -3665,6 +4187,12 @@ class SshSessionActionBundle:
 
     def _prepare_deferred_open(self, state: _SshTransportState) -> _PreparedDeferredSshOpen:
         """Prepare the exact SSH State/application/dependent handoff without mutation."""
+
+        from evidenceforge.generation.actions.macos_ssh_receiver import (
+            MacosSshReceiverStartupRequest,
+            macos_ssh_command_arguments,
+            resolve_macos_ssh_receiver_environment,
+        )
 
         request = self.request
         executor = self.executor
@@ -3722,6 +4250,46 @@ class SshSessionActionBundle:
         ):
             raise StateError("Exact SSH session end cannot precede its transport close")
 
+        macos = _get_os_category(request.target_system.os) == "macos"
+        provider = getattr(executor, "macos_execution_metadata", None)
+        native_receiver = bool(
+            macos
+            and provider is not None
+            and provider.profile.ssh_receiver_startup == "launchd_non_pty_v11"
+            and executor.dispatcher.macos_es_ingress is not None
+            and executor.dispatcher.macos_es_ingress.enabled
+        )
+        if request.pty and (
+            not native_receiver or provider.profile.ssh_pty_execution != "zsh_foreground_v11"
+        ):
+            raise StateError("SSH PTY startup requires the qualified native zsh foreground profile")
+        environment = None
+        phase_times: tuple[datetime, ...] = ()
+        if macos:
+            if not request.bundle_owns_close:
+                raise StateError("Mac SSH receiver requires bundle-owned session closure")
+            environment = resolve_macos_ssh_receiver_environment(
+                hostname=request.target_system.hostname,
+                username=request.user.username,
+                started_at=receiver_start,
+                state=executor.state_manager,
+                identities=executor.identity_directory,
+                deployment=executor.dispatcher.deployment_registry,
+                native=native_receiver,
+            )
+            if request.pty and environment.shell.image_path != "/bin/zsh":
+                raise StateError(
+                    "SSH PTY startup currently qualifies the installed zsh login shell"
+                )
+            phase_times = plan_macos_ssh_startup_times(
+                connection_time=connection_time,
+                authenticated_at=accepted_time,
+                session_open_time=pam_time,
+                ready_at=logind_time,
+                timing_runtime=timing_preview,
+                scope=timing_scope,
+                phase_count=19 if native_receiver else 12,
+            )
         batch_builder = executor.state_manager.begin_materialization_batch()
         session_plan = batch_builder.plan_session(
             username=request.user.username,
@@ -3733,48 +4301,119 @@ class SshSessionActionBundle:
             start_time=session_start,
             lifecycle_group_id=execution_id,
             auth_protocol="ssh",
-            effective_uid=_linux_uid_for_user(request.user.username),
-            effective_gid=_linux_uid_for_user(request.user.username),
+            effective_uid=environment.account.uid
+            if environment
+            else _linux_uid_for_user(request.user.username),
+            effective_gid=environment.account.gid
+            if environment
+            else _linux_uid_for_user(request.user.username),
             network_close_time=state.close_time,
             source_ready_time=logind_time,
-            closure_owned_by_bundle=request.bundle_owns_close,
+            closure_owned_by_bundle=request.emit_session_close,
             end_plan=request.session_end_plan,
         )
-        logind_rng = random.Random(
-            _stable_seed(
-                "ssh_deferred_logind:"
-                f"{request.target_system.hostname}:{request.user.username}:"
-                f"{request.source_ip}:{state.source_port}:{logind_time.isoformat()}"
+        if environment is not None:
+            session_plan = batch_builder.enrich_macos_audit_session(
+                session_plan,
+                audit_uid=environment.account.uid,
+                authenticated_at=accepted_time,
             )
-        )
-        session_plan = batch_builder.enrich_linux_logind_session(
-            session_plan,
-            rng=logind_rng,
-            event_time=logind_time,
-        )
-        receiver_parent_pid, receiver_parent_group = self._deferred_receiver_parent(receiver_start)
-        receiver_plan = batch_builder.plan_process(
-            system=request.target_system.hostname,
-            parent_pid=receiver_parent_pid,
-            image="/usr/sbin/sshd",
-            command_line=f"sshd: {request.user.username} [priv]",
-            username="root",
-            integrity_level="System",
-            os_category="linux",
-            logon_id=session_plan.identity.logon_id,
-            lifecycle_group_id=stable_uuid(
-                "ssh-deferred-receiver-lifecycle",
-                execution_id,
-            ),
-            parent_lifecycle_group_id=(
-                receiver_parent_group or session_plan.identity.lifecycle_group_id
-            ),
-            start_time=receiver_start,
-            require_session=True,
-            session_plan=session_plan,
-            auth_session_id=session_plan.identity.session_id,
-            auth_logon_type=10,
-        )
+            provider = getattr(executor, "macos_execution_metadata", None)
+            if (
+                provider is not None
+                and provider.profile.ssh_command_descriptors == "standard_pipes"
+                and not request.pty
+            ):
+                session_plan = batch_builder.enrich_macos_ssh_command_streams(
+                    session_plan, first_pipe_id=provider.profile.first_pipe_id
+                )
+            receiver_parent_pid = environment.parent.pid
+            receiver_parent_group = environment.parent.lifecycle_group_id
+        else:
+            logind_rng = random.Random(
+                _stable_seed(
+                    "ssh_deferred_logind:"
+                    f"{request.target_system.hostname}:{request.user.username}:"
+                    f"{request.source_ip}:{state.source_port}:{logind_time.isoformat()}"
+                )
+            )
+            session_plan = batch_builder.enrich_linux_logind_session(
+                session_plan,
+                rng=logind_rng,
+                event_time=logind_time,
+            )
+            receiver_parent_pid, receiver_parent_group = self._deferred_receiver_parent(
+                receiver_start
+            )
+        receiver_executable_version = None
+        receiver_metadata = None
+        if environment is not None and not native_receiver:
+            binary = executor.dispatcher.resolve_process_binary_identity(
+                request.target_system.hostname, "root", environment.wrapper.image_path, "macos"
+            )
+            if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+                receiver_executable_version = ProcessExecutableVersion.from_binary(binary)
+            provider = getattr(executor, "macos_execution_metadata", None)
+            if provider is not None:
+                receiver_metadata = provider.launch(
+                    request.target_system.hostname,
+                    "root",
+                    at=receiver_start,
+                    requested_path=environment.wrapper.image_path,
+                    binary=binary,
+                    kind="system",
+                )
+        if native_receiver:
+            current_directory = executor.state_manager.process_directory_at(
+                environment.parent, event_time=receiver_start
+            )
+            if current_directory is None:
+                raise StateError("Native SSH startup requires its boot parent's directory")
+            receiver_plan = batch_builder.plan_macos_ssh_receiver_fork(
+                environment.parent,
+                session=session_plan,
+                forked_at=receiver_start,
+                execution_directory=provider.directory(
+                    request.target_system.hostname, current_directory.native_path, receiver_start
+                ),
+                lifecycle_group_id=stable_uuid("ssh-deferred-receiver-lifecycle", execution_id),
+            )
+        else:
+            receiver_plan = batch_builder.plan_process(
+                system=request.target_system.hostname,
+                parent_pid=receiver_parent_pid,
+                image=environment.wrapper.image_path if environment else "/usr/sbin/sshd",
+                command_line=environment.wrapper.command_templates[0]
+                if environment
+                else f"sshd: {request.user.username} [priv]",
+                username="root",
+                integrity_level="System",
+                os_category="macos" if environment else "linux",
+                credentials=environment.parent.credentials if environment else None,
+                new_posix_session=environment is not None,
+                executable_version=receiver_executable_version,
+                arguments=macos_ssh_command_arguments(environment.wrapper) if environment else None,
+                environment=receiver_metadata.environment if receiver_metadata else None,
+                execution_directory=receiver_metadata.directory if receiver_metadata else None,
+                exec_image=receiver_metadata.image if receiver_metadata else None,
+                exec_script=receiver_metadata.script if receiver_metadata else None,
+                image_security=receiver_metadata.image_security if receiver_metadata else None,
+                responsibility=receiver_metadata.responsibility if receiver_metadata else None,
+                macos_terminal="absent" if receiver_metadata else None,
+                logon_id=session_plan.identity.logon_id,
+                lifecycle_group_id=stable_uuid(
+                    "ssh-deferred-receiver-lifecycle",
+                    execution_id,
+                ),
+                parent_lifecycle_group_id=(
+                    receiver_parent_group or session_plan.identity.lifecycle_group_id
+                ),
+                start_time=receiver_start,
+                require_session=True,
+                session_plan=session_plan,
+                auth_session_id=session_plan.identity.session_id,
+                auth_logon_type=10,
+            )
         batch_builder.bind_session_processes(
             session_plan,
             transport_plan=receiver_plan,
@@ -3789,21 +4428,56 @@ class SshSessionActionBundle:
         source_session_object_id = (
             source_session_identity.object_id if source_session_identity is not None else ""
         )
-        auth_state = _SshLinuxAuthState(
-            sshd_pid=receiver_plan.identity.pid,
-            logind_session_id=session_plan.identity.session_id,
-            syslog_seed=(
-                request.target_system.hostname,
-                request.source_ip,
-                state.source_port,
-                receiver_plan.identity.pid,
-                request.time.isoformat(),
-            ),
+        authentication = SshReceiverAuthentication(
+            responder_pid=receiver_plan.identity.pid,
+            session_id=session_plan.identity.session_id,
             connection_time=connection_time,
-            accepted_time=accepted_time,
-            pam_time=pam_time,
-            logind_time=logind_time,
+            authenticated_at=accepted_time,
+            session_open_time=pam_time,
+            ready_at=logind_time,
         )
+        startup_request = None
+        auth_state: _SshLinuxAuthState | _SshMacAuthState
+        if environment is not None:
+            auth_state = _SshMacAuthState(
+                receiver=authentication,
+                initial_receiver_image=receiver_plan.identity.image,
+                receiver_image=environment.session_worker.image_path,
+                owns_posix_session=True,
+                pty=request.pty,
+            )
+            startup_request = MacosSshReceiverStartupRequest(
+                receiver=receiver_plan.identity,
+                service_account=environment.service_account,
+                wrapper=environment.wrapper,
+                daemon=environment.daemon,
+                session_worker=environment.session_worker,
+                authentication_worker=environment.authentication_worker,
+                shell=environment.shell,
+                phase_times=phase_times,
+                auth_method=request.auth_method,
+                public_key_type=request.public_key_type,
+                public_key_hash=request.public_key_hash,
+                launcher=environment.launcher,
+                pty=request.pty,
+                service_label=(
+                    f"{provider.profile.ssh_receiver_service_label}."
+                    f"{stable_uuid('macos-ssh-service-instance', execution_id).upper()}"
+                    if native_receiver
+                    else None
+                ),
+            )
+        else:
+            auth_state = _SshLinuxAuthState(
+                receiver=authentication,
+                syslog_seed=(
+                    request.target_system.hostname,
+                    request.source_ip,
+                    state.source_port,
+                    receiver_plan.identity.pid,
+                    request.time.isoformat(),
+                ),
+            )
         close_plan = self._prepare_deferred_close_plan(
             state,
             session_plan=session_plan,
@@ -3815,6 +4489,7 @@ class SshSessionActionBundle:
         close_continuation = (
             _PreparedSshCloseContinuation(
                 plan=close_plan,
+                startup_request=startup_request,
                 identity_capture=identity_capture,
                 dispatcher_owner=executor.dispatcher,
                 ecar_owner=executor.dispatcher.emitters.get("ecar"),
@@ -3871,7 +4546,9 @@ class SshSessionActionBundle:
                     "ssh-deferred-receiver-occurrence",
                     receiver_plan.identity.object_id,
                 ),
-                event_type=EventKind.SYSTEM_PROCESS_CREATE,
+                event_type=EventKind.PROCESS_FORK
+                if receiver_plan.forked
+                else EventKind.SYSTEM_PROCESS_CREATE,
                 canonical_time=receiver_plan.identity.started_at,
                 member_references=(receiver_plan.identity.object_id,),
                 publication_ordinal=1,
@@ -3904,6 +4581,7 @@ class SshSessionActionBundle:
                 transport_open_time=open_time,
                 ready_at=logind_time,
                 receiver_bootstrap_headroom=receiver_start - open_time,
+                macos_startup_times=phase_times,
             ),
             ssh_timing_runtime=timing_runtime,
         )
@@ -4074,9 +4752,10 @@ class SshSessionActionBundle:
         source_system = self._source_system()
         if source_system is None or source_pid <= 0:
             return
-        source_process = self.executor.state_manager.get_process(
+        source_process = self.executor.state_manager.get_process_at(
             source_system.hostname,
             source_pid,
+            state.open_time or self.request.time,
         )
         source_session_end: datetime | None = None
         if source_process is not None and source_process.logon_id:
@@ -4117,11 +4796,14 @@ class SshSessionActionBundle:
                 source_system=source_system,
                 target_system=request.target_system,
                 time=request.time,
-                process_image=source_process_image or "/usr/bin/ssh",
+                process_image=source_process_image,
                 source_port=state.source_port,
                 required_until=(
-                    state.close_time if _get_os_category(source_system.os) == "linux" else None
+                    state.close_time
+                    if _get_os_category(source_system.os) in {"linux", "macos"}
+                    else None
                 ),
+                **({"pty": True} if request.pty else {}),
             )
             if client is not None:
                 source_pid, source_process_image = client
@@ -4290,6 +4972,36 @@ class SshSessionActionBundle:
         ):
             raise TypeError("Exact SSH terminal cohort received an invalid typed owner")
         continuation.prepared.require_projection_owner(self.executor)
+        if (
+            _is_ssh_process_termination_phase(phase)
+            and event.src_host is not None
+            and event.src_host.os_category == "macos"
+        ):
+            from evidenceforge.generation.actions.posix_process import process_exit_occurrence
+
+            terminal = next(
+                item
+                for item in state_plan.process_terminations
+                if item.identity == expected_identity
+            )
+            running = self.executor.state_manager.get_process(
+                expected_identity.hostname, expected_identity.pid
+            )
+            if running is None or running.ecar_object_id != expected_identity.object_id:
+                raise StateError("Mac SSH process exit lost its exact live State owner")
+            pure_exit = process_exit_occurrence(
+                host=event.src_host,
+                process=expected_identity,
+                timestamp=terminal.end_time,
+                integrity_level=running.integrity_level,
+                session=event.identity_plan.session,
+                exit_outcome=terminal.exit_outcome,
+            )
+            pure_exit.process = replace(
+                pure_exit.process, concurrency_group_id=event.process.concurrency_group_id
+            )
+            pure_exit.storyline_origin = event.storyline_origin
+            event = pure_exit
         root_action_id = f"ssh-close:{continuation.continuation_id}:{phase}"
         audit_plan = ExecutionEffectPlan(
             ActionAnchor(
@@ -4499,7 +5211,11 @@ class SshSessionActionBundle:
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         if source_session_identity is not None:
             state_builder.patch_session_activity(source_session_identity, terminate_time)
-        state_builder.terminate_process(identity, end_time=terminate_time)
+        state_builder.terminate_process(
+            identity,
+            end_time=terminate_time,
+            exit_outcome=self._ordinary_macos_exit(identity, terminate_time, owner="ssh_client"),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -4557,7 +5273,11 @@ class SshSessionActionBundle:
         session_identity = plan.session_identity()
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         state_builder.patch_session_activity(session_identity, terminate_time)
-        state_builder.terminate_process(identity, end_time=terminate_time)
+        state_builder.terminate_process(
+            identity,
+            end_time=terminate_time,
+            exit_outcome=self._ordinary_macos_exit(identity, terminate_time, owner="ssh_receiver"),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -4566,7 +5286,11 @@ class SshSessionActionBundle:
             src_host=plan.target_host.materialize(),
             auth=AuthContext(
                 username=identity.principal,
-                user_sid=self.executor._get_sid(identity.principal),
+                user_sid=(
+                    ""
+                    if plan.target_host.os_category == "macos"
+                    else self.executor._get_sid(identity.principal)
+                ),
                 logon_id=identity.logon_id,
                 session_id=session_identity.session_id,
                 logon_type=10,
@@ -4614,14 +5338,20 @@ class SshSessionActionBundle:
         session_identity = planned.session_identity
         if (
             identity.hostname != plan.target_system.hostname
-            or identity.pid == plan.auth_state.sshd_pid
+            or identity.pid == plan.auth_state.receiver.responder_pid
             or planned.terminate_at >= plan.receiver_terminate_time
         ):
             raise StateError("Exact SSH descendant close crossed its receiver owner")
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         if session_identity is not None:
             state_builder.patch_session_activity(session_identity, planned.terminate_at)
-        state_builder.terminate_process(identity, end_time=planned.terminate_at)
+        state_builder.terminate_process(
+            identity,
+            end_time=planned.terminate_at,
+            exit_outcome=self._ordinary_macos_exit(
+                identity, planned.terminate_at, owner="ssh_descendant"
+            ),
+        )
         state_plan = state_builder.seal()
         exact_termination = state_plan.process_terminations[0]
         event = OccurrenceBuilder(
@@ -4630,7 +5360,11 @@ class SshSessionActionBundle:
             src_host=plan.target_host.materialize(),
             auth=AuthContext(
                 username=identity.principal,
-                user_sid=self.executor._get_sid(identity.principal),
+                user_sid=(
+                    ""
+                    if plan.target_host.os_category == "macos"
+                    else self.executor._get_sid(identity.principal)
+                ),
                 logon_id=identity.logon_id,
                 session_id=session_identity.session_id if session_identity is not None else 0,
                 logon_type=(
@@ -4752,6 +5486,14 @@ class SshSessionActionBundle:
             raise StateError("Exact SSH source termination lost its frozen terminal time")
         try:
             if continuation is None:
+                identity = self.executor.state_manager.get_process_identity(
+                    source_system.hostname, source_process.pid
+                )
+                outcome = (
+                    self._ordinary_macos_exit(identity, terminate_time, owner="ssh_client")
+                    if identity is not None
+                    else None
+                )
                 self.executor.generate_process_termination(
                     user=self.request.user,
                     system=source_system,
@@ -4760,6 +5502,11 @@ class SshSessionActionBundle:
                     process_name=running.image,
                     logon_id=running.logon_id,
                     from_storyline=self.request.source.startswith("storyline"),
+                    **(
+                        {"exit_outcome": outcome, "expected_process": identity}
+                        if outcome is not None
+                        else {}
+                    ),
                 )
             else:
                 identity = self.executor.state_manager.get_process_identity(
@@ -4823,7 +5570,7 @@ class SshSessionActionBundle:
         manager = self.executor.state_manager
         if not manager.is_process_active_at(system.hostname, source_pid, self.request.time):
             return None
-        return manager.get_process_identity(system.hostname, source_pid)
+        return manager.get_process_identity_at(system.hostname, source_pid, self.request.time)
 
     @staticmethod
     def _source_process_context(identity: ProcessIdentity | None) -> ProcessContext | None:
@@ -4854,7 +5601,7 @@ class SshSessionActionBundle:
     def _build_session_event(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState | None = None,
+        authentication: SshReceiverAuthentication | None = None,
     ) -> OccurrenceBuilder:
         """Build the canonical SSH session occurrence.
 
@@ -4865,7 +5612,9 @@ class SshSessionActionBundle:
 
         request = self.request
         return OccurrenceBuilder(
-            timestamp=auth_state.pam_time if auth_state is not None else request.time,
+            timestamp=authentication.session_open_time
+            if authentication is not None
+            else request.time,
             event_type="ssh_session",
             src_host=state.src_host,
             dst_host=state.dst_host,
@@ -4874,7 +5623,7 @@ class SshSessionActionBundle:
                 source_ip=request.source_ip,
                 source_port=state.source_port,
                 logon_id=state.logon_id,
-                session_id=auth_state.logind_session_id if auth_state is not None else 0,
+                session_id=authentication.session_id if authentication is not None else 0,
                 logon_type=10,
             ),
             process=state.source_process,
@@ -4947,13 +5696,15 @@ class SshSessionActionBundle:
                 session_id=logind_session_id,
             )
         return _SshLinuxAuthState(
-            sshd_pid=plan.sshd_pid,
-            logind_session_id=logind_session_id,
+            receiver=SshReceiverAuthentication(
+                responder_pid=plan.sshd_pid,
+                session_id=logind_session_id,
+                connection_time=resolved_times["connection"],
+                authenticated_at=resolved_times["accepted"],
+                session_open_time=resolved_times["pam"],
+                ready_at=resolved_times["logind"],
+            ),
             syslog_seed=plan.syslog_seed,
-            connection_time=resolved_times["connection"],
-            accepted_time=resolved_times["accepted"],
-            pam_time=resolved_times["pam"],
-            logind_time=resolved_times["logind"],
         )
 
     def _freeze_linux_ecar_readiness(self) -> _FrozenSshTimingDelta | None:
@@ -5360,7 +6111,7 @@ class SshSessionActionBundle:
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        authentication: SshReceiverAuthentication,
         *,
         ecar_after_accept_gap: timedelta,
     ) -> None:
@@ -5384,9 +6135,9 @@ class SshSessionActionBundle:
             seed_parts=ecar_seed,
         )
         graph = TemporalConstraintGraph()
-        graph.add_node("pam", auth_state.pam_time)
+        graph.add_node("session_open", authentication.session_open_time)
         graph.add_node("ecar_login", preferred_ecar_login_time)
-        graph.constrain_after("ecar_login", "pam", min_gap=ecar_after_accept_gap)
+        graph.constrain_after("ecar_login", "session_open", min_gap=ecar_after_accept_gap)
         ecar_login_time = graph.resolved_time("ecar_login")
         self.executor._source_timing_planner.record_source_time(
             event,
@@ -5399,7 +6150,7 @@ class SshSessionActionBundle:
             f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
             f"{state.source_port}:{state.logon_id}:{request.time.isoformat()}"
         )
-        ready_time = max(ecar_login_time, auth_state.logind_time) + timedelta(
+        ready_time = max(ecar_login_time, authentication.ready_at) + timedelta(
             milliseconds=80 + (ready_seed % 160)
         )
         self.executor._remember_ssh_session_ready_time(
@@ -5524,16 +6275,18 @@ class SshSessionActionBundle:
             f"port {state.source_port} ssh2"
         )
 
-    def _dispatch_linux_session_close_lifecycle(
+    def _dispatch_session_close_lifecycle(
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         *,
         continuation: _SshCloseContinuation | None = None,
     ) -> None:
         """Dispatch source-native close/logout evidence for a modeled SSH session."""
 
+        if type(auth_state) is _SshMacAuthState and continuation is None:
+            raise StateError("Mac SSH close requires its exact retained continuation")
         if continuation is not None:
             continuation.prepared.require_projection_owner(self.executor)
         logout_complete = bool(
@@ -5589,14 +6342,14 @@ class SshSessionActionBundle:
             # A real dispatcher applies the logoff to StateManager immediately.
             # Capture and schedule responder termination before that logoff
             # consumes the live session/process graph.
-            self._terminate_receiver_sshd_process(
+            self._terminate_receiver_process(
                 state,
                 auth_state,
                 close_time,
                 continuation=continuation,
             )
             try:
-                self._dispatch_linux_session_logout(
+                self._dispatch_session_logout(
                     state,
                     event,
                     auth_state,
@@ -5609,6 +6362,9 @@ class SshSessionActionBundle:
                 raise
             if continuation is not None:
                 continuation.mark_projection_complete("logout")
+
+        if type(auth_state) is _SshMacAuthState:
+            return
 
         logind_complete = bool(
             continuation is not None
@@ -5637,80 +6393,69 @@ class SshSessionActionBundle:
                 logon_id=state.logon_id,
             )
 
-    def _dispatch_linux_session_logout(
+    def _dispatch_session_logout(
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         close_time: datetime,
         *,
         continuation: _SshCloseContinuation | None = None,
     ) -> None:
         """Publish the immutable target LOGOUT occurrence."""
 
+        from evidenceforge.generation.actions.ssh_session_events import ssh_logout_occurrence
+
         request = self.request
-        logout_event = OccurrenceBuilder(
-            timestamp=close_time,
-            event_type="logoff",
-            dst_host=(
-                continuation.plan.target_host.materialize()
-                if continuation is not None
-                else event.dst_host
-            ),
-            auth=AuthContext(
-                username=(
-                    continuation.plan.username
-                    if continuation is not None
-                    else request.user.username
-                ),
-                source_ip=(
-                    continuation.plan.source_ip if continuation is not None else request.source_ip
-                ),
-                source_port=(
-                    continuation.plan.source_port if continuation is not None else state.source_port
-                ),
-                logon_id=(
-                    continuation.plan.logon_id if continuation is not None else state.logon_id
-                ),
-                session_id=(
-                    continuation.plan.session_id
-                    if continuation is not None
-                    else auth_state.logind_session_id
-                ),
-                logon_type=10,
-            ),
-            syslog=SyslogContext(
-                app_name="sshd",
-                pid=(
-                    continuation.plan.auth_state.sshd_pid
-                    if continuation is not None
-                    else auth_state.sshd_pid
-                ),
-                facility=10,
-                severity=6,
-                message=(
-                    "pam_unix(sshd:session): session closed for user "
-                    f"{continuation.plan.username if continuation is not None else request.user.username}"
-                ),
-            ),
-        )
         if continuation is None:
-            self.executor.dispatcher.dispatch_builder(logout_event)
+            if type(auth_state) is not _SshLinuxAuthState:
+                raise StateError("Mac SSH logout requires its exact retained continuation")
+            self.executor.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
+                    timestamp=close_time,
+                    event_type="logoff",
+                    dst_host=event.dst_host,
+                    auth=AuthContext(
+                        username=request.user.username,
+                        source_ip=request.source_ip,
+                        source_port=state.source_port,
+                        logon_id=state.logon_id,
+                        session_id=auth_state.logind_session_id,
+                        logon_type=10,
+                    ),
+                    syslog=SyslogContext(
+                        app_name="sshd",
+                        pid=auth_state.receiver.responder_pid,
+                        facility=10,
+                        severity=6,
+                        message=(
+                            "pam_unix(sshd:session): session closed for user "
+                            f"{request.user.username}"
+                        ),
+                    ),
+                )
+            )
             return
-        identity = continuation.plan.session_identity()
+        plan = continuation.plan
+        identity = plan.session_identity()
         retained_identity = self.executor.state_manager.get_session_identity(identity.logon_id)
         if retained_identity != identity:
             raise StateError("Exact SSH logout changed its canonical session identity")
+        logout_event = ssh_logout_occurrence(
+            host=plan.target_host.materialize(),
+            session=identity,
+            timestamp=close_time,
+            source_ip=plan.source_ip,
+            source_port=plan.source_port,
+            linux_receiver_pid=(
+                plan.auth_state.receiver.responder_pid
+                if type(plan.auth_state) is _SshLinuxAuthState
+                else None
+            ),
+        )
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         state_builder.terminalize_session(identity, end_time=close_time)
         state_plan = state_builder.seal()
-        logout_event.identity_plan = EventIdentityPlan(subject=identity, session=identity)
-        logout_event.lifecycle = ActionLifecycleContext(
-            group_id=identity.lifecycle_group_id,
-            canonical_start=identity.started_at,
-            phase="closure",
-            parent_group_id=identity.parent_lifecycle_group_id or None,
-        )
         self._publish_exact_ssh_terminal_cohort(
             continuation=continuation,
             phase="logout",
@@ -5818,7 +6563,7 @@ class SshSessionActionBundle:
     def _plan_exact_receiver_descendant_terminations(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         continuation: _SshCloseContinuation,
     ) -> tuple[_SshReceiverDescendantTermination, ...]:
         """Freeze all SSH target processes in structural children-first order."""
@@ -5828,11 +6573,11 @@ class SshSessionActionBundle:
         expected_session_identity = plan.session_identity()
         receiver = self.executor.state_manager.get_process(
             plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         receiver_identity = self.executor.state_manager.get_process_identity(
             plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         receiver_snapshot = (
             authority.registry.get_process(receiver_identity.object_id)
@@ -5850,8 +6595,9 @@ class SshSessionActionBundle:
             or receiver_snapshot.closure_ticket is not None
             or receiver.ecar_object_id != receiver_identity.object_id
             or receiver_identity.hostname != plan.target_system.hostname
-            or receiver_identity.pid != auth_state.sshd_pid
-            or receiver_identity.image != "/usr/sbin/sshd"
+            or receiver_identity.pid != auth_state.receiver.responder_pid
+            or receiver_identity.image != plan.receiver_image
+            or receiver_identity.initial_image != plan.initial_receiver_image
             or receiver_identity.principal.casefold() != "root"
             or receiver_identity.started_at != plan.receiver_started_at
             or receiver_identity.logon_id != plan.logon_id
@@ -5862,11 +6608,15 @@ class SshSessionActionBundle:
             or receiver_snapshot.identity.object_id != receiver_identity.object_id
             or receiver_snapshot.identity.hostname != receiver_identity.hostname
             or receiver_snapshot.identity.pid != receiver_identity.pid
-            or receiver_snapshot.identity.image != receiver_identity.image
+            or receiver_snapshot.identity.image != receiver_identity.initial_image
+            or receiver_snapshot.current_view.image != receiver_identity.image
+            or receiver_snapshot.current_view.execution_ordinal
+            != receiver_identity.execution_ordinal
+            or receiver_snapshot.current_view.changed_at < receiver_identity.execution_started_at
             or receiver_snapshot.identity.started_at != receiver_identity.started_at
-            or receiver_snapshot.token.logon_id != plan.logon_id
-            or receiver_snapshot.token.session_id != plan.session_id
-            or receiver_snapshot.token.logon_type != 10
+            or receiver_snapshot.current_view.token.logon_id != plan.logon_id
+            or receiver_snapshot.current_view.token.session_id != plan.session_id
+            or receiver_snapshot.current_view.token.logon_type != 10
             or receiver_snapshot.membership.owner_kind != "session"
             or receiver_snapshot.membership.owner_object_id != plan.session_object_id
             or receiver_snapshot.membership.session_object_id != plan.session_object_id
@@ -5914,7 +6664,7 @@ class SshSessionActionBundle:
 
         for snapshot in snapshots.values():
             if (
-                snapshot.token.logon_id != plan.logon_id
+                snapshot.current_view.token.logon_id != plan.logon_id
                 or snapshot.membership.owner_kind != "session"
                 or snapshot.membership.owner_object_id != plan.session_object_id
                 or snapshot.membership.session_object_id != plan.session_object_id
@@ -5987,14 +6737,17 @@ class SshSessionActionBundle:
                 or identity.object_id != snapshot.identity.object_id
                 or identity.hostname != snapshot.identity.hostname
                 or identity.pid != snapshot.identity.pid
-                or identity.image != snapshot.identity.image
+                or identity.initial_image != snapshot.identity.image
+                or identity.image != snapshot.current_view.image
+                or identity.execution_ordinal != snapshot.current_view.execution_ordinal
+                or identity.execution_started_at > snapshot.current_view.changed_at
                 or identity.started_at != snapshot.identity.started_at
-                or identity.principal != snapshot.token.principal
+                or identity.principal != snapshot.current_view.token.principal
                 or identity.logon_id != plan.logon_id
                 or running.logon_id != plan.logon_id
-                or running.token_logon_id != snapshot.token.logon_id
-                or running.auth_session_id != snapshot.token.session_id
-                or running.auth_logon_type != snapshot.token.logon_type
+                or running.token_logon_id != snapshot.current_view.token.logon_id
+                or running.auth_session_id != snapshot.current_view.token.session_id
+                or running.auth_logon_type != snapshot.current_view.token.logon_type
             ):
                 raise StateError(
                     "Exact SSH lifecycle descendant disagrees with live State identity: "
@@ -6045,7 +6798,7 @@ class SshSessionActionBundle:
     def _terminate_exact_receiver_descendants(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         continuation: _SshCloseContinuation,
     ) -> None:
         """Publish the frozen SSH target-process schedule before receiver close."""
@@ -6089,7 +6842,7 @@ class SshSessionActionBundle:
 
         receiver_identity = self.executor.state_manager.get_process_identity(
             continuation.plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if receiver_identity is None:
             raise StateError("Exact SSH descendant census lost its receiver identity")
@@ -6202,7 +6955,7 @@ class SshSessionActionBundle:
                 snapshot.identity.pid,
             )
             if (
-                snapshot.token.logon_id != state.logon_id
+                snapshot.current_view.token.logon_id != state.logon_id
                 or snapshot.membership.owner_kind != "session"
                 or snapshot.membership.owner_object_id != session_identity.object_id
                 or snapshot.membership.session_object_id != session_identity.object_id
@@ -6210,7 +6963,10 @@ class SshSessionActionBundle:
                 or identity.object_id != snapshot.identity.object_id
                 or identity.hostname != snapshot.identity.hostname
                 or identity.pid != snapshot.identity.pid
-                or identity.image != snapshot.identity.image
+                or identity.initial_image != snapshot.identity.image
+                or identity.image != snapshot.current_view.image
+                or identity.execution_ordinal != snapshot.current_view.execution_ordinal
+                or identity.execution_started_at > snapshot.current_view.changed_at
                 or identity.started_at != snapshot.identity.started_at
                 or identity.logon_id != state.logon_id
                 or running is None
@@ -6327,16 +7083,18 @@ class SshSessionActionBundle:
                 f"receiver={receiver_identity.object_id} residual={residual!r}"
             )
 
-    def _terminate_receiver_sshd_process(
+    def _terminate_receiver_process(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         close_time: datetime,
         *,
         continuation: _SshCloseContinuation | None = None,
     ) -> None:
         """Emit receiver-side accepted sshd termination when the tuple child is modeled."""
 
+        if type(auth_state) is _SshMacAuthState and continuation is None:
+            raise StateError("Mac SSH receiver close requires its exact retained continuation")
         if continuation is not None and continuation.recover_projection(
             "receiver-terminate",
             self.executor.dispatcher,
@@ -6345,17 +7103,19 @@ class SshSessionActionBundle:
         request = self.request
         running = self.executor.state_manager.get_process(
             request.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if running is None:
+            if continuation is not None:
+                raise StateError("Exact SSH receiver lost live State without a retained receipt")
             return
         command_line = running.command_line or ""
-        if "sshd:" not in command_line:
+        if type(auth_state) is _SshLinuxAuthState and "sshd:" not in command_line:
             return
         seed = _stable_seed(
             "ssh_session_responder_terminate:"
             f"{request.target_system.hostname}:{request.source_ip}:{state.source_port}:"
-            f"{auth_state.sshd_pid}:{close_time.isoformat()}"
+            f"{auth_state.receiver.responder_pid}:{close_time.isoformat()}"
         )
         # PAM close has its own source-native delay (up to 2.5 seconds) before
         # collection delay is applied.  Leave a real teardown tail so an eCAR
@@ -6371,7 +7131,7 @@ class SshSessionActionBundle:
                 user=request.user,
                 system=request.target_system,
                 time=terminate_time,
-                pid=auth_state.sshd_pid,
+                pid=auth_state.receiver.responder_pid,
                 process_name=running.image,
                 logon_id=running.logon_id,
                 from_storyline=request.source.startswith("storyline"),
@@ -6382,12 +7142,13 @@ class SshSessionActionBundle:
             raise StateError("Exact SSH receiver lifetime leaves no interval before logout")
         identity = self.executor.state_manager.get_process_identity(
             request.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if (
             identity is None
             or identity.object_id != running.ecar_object_id
-            or identity.image != "/usr/sbin/sshd"
+            or identity.image != continuation.plan.receiver_image
+            or identity.initial_image != continuation.plan.initial_receiver_image
             or identity.started_at != ensure_utc(running.start_time)
         ):
             raise StateError("Exact SSH receiver changed its canonical process identity")

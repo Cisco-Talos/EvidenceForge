@@ -40,6 +40,7 @@
         "account_created",
         "account_deleted",
         "bash_command",
+        "zsh_command",
         "create_remote_thread",
         "dhcp_lease",
         "explicit_credentials",
@@ -141,6 +142,47 @@
       "classification": "unsupported_escape_hatch",
       "owner": "RawProjectionRequest and EventDispatcher.dispatch_raw",
       "assessment": "Raw intentionally bypasses canonical cross-source consistency and is reviewed only for target routing, validation, and safety."
+    },
+    {
+      "names": ["process_fork"],
+      "classification": "single_canonical_path",
+      "owner": "State fork cohort, POSIX occurrence helper and EventDispatcher exact projection",
+      "assessment": "An internal fork observation binds to an explicitly forked State start and its immutable parent execution. Generic launches cannot substitute; authored producers and Mac receivers remain gated."
+    },
+    {
+      "names": [
+        "process_exec"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection",
+      "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition."
+    },
+    {
+      "names": [
+        "process_audit_bind",
+        "process_privilege_drop",
+        "process_service_drop"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
+      "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
+    },
+    {
+      "names": [
+        "process_job_control"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "State POSIX membership patch, canonical occurrence helper and EventDispatcher exact projection",
+      "assessment": "Internal membership changes retain exact before/after state and the actual changing actor. Dispatcher coverage requires the authenticated singleton State cohort; eCAR observation, collection omission and source recovery cannot redefine the action. Production boot/session/job composition remains unavailable."
+    },
+    {
+      "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+      "classification": "single_canonical_path",
+      "names": [
+        "file_close",
+        "file_rename"
+      ],
+      "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
     }
   ],
   "contexts": [
@@ -402,12 +444,21 @@
       "classification": "single_canonical_path",
       "owner": "OcspTransactionActionBundle",
       "assessment": "The bundle owns OCSP request/response planning and delegates transport to the network contract, but lacks an ActionAnchor and needs stronger direct contract tests."
+    },
+    {
+      "assessment": "The explicit-facts API publishes one actor activity patch, exact artifact members, effect provenance, timing and source ingress through the existing cohort journal. Automatic scenario/baseline producer integration remains open.",
+      "classification": "single_canonical_path",
+      "names": [
+        "MacosFilesystemActionBundle"
+      ],
+      "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
     }
   ],
   "formats": [
     {
       "names": [
         "bash_history",
+        "zsh_history",
         "cisco_asa",
         "ecar",
         "proxy_access",

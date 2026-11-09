@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import ntpath
 import random
+import shlex
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -15,7 +16,14 @@ from enum import StrEnum
 from typing import cast
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.content_identity import Platform, UnresolvedBinaryIdentity
+from evidenceforge.events.content_identity import (
+    BinaryReleaseIdentity,
+    LocalArtifactBinaryIdentity,
+    Platform,
+    ProcessBinaryIdentity,
+    UnresolvedBinaryIdentity,
+    canonical_native_path,
+)
 from evidenceforge.events.contexts import (
     AuthContext,
     ProcessContext,
@@ -27,10 +35,16 @@ from evidenceforge.events.dispatcher import (
 )
 from evidenceforge.events.identity import (
     EventIdentityPlan,
+    ProcessIdentity,
 )
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
+from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_spawn_io import MacosSpawnIO
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import (
     EffectRequirement,
     ExecutionEffectPlanError,
@@ -38,8 +52,27 @@ from evidenceforge.generation.actions import (
     ProcessExecutionRequest,
     ProcessTerminationRequest,
 )
-from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
+from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.command_effects import (
+    ExecutionEffectAuditCohortEntry,
+    ExecutionEffectPlan,
+    FileEffectIntent,
+)
+from evidenceforge.generation.actions.endpoint_effects import (
+    PreparedFileEffectPayload,
+    PreparedProcessEffectActor,
+)
+from evidenceforge.generation.actions.macos_browser_helper import MacosBrowserHelperStartup
+from evidenceforge.generation.actions.macos_finder import MacosFinderStartup
+from evidenceforge.generation.actions.macos_pty_command import MacosPtyCommandStartup
+from evidenceforge.generation.actions.posix_process import (
+    process_exec_occurrence,
+    process_exit_occurrence,
+    process_fork_occurrence,
+)
+from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
+from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
     _get_rng,
@@ -124,6 +157,16 @@ class ProcessReuseCandidate:
 
 
 @dataclass(frozen=True)
+class RetainedFinderLaunch:
+    """Current startup journal and its immutable admission intent, owned by activity."""
+
+    request: ProcessExecutionRequest
+    launch: ProcessLaunchPlan
+    startup: MacosFinderStartup
+    binary: BinaryReleaseIdentity
+
+
+@dataclass(frozen=True)
 class ProcessExecutionService:
     """Ephemeral dependency binding; all durable state remains on existing owners."""
 
@@ -141,6 +184,7 @@ class ProcessExecutionService:
     dispatcher: EventDispatcher
     lifecycle_authority: GeneratorLifecycleAuthority
     runtime_content_manager: RuntimeContentIdentityManager | None
+    finder_startups: dict[str, RetainedFinderLaunch]
 
     def bounded_reuse_intent(
         self,
@@ -273,6 +317,10 @@ class ProcessExecutionService:
     ) -> ProcessReuseCandidate | None:
         """Select in the existing precedence order, keeping preflight allocation-free."""
         system = request.system
+        if request.new_posix_session or (
+            request.arguments is not None and request.macos_launch_kind != "finder"
+        ):
+            return None
         if (
             not preflight
             and not prepared_requires_new_root
@@ -332,7 +380,6 @@ class ProcessExecutionService:
             and not prepared_requires_new_root
             and not request.from_storyline
             and request.allow_existing_browser_reuse
-            and request.source_visible_by is None
         ):
             candidate_pid = self.reuse._existing_user_browser_pid(
                 system=system,
@@ -342,6 +389,9 @@ class ProcessExecutionService:
                 command_line=command_line,
                 time=time,
                 source_visible_by=request.source_visible_by,
+                allow_deferred_start=(
+                    request.source_visible_by is None and not request.preserve_requested_time
+                ),
             )
             if candidate_pid is not None:
                 return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.BROWSER)
@@ -378,6 +428,15 @@ class ProcessExecutionService:
 
     def create(self, request: ProcessExecutionRequest) -> int:
         """Execute process admission, planning, preparation, publication and bookkeeping."""
+        retained = self.finder_startups.get(request.stable_id)
+        if retained is not None:
+            if (
+                retained.request != request
+                or retained.request.effect_plan != request.effect_plan
+                or retained.request.prepared_effects != request.prepared_effects
+            ):
+                raise StateError("Pending Mac startup changed its original execution request")
+            return self._continue_finder(request.stable_id, retained)
         admission = self._prepare_execution(request)
         actor = self._resolve_actor(request, admission)
         if isinstance(actor, int):
@@ -387,14 +446,305 @@ class ProcessExecutionService:
             return launch
         # Due closes own independent commits and must precede frozen State/timing plans.
         self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
+        if request.macos_launch_kind == "finder":
+            retained = self._prepare_finder(request, admission, launch)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
+        parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
+        session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and session is not None
+            and session.session_kind == "ssh"
+            and parent is not None
+            and parent.job_control is not None
+            and type(
+                self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
+            )
+            is MacosTerminalObservation
+        ):
+            retained = self._prepare_pty_command(request, admission, launch, parent)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and parent is not None
+            and self.identity.macos_execution_metadata is not None
+            and any(
+                rule.parent_image == parent.image
+                for rule in self.identity.macos_execution_metadata.profile.browser_helpers
+            )
+        ):
+            retained = self._prepare_browser_helper(request, admission, launch, parent)
+            self.finder_startups[request.stable_id] = retained
+            return self._continue_finder(request.stable_id, retained)
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and request.require_exact_parent
+            and request.suppress_command_file_effect
+            and not request.ensure_file_event
+            and request.source_visible_by is None
+            and request.effect_plan is None
+            and admission.endpoint is None
+            and not request.requested_endpoint_effects
+        ):
+            request = replace(
+                request,
+                effect_plan=ExecutionEffectPlan(
+                    ActionAnchor("process_execution", request.stable_id, source=request.source),
+                    (),
+                ),
+            )
         root = self._prepare_root(request, admission, launch)
+        if root.birth_event is not None:
+            launch = replace(
+                launch,
+                time=root.identity.execution_started_at,
+                integrity=root.process.integrity_level,
+            )
         evidence = self._prepare_evidence(request, admission, launch, root)
         publication = self._prepare_publication(request, admission, root, evidence)
         running = self._publish_process(request, root, publication)
         return self._finish_execution(request, launch, root, evidence, running)
 
+    def _prepare_finder(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+    ) -> RetainedFinderLaunch:
+        """Validate every startup dependency before allocating a root child."""
+        provider = self.identity.macos_execution_metadata
+        if (
+            provider is None
+            or provider.profile.finder_launch_execution != "xpcproxy_app_exec"
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or request.requested_endpoint_effects
+            or request.new_posix_session
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+        ):
+            raise StateError(
+                "Finder startup requires qualified installed-app policy and empty effects"
+            )
+        if len(self.finder_startups) >= 128:
+            raise StateError("Finish pending Finder startups before admitting another launch")
+        application = next(
+            (
+                entry
+                for entry in provider.profile.finder_applications
+                if entry.image == launch.actor.image
+            ),
+            None,
+        )
+        if application is None or request.arguments is None:
+            raise StateError("Finder startup requires an explicit app bundle-identifier policy")
+        binary = self.dispatcher.resolve_process_binary_identity(
+            request.system.hostname,
+            launch.actor.username,
+            launch.actor.image,
+            "macos",
+        )
+        launcher = self.dispatcher.resolve_process_binary_identity(
+            request.system.hostname,
+            "root",
+            "/usr/libexec/xpcproxy",
+            "macos",
+        )
+        if type(binary) is not BinaryReleaseIdentity or type(launcher) is not BinaryReleaseIdentity:
+            raise StateError("Finder startup requires exact installed launcher and app binaries")
+        at = ensure_utc(launch.time)
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.finder_preimage_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="finder_launch",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        times = (at, at + gap / 3, at + gap * 2 / 3, at + gap)
+        if request.source_visible_by is not None and times[-1] > ensure_utc(
+            request.source_visible_by
+        ):
+            raise StateError("Finder startup cannot meet the requested source readiness deadline")
+        credentials = self.identity.process_credentials(
+            request.system,
+            launch.actor.username,
+            1,
+            at,
+        )
+        relationship = provider.finder_launch_relationships(
+            self.state_manager,
+            request.system.hostname,
+            launch.actor.username,
+            parent_pid=launch.parent_pid,
+            logon_id=launch.actor.logon_id,
+            at=times[-1],
+            credentials=credentials,
+        )
+        session = self.state_manager.get_session_identity(launch.actor.logon_id)
+        if session is None:
+            raise StateError("Finder startup lost its live GUI login owner")
+        suffix = tuple(
+            _stable_seed(f"finder-service:{request.stable_id}:{part}") % 10**9
+            for part in ("first", "second")
+        )
+        label = f"application.{application.bundle_identifier}.{suffix[0]}.{suffix[1]}"
+        startup = MacosFinderStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=relationship.parent,
+            session=session,
+            launcher=launcher,
+            app=binary,
+            arguments=request.arguments,
+            service_label=label,
+            times=times,
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
+
+    def _prepare_pty_command(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        parent: ProcessIdentity,
+    ) -> RetainedFinderLaunch:
+        """Admit the measured literal foreground command before its first canonical fork."""
+        provider = self.identity.macos_execution_metadata
+        if (
+            provider is None
+            or provider.profile.ssh_pty_execution != "zsh_foreground_v11"
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or request.requested_endpoint_effects
+            or request.new_posix_session
+            or request.exec_script is not None
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+            or len(self.finder_startups) >= 128
+        ):
+            raise StateError(
+                "SSH PTY commands require the qualified literal installed-command policy without effects"
+            )
+        arguments = (
+            request.arguments
+            if request.arguments is not None
+            else literal_shell_child_arguments(launch.actor.image, launch.actor.command_line)
+        )
+        binary = self.dispatcher.resolve_process_binary_identity(
+            parent.hostname, parent.principal, launch.actor.image, "macos"
+        )
+        session = self.state_manager.get_session_identity(parent.logon_id)
+        if not arguments or arguments[0] != launch.actor.image or session is None:
+            raise StateError("SSH PTY command requires literal argv and its exact owning session")
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.shell_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="shell_command",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        forked_at = ensure_utc(launch.time)
+        times = forked_at, forked_at + gap / 2, forked_at + gap
+        if request.source_visible_by is not None and times[-1] >= request.source_visible_by:
+            raise StateError("SSH PTY command cannot meet its requested source readiness deadline")
+        startup = MacosPtyCommandStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            session=session,
+            app=binary,
+            arguments=arguments,
+            times=times,
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
+
+    def _continue_finder(self, key: str, retained: RetainedFinderLaunch) -> int:
+        """Resume committed source work before exposing a ready application."""
+        startup = retained.startup
+        while not startup.complete:
+            startup.advance()
+        process, birth = startup.process, startup.birth
+        assert process is not None and birth is not None and startup.app_event is not None
+        session = self.state_manager.get_session_identity(process.logon_id)
+        if session is None:
+            raise StateError("Completed Finder startup lost its GUI owner")
+        root = ProcessRootPlan(
+            birth,
+            None,
+            session.session_id,
+            session,
+            birth.parent_identity,
+            retained.binary,
+            process,
+            startup.fork_event,
+        )
+        running = self.state_manager.get_process(process.hostname, process.pid)
+        if running is None:
+            raise StateError("Completed Finder startup lost its exact process")
+        launch = replace(retained.launch, time=process.execution_started_at)
+        evidence = ProcessEvidencePlan(
+            startup.app_event,
+            None,
+            retained.request.source_visible_by,
+            None,
+        )
+        result = self._finish_execution(retained.request, launch, root, evidence, running)
+        del self.finder_startups[key]
+        return result
+
     def _prepare_execution(self, request: ProcessExecutionRequest) -> ProcessExecutionAdmission:
         """Validate prepared effects and actor identity before launch decisions."""
+        provider = self.identity.macos_execution_metadata
+        registry = self.dispatcher.deployment_registry
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and provider is not None
+            and provider.complete_launches
+            and registry is not None
+            and registry.resolve_binary(
+                request.system.hostname,
+                request.process_name,
+                "macos",
+                principal=request.user.username,
+            )
+            is not None
+        ):
+            from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
+
+            support = resolve_macos_launch_support(
+                registry,
+                provider.profile,
+                request.system.hostname,
+                request.user.username,
+                request.process_name,
+            )
+            if support.issues:
+                raise StateError(
+                    f"Unsupported native Mac launch {request.process_name}: "
+                    f"{', '.join(support.issues)}. No process was admitted."
+                )
         prepared_endpoint = (
             request.prepared_effects.endpoint if request.prepared_effects is not None else None
         )
@@ -418,7 +768,7 @@ class ProcessExecutionService:
                 effect_plan=request.effect_plan,
             )
         )
-        if uses_action_cohort:
+        if uses_action_cohort and prepared_endpoint is not None:
             admitted_occurrence_count = sum(
                 len(effect.spec.occurrence_times) for effect in prepared_endpoint.admitted_effects
             )
@@ -427,10 +777,30 @@ class ProcessExecutionService:
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "process endpoint action cohort exceeds its root/occurrence member limit",
                 )
+        if request.exec_script is not None and request.exec_script.artifact_version_id is not None:
+            if prepared_endpoint is not None and not uses_action_cohort:
+                raise StateError("Mac script launch requires cohort-compatible endpoint effects")
+            uses_action_cohort = True
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and request.prepared_effects is not None
+            and request.prepared_effects.process_binary_publication is not None
+            and prepared_endpoint is None
+            and prepared_actor is not None
+            and request.effect_plan is not None
+            and not request.effect_plan.nodes
+            and self.actors._process_endpoint_uses_action_cohort(
+                actor=prepared_actor, admitted_effects=(), effect_plan=request.effect_plan
+            )
+        ):
+            # Runtime image retention is fallible. Its owner must commit before
+            # State/lifecycle allocation, even when no file-effect rows exist.
+            uses_action_cohort = True
         prepared_requires_new_root = bool(
             request.prepared_effects is not None
             and (
                 request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.root_script_publication is not None
                 or (
                     request.prepared_effects.endpoint is not None
                     and any(
@@ -666,11 +1036,19 @@ class ProcessExecutionService:
             )
             time = session.start_time + logon_gap
         explicit_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
-        if (
-            admission.actor is None
-            and explicit_parent is not None
-            and time <= explicit_parent.start_time
-        ):
+        explicit_execution = (
+            self.state_manager.get_process_identity(request.system.hostname, parent_pid)
+            if _get_os_category(request.system.os) == "macos"
+            else None
+        )
+        explicit_ready_at = (
+            explicit_execution.execution_started_at
+            if explicit_execution is not None
+            else explicit_parent.start_time
+            if explicit_parent is not None
+            else None
+        )
+        if admission.actor is None and explicit_ready_at is not None and time <= explicit_ready_at:
             parent_gap = self.activity_timing.sample_gap(
                 relationship_key="activity.process.start_after_parent",
                 stable_id=request.stable_id,
@@ -681,13 +1059,14 @@ class ProcessExecutionService:
                 lifecycle_id=actor.logon_id,
                 sample_key="after_parent_gap",
             )
-            time = explicit_parent.start_time + parent_gap
+            time = explicit_ready_at + parent_gap
         # A caller-supplied source deadline means this process owns an already
         # anchored causal occurrence (for example an SSH socket). Optional
         # human-spacing must not move the canonical start beyond that anchor.
         if (
             admission.actor is None
             and not request.from_storyline
+            and not request.preserve_requested_time
             and request.source_visible_by is None
         ):
             spaced_time = self.scheduling._space_one_shot_cli_launch(
@@ -697,7 +1076,6 @@ class ProcessExecutionService:
                 process_name=actor.image,
                 command_line=actor.command_line,
                 time=time,
-                source_visible_by=request.source_visible_by,
             )
             if spaced_time != time:
                 time = spaced_time
@@ -750,12 +1128,20 @@ class ProcessExecutionService:
             request, admission, actor, time=time, parent_pid=parent_pid
         )
         repaired_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
-        if (
-            admission.actor is None
-            and repaired_parent is not None
-            and time <= repaired_parent.start_time
-        ):
-            time = repaired_parent.start_time + timedelta(milliseconds=50)
+        repaired_execution = (
+            self.state_manager.get_process_identity(request.system.hostname, parent_pid)
+            if _get_os_category(request.system.os) == "macos"
+            else None
+        )
+        repaired_ready_at = (
+            repaired_execution.execution_started_at
+            if repaired_execution is not None
+            else repaired_parent.start_time
+            if repaired_parent is not None
+            else None
+        )
+        if admission.actor is None and repaired_ready_at is not None and time <= repaired_ready_at:
+            time = repaired_ready_at + timedelta(milliseconds=50)
         if (
             admission.actor is None
             and _get_os_category(request.system.os) == "linux"
@@ -795,6 +1181,20 @@ class ProcessExecutionService:
                     )
                     if spaced_time != time:
                         time = spaced_time
+
+        collection_end = getattr(self.dispatcher, "output_end_time", None)
+        if (
+            not request.from_storyline
+            and not request.preserve_requested_time
+            and request.source_visible_by is None
+            and _get_os_category(request.system.os) == "macos"
+            and collection_end is not None
+            and time >= collection_end
+        ):
+            # Generic baseline starts can be displaced by shell/application
+            # pacing. An eligible request anchor cannot authorize a new start
+            # after collection; no birth/exec has been materialized here.
+            return 0
 
         return ProcessLaunchPlan(
             actor,
@@ -893,9 +1293,84 @@ class ProcessExecutionService:
         launch: ProcessLaunchPlan,
     ) -> ProcessRootPlan:
         """Freeze exact State identities without consuming the process allocator."""
+        if request.macos_launch_kind == "finder":
+            raise StateError("Finder process roots require their retained startup coordinator")
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
         process_session_id = self.queries._session_id_for_logon(launch.actor.logon_id)
         process_session_identity = self.state_manager.get_session_identity(launch.actor.logon_id)
+        credentials = self.identity.process_credentials(
+            request.system, launch.actor.username, launch.parent_pid, launch.time
+        )
+        binary: ProcessBinaryIdentity | None = None
+        executable_version: ProcessExecutableVersion | None = None
+        platform = _get_os_category(request.system.os)
+        if platform in {"macos", "windows"}:
+            publication = (
+                request.prepared_effects.process_binary_publication
+                if request.prepared_effects is not None
+                else None
+            )
+            binary = (
+                publication.record.binary
+                if publication is not None
+                else self.dispatcher.resolve_process_binary_identity(
+                    request.system.hostname,
+                    launch.actor.username,
+                    launch.actor.image,
+                    cast(Platform, platform),
+                )
+            )
+            if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+                executable_version = ProcessExecutableVersion.from_binary(binary)
+            else:
+                binary = None  # Unknown/virtual identities cannot bind a loaded file version.
+        if request.exec_script is not None and request.exec_script.artifact_version_id is not None:
+            retained_script = (
+                request.prepared_effects.root_script_publication
+                if request.prepared_effects is not None
+                else None
+            )
+            if (
+                retained_script is None
+                or MacosExecScript.from_runtime_record(retained_script.record)
+                != request.exec_script
+            ):
+                raise StateError("Mac script launch requires its exact prepared retention")
+        shell_root = self._prepare_macos_shell_root(request, admission, launch, binary=binary)
+        if shell_root is not None:
+            return shell_root
+        provider = self.identity.macos_execution_metadata
+        metadata = None
+        terminal = None
+        standard_io = None
+        if provider is not None and _get_os_category(request.system.os) == "macos":
+            if request.macos_launch_kind is not None:
+                metadata = provider.launch(
+                    request.system.hostname,
+                    launch.actor.username,
+                    at=ensure_utc(launch.time),
+                    requested_path=request.process_name,
+                    binary=binary,
+                    kind=request.macos_launch_kind,
+                    script=request.exec_script,
+                )
+                if request.macos_launch_kind == "user":
+                    credentials = provider.gui_launch_credentials(
+                        self.state_manager,
+                        request.system.hostname,
+                        launch.actor.username,
+                        logon_id=launch.actor.logon_id,
+                        at=ensure_utc(launch.time),
+                        credentials=credentials,
+                    )
+            terminal = (
+                provider.profile.terminal
+                if request.macos_terminal == "allocate"
+                else "absent"
+                if request.macos_terminal == "absent"
+                else None
+            )
+            standard_io = request.macos_standard_io
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
             if admission.uses_action_cohort
@@ -919,10 +1394,23 @@ class ProcessExecutionService:
                 ),
                 auth_session_id=process_session_id,
                 auth_logon_type=launch.logon_type,
+                credentials=credentials,
+                executable_version=executable_version,
+                new_posix_session=request.new_posix_session,
+                arguments=request.arguments,
+                exec_script=metadata.script if metadata is not None else request.exec_script,
+                environment=metadata.environment if metadata is not None else None,
+                execution_directory=metadata.directory if metadata is not None else None,
+                exec_image=metadata.image if metadata is not None else None,
+                image_security=metadata.image_security if metadata is not None else None,
+                macos_terminal=terminal,
+                macos_standard_io=standard_io,
+                responsibility=request.macos_responsibility,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
-                admission.endpoint.latest_admitted_occurrence or ensure_utc(launch.time),
+                (admission.endpoint.latest_admitted_occurrence if admission.endpoint else None)
+                or ensure_utc(launch.time),
             )
             action_cohort_builder.patch_process_activity(
                 process_plan,
@@ -949,6 +1437,18 @@ class ProcessExecutionService:
                 os_category=_get_os_category(request.system.os),
                 start_time=ensure_utc(launch.time),
                 parent_activity_time=ensure_utc(launch.time),
+                credentials=credentials,
+                executable_version=executable_version,
+                new_posix_session=request.new_posix_session,
+                arguments=request.arguments,
+                exec_script=metadata.script if metadata is not None else request.exec_script,
+                environment=metadata.environment if metadata is not None else None,
+                execution_directory=metadata.directory if metadata is not None else None,
+                exec_image=metadata.image if metadata is not None else None,
+                image_security=metadata.image_security if metadata is not None else None,
+                macos_terminal=terminal,
+                macos_standard_io=standard_io,
+                responsibility=request.macos_responsibility,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity
@@ -963,6 +1463,378 @@ class ProcessExecutionService:
             process_session_id,
             process_session_identity,
             parent_identity,
+            binary,
+        )
+
+    def _prepare_browser_helper(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        parent: ProcessIdentity,
+    ) -> RetainedFinderLaunch:
+        """Prepare exact helper inputs before entering the retained fork/exec journal."""
+        provider = self.identity.macos_execution_metadata
+        assert provider is not None
+        if len(self.finder_startups) >= 128:
+            raise StateError("Finish pending Mac startups before admitting another helper")
+        binary = self.dispatcher.resolve_process_binary_identity(
+            parent.hostname, parent.principal, launch.actor.image, "macos"
+        )
+        arguments = request.arguments or literal_shell_child_arguments(
+            launch.actor.image, launch.actor.command_line
+        )
+        rule = next(
+            (
+                rule
+                for rule in provider.profile.browser_helpers
+                if rule.parent_image == parent.image
+                and rule.image == launch.actor.image
+                and arguments == (rule.image, *rule.arguments)
+            ),
+            None,
+        )
+        if rule is None:
+            raise StateError(
+                "Mac browser child requires a qualified exact helper image and invocation"
+            )
+        session = self.state_manager.get_session_at(parent.logon_id, launch.time)
+        parent_binary = self.dispatcher.resolve_loaded_process_binary_identity(parent)
+        if (
+            request.macos_launch_kind is not None
+            or request.new_posix_session
+            or request.exec_script is not None
+            or request.requested_endpoint_effects
+            or request.prepared_effects is not None
+            and (
+                request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.artifact_publications
+                or request.prepared_effects.runtime_image_load is not None
+            )
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or parent.principal != launch.actor.username
+            or parent.logon_id != launch.actor.logon_id
+            or parent.credentials is None
+            or parent.credentials.audit_uid is None
+            or parent.credentials.audit_session_id is None
+            or parent.responsibility is None
+            or parent.job_control is None
+            or parent.environment is None
+            or parent.parent_pid != 1
+            or parent.execution_ordinal != 2
+            or parent.initial_image != "/sbin/launchd"
+            or parent.image_security is None
+            or parent.image_security.validation_category is None
+            or session is None
+            or session.session_kind != "interactive"
+            or type(binary) is not BinaryReleaseIdentity
+            or type(parent_binary) is not BinaryReleaseIdentity
+            or binary.code_signature is None
+            or binary.code_signature.entitlements is None
+            or binary.mach_o_image is None
+            or provider.image_security(binary) is None
+            or binary.key.product_id != parent_binary.key.product_id
+            or binary.key.version != parent_binary.key.version
+            or binary.key.build != parent_binary.key.build
+            or self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
+            != "absent"
+        ):
+            raise StateError(
+                "Mac browser helper requires its qualified GUI parent, installed release and empty effects"
+            )
+        forked_at = ensure_utc(launch.time)
+        executed_at = forked_at + self.activity_timing.sample_profile_gap(
+            "macos.browser_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="browser_helper",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        if forked_at <= parent.execution_started_at:
+            raise StateError("Mac browser helper must follow its parent exec readiness")
+        directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
+        if directory is None:
+            raise StateError("Mac browser helper requires its parent's current working directory")
+        if rule.io_layout == "browser_sandbox":
+            arguments = (*arguments, f"--seatbelt-client={rule.seatbelt_fd}")
+        overrides = {entry.split("=", 1)[0] for entry in rule.environment}
+        environment = (
+            tuple(entry for entry in parent.environment if entry.split("=", 1)[0] not in overrides)
+            + rule.environment
+        )
+        if request.source_visible_by is not None and executed_at > ensure_utc(
+            request.source_visible_by
+        ):
+            raise StateError("Mac browser helper cannot meet its source readiness deadline")
+        session_identity = self.state_manager.get_session_identity(parent.logon_id)
+        if session_identity is None:
+            raise StateError("Mac browser helper lost its GUI session identity")
+        startup = MacosBrowserHelperStartup(
+            state=self.state_manager,
+            dispatcher=self.dispatcher,
+            metadata=provider,
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            session=session_identity,
+            app=binary,
+            arguments=arguments,
+            environment=environment,
+            spawn_io=MacosSpawnIO(rule.io_layout, provider.profile.first_pipe_id, rule.seatbelt_fd),
+            times=(forked_at, executed_at),
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+            storyline=request.from_storyline,
+        )
+        return RetainedFinderLaunch(request, launch, startup, binary)
+
+    def _prepare_macos_shell_root(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        *,
+        binary: ProcessBinaryIdentity | None,
+    ) -> ProcessRootPlan | None:
+        """Model a qualified direct shell command as an actual fork and exec.
+
+        This bounded path shares process admission, lifetime and completion owners.
+        Explicit retained shebang facts use the existing script/content authority;
+        argv alone never establishes a script. Exact file-effect plans share
+        this transaction; unexpanded operators and other effect families retain gates.
+        """
+        if _get_os_category(request.system.os) != "macos":
+            return None
+        file_effects = bool(
+            admission.uses_action_cohort
+            and admission.endpoint is not None
+            and admission.endpoint.execution_plan is not None
+            and admission.endpoint.execution_plan.nodes
+            and (request.effect_plan is None or not request.effect_plan.nodes)
+            and all(
+                isinstance(node.intent, FileEffectIntent)
+                for node in admission.endpoint.execution_plan.nodes
+            )
+            and all(
+                type(effect.payload) is PreparedFileEffectPayload
+                and (
+                    effect.payload.artifact_publication is None
+                    or canonical_native_path(
+                        effect.payload.artifact_publication.record.artifact.native_path, "macos"
+                    )
+                    != canonical_native_path(launch.actor.image, "macos")
+                )
+                for effect in admission.endpoint.admitted_effects
+            )
+        )
+        file_publications = (
+            tuple(
+                effect.payload.artifact_publication
+                for effect in admission.endpoint.admitted_effects
+                if effect.payload.artifact_publication is not None
+            )
+            if file_effects
+            else ()
+        )
+        if (
+            request.macos_launch_kind is not None
+            or request.new_posix_session
+            or (admission.endpoint is not None and not file_effects)
+            or (request.effect_plan is None and not file_effects)
+            or (request.effect_plan is not None and request.effect_plan.nodes and not file_effects)
+            or (
+                request.prepared_effects is not None
+                and any(
+                    all(
+                        token is not candidate
+                        for candidate in (
+                            request.prepared_effects.process_binary_publication,
+                            request.prepared_effects.root_script_publication,
+                            *file_publications,
+                        )
+                    )
+                    or self.dispatcher.local_artifact_registry is None
+                    or not self.dispatcher.local_artifact_registry.authenticates_prepared_publication(
+                        token
+                    )
+                    or (
+                        all(token is not publication for publication in file_publications)
+                        and not self.dispatcher.local_artifact_registry.authenticates_prepared_retention(
+                            token
+                        )
+                    )
+                    for token in request.prepared_effects.artifact_publications
+                )
+            )
+        ):
+            return None
+        if (
+            file_effects
+            and 2
+            + sum(
+                len(effect.spec.occurrence_times) for effect in admission.endpoint.admitted_effects
+            )
+            > _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT
+        ):
+            raise StateError(
+                "Mac fork/exec and file effects exceed the process cohort member limit"
+            )
+        parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
+        provider = self.identity.macos_execution_metadata
+        session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
+        root_shell = (
+            parent is not None
+            and provider is not None
+            and provider.profile.preexisting_root_shell is not None
+            and parent.image == provider.profile.preexisting_root_shell.image
+            and parent.arguments == provider.profile.preexisting_root_shell.arguments
+            and parent.principal == launch.actor.username == "root"
+            and not parent.logon_id
+            and not launch.actor.logon_id
+            and session is None
+        )
+        if (
+            parent is None
+            or provider is None
+            or not (root_shell or parent.image in {"/bin/zsh", "/bin/bash"})
+            or not (
+                root_shell
+                or (
+                    parent.command_line in {"-zsh", "-bash"}
+                    or any(
+                        parent.image == rule.image and parent.arguments == rule.arguments
+                        for rule in provider.profile.nested_command_shells
+                    )
+                )
+            )
+            or parent.principal != launch.actor.username
+            or parent.logon_id != launch.actor.logon_id
+            or parent.credentials is None
+            or parent.credentials.audit_uid is None
+            or parent.credentials.audit_session_id is None
+            or parent.responsibility is None
+            or parent.executable_version is None
+            or parent.parentage is None
+            or parent.job_control is None
+            or parent.audit_pid_version is None
+            or parent.primary_thread is None
+            or parent.environment is None
+            or not (
+                root_shell or session is not None and session.session_kind in {"interactive", "ssh"}
+            )
+        ):
+            return None
+        if self.state_manager.known_macos_terminal(parent.job_control.session, launch.time) is None:
+            return None
+        arguments = (
+            request.arguments
+            if request.arguments is not None
+            else literal_shell_child_arguments(launch.actor.image, launch.actor.command_line)
+        )
+        if not arguments or arguments[0] != launch.actor.image:
+            return None
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.shell_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="shell_command",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        # The admission instant is shell readiness, including the previous
+        # foreground close. Fork begins there; exec follows its modeled latency.
+        forked_at = ensure_utc(launch.time)
+        executed_at = forked_at + gap
+        if (
+            admission.endpoint is not None
+            and admission.endpoint.earliest_admitted_occurrence is not None
+            and admission.endpoint.earliest_admitted_occurrence < executed_at
+        ):
+            raise StateError(
+                "Mac process-owned file effects must follow the modeled exec; schedule the file occurrence after shell launch latency"
+            )
+        if forked_at <= parent.execution_started_at:
+            return None
+        directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
+        if directory is None:
+            return None
+        builder = self.state_manager.begin_action_cohort_materialization()
+        birth = builder.fork_process(
+            parent,
+            forked_at=forked_at,
+            execution_directory=provider.directory(
+                parent.hostname, directory.native_path, forked_at
+            ),
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+        )
+        after = builder.execute_process(
+            birth,
+            image=launch.actor.image,
+            command_line=shlex.join(arguments),
+            executed_at=executed_at,
+            arguments=arguments,
+            environment=provider.command_environment(launch.actor.image, parent.environment),
+            execution_directory=provider.directory(
+                parent.hostname, directory.native_path, executed_at
+            ),
+            exec_image=provider.launch(
+                parent.hostname,
+                parent.principal,
+                at=executed_at,
+                requested_path=launch.actor.image,
+                binary=binary,
+                kind="user",
+            ).image,
+            exec_script=request.exec_script
+            if request.exec_script is not None
+            else MacosExecScript(),
+            executable_version=(
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
+                else None
+            ),
+            image_security=provider.image_security(binary),
+            macos_ssh_standard_io=(
+                provider.profile.ssh_command_descriptors == "standard_pipes"
+                and session is not None
+                and session.session_kind == "ssh"
+                and session.ssh_command_streams is not None
+                and self.state_manager.process_descriptors_at(parent, event_time=forked_at) is None
+                and self.state_manager.known_macos_terminal(parent.job_control.session, forked_at)
+                == "absent"
+            ),
+        )
+        session_identity = self.state_manager.get_session_identity(parent.logon_id)
+        if (
+            file_effects
+            and session_identity is not None
+            and admission.endpoint.latest_admitted_occurrence is not None
+        ):
+            builder.patch_process_activity(
+                after, max(executed_at, admission.endpoint.latest_admitted_occurrence)
+            )
+            builder.patch_session_activity(
+                session_identity,
+                max(executed_at, admission.endpoint.latest_admitted_occurrence or executed_at),
+            )
+        cohort = builder.seal()
+        fork = process_fork_occurrence(
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            child=birth.identity,
+            integrity_level=birth.integrity_level,
+        )
+        fork.storyline_origin = request.from_storyline
+        return ProcessRootPlan(
+            birth,
+            cohort,
+            session.session_id if session is not None else None,
+            session_identity,
+            parent,
+            binary,
+            after,
+            fork,
         )
 
     def _prepare_evidence(
@@ -973,7 +1845,7 @@ class ProcessExecutionService:
         root: ProcessRootPlan,
     ) -> ProcessEvidencePlan:
         """Build canonical process evidence with its existing lifetime and source deadlines."""
-        process_identity = root.process.identity
+        process_identity = root.identity
         # Phase 2: Build and validate the complete root/dependent publication batch.
         provisional_process_termination = (
             request.prepared_effects.provisional_termination
@@ -1091,7 +1963,9 @@ class ProcessExecutionService:
                 ),
                 concurrency_group_id=request.concurrency_group_id,
                 binary_identity=(
-                    process_binary_publication.record.binary
+                    root.binary
+                    if root.binary is not None
+                    else process_binary_publication.record.binary
                     if process_binary_publication is not None
                     else None
                 ),
@@ -1109,6 +1983,16 @@ class ProcessExecutionService:
                 parent_group_id=process_identity.parent_lifecycle_group_id or None,
             ),
         )
+        if root.executed is not None:
+            event = process_exec_occurrence(
+                host=self.identity.host_context(request.system),
+                before=root.process.identity,
+                after=root.executed,
+                integrity_level=launch.integrity,
+                session=root.session_identity if request.macos_launch_kind == "finder" else None,
+            )
+            event.storyline_origin = request.from_storyline
+            event.process.binary_identity = root.binary
 
         endpoint_source_deadline = (
             admission.endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
@@ -1150,6 +2034,8 @@ class ProcessExecutionService:
         evidence: ProcessEvidencePlan,
     ) -> PreparedProcessPublication:
         """Prepare and validate source, artifact and optional cohort capabilities before commit."""
+        if root.birth_event is not None:
+            return self._prepare_macos_process_publication(request, admission, root, evidence)
         process_plan = root.process
         process_identity = root.process.identity
         event = evidence.event
@@ -1212,10 +2098,15 @@ class ProcessExecutionService:
                     else PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START
                 ),
                 lifecycle_ticket=(root.cohort if root.cohort is not None else process_plan),
-                artifact_publications=(
-                    (evidence.binary_publication,)
-                    if evidence.binary_publication is not None
-                    else ()
+                artifact_publications=tuple(
+                    token
+                    for token in (
+                        evidence.binary_publication,
+                        request.prepared_effects.root_script_publication
+                        if request.prepared_effects is not None
+                        else None,
+                    )
+                    if token is not None
                 ),
                 source_timing_preparation=timing_preparation,
             )
@@ -1261,16 +2152,37 @@ class ProcessExecutionService:
                 ExecutionEffectAuditCohortEntry,
             )
 
-            if endpoint_reconciliation is None or admission.endpoint is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its exact reconciliation",
+            audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...] = ()
+            if admission.endpoint is not None:
+                if endpoint_reconciliation is None or admission.endpoint.execution_plan is None:
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                        "process endpoint action cohort lost its exact reconciliation or plan",
+                    )
+                audit_entries = (
+                    ExecutionEffectAuditCohortEntry(
+                        admission.endpoint.execution_plan, endpoint_reconciliation
+                    ),
                 )
-            endpoint_effect_plan = admission.endpoint.execution_plan
-            if endpoint_effect_plan is None:
+                root_action_id = admission.endpoint.root_anchor.action_id
+            elif request.prepared_effects is not None and (
+                request.prepared_effects.root_script_publication is not None
+                or (
+                    _get_os_category(request.system.os) == "macos"
+                    and request.prepared_effects.process_binary_publication is not None
+                )
+            ):
+                root_effects = request.effect_plan
+                if root_effects is None or root_effects.nodes:
+                    raise StateError("Mac artifact-only cohort requires its empty root effect plan")
+                audit_entries = (
+                    ExecutionEffectAuditCohortEntry(root_effects, root_effects.reconcile(())),
+                )
+                root_action_id = request.prepared_effects.root_anchor.action_id
+            else:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its execution-effect plan",
+                    "process action cohort lost its endpoint or exact Mac artifact owner",
                 )
             effect_member_bindings = tuple(
                 ActionCohortEffectMemberBinding(
@@ -1288,15 +2200,10 @@ class ProcessExecutionService:
             )
             try:
                 action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                    admission.endpoint.root_anchor.action_id,
+                    root_action_id,
                     root.cohort,
                     (root_dispatch, *dependent_dispatches),
-                    (
-                        ExecutionEffectAuditCohortEntry(
-                            endpoint_effect_plan,
-                            endpoint_reconciliation,
-                        ),
-                    ),
+                    audit_entries,
                     effect_member_bindings,
                     (),
                 )
@@ -1320,6 +2227,105 @@ class ProcessExecutionService:
             action_cohort_batch,
         )
 
+    def _prepare_macos_process_publication(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        root: ProcessRootPlan,
+        evidence: ProcessEvidencePlan,
+    ) -> PreparedProcessPublication:
+        """Publish explicit birth/exec through the shared exact native source boundary."""
+        assert root.cohort is not None and root.birth_event is not None
+        assert request.effect_plan is not None or admission.endpoint is not None
+        reconciliation = None
+        endpoint_builders = ()
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            if admission.endpoint is not None:
+                reconciliation, endpoint_builders = (
+                    self.effects._prepare_process_owned_endpoint_effects_for_publication(
+                        system=request.system,
+                        process_identity=root.identity,
+                        process_closes_at=evidence.provisional_termination,
+                        prepared=admission.endpoint,
+                        storyline_origin=request.from_storyline,
+                        action_cohort_owned=True,
+                    )
+                )
+                for builder, _ in endpoint_builders:
+                    builder.process.binary_identity = root.binary
+                    builder.identity_plan = replace(
+                        builder.identity_plan, session=root.session_identity
+                    )
+            carriers = tuple(
+                self.dispatcher.prepare_action_cohort_projection(
+                    event, source_timing_preparation=timing
+                )
+                for event in (
+                    root.birth_event,
+                    evidence.event,
+                    *(builder for builder, _ in endpoint_builders),
+                )
+            )
+        artifacts = (
+            request.prepared_effects.artifact_publications
+            if request.prepared_effects is not None
+            else ()
+        )
+        file_publication_ids = {
+            id(publication) for _, publication in endpoint_builders if publication is not None
+        }
+        retained_artifacts = tuple(
+            token for token in artifacts if id(token) not in file_publication_ids
+        )
+        members = tuple(
+            self.dispatcher.bind_action_cohort_projection(
+                carrier,
+                state_plan=root.cohort,
+                artifact_publications=(
+                    retained_artifacts
+                    if index == 1
+                    else (endpoint_builders[index - 2][1],)
+                    if index >= 2 and endpoint_builders[index - 2][1] is not None
+                    else ()
+                ),
+            )
+            for index, carrier in enumerate(carriers)
+        )
+        effects = request.effect_plan
+        root_action_id = f"macos-process-cohort:{root.cohort.semantic_id}"
+        if admission.endpoint is not None:
+            if endpoint_builders:
+                root_action_id = admission.endpoint.root_anchor.action_id
+            if admission.endpoint.execution_plan is None or reconciliation is None:
+                raise StateError("Mac file-effect process lost its exact effect reconciliation")
+            effects = admission.endpoint.execution_plan
+        bindings = tuple(
+            ActionCohortEffectMemberBinding(
+                entry_ordinal=0,
+                node_id=builder.effect_provenance.node_id,
+                occurrence_ordinal=builder.effect_provenance.occurrence_ordinal,
+                member=member,
+            )
+            for (builder, _), member in zip(endpoint_builders, members[2:], strict=True)
+            if builder.effect_provenance is not None
+        )
+        batch = self.dispatcher.prepare_action_cohort_batch(
+            root_action_id,
+            root.cohort,
+            members,
+            (
+                ExecutionEffectAuditCohortEntry(
+                    effects, reconciliation if reconciliation is not None else effects.reconcile(())
+                ),
+            ),
+            bindings,
+            (),
+            exact_projection=True,
+        )
+        return PreparedProcessPublication(
+            members[0], members[1:], timing, artifacts, reconciliation, batch
+        )
+
     def _publish_process(
         self,
         request: ProcessExecutionRequest,
@@ -1339,22 +2345,23 @@ class ProcessExecutionService:
         else:
             with timing_preparation.claimed_commit():
                 with ExitStack() as artifact_stack:
-                    artifact_commits = tuple(
+                    artifacts = (
                         artifact_stack.enter_context(
-                            self.runtime_content_manager.registry.prepared_publication(publication)
+                            self.runtime_content_manager.registry.prepared_publication_group(
+                                publication.artifacts
+                            )
                         )
-                        for publication in publication.artifacts
+                        if publication.artifacts
+                        else None
                     )
-
-                    def finalize_prepared_capabilities() -> None:
-                        for artifact_commit in artifact_commits:
-                            artifact_commit.commit()
-                        timing_preparation.commit_no_fail()
 
                     running_proc, materialization_receipt = (
                         self.lifecycle_authority.materialize_process(
                             process_plan,
-                            finalize_external_no_fail=finalize_prepared_capabilities,
+                            commit_external_first=artifacts.commit_no_fail
+                            if artifacts is not None
+                            else None,
+                            finalize_external_no_fail=timing_preparation.commit_no_fail,
                         )
                     )
 
@@ -1391,14 +2398,16 @@ class ProcessExecutionService:
                 command_line=launch.actor.command_line,
                 time=launch.time,
             )
-        if running_proc.logon_id and root.cohort is None:
+        if running_proc.logon_id and (root.cohort is None or root.birth_event is not None):
             session = self.state_manager.get_session(running_proc.logon_id)
-            if session is not None:
+            if session is not None and (
+                session.last_activity_time is None or session.last_activity_time < launch.time
+            ):
                 session.last_activity_time = launch.time
         self.sources._record_process_source_create_time(
             request.system.hostname,
             root.process.identity.pid,
-            event,
+            root.birth_event if root.birth_event is not None else event,
             not_after=evidence.source_visible_by,
         )
         if evidence.provisional_termination is not None:
@@ -1482,6 +2491,12 @@ class ProcessTerminationService:
         authoritative_latest_allowed: datetime | None = None
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        if request.expected_process is not None and (
+            running_proc is None
+            or self.state_manager.get_process_identity(system.hostname, pid)
+            != request.expected_process
+        ):
+            raise StateError("Process completion lost its exact live execution")
         owned_end_plan = (
             self.state_manager.process_session_end_plan(system.hostname, pid)
             if running_proc is not None
@@ -1685,6 +2700,20 @@ class ProcessTerminationService:
             storyline_origin=from_storyline,
         )
 
+        macos_exit = running_proc is not None and _get_os_category(system.os) == "macos"
+        if macos_exit:
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is None:
+                raise StateError("Mac process exit lost its exact live identity")
+            event = process_exit_occurrence(
+                host=self.identity.host_context(system),
+                process=process,
+                timestamp=time,
+                integrity_level=running_proc.integrity_level,
+                exit_outcome=self._macos_exit_outcome(request, process, time),
+            )
+            event.storyline_origin = from_storyline
+
         self.sources._record_process_source_terminate_time(system.hostname, pid, event)
         if (
             running_proc is not None
@@ -1713,7 +2742,10 @@ class ProcessTerminationService:
                 seed_text=running_proc.command_line,
                 concurrency_group_id=running_proc.concurrency_group_id,
             )
-        self.dispatcher.dispatch_builder(event)
+        if macos_exit:
+            self._publish_macos_exit(event)
+        else:
+            self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         self.foreground.record_termination(
             system.hostname, pid, termination_start_time, event.timestamp
@@ -1730,3 +2762,70 @@ class ProcessTerminationService:
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
         )
+
+    def _publish_macos_exit(self, event: OccurrenceBuilder) -> None:
+        """Close State and lifecycle together, adopting surviving exact children."""
+        process = event.identity_plan.subject
+        authority = self.foreground._lifecycle_authority
+        if self.foreground._lifecycle_compatibility_fixture_mode:
+            authority.ensure_process(process.hostname, process.pid)
+        builder = self.state_manager.begin_action_cohort_materialization()
+        root = f"process-exit:{process.object_id}"
+        prepare_surviving_child_adoptions(
+            lifecycle_registry=authority.registry,
+            state_manager=self.state_manager,
+            builder=builder,
+            members=(process,),
+            closing_ids={process.object_id},
+            completed_at=event.timestamp,
+            action_id=root,
+        )
+        builder.terminate_process(
+            process, end_time=event.timestamp, exit_outcome=event.process.exit_outcome
+        )
+        plan = builder.seal()
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            carrier = self.dispatcher.prepare_action_cohort_projection(
+                event, source_timing_preparation=timing
+            )
+        try:
+            dispatch = self.dispatcher.bind_action_cohort_projection(carrier, state_plan=plan)
+            effects = ExecutionEffectPlan(
+                ActionAnchor("process_execution", root, source="process_termination"), ()
+            )
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                root,
+                plan,
+                (dispatch,),
+                (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+                (),
+                (),
+                exact_projection=True,
+            )
+        except BaseException:
+            timing.cancel()
+            raise
+        self.dispatcher.publish_prepared_action_cohort_batch(batch)
+
+    def _macos_exit_outcome(
+        self, request: ProcessTerminationRequest, process: ProcessIdentity, at: datetime
+    ) -> PosixProcessExit | None:
+        """Retain explicit truth or the policy of an untruncated natural completion."""
+        if request.exit_outcome is not None:
+            return request.exit_outcome
+        provider = self.identity.macos_execution_metadata
+        if not request.macos_command_completed or provider is None:
+            return None
+        planned = self.foreground.foreground_process_termination_time(process.hostname, process.pid)
+        session = self.state_manager.get_session(process.logon_id)
+        deadlines = (
+            self.state_manager.get_session_end_time(process.logon_id),
+            session.network_close_time if session is not None else None,
+        )
+        if (
+            ensure_utc(at) != ensure_utc(request.time)
+            or (planned is not None and ensure_utc(at) < ensure_utc(planned))
+            or any(ensure_utc(at) >= ensure_utc(end) for end in deadlines if end is not None)
+        ):
+            return None
+        return provider.command_completion(process, at)

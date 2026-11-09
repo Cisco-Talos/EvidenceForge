@@ -1,0 +1,5 @@
+[
+  "fw-perimeter/cisco_asa.log",
+  "zeek-core/conn.json",
+  "zeek-dmz/conn.json"
+]

@@ -75,37 +75,46 @@ def pick_issuer(
                 # Find the matching issuer config
                 for issuer in issuers:
                     if issuer["name"] == ca_name:
-                        return issuer
+                        if event_time is None or _issuer_valid_at(issuer, event_time):
+                            return issuer
+                        break
                 # CA name in overrides but not in issuers list — return minimal config
-                return {
-                    "name": ca_name,
-                    "weight": 0,
-                    "validity_days": 397,
-                    "not_before_max_days": 300,
-                    "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
-                }
+                else:
+                    return {
+                        "name": ca_name,
+                        "weight": 0,
+                        "validity_days": 397,
+                        "not_before_max_days": 300,
+                        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+                    }
 
     # No override — weighted random selection (exclude weight=0 override-only CAs).
     # If an event timestamp is available, also filter out issuers whose configured
     # authority profile is not valid at that point in time.
     active_issuers = [i for i in issuers if i.get("weight", 0) > 0]
     if event_time is not None:
-        from evidenceforge.generation.activity.tls_realism import certificate_authority_profile
-
-        event_epoch = int(event_time.timestamp())
-        time_valid_issuers: list[dict[str, Any]] = []
-        for issuer in active_issuers:
-            profile = certificate_authority_profile(str(issuer["name"]))
-            if profile is None:
-                time_valid_issuers.append(issuer)
-                continue
-            if int(profile["not_valid_before"]) <= event_epoch <= int(profile["not_valid_after"]):
-                time_valid_issuers.append(issuer)
-        if time_valid_issuers:
-            active_issuers = time_valid_issuers
+        active_issuers = [
+            issuer for issuer in active_issuers if _issuer_valid_at(issuer, event_time)
+        ]
+        if not active_issuers:
+            raise ValueError(
+                "No configured TLS issuer is valid at the requested event time; "
+                "update the issuer profiles for this date"
+            )
 
     weights = [i["weight"] for i in active_issuers]
     return rng.choices(active_issuers, weights=weights, k=1)[0]
+
+
+def _issuer_valid_at(issuer: dict[str, Any], event_time: datetime) -> bool:
+    """Return whether a configured issuer authority is valid at a TLS event time."""
+    from evidenceforge.generation.activity.tls_realism import certificate_authority_profile
+
+    profile = certificate_authority_profile(str(issuer["name"]))
+    if profile is None:
+        return True
+    event_epoch = int(event_time.timestamp())
+    return int(profile["not_valid_before"]) <= event_epoch <= int(profile["not_valid_after"])
 
 
 def pick_key_type(rng: random.Random, issuer: dict[str, Any]) -> tuple[str, int]:

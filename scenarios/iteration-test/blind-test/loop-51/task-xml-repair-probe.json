@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "host": "DC-01.meridianhcs.local",
+      "task": "\\Microsoft\\Windows\\Maintenance\\DeviceSync",
+      "methods": [],
+      "principal": "NT AUTHORITY\\SYSTEM"
+    }
+  ],
+  "all_generated_methods_valid": true
+}

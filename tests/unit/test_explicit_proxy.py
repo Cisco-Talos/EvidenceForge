@@ -232,7 +232,37 @@ def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> Non
     assert "Edg/" not in first
 
 
-def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> None:
+@pytest.mark.parametrize(
+    ("image", "version", "token"),
+    [
+        ("chrome.exe", "120.0.6099.225", "Chrome/120.0.0.0"),
+        ("firefox.exe", "126.0.2", "Firefox/126.0"),
+    ],
+)
+def test_process_browser_agent_consumes_loaded_release_version(
+    image: str, version: str, token: str
+) -> None:
+    from evidenceforge.generation.activity.proxy_user_agents import (
+        stable_browser_user_agent_for_process,
+    )
+
+    host = System(hostname="WS-02", ip="10.0.1.21", os="Windows 11", type="workstation")
+    first = stable_browser_user_agent_for_process(
+        host, image, "loaded-process", release_version=version
+    )
+    second = stable_browser_user_agent_for_process(
+        host, image, "loaded-process", release_version=version, hostname="other.example"
+    )
+    assert first == second
+    assert token in first
+    if image == "firefox.exe":
+        assert "rv:126.0" in first
+
+
+@pytest.mark.parametrize("explicit_header", [False, True])
+def test_browser_process_defaults_are_stable_and_explicit_headers_survive(
+    explicit_header: bool,
+) -> None:
     """Authoritative-PID rendering projects one stable version from its browser owner."""
     generator, emitters = _generator(
         [
@@ -282,7 +312,9 @@ def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> No
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; "
                     f"rv:{version}) Gecko/20100101 Firefox/{version}"
-                ),
+                )
+                if explicit_header
+                else "",
                 status_code=200,
                 response_body_len=5000,
             ),
@@ -293,8 +325,10 @@ def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> No
         for call in emitters["zeek_http"].emit.call_args_list
         if call.args[0].protocol.http is not None
     }
-    assert len(user_agents) == 1
-    assert "Firefox/" in next(iter(user_agents))
+    assert len(user_agents) == (2 if explicit_header else 1)
+    assert all("Firefox/" in user_agent for user_agent in user_agents)
+    if explicit_header:
+        assert {agent.split("Firefox/")[1] for agent in user_agents} == {"120.0", "121.0"}
 
 
 def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
@@ -682,7 +716,7 @@ def test_build_proxy_context_preserves_known_absent_http_user_agent():
     assert proxy_context.user_agent == ""
 
 
-def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
+def test_build_proxy_context_preserves_explicit_service_user_agent():
     generator = ActivityGenerator(StateManager(), {})
     domain_controller = System(
         hostname="DC-01",
@@ -714,10 +748,7 @@ def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
             method="GET",
             host="api.westbridge-services.net",
             uri="/api/v2/checkin",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "Chrome/121.0.0.0 Safari/537.36"
-            ),
+            user_agent="Go-http-client/1.1",
             response_body_len=4096,
         ),
         explicit_mode=True,
@@ -1532,8 +1563,8 @@ class TestExplicitProxyVisibility:
         assert client_event.process is None
         assert client_event.network.initiating_pid == -1
 
-    def test_explicit_proxy_uses_process_bound_browser_agent(self) -> None:
-        """Proxy delegation cannot replace one browser process with request-local versions."""
+    def test_explicit_proxy_preserves_explicit_browser_headers(self) -> None:
+        """Proxy delegation preserves action-owned headers and their byte budgets."""
         generator, emitters = _generator([])
         user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
         workstation = generator._ip_to_system["10.0.1.10"]
@@ -1582,9 +1613,8 @@ class TestExplicitProxyVisibility:
             for call in emitters["proxy_access"].emit.call_args_list
         ]
         assert len(agents) == 2
-        assert agents[0] == agents[1]
+        assert agents == ["Firefox/119.0", "Firefox/121.0"]
         assert "Firefox/" in agents[0]
-        assert agents[0] not in {"Firefox/119.0", "Firefox/121.0"}
 
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,
@@ -4070,8 +4100,17 @@ class TestExplicitProxyVisibility:
             if call.args[0].network.src_ip == "10.0.1.10"
             and call.args[0].network.dst_ip == "10.0.3.10"
         )
-        assert proxy_event.protocol.proxy.cs_bytes == request_body + proxy_overhead
-        assert client_event.network.orig_bytes < request_body + 10_000
+        # The legacy estimate is a floor; observed headers can require more.
+        assert proxy_event.protocol.proxy.cs_bytes >= request_body + proxy_overhead
+        assert proxy_event.protocol.proxy.cs_bytes < request_body + 4096
+        from evidenceforge.generation.activity.tls_realism import tls13_application_payload_budget
+
+        phase = proxy_event.protocol.proxy.transaction
+        handshake_bytes = client_event.network.orig_bytes - (
+            phase.tunnel_setup_cs_bytes
+            + tls13_application_payload_budget(proxy_event.protocol.proxy.cs_bytes)
+        )
+        assert 400 <= handshake_bytes <= 1800
 
     def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):
         generator, emitters = _generator(
@@ -4531,12 +4570,33 @@ class TestExplicitProxyVisibility:
         assert len(client_events) == 3
         assert len(origin_events) == 3
         assert len(proxy_events) == 3
-        assert [
-            (event.network.orig_bytes, event.network.resp_bytes) for event in client_events
-        ] == [(846, 1615), (636, 932), (566, 697)]
-        assert [
-            (event.network.orig_bytes, event.network.resp_bytes) for event in origin_events
-        ] == [(768, 6219), (619, 3601), (792, 5520)]
+        from evidenceforge.generation.activity.tls_realism import tls13_application_payload_budget
+
+        for client_event, proxy_event in zip(client_events, proxy_events, strict=True):
+            proxy = proxy_event.protocol.proxy
+            phase = proxy.transaction
+            client_handshake = client_event.network.orig_bytes - (
+                phase.tunnel_setup_cs_bytes + tls13_application_payload_budget(proxy.cs_bytes)
+            )
+            server_handshake = client_event.network.resp_bytes - (
+                phase.tunnel_setup_sc_bytes + tls13_application_payload_budget(proxy.sc_bytes)
+            )
+            assert 400 <= client_handshake <= 1800
+            assert 1800 <= server_handshake <= 6500
+        from evidenceforge.generation.activity.tls_realism import tls_server_payload_budget
+
+        for event, (expected_orig, prior_resp_floor) in zip(
+            origin_events, [(768, 6219), (619, 3601), (792, 5520)], strict=True
+        ):
+            wire_floor = tls_server_payload_budget(
+                zeek_uid=event.network.zeek_uid,
+                ssl=event.protocol.ssl,
+                chain=event.protocol.x509_chain,
+                service=event.network.service,
+                application_bytes=event.protocol.http.response_body_len,
+            )
+            assert event.network.orig_bytes == expected_orig
+            assert event.network.resp_bytes == max(prior_resp_floor, wire_floor)
         assert [
             (event.protocol.proxy.cs_bytes, event.protocol.proxy.sc_bytes) for event in proxy_events
         ] == [(367, 1439), (316, 789), (335, 567)]
@@ -4607,12 +4667,8 @@ class TestExplicitProxyVisibility:
             assert snapshot.close_reason == "setup-only"
             assert snapshot.reserved_operations == 1
             assert snapshot.completed_operations == 1
-            assert snapshot.reserved_initiator_bytes == (
-                phase.tunnel_setup_cs_bytes + proxy_event.protocol.proxy.cs_bytes
-            )
-            assert snapshot.reserved_responder_bytes == (
-                phase.tunnel_setup_sc_bytes + proxy_event.protocol.proxy.sc_bytes
-            )
+            assert snapshot.reserved_initiator_bytes == phase.client_transport_cs_bytes
+            assert snapshot.reserved_responder_bytes == phase.client_transport_sc_bytes
             assert client.orig_bytes == snapshot.reserved_initiator_bytes
             assert client.resp_bytes == snapshot.reserved_responder_bytes
             reserved_request_bytes += snapshot.reserved_initiator_bytes
@@ -4639,7 +4695,11 @@ class TestExplicitProxyVisibility:
         assert census.reserved_channel_ids == 0
         assert census.reserved_affinities == 0
         assert census.reserved_origin_transport_ids == 0
-        assert census.application.open_channels == 0
+        # Timing may admit an independent direct OCSP request. All three proxy
+        # channels are closed above; unrelated HTTP channels have their own owner.
+        assert census.application.open_channels == (
+            generator._http_channel_manager.census().open_transport_views
+        )
         assert census.application.active_operations == 0
         assert census.application.prepared_admissions == 0
         assert census.application.claimed_admissions == 0
@@ -6935,3 +6995,67 @@ class TestExplicitProxyVisibility:
         assert conn_event.protocol.ssl.cert_chain_fuids == tuple(
             cert.fuid for cert in conn_event.protocol.x509_chain
         )
+
+
+@pytest.mark.parametrize(
+    ("filename", "version", "expected"),
+    [
+        ("chrome.exe", "120.0.6099.130", "Chrome/120.0.0.0"),
+        ("firefox.exe", "126.0.2", "Firefox/126.0"),
+        ("msedge.exe", "125.0.2535.51", "Edg/125.0.0.0"),
+        ("cmd.exe", "10.0.22631.1", ""),
+    ],
+)
+def test_windows_root_binds_loaded_release_for_browser_and_nonbrowser(
+    monkeypatch: pytest.MonkeyPatch, filename: str, version: str, expected: str
+) -> None:
+    from evidenceforge.events.content_identity import (
+        BinaryReleaseIdentity,
+        BinaryReleaseKey,
+        PeVersionInfo,
+    )
+    from evidenceforge.events.process_executable import ProcessExecutableVersion
+
+    generator, _ = _generator([])
+    user, _, parent_pid = _seed_proxy_client_user_session(generator)
+    host = generator._ip_to_system["10.0.1.10"]
+    image = rf"C:\Program Files\Test\{filename}"
+    binary = BinaryReleaseIdentity(
+        BinaryReleaseKey("test.loaded", version, "retained", "x64", "windows", filename),
+        pe_version_info=PeVersionInfo(
+            version, "Test executable", "Test product", "Vendor", filename
+        ),
+    )
+    monkeypatch.setattr(
+        generator.dispatcher, "resolve_process_binary_identity", lambda *_args, **_kwargs: binary
+    )
+    monkeypatch.setattr(
+        generator.dispatcher, "resolve_loaded_process_binary_identity", lambda _identity: binary
+    )
+    session = generator.state_manager.get_process(host.hostname, parent_pid).logon_id
+    pid = generator.generate_process(
+        user=user,
+        system=host,
+        time=datetime(2024, 1, 15, 10, tzinfo=UTC),
+        logon_id=session,
+        process_name=image,
+        command_line=image,
+        parent_pid=parent_pid,
+    )
+    identity = generator.state_manager.get_process_identity(host.hostname, pid)
+    assert identity.executable_version == ProcessExecutableVersion.from_binary(binary)
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+
+    restored = StateManager()
+    _restore_head(restored, _capture_head(generator.state_manager))
+    assert (
+        restored.get_process_identity(host.hostname, pid).executable_version
+        == identity.executable_version
+    )
+    first = generator.browser_user_agent_for_process(host, pid, hostname="one.example")
+    second = generator.browser_user_agent_for_process(host, pid, hostname="two.example")
+    assert first == second
+    if expected:
+        assert expected in first
+    else:
+        assert first == ""

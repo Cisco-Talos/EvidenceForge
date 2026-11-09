@@ -1,0 +1,19 @@
+{
+  "loop": 61,
+  "initial_scores_verified": true,
+  "initial_mean": 55.25,
+  "deliberation_triggered": true,
+  "three_copy_data_hashes_verified": 116,
+  "authored_inputs_unchanged": true,
+  "hard_acceptance": true,
+  "native_census": {
+    "expected_forks": 90,
+    "published_forks": 90,
+    "expected_execs": 106,
+    "published_execs": 106,
+    "expected_exits": 88,
+    "published_exits": 88,
+    "aggregate_births": 0
+  },
+  "history_boundary": "Mac series1\u201342 retained under iteration-test-macos; canonical43 onward; historical v2-loop series excluded"
+}

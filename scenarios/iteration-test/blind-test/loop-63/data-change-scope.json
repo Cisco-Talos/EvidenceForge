@@ -1,0 +1,15 @@
+{
+  "compared_prior_loop": 62,
+  "before_files": 119,
+  "after_files": 119,
+  "changed_data_files": [
+    "MAC-MROSS-01.meridianhcs.local/ecar.json",
+    "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+    "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson",
+    "zeek-core/conn.json"
+  ],
+  "unchanged_data_files": 114,
+  "added_files": [],
+  "removed_files": []
+}

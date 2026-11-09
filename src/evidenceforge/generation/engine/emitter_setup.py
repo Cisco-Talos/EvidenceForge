@@ -34,11 +34,22 @@ Contains the EmitterSetupMixin with methods for:
 import hashlib
 import logging
 import random
+import shlex
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from evidenceforge.events.collection_policy import canonical_source_hostname
+from evidenceforge.events.content_identity import BinaryReleaseIdentity
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    validate_process_arguments,
+)
+from evidenceforge.events.process_executable import (
+    ProcessExecutableVersion,
+    validate_process_executable_version,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -53,6 +64,7 @@ from evidenceforge.generation.activity.smb_profiles import (
 from evidenceforge.generation.activity.smb_profiles import (
     select_server_profile,
 )
+from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     CiscoAsaEmitter,
@@ -79,6 +91,7 @@ from evidenceforge.generation.emitters import (
     ZeekSslEmitter,
     ZeekWeirdEmitter,
     ZeekX509Emitter,
+    ZshHistoryEmitter,
 )
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.lifecycle_authority import (
@@ -89,6 +102,10 @@ from evidenceforge.generation.lifecycle_authority import (
     LifecycleMaterializationBatchTransaction,
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.macos_execution_metadata import (
+    MacosExecutionMetadataProducer,
+    MacosLaunchMetadata,
+)
 from evidenceforge.generation.state_manager import (
     MaterializationBatchBuilder,
     ProcessMaterializationPlan,
@@ -119,21 +136,48 @@ class _BootProcessSpec:
     os_category: str
     logon_id: str
     start_time: datetime | None
+    executable_version: ProcessExecutableVersion | None = None
+    arguments: tuple[str, ...] | None = None
+
+    def executable_payload(self) -> tuple[object, ...]:
+        """Freeze optional loaded-image facts without changing old platform payloads."""
+        version = self.executable_version
+        validate_process_executable_version(version, self.os_category)
+        if version is None:
+            return ()
+        return (
+            (
+                "process-executable-version-v1",
+                version.platform,
+                version.identity_kind,
+                version.content_id,
+                version.artifact_version_id,
+            ),
+        )
 
     def canonical_payload(self) -> tuple[object, ...]:
         """Return the exact immutable request projection used by planning."""
-
+        validate_process_arguments(self.arguments, command_line=self.command_line)
+        if self.arguments is not None and self.os_category != "macos":
+            raise StateError("Explicit boot argv is bounded to the Mac boot profile")
+        arguments = (
+            (("process-arguments-v1", self.arguments),) if self.arguments is not None else ()
+        )
         return (
-            self.alias,
-            self.parent_alias,
-            self.fixed_pid,
-            self.image,
-            self.command_line,
-            self.username,
-            self.integrity_level,
-            self.os_category,
-            self.logon_id,
-            self.start_time,
+            (
+                self.alias,
+                self.parent_alias,
+                self.fixed_pid,
+                self.image,
+                self.command_line,
+                self.username,
+                self.integrity_level,
+                self.os_category,
+                self.logon_id,
+                self.start_time,
+            )
+            + self.executable_payload()
+            + arguments
         )
 
 
@@ -244,7 +288,14 @@ def _has_dhcp_event(step: object) -> bool:
 
 def _build_emitter_classes() -> dict:
     """Build emitter class map at call time (supports test patching of module-level names)."""
+    from evidenceforge.generation.emitters.macos_endpoint_security import (
+        MacosEndpointSecurityEmitter,
+    )
+    from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
+
     return {
+        "macos_endpoint_security": MacosEndpointSecurityEmitter,
+        "macos_unified_log": MacosUnifiedLogEmitter,
         "windows_event_security": WindowsEventEmitter,
         "windows_event_sysmon": SysmonEventEmitter,
         "zeek_conn": ZeekEmitter,
@@ -266,6 +317,7 @@ def _build_emitter_classes() -> dict:
         "ecar": EcarEmitter,
         "syslog": SyslogEmitter,
         "bash_history": BashHistoryEmitter,
+        "zsh_history": ZshHistoryEmitter,
         "snort_alert": SnortEmitter,
         "cisco_asa": CiscoAsaEmitter,
         "web_access": WebEmitter,
@@ -295,11 +347,14 @@ _ZEEK_FORMATS = _ZEEK_FORMAT_NAMES
 # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
 _SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert", "cisco_asa"}
 _HOST_FORMATS = {
+    "macos_endpoint_security",
+    "macos_unified_log",
     "windows_event_security",
     "windows_event_sysmon",
     "ecar",
     "syslog",
     "bash_history",
+    "zsh_history",
     "web_access",
     "proxy_access",
 }
@@ -350,6 +405,25 @@ class EmitterSetupMixin:
 
         requested = {log["format"] for log in self.scenario.output.logs if "format" in log}
         formats_to_generate = expand_formats(requested)
+
+        from evidenceforge.generation.activity.helpers import _get_os_category
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        for system in self.scenario.environment.systems:
+            if _get_os_category(system.os) == "macos" and select_macos_es_profile(system) is None:
+                raise StateError(
+                    "Unsupported macOS generation target; select an active macOS 27 arm64 "
+                    "workstation profile. Changing output formats does not enable retired targets."
+                )
+
+        if "macos_endpoint_security" in formats_to_generate:
+            if not any(
+                select_macos_es_profile(system) is not None
+                for system in self.scenario.environment.systems
+            ):
+                raise StateError(
+                    "Native ES output requires an active macOS 27 arm64 workstation profile"
+                )
 
         emitter_classes = _build_emitter_classes()
 
@@ -656,6 +730,8 @@ class EmitterSetupMixin:
                     ]
                     if system.type and system.type.lower() in ("server", "domain_controller"):
                         svcs.append("smb-server")
+                elif os_cat == "macos":
+                    svcs = ["dns-client", "ntp-client", "smb-client"]
                 else:
                     svcs = ["dns-client", "ntp-client", "syslog"]
                 defaults[system.hostname] = svcs
@@ -1111,6 +1187,257 @@ class EmitterSetupMixin:
             aliases=tuple(aliases),
         )
 
+    def _build_macos_boot_host_spec(
+        self, system: System, boot_time: datetime | None
+    ) -> _BootHostSpec:
+        """Build the Mac boot forest from the effective application catalog."""
+        from evidenceforge.generation.activity.application_catalog import load_catalog
+        from evidenceforge.generation.activity.timing_profiles import get_timing_window
+        from evidenceforge.generation.timing import (
+            ConstantDistribution,
+            TimingScope,
+            TriangularDistribution,
+        )
+
+        window = get_timing_window(
+            "macos.boot_inventory_gap",
+            default_min_ms=50,
+            default_max_ms=1900,
+            default_position="after",
+        )
+
+        def boot_gap(alias: str) -> float:
+            distribution = (
+                ConstantDistribution(value=window.min_ms * 1000)
+                if window.min_ms == window.max_ms
+                else TriangularDistribution(
+                    minimum=window.min_ms * 1000,
+                    mode=(window.min_ms + (window.max_ms - window.min_ms) * 0.35) * 1000,
+                    maximum=window.max_ms * 1000,
+                )
+            )
+            return self.timing_runtime.sampler.sample_timedelta(
+                distribution,
+                relationship_key="macos.boot_inventory_gap",
+                scope=TimingScope(
+                    stable_id=f"{system.hostname}:{boot_time.isoformat() if boot_time else 'unknown'}",
+                    host=system.hostname,
+                    lifecycle_id=alias,
+                ),
+            ).total_seconds()
+
+        deployment = getattr(self, "deployment_registry", None)
+        elapsed = 0.0
+        processes: list[_BootProcessSpec] = []
+        for app in load_catalog()["applications"]:
+            if (
+                not {"macos_boot", "macos_resident"}.intersection(app["categories"])
+                or "macos" not in app["platforms"]
+            ):
+                continue
+            resident = "macos_resident" in app["categories"]
+            platform = app["platforms"]["macos"]
+            if len(platform["command_templates"]) != 1 or platform.get("command_parameter_pools"):
+                raise StateError("Mac boot requires one literal command template per process")
+            command = platform["command_templates"][0]
+            try:
+                arguments = tuple(shlex.split(command, posix=True))
+                validate_process_arguments(arguments, command_line=command)
+            except ValueError as error:
+                raise StateError("Mac boot requires canonical literal catalog argv") from error
+            if arguments[0] != platform["image_path"]:
+                raise StateError("Mac boot argv must name its exact executable")
+            alias = app["id"].removeprefix("macos-")
+            is_init = alias == "launchd"
+            if not is_init:
+                elapsed += boot_gap(alias)
+            inventory_at = boot_time + timedelta(seconds=elapsed) if boot_time else None
+            collection_start = getattr(self, "warmup_start_time", None)
+            if (
+                resident
+                and isinstance(collection_start, datetime)
+                and (inventory_at is None or inventory_at >= collection_start)
+            ):
+                raise StateError(
+                    "Shared Mac resident inventory must precede collection; native startup is unqualified"
+                )
+            binary = (
+                deployment.resolve_binary(
+                    system.hostname, platform["image_path"], "macos", principal="root"
+                )
+                if type(deployment) is DeploymentContentRegistry
+                else None
+            )
+            executable_version = (
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) is BinaryReleaseIdentity
+                else None
+            )
+            processes.append(
+                _BootProcessSpec(
+                    alias=alias,
+                    parent_alias=None if is_init else "launchd",
+                    fixed_pid=1 if is_init else None,
+                    image=platform["image_path"],
+                    command_line=command,
+                    arguments=arguments,
+                    username="root",
+                    integrity_level="System",
+                    os_category="macos",
+                    logon_id="",
+                    start_time=boot_time + timedelta(seconds=elapsed) if boot_time else None,
+                    executable_version=executable_version,
+                )
+            )
+        if not processes or processes[0].alias != "launchd":
+            raise StateError("Mac boot catalog must begin with the macos-launchd application")
+        world = getattr(self, "world_model", None)
+        if system.hostname in getattr(world, "preexisting_macos_root_shell_hosts", ()):
+            from evidenceforge.generation.activity.macos_execution_metadata import (
+                load_macos_execution_metadata_profile,
+            )
+
+            metadata_profile = load_macos_execution_metadata_profile()
+            shell = metadata_profile.preexisting_root_shell if metadata_profile else None
+            if shell is not None:
+                binary = deployment.resolve_binary(
+                    system.hostname, shell.image, "macos", principal="root"
+                )
+                if type(binary) is not BinaryReleaseIdentity or binary.mach_o_image is None:
+                    raise StateError("Pre-existing root shell requires its installed native image")
+                elapsed += boot_gap("preexisting-root-shell")
+                started_at = boot_time + timedelta(seconds=elapsed) if boot_time else None
+                if started_at is None or started_at >= self.start_time:
+                    raise StateError("Assumed root foothold must exist before collection starts")
+                processes.append(
+                    _BootProcessSpec(
+                        alias="preexisting-root-shell",
+                        parent_alias="launchd",
+                        fixed_pid=None,
+                        image=shell.image,
+                        command_line=shlex.join(shell.arguments),
+                        arguments=shell.arguments,
+                        username="root",
+                        integrity_level="System",
+                        os_category="macos",
+                        logon_id="",
+                        start_time=started_at,
+                        executable_version=ProcessExecutableVersion.from_binary(binary),
+                    )
+                )
+        # Collection is part of the modeled host, independent of which output
+        # formats are exported. The same fleet transaction owns its activation.
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        profile = select_macos_es_profile(system)
+        if profile is not None:
+            descriptor = (
+                deployment.application_descriptor("macos-eslogger", "macos")
+                if type(deployment) is DeploymentContentRegistry
+                else None
+            )
+            if descriptor is None or descriptor.image_path != profile.collector_arguments[0]:
+                raise StateError("Native ES activation requires its compiled collector application")
+            binary = deployment.resolve_binary(
+                system.hostname, descriptor.image_path, "macos", principal="root"
+            )
+            if type(binary) is not BinaryReleaseIdentity:
+                raise StateError("Native ES activation requires its exact deployed collector")
+            elapsed += boot_gap("eslogger")
+            processes.append(
+                _BootProcessSpec(
+                    alias="eslogger",
+                    parent_alias="launchd",
+                    fixed_pid=None,
+                    image=descriptor.image_path,
+                    command_line=shlex.join(profile.collector_arguments),
+                    arguments=profile.collector_arguments,
+                    username="root",
+                    integrity_level="System",
+                    os_category="macos",
+                    logon_id="",
+                    start_time=boot_time + timedelta(seconds=elapsed) if boot_time else None,
+                    executable_version=ProcessExecutableVersion.from_binary(binary),
+                )
+            )
+        return _BootHostSpec(
+            hostname=system.hostname,
+            os_category="macos",
+            boot_time=boot_time,
+            machine_id="",
+            processes=tuple(processes),
+            aliases=(),
+        )
+
+    @staticmethod
+    def _macos_boot_launch_metadata(
+        hostname: str,
+        member: _BootProcessSpec,
+        provider: MacosExecutionMetadataProducer | None = None,
+    ) -> MacosLaunchMetadata | None:
+        """Produce explicit clean boot-launch facts from the shared frozen owner."""
+        if (
+            type(provider) is not MacosExecutionMetadataProducer
+            or member.os_category != "macos"
+            or member.start_time is None
+        ):
+            return None
+        return provider.deployed_launch(
+            hostname, member.username, at=member.start_time, path=member.image, kind="system"
+        )
+
+    def _seed_macos_process_tree(self, system: System, pids: dict[str, int]) -> None:
+        """Materialize the same catalog boot forest for direct compatibility callers."""
+        state = self.state_manager
+        host = self._build_macos_boot_host_spec(system, state.state.current_time)
+        for member in host.processes:
+            if member.start_time is not None:
+                state.set_current_time(member.start_time)
+            metadata = EmitterSetupMixin._macos_boot_launch_metadata(
+                host.hostname,
+                member,
+                getattr(
+                    getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                ),
+            )
+            credentials, assign_boot_audit = EmitterSetupMixin._macos_boot_audit_inputs(
+                member,
+                metadata,
+                state.get_process_identity(host.hostname, pids[member.parent_alias])
+                if member.parent_alias
+                else None,
+                getattr(
+                    getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                ),
+            )
+            plan = state.plan_process_materialization(
+                system=host.hostname,
+                parent_pid=pids[member.parent_alias] if member.parent_alias else 0,
+                fixed_pid=member.fixed_pid,
+                image=member.image,
+                command_line=member.command_line,
+                username=member.username,
+                integrity_level=member.integrity_level,
+                os_category=host.os_category,
+                credentials=credentials,
+                macos_boot_audit_session=assign_boot_audit,
+                new_posix_session=True,
+                executable_version=member.executable_version,
+                arguments=member.arguments,
+                environment=metadata.environment if metadata else None,
+                execution_directory=metadata.directory if metadata else None,
+                exec_image=metadata.image if metadata else None,
+                image_security=metadata.image_security if metadata is not None else None,
+                exec_script=metadata.script if metadata else None,
+                responsibility=metadata.responsibility if metadata else None,
+                macos_terminal="absent" if metadata else None,
+                macos_standard_io="null" if metadata else None,
+                logon_id=member.logon_id,
+            )
+            with state.materialization_guard(plan.expected_version):
+                process = state.materialize_process(plan)
+            pids[member.alias] = process.pid
+
     def _build_boot_fleet_spec(self, original_time: datetime | None) -> BootFleetSpec:
         """Resolve every boot input once into the exact symbolic fleet forest."""
 
@@ -1128,6 +1455,8 @@ class EmitterSetupMixin:
             )
             if _get_os_category(system.os) == "windows":
                 hosts.append(self._build_windows_boot_host_spec(system, boot_time))
+            elif _get_os_category(system.os) == "macos":
+                hosts.append(self._build_macos_boot_host_spec(system, boot_time))
             else:
                 hosts.append(self._build_linux_boot_host_spec(system, boot_time))
         return BootFleetSpec(
@@ -1228,7 +1557,13 @@ class EmitterSetupMixin:
             page_pids: dict[str, dict[str, int]] = {}
             page_machine_ids: dict[str, str] = {}
             for host_spec in page.hosts:
-                page_pids[host_spec.hostname] = self._plan_boot_host_spec(builder, host_spec)
+                page_pids[host_spec.hostname] = self._plan_boot_host_spec(
+                    builder,
+                    host_spec,
+                    getattr(
+                        getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                    ),
+                )
                 if host_spec.machine_id:
                     page_machine_ids[host_spec.hostname] = host_spec.machine_id
             # The page is already fully preflighted. A direct page commit avoids
@@ -1300,6 +1635,7 @@ class EmitterSetupMixin:
                         uuid_upper,
                         thread_projection,
                     )
+                    + member.executable_payload()
                 )
         external_projection = EmitterSetupMixin._boot_materialization_external_result(
             dict(machine_ids),
@@ -1323,9 +1659,44 @@ class EmitterSetupMixin:
         )
 
     @staticmethod
+    def _macos_boot_audit_inputs(
+        member: _BootProcessSpec,
+        metadata: MacosLaunchMetadata | None,
+        parent: ProcessIdentity | None,
+        provider: MacosExecutionMetadataProducer | None,
+    ) -> tuple[PosixProcessCredentials | None, bool]:
+        """Select explicit boot assignment and inheritance through canonical process plans."""
+        credentials = (
+            metadata.credentials
+            if metadata is not None
+            else PosixProcessCredentials(0, 0, 0, 0)
+            if member.os_category == "macos" and member.username == "root"
+            else None
+        )
+        if (
+            type(provider) is not MacosExecutionMetadataProducer
+            or member.os_category != "macos"
+            or provider.profile.boot_audit_origin is None
+        ):
+            return credentials, False
+        if parent is None:
+            return credentials, True
+        if (
+            parent.credentials is None
+            or not parent.credentials.is_unattributed_root
+            or parent.credentials.audit_uid != 2**32 - 1
+            or parent.credentials.audit_session_id in {None, 0}
+        ):
+            raise StateError(
+                "Mac boot child requires its assigned unattributed parent audit origin"
+            )
+        return parent.credentials, False
+
+    @staticmethod
     def _plan_boot_host_spec(
         batch_builder: MaterializationBatchBuilder,
         host_spec: _BootHostSpec,
+        metadata_provider: MacosExecutionMetadataProducer | None = None,
     ) -> dict[str, int]:
         """Allocate one exact symbolic host forest into the shared fleet builder."""
 
@@ -1344,6 +1715,15 @@ class EmitterSetupMixin:
                     )
                 parent_pid = pids[member.parent_alias]
                 parent_plan = plans_by_alias.get(member.parent_alias)
+            metadata = EmitterSetupMixin._macos_boot_launch_metadata(
+                host_spec.hostname, member, metadata_provider
+            )
+            credentials, assign_boot_audit = EmitterSetupMixin._macos_boot_audit_inputs(
+                member,
+                metadata,
+                parent_plan.identity if parent_plan is not None else None,
+                metadata_provider,
+            )
             plan = batch_builder.plan_process(
                 system=host_spec.hostname,
                 fixed_pid=member.fixed_pid,
@@ -1353,7 +1733,20 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=member.os_category,
+                credentials=credentials,
+                macos_boot_audit_session=assign_boot_audit,
                 logon_id=member.logon_id,
+                new_posix_session=member.os_category == "macos",
+                executable_version=member.executable_version,
+                arguments=member.arguments,
+                environment=metadata.environment if metadata else None,
+                execution_directory=metadata.directory if metadata else None,
+                exec_image=metadata.image if metadata else None,
+                image_security=metadata.image_security if metadata is not None else None,
+                exec_script=metadata.script if metadata else None,
+                responsibility=metadata.responsibility if metadata else None,
+                macos_terminal="absent" if metadata else None,
+                macos_standard_io="null" if metadata else None,
                 start_time=member.start_time,
                 parent_plan=parent_plan,
             )
@@ -1630,6 +2023,8 @@ class EmitterSetupMixin:
                                 _batch_builder=None,
                                 _boot_base=boot_time,
                             )
+                        elif _get_os_category(system.os) == "macos":
+                            self._seed_macos_process_tree(system, pids)
                         else:
                             self._seed_linux_process_tree(
                                 system,
@@ -1654,6 +2049,11 @@ class EmitterSetupMixin:
                         staged_system_pids[host_spec.hostname] = self._plan_boot_host_spec(
                             batch_builder,
                             host_spec,
+                            getattr(
+                                getattr(self, "activity_generator", None),
+                                "macos_execution_metadata",
+                                None,
+                            ),
                         )
                         if host_spec.machine_id:
                             staged_machine_ids[host_spec.hostname] = host_spec.machine_id

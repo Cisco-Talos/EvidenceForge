@@ -1,0 +1,741 @@
+# Explicit synthetic launch/device policy, not host inspection or APFS calibration.
+schema_version: "1.0"
+profile: modeled-macos-execution-v1
+# Explicit model selection; older frozen profiles retain unknown audit origin.
+# XNU bsd/bsm/audit.h and bsd/security/audit/audit_session.c define this origin.
+system_audit_origin: default_unattributed
+# The reviewed boot launchd uses an assigned, nonzero unattributed session.
+# State allocates its synthetic ID once; children inherit that same origin.
+boot_audit_origin: assigned_unattributed
+system_responsibility: none # clean service launch with no other responsible lifetime
+# One canonical origin per explicit GUI login, shared across terminal POSIX sessions.
+# Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.
+gui_audit_origin: authenticated_local_account
+# Selected canonical ownership for this modeled terminal chain. The app owns
+# its login/shell/command descendants. The app's own startup and entitlement
+# qualification remain separately gated. Old profiles stay unknown.
+terminal_responsibility: terminal_application
+# The file owner/mode is consumed from canonical installed filesystem facts.
+login_setuid_execution: installed_owner
+terminal_startups:
+  - application_id: macos-terminal
+    kind: apple
+    bundle_identifier: com.apple.Terminal
+    shell_environment: ["TERM=xterm-256color", "TERM_PROGRAM=Apple_Terminal"]
+  - application_id: macos-iterm2
+    kind: iterm2
+    bundle_identifier: com.googlecode.iterm2
+    server_application_id: macos-iterm2-server
+    shell_launcher_application_id: macos-iterm2-shell-launcher
+    server_socket_path: "{home}/Library/Application Support/iTerm2/iterm2-daemon-1.socket"
+    shell_environment: ["TERM=xterm-256color", "TERM_PROGRAM=iTerm.app"]
+# Human-reviewed regular Finder test-app relationship, not every GUI/helper class.
+# This selects parent/audit/responsibility only: no inferred exec environment,
+# descriptor backing, controlling terminal, POSIX session creation or native fork.
+finder_launch_relationships: launchd_self
+# Explicit synthetic clean launch inputs; never copied from the later main-entry
+# environment or extrapolated to arbitrary installed GUI applications.
+finder_launch_execution: xpcproxy_app_exec
+command_environments:
+  # Homebrew wrapper default; catalog intent addresses the real Mach-O directly.
+  - image: /opt/homebrew/opt/powershell/libexec/pwsh
+    environment: [DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec]
+finder_launch_images:
+  # Provisional regular-GUI models authorized November 7; full catalog audit is P2.
+  - /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+  - /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+  - /Applications/Postman.app/Contents/MacOS/Postman
+  - /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+  - /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+  - /Applications/Safari.app/Contents/MacOS/Safari
+  - /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+  - /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+  - /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+  - /Applications/Visual Studio Code.app/Contents/MacOS/Code
+  - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+  - /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+  - /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  - /Applications/Firefox.app/Contents/MacOS/firefox
+  - /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+  - /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+  - /Applications/OneDrive.app/Contents/MacOS/OneDrive
+  - /Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat
+  - /Applications/Slack.app/Contents/MacOS/Slack
+  - /Applications/zoom.us.app/Contents/MacOS/zoom.us
+  - /Applications/Webex.app/Contents/MacOS/Webex
+  - /Applications/Dropbox.app/Contents/MacOS/Dropbox
+  - /Applications/Google Drive.app/Contents/MacOS/Google Drive
+  - /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+  - /Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client
+  - /Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau
+  - /Applications/DBeaver.app/Contents/MacOS/dbeaver
+# Explicit bundle metadata; never inferred from a signing identifier.
+# Public packaging/vendor provenance is recorded in catalog-native-metadata.md.
+finder_applications:
+  - image: /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+    bundle_identifier: com.jetbrains.intellij
+  - image: /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+    bundle_identifier: com.sublimetext.4
+  - image: /Applications/Postman.app/Contents/MacOS/Postman
+    bundle_identifier: com.postmanlabs.mac
+  - image: /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+    bundle_identifier: org.mozilla.thunderbird
+  - image: /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+    bundle_identifier: com.microsoft.Excel
+  - image: /Applications/Safari.app/Contents/MacOS/Safari
+    bundle_identifier: com.apple.Safari
+  - image: /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+    bundle_identifier: com.apple.finder
+  - image: /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+    bundle_identifier: com.microsoft.edgemac
+  - image: /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+    bundle_identifier: com.microsoft.teams2
+  - image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    bundle_identifier: com.microsoft.VSCode
+  - image: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+    bundle_identifier: com.paloaltonetworks.GlobalProtect.client
+  - image: /Applications/EForgeReference.app/Contents/MacOS/EForgeReference
+    bundle_identifier: org.evidenceforge.Reference
+  - image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    bundle_identifier: com.google.Chrome
+  - image: /Applications/Firefox.app/Contents/MacOS/firefox
+    bundle_identifier: org.mozilla.firefox
+  - image: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+    bundle_identifier: com.microsoft.Outlook
+  - image: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+    bundle_identifier: com.microsoft.Word
+  - image: /Applications/OneDrive.app/Contents/MacOS/OneDrive
+    bundle_identifier: com.microsoft.OneDrive
+  - image: /Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat
+    bundle_identifier: com.adobe.Acrobat.Pro
+  - image: /Applications/Slack.app/Contents/MacOS/Slack
+    bundle_identifier: com.tinyspeck.slackmacgap
+  - image: /Applications/zoom.us.app/Contents/MacOS/zoom.us
+    bundle_identifier: us.zoom.xos
+  - image: /Applications/Webex.app/Contents/MacOS/Webex
+    bundle_identifier: Cisco-Systems.Spark
+  - image: /Applications/Dropbox.app/Contents/MacOS/Dropbox
+    bundle_identifier: com.getdropbox.dropbox
+  - image: /Applications/Google Drive.app/Contents/MacOS/Google Drive
+    bundle_identifier: com.google.drivefs
+  - image: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+    bundle_identifier: com.citrix.receiver.nomas
+  - image: /Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client
+    bundle_identifier: com.cisco.secureclient.gui
+  - image: /Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau
+    bundle_identifier: com.tableausoftware.tableaudesktop
+  - image: /Applications/DBeaver.app/Contents/MacOS/dbeaver
+    bundle_identifier: org.jkiss.dbeaver.core.product
+# Bounded fresh LaunchServices browser and direct sandboxed helper roles.
+# Pipe slots and environment are explicit synthetic inputs, not copied host values.
+# The dedicated GPU bundle, Crashpad double-fork, alerts and other helper classes
+# remain outside this invocation contract. There is no automatic whole-graph claim.
+browser_helpers:
+  # Two controlled Code 1.143.0 repeats qualify these exact roles. Descriptor
+  # slots are selected simulation policy; reference pipe IDs are not copied.
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=gpu-process]
+    seatbelt_fd: 21
+    environment: ["XPC_FLAGS=0x0"]
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=utility, --utility-sub-type=network.mojom.NetworkService]
+    seatbelt_fd: 29
+    environment: ["XPC_FLAGS=0x0"]
+  - parent_image: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    image: /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper
+    arguments: [--type=utility, --utility-sub-type=node.mojom.NodeService]
+    io_layout: utility_pipes
+    environment: ["XPC_FLAGS=0x0", "VSCODE_ESM_ENTRYPOINT=vs/code/electron-utility/sharedProcess/sharedProcessMain"]
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+    arguments: [--type=renderer]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+    arguments: [--type=gpu-process]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
+  - parent_image: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+    image: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper
+    arguments: [--type=utility, --utility-sub-type=network.mojom.NetworkService]
+    seatbelt_fd: 3
+    environment: ["XPC_FLAGS=0x0", "OS_ACTIVITY_MODE=disable"]
+# Selected synthetic launcher input. The private reference classifies its native
+# value only as OTHER; this literal is not claimed to have been measured.
+finder_launcher_xpc_flags: "0x2"
+# Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
+ssh_command_descriptors: standard_pipes
+# Reviewed bounded non-PTY receiver graph; old frozen profiles keep the legacy path.
+ssh_receiver_startup: launchd_non_pty_v11
+ssh_receiver_service_label: com.openssh.sshd
+# Reviewed macOS 27 PTY shell and direct foreground child, distinct from channel pipes.
+ssh_pty_execution: zsh_foreground_v11
+# Explicit loaded-job preset: root cwd, null standards, clean declared environment.
+# Launcher/target XPC fields come from the reviewed system activation boundary.
+system_job_startup: root_xpcproxy_v11
+# Historical reference targets. Installed native targets share the startup owner;
+# each target's own signing/validation facts still qualify its ES publication.
+system_job_images: [/usr/bin/true, /usr/bin/sw_vers]
+system_job_environment: ["PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"]
+system_job_phase_timing: {minimum: 0.001, median: 0.002, maximum: 0.02, sigma: 0.5} # nominal, not measured
+# Explicit nominal completed results for these exact invocations only. This is a
+# synthetic workload choice, not a success default, failure-rate measurement or
+# result inferred from exec admission. Only the natural completion owner uses it.
+# Literal nested shells can own subsequent direct commands when all existing
+# audit, responsibility, job-control, image and descriptor gates also pass.
+# Scripts, -c strings and other flags are deliberately absent.
+nested_command_shells:
+  - image: /bin/zsh
+    arguments: ["/bin/zsh"]
+  - image: /bin/bash
+    arguments: ["/bin/bash"]
+# Explicit assumed foothold for authored root process intents without a parent.
+# Pre-window inventory only; this asserts no in-window elevation or GUI login.
+preexisting_root_shell:
+  image: /bin/sh
+  arguments: ["/bin/sh"]
+# Explicit selected simulation path, approved November 4. These are completed
+# ordinary-close outcomes, not measured automatic logoff behavior or signal requests.
+# SSH worker results belong to their normal-return path, not the remote command result.
+ordinary_close:
+  model: orderly_logout_and_ssh_normal_return_v1
+  application_quit: {exit_code: 0}
+  terminal_server_return: {exit_code: 0}
+  shell_logout: {exit_code: 0}
+  login_return: {exit_code: 0}
+  ssh_client_return: {exit_code: 0}
+  ssh_worker_return: {exit_code: 0}
+  ssh_receiver_return: {exit_code: 0}
+  cancelled_command: {signal: 15}
+  shell_images: [/bin/zsh, /bin/bash, /bin/sh]
+  login_image: /usr/bin/login
+  ssh_client_images: [/usr/bin/ssh, /opt/homebrew/bin/ssh]
+  ssh_receiver_image: /usr/libexec/sshd-session
+command_completions:
+  # OpenSSH ssh.c -V prints the release and exits zero without opening a session.
+  - arguments: ["/opt/homebrew/bin/ssh", "-V"]
+    exit_code: 0
+  - arguments: ["/usr/bin/true"]
+    exit_code: 0
+  - arguments: ["/usr/bin/id"]
+    exit_code: 0
+  - arguments: ["/usr/bin/sw_vers"]
+    exit_code: 0
+  - arguments: ["/usr/bin/sw_vers", "-productVersion"]
+    exit_code: 0
+  - arguments: ["/usr/bin/uname", "-a"]
+    exit_code: 0
+  # Selected nominal query outcomes, not measured command results or success
+  # inferred from exec/TCP. Only the owning untruncated completion may use these.
+  - arguments: ["/bin/pwd"]
+    exit_code: 0
+  - arguments: ["/bin/df", "-h"]
+    exit_code: 0
+  - arguments: ["/sbin/ifconfig", "-a"]
+    exit_code: 0
+  - arguments: ["/bin/ps", "aux"]
+    exit_code: 0
+  - arguments: ["/usr/bin/dscl", ".", "-list", "/Users"]
+    exit_code: 0
+  - argument_template: ["/bin/ls", "-la", "{home}/Documents"]
+    exit_code: 0
+  - argument_template: ["/usr/bin/du", "-sh", "{home}/Documents"]
+    exit_code: 0
+  - argument_template: ["/usr/bin/find", "{home}/Documents", "-maxdepth", "2", "-type", "f", "-name", "*.pdf"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/bin/sqlcmd", "-S", "{db_server}", "-Q", "SELECT 1"]
+    exit_code: 0
+  - argument_template: ["/opt/homebrew/opt/libpq/bin/psql", "-h", "{db_server}", "-c", "SELECT 1"]
+    exit_code: 0
+    connection_failure_exit_code: 2
+  - argument_template: ["/opt/homebrew/opt/mysql-client/bin/mysql", "--host={db_server}", "--execute=SELECT 1"]
+    exit_code: 0
+    connection_failure_exit_code: 1
+  - argument_template: ["/opt/homebrew/opt/curl/bin/curl", "--head", "{internal_url}"]
+    exit_code: 0
+terminal:
+  volume_id: modeled-devfs
+  device: 16777217
+  special_device_base: 268435456
+  first_inode: 100000000
+  max_devices: 256
+  permissions: 384 # 0600; ownership comes from the exact local credentials
+  preferred_block_size: 4096
+cpu_subtype: 0 # explicitly selected generic arm64 slice, not inferred from a host
+user_environment:
+  - "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  - "HOME={home}"
+  - "USER={username}"
+  - "LOGNAME={username}"
+  - "SHELL={shell}"
+  - "LANG=en_US.UTF-8"
+root_environment:
+  - "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  - "HOME=/var/root"
+  - "USER=root"
+  - "LOGNAME=root"
+  - "SHELL=/bin/zsh"
+  - "LANG=en_US.UTF-8"
+directory_inode_range: {min: 1099511627776, max: 2199023255552}
+directory_permissions: 493 # 0755
+directory_size_bytes: 128
+directory_allocated_blocks: 0
+directory_age_range: {min: 2592000, max: 63072000}
+first_pipe_id: 1000000 # host-local monotonic synthetic native pipe-object namespace
+# Explicit modeled successful validation, not inferred trust or measured flags.
+# CS_VALID | CS_SIGNED | CS_PLATFORM_BINARY; no unmodeled entitlements/debug state.
+# Values: Apple XNU osfmk/kern/cs_blobs.h. Only enumerated native artifacts qualify.
+code_validation:
+  # Static inspection qualifies identifier/entitlement/slice only. These select
+  # the existing modeled platform-validation outcomes for the plain root shell
+  # and explicit system-job target, respectively; no runtime flags were collected.
+  - product_id: apple-macos
+    artifact_names: [sh]
+    codesigning_flags: 0x24000001
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [sleep]
+    codesigning_flags: 0x26011b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  # Public macOS 27 arm64 Homebrew bottles have ad-hoc signatures and no XML/DER
+  # entitlements. This explicitly selects successful ad-hoc validation, following
+  # the existing model's SIGNED|ADHOC|VALID policy; it is not a live runtime capture.
+  # sqlcmd additionally retains its observed CodeDirectory LINKER_SIGNED bit.
+  # Public artifact provenance: docs/design/macos-workstation-feasibility/catalog-native-metadata.md.
+  - product_id: mysql
+    artifact_names: [mysql]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: psql
+    artifact_names: [psql]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: curl
+    artifact_names: [curl]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: sqlcmd
+    artifact_names: [sqlcmd]
+    codesigning_flags: 0x20020003
+    is_platform_binary: false
+    validation_category: 10
+  - product_id: apple-macos
+    artifact_names:
+      - bash
+      - cat
+      - df
+      - dscl
+      - du
+      - find
+      - id
+      - ifconfig
+      - logind
+      - loginwindow
+      - mds
+      - ls
+      - ps
+      - pwd
+      - smd
+      - syspolicyd
+      - sw_vers
+      - tee
+      - tccd
+      - uname
+    codesigning_flags: 603979777 # 0x24000001
+    is_platform_binary: true
+    validation_category: 1 # explicit modeled platform validation outcome
+  # Human-reviewed macOS 27 Finder chain, including the fork's boot parent.
+  # VALID|FORCED_LV|HARD|KILL|RESTRICT|ENFORCEMENT|ENTITLEMENTS_VALIDATED|
+  # RUNTIME|NO_UNTRUSTED_HELPERS|PLATFORM_BINARY|SIGNED.
+  - product_id: apple-macos
+    artifact_names: [launchd]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+  - product_id: apple-macos
+    artifact_names: [xpcproxy]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646 # ARM64E | PTRAUTH_ABI, distinct from generic app arm64
+  # Reviewed bounded system-job target. Its null entitlements do not carry
+  # xpcproxy's ENTITLEMENTS_VALIDATED bit. Installed content IDs stay synthetic.
+  - product_id: apple-macos
+    artifact_names: ["true"]
+    codesigning_flags: 0x26011b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  # Human-reviewed macOS 27 non-PTY loopback client and receiver exec snapshots.
+  # This qualifies runtime security/slice, not the unresolved receiver graph/FDs.
+  - product_id: apple-macos
+    artifact_names: [ssh, sshd, sshd-auth, sshd-keygen-wrapper, sshd-session]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  # Human-reviewed clean Apple Terminal startup on macOS 27. These select only
+  # the observed runtime security and slice; missing argv/FD/entitlement and
+  # transition facts still prevent qualification of initial app/login starts.
+  - product_id: apple-macos
+    artifact_names: [Terminal]
+    codesigning_flags: 0x26017b01
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [login]
+    codesigning_flags: 0x26015b11
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: apple-macos
+    artifact_names: [zsh]
+    codesigning_flags: 0x26010b01
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  # Reviewed iTerm2 3.7.6 execution properties remain distinct from Apple images.
+  - product_id: iterm2
+    artifact_names: [iTerm2]
+    codesigning_flags: 0x22015311
+    is_platform_binary: false
+    validation_category: 6 # Developer ID
+    cpu_subtype: 0
+  - product_id: iterm2
+    artifact_names: [iTermServer-3.7.6, ShellLauncher]
+    codesigning_flags: 0x22011311
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  # This invented ad-hoc app is a selected model, not an inventory claim about
+  # third-party applications. XNU cs_blobs.h defines SIGNED|ADHOC|VALID and NONE.
+  - product_id: eforge-reference
+    artifact_names: [EForgeReference]
+    codesigning_flags: 536870915 # 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+  # Reviewed macOS 27 Developer ID execution flags. This is a bounded synthetic
+  # successful validation policy, not exact installed-build parity or Gatekeeper.
+  # Independently reviewed Code 1.143.0 main/generic-helper exec properties.
+  - product_id: vscode
+    artifact_names: [Code, Code Helper]
+    codesigning_flags: 570495761
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: chrome
+    artifact_names: [Google Chrome]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: chrome
+    artifact_names: [Google Chrome Helper (Renderer)]
+    codesigning_flags: 0x22011b11
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: chrome
+    artifact_names: [Google Chrome Helper]
+    codesigning_flags: 0x22013b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  # Public vendor static templates; successful runtime flags are selected model
+  # outcomes, not measurements. Full artifact/release boundaries are documented in
+  # docs/design/macos-workstation-feasibility/catalog-native-metadata.md.
+  - product_id: firefox
+    artifact_names:
+    - firefox
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: slack
+    artifact_names:
+    - Slack
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: dropbox
+    artifact_names:
+    - Dropbox
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: dbeaver
+    artifact_names:
+    - dbeaver
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: outlook
+    artifact_names:
+    - Microsoft Outlook
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: word
+    artifact_names:
+    - Microsoft Word
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: onedrive
+    artifact_names:
+    - OneDrive
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: zoom
+    artifact_names:
+    - zoom.us
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: citrix_workspace
+    artifact_names:
+    - Citrix Workspace
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: webex
+    artifact_names:
+    - Webex
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: google_drive_desktop
+    artifact_names:
+    - Google Drive
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: cisco-secure-client-ui
+    artifact_names:
+    - Cisco Secure Client
+    codesigning_flags: 0x22013b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: tableau_desktop
+    artifact_names:
+    - Tableau
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: globalprotect
+    artifact_names:
+    - GlobalProtect
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: acrobat
+    artifact_names:
+    - AdobeAcrobat
+    codesigning_flags: 0x22015b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+
+  # November 7 exact static templates; successful runtime validation is modeled.
+  # Apple arm64e mains retain their own entitlement dictionaries and slice policy.
+  - product_id: apple-macos
+    artifact_names: [Finder, Safari]
+    codesigning_flags: 0x24006001
+    is_platform_binary: true
+    validation_category: 1
+    cpu_subtype: -2147483646
+  - product_id: edge
+    artifact_names: [Microsoft Edge]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: teams
+    artifact_names: [MSTeams]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: ssh
+    artifact_names: [ssh]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+
+  - product_id: nano
+    artifact_names: [nano]
+    codesigning_flags: 0x20000003
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: excel
+    artifact_names: [Microsoft Excel]
+    codesigning_flags: 0x22017b01
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+
+  # Provisional desktop runtime policy, not observed vendor-build flags.
+  - product_id: intellij
+    artifact_names: [idea]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: sublimetext
+    artifact_names: [sublime_text]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: postman
+    artifact_names: [Postman]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: thunderbird
+    artifact_names: [thunderbird]
+    codesigning_flags: 0x22015301
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+
+  # Installed CLI/reference templates; startup flags/category measured twice via csops.
+  - product_id: 7zip
+    artifact_names: [7zz]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: git
+    artifact_names: [git]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: docker
+    artifact_names: [docker]
+    codesigning_flags: 0x22011311
+    is_platform_binary: false
+    validation_category: 6
+    cpu_subtype: 0
+  - product_id: kubectl
+    artifact_names: [kubectl]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: make
+    artifact_names: [gmake]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: vim
+    artifact_names: [vim]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: emacs
+    artifact_names: [emacs]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: gcc
+    artifact_names: [gcc-16]
+    codesigning_flags: 0x22020201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: cargo
+    artifact_names: [cargo]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: dotnet
+    artifact_names: [dotnet]
+    codesigning_flags: 0x22000205
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: nodejs
+    artifact_names: [node]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: python3
+    artifact_names: [Python]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: redis-cli
+    artifact_names: [redis-cli]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: ldapsearch
+    artifact_names: [ldapsearch]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+  - product_id: powershell
+    artifact_names: [pwsh]
+    codesigning_flags: 0x22000201
+    is_platform_binary: false
+    validation_category: 10
+    cpu_subtype: 0
+
+# Selected nominal document activity, not a claim about every Code save or APFS
+# allocation behavior. Parent NOTIFY stat phases remain separately qualified.
+filesystem_workload:
+  applications: [vscode]
+  directory_name: Documents
+  filenames: [work-notes.md, review-notes.md, project-notes.md]
+  first_inode: 4398046511104
+  count_min: 0
+  count_max: 2
+  size_min: 128
+  size_max: 2048
+  file_permissions: 384
+  allocated_blocks: 8
+  close_delay_min: 0.01
+  close_delay_max: 0.75
+  idle_probability: 0.25
+  atomic_replace_probability: 0.35
+  cleanup_probability: 0.15
+  parent_stat_phase: before
+  directory_entry_bytes: 32

@@ -125,7 +125,11 @@ class TestPerUserToolAffinity:
     def test_workstation_persona_pools_do_not_leak_to_servers(self):
         """Desktop-oriented persona pools should only apply on workstation-like hosts."""
         assert _get_role_pool("help_desk", "generic", workstation_like=True) == "help_desk"
-        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "sysadmin"
+        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "help_desk_server"
+        assert any(
+            command.startswith("resolvectl status")
+            for command in load_bash_commands()["help_desk_server"]
+        )
         assert _get_role_pool("data_analyst", "db", workstation_like=False) == "dba"
 
     def test_service_placeholder_prefers_host_services(self):

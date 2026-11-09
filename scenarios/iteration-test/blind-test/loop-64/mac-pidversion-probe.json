@@ -1,0 +1,20 @@
+{
+  "loop": 64,
+  "scope": "New fork child and exec target assignments only, not later references to existing identities. Host-local native event occurrence order, as exported.",
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "new_fork_exec_assignments": 126,
+      "assignments_below_prior_new_identity_high_water": 0,
+      "adjacent_new_fork_version_reversals": 0,
+      "examples": []
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "new_fork_exec_assignments": 93,
+      "assignments_below_prior_new_identity_high_water": 0,
+      "adjacent_new_fork_version_reversals": 0,
+      "examples": []
+    }
+  },
+  "total_adjacent_new_fork_reversals": 0,
+  "qualification": "Shared XNU fork/exec allocation counter per Apple primary source; source-build and intentional sanitization alternatives remain qualified. No actual same-process lifetime inversion is implied."
+}

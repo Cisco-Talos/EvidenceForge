@@ -660,15 +660,19 @@ def test_planned_auth_reuse_and_lifecycle_resolution_do_not_resample(
     parameters = inspect.signature(bundle._plan_linux_auth).parameters
     if "planned_auth_state" in parameters:
         planned_state = ssh_session_module._SshLinuxAuthState(
-            sshd_pid=4242,
-            logind_session_id=17,
+            receiver=ssh_session_module.SshReceiverAuthentication(
+                responder_pid=4242,
+                session_id=17,
+                connection_time=_START + timedelta(milliseconds=plan.conn_delay_ms),
+                authenticated_at=_START
+                + timedelta(milliseconds=plan.conn_delay_ms + plan.accepted_gap_ms),
+                session_open_time=_START
+                + timedelta(
+                    milliseconds=plan.conn_delay_ms + plan.accepted_gap_ms + plan.pam_gap_ms
+                ),
+                ready_at=_START + timedelta(milliseconds=plan.timing.lifecycle_gap_ms),
+            ),
             syslog_seed=plan.syslog_seed,
-            connection_time=_START + timedelta(milliseconds=plan.conn_delay_ms),
-            accepted_time=_START
-            + timedelta(milliseconds=plan.conn_delay_ms + plan.accepted_gap_ms),
-            pam_time=_START
-            + timedelta(milliseconds=plan.conn_delay_ms + plan.accepted_gap_ms + plan.pam_gap_ms),
-            logind_time=_START + timedelta(milliseconds=plan.timing.lifecycle_gap_ms),
         )
         reused = bundle._plan_linux_auth(
             state,

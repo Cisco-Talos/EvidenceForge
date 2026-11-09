@@ -1,0 +1,41 @@
+{
+  "before_flow_rows": 5336,
+  "after_flow_rows": 5334,
+  "removed_flow_rows": [
+    {
+      "timestamp_ms": 1793643074057,
+      "id": "98e33532-fd25-4f78-ae81-bf67bb0058aa",
+      "hostname": "PROXY-01",
+      "object": "FLOW",
+      "action": "CONNECT",
+      "objectID": "c3ae3717-2984-48a8-8cd7-27fe847b209a",
+      "properties": {
+        "src_ip": "10.10.1.21",
+        "src_port": "44178",
+        "dst_ip": "10.10.3.20",
+        "dst_port": "8080",
+        "protocol": "tcp",
+        "direction": "INBOUND"
+      }
+    },
+    {
+      "timestamp_ms": 1793638025380,
+      "id": "a999d98e-4666-479c-90a2-e5609595d34d",
+      "hostname": "PROXY-01",
+      "object": "FLOW",
+      "action": "CONNECT",
+      "objectID": "cb8bbc27-5556-4cf6-8ea9-7972c1a91b51",
+      "properties": {
+        "src_ip": "10.10.1.32",
+        "src_port": "57696",
+        "dst_ip": "10.10.3.20",
+        "dst_port": "8080",
+        "protocol": "tcp",
+        "direction": "INBOUND"
+      }
+    }
+  ],
+  "added_flow_rows": [],
+  "retimed_matching_flows": 45,
+  "qualification": "Full directional tuple joins, unlike the initial timestamp-sensitive comparison. HTTP wire identity/timing changes propagate to derived source observations; all proxy/Zeek request and transport counts remain unchanged. Source observation decisions are seeded by canonical identity."
+}

@@ -1,0 +1,61 @@
+{
+  "counts": {
+    "MAIL-EDGE-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "DB-PROD-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "LT-MRIVERA-02": {
+      "polkitd": 6,
+      "dbus-daemon": 8
+    },
+    "WEB-EXT-01": {
+      "dbus-daemon": 8,
+      "polkitd": 3
+    },
+    "LOG-MON-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "PROXY-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "MAIL-CLIN-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "WS-LNGUYEN-01": {
+      "polkitd": 6,
+      "dbus-daemon": 8
+    },
+    "WS-OHADDAD-01": {
+      "polkitd": 6,
+      "dbus-daemon": 8
+    },
+    "FILE-LNX-01": {
+      "polkitd": 3,
+      "dbus-daemon": 8
+    },
+    "APP-INT-01": {
+      "dbus-daemon": 8,
+      "polkitd": 3
+    }
+  },
+  "hourly": {
+    "polkitd": {
+      "13": 34,
+      "14": 8
+    },
+    "dbus-daemon": {
+      "13": 64,
+      "14": 14,
+      "15": 1,
+      "16": 6,
+      "18": 3
+    }
+  }
+}

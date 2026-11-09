@@ -166,6 +166,10 @@ def resolve_storyline(
             spec_dict = spec.model_dump(
                 exclude_none=True, exclude={"type", "technique", "description", "supplementary"}
             )
+            if spec.type == "port_scan" and not spec_dict.get("source_ip"):
+                # Empty is omission in PortScanEventSpec; the canonical scanner
+                # uses the storyline host. Preserve explicit external overrides.
+                spec_dict["source_ip"] = system_ips.get(event.system)
             sub_details.append(spec_dict)
             details.update(spec_dict)
 

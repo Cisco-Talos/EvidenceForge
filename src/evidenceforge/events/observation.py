@@ -462,10 +462,28 @@ class ObservationPolicy:
             src_port = int(event.network.src_port or 0)
             dst_ip = dst_ip or str(event.network.dst_ip or "")
         elif event.auth is not None and event.auth.source_ip and event.auth.source_port:
-            if event.event_type == "ssh_session":
+            if event.event_type not in {"ssh_session", "logon", "logoff"}:
+                return ""
+            identity = event.identity_plan.session if event.identity_plan is not None else None
+            kind = (
+                identity.session_kind
+                if identity is not None
+                else event.auth.session_kind
+                or (event.auth.auth_protocol if event.auth.auth_protocol in {"ssh", "rdp"} else "")
+            )
+            if kind == "ssh" or event.event_type == "ssh_session":
                 dst_port = 22
-            elif event.event_type == "logon" and event.auth.logon_type == 10:
+            elif kind == "rdp":
                 dst_port = 3389
+            elif not kind and event.auth.logon_type == 10:
+                # Compatibility Type 10 intents are platform-specific: POSIX
+                # remote interactive sessions are SSH, Windows sessions are RDP.
+                if host.os_category == "windows":
+                    dst_port = 3389
+                elif host.os_category in {"linux", "macos"}:
+                    dst_port = 22
+                else:
+                    return ""
             else:
                 return ""
             src_ip = str(event.auth.source_ip or "")

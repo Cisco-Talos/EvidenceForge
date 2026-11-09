@@ -13,8 +13,32 @@ from datetime import datetime, timedelta
 from pydantic import TypeAdapter, ValidationError
 
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    MacosAuditSession,
+    MacosProcessAuditBinding,
+    MacosProcessPrivilegeDrop,
+    MacosProcessServiceDrop,
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+)
+from evidenceforge.events.job_control import (
+    PosixGroupIdentity,
+    PosixJobControlChange,
+    PosixJobControlReservation,
+    PosixSessionIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
+from evidenceforge.events.macos_exec_image import MacosExecImage
+from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
+from evidenceforge.events.macos_file import MacosDirectoryMetadata
+from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
+from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
+from evidenceforge.events.macos_terminal import MacosTerminalSession
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     FileSensorObservation,
@@ -23,7 +47,15 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
     NetworkTuple,
+    TcpStreamExtent,
 )
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpRetentionLease,
@@ -32,7 +64,13 @@ from evidenceforge.events.rdp import (
     RdpSessionState,
     RdpTransportGeneration,
 )
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityBinding
+from evidenceforge.generation.macos_process_census import (
+    MacosAggregateBirthSample,
+    MacosOccurrenceDigest,
+    MacosProcessCensus,
+)
 from evidenceforge.generation.process_runtime_cache import RuntimeProcessBinding
 from evidenceforge.models.state import (
     ActiveSession,
@@ -81,6 +119,8 @@ _ACTIVE_SESSION_FIELDS = (
     "auth_session_ref",
     "effective_uid",
     "effective_gid",
+    "audit_origin",
+    "ssh_command_streams",
 )
 _RUNNING_PROCESS_FIELDS = (
     "pid",
@@ -104,6 +144,30 @@ _RUNNING_PROCESS_FIELDS = (
     "concurrency_group_id",
     "pid_logical_position",
     "end_time",
+    "execution_ordinal",
+    "executed_at",
+    "prior_executions",
+    "lifetime_image",
+    "credentials",
+    "audit_pid_version",
+    "audit_binding",
+    "privilege_drop",
+    "service_drop",
+    "exit_outcome",
+    "arguments",
+    "job_control",
+    "job_control_history",
+    "environment",
+    "parentage",
+    "parentage_history",
+    "responsibility",
+    "image_security",
+    "execution_directory",
+    "executable_version",
+    "directory_history",
+    "descriptor_history",
+    "exec_image",
+    "exec_script",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -133,6 +197,7 @@ _OPEN_CONNECTION_FIELDS = (
     "bytes_sent",
     "bytes_received",
     "traffic_ledger",
+    "http_capture_transaction",
     "transaction_id",
     "conn_state",
     "history",
@@ -194,6 +259,7 @@ _NETWORK_SENSOR_OBSERVATION_FIELDS = (
     "nat",
     "source_times",
     "source_durations",
+    "tcp_stream",
 )
 _APPLICATION_CHANNEL_BUDGET_FIELDS = ("initiator_bytes", "responder_bytes", "operations")
 _APPLICATION_TRANSPORT_BINDING_FIELDS = ("transport_id", "opened_at", "closes_at")
@@ -284,6 +350,21 @@ _PROCESS_IDENTITY_FIELDS = (
     "lifecycle_group_id",
     "parent_lifecycle_group_id",
     "primary_thread",
+    "execution_ordinal",
+    "executed_at",
+    "lifetime_image",
+    "credentials",
+    "audit_pid_version",
+    "arguments",
+    "job_control",
+    "environment",
+    "parentage",
+    "responsibility",
+    "image_security",
+    "execution_directory",
+    "executable_version",
+    "exec_image",
+    "exec_script",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -326,7 +407,48 @@ _NETWORK_TRANSACTION_PLAN_FIELDS = (
 )
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
-    "active-session": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "active-session-v3": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "macos-ssh-command-streams-v1": (
+        MacosSshCommandStreams,
+        ("hostname", "session_object_id", "available_at", "bindings"),
+    ),
+    "macos-process-privilege-drop-v1": (
+        MacosProcessPrivilegeDrop,
+        (
+            "origin",
+            "before",
+            "after",
+            "before_principal",
+            "after_principal",
+            "before_integrity",
+            "after_integrity",
+            "dropped_at",
+        ),
+    ),
+    "macos-process-service-drop-v2": (
+        MacosProcessServiceDrop,
+        (
+            "parent_object_id",
+            "parent_execution_id",
+            "execution_ordinal",
+            "before",
+            "after",
+            "before_principal",
+            "after_principal",
+            "before_integrity",
+            "after_integrity",
+            "dropped_at",
+            "gui_session",
+            "before_logon_id",
+            "after_logon_id",
+            "gui_audit_origin",
+        ),
+    ),
+    "macos-process-audit-binding-v1": (
+        MacosProcessAuditBinding,
+        ("origin", "before", "after", "bound_at"),
+    ),
+    "macos-audit-session-v1": (MacosAuditSession, ("audit_uid", "audit_session_id", "created_at")),
     "application-channel-budget": (
         ApplicationChannelBudget,
         _APPLICATION_CHANNEL_BUDGET_FIELDS,
@@ -338,16 +460,94 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "directional-traffic": (DirectionalTrafficLedger, _DIRECTIONAL_TRAFFIC_FIELDS),
     "file-sensor-observation": (FileSensorObservation, _FILE_SENSOR_OBSERVATION_FIELDS),
     "nat-sensor-observation": (NatSensorObservation, _NAT_SENSOR_OBSERVATION_FIELDS),
-    "network-sensor-observation": (
+    "network-sensor-observation-v2": (
         NetworkSensorObservation,
         _NETWORK_SENSOR_OBSERVATION_FIELDS,
     ),
+    "tcp-stream-extent-v1": (TcpStreamExtent, ("orig_bytes", "resp_bytes")),
     "network-traffic": (NetworkTrafficLedger, _NETWORK_TRAFFIC_FIELDS),
     "network-transaction-plan": (NetworkTransactionPlan, _NETWORK_TRANSACTION_PLAN_FIELDS),
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
-    "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
+    "open-connection-v2": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "posix-session-v1": (
+        PosixSessionIdentity,
+        ("hostname", "sid", "leader_object_id", "started_at"),
+    ),
+    "posix-group-v1": (PosixGroupIdentity, ("session", "pgid", "leader_object_id", "started_at")),
+    "posix-job-control-change-v1": (
+        PosixJobControlChange,
+        ("operation", "before", "after", "changed_at"),
+    ),
+    "posix-job-control-reservation-v1": (
+        PosixJobControlReservation,
+        ("identity", "members", "updated_at", "ended_at"),
+    ),
+    "process-parent-reference-v1": (
+        ProcessParentReference,
+        ("hostname", "object_id", "pid", "started_at"),
+    ),
+    "responsible-process-reference-v1": (
+        ResponsibleProcessReference,
+        ("hostname", "object_id", "pid", "started_at"),
+    ),
+    "macos-exec-script-v1": (
+        MacosExecScript,
+        ("hostname", "artifact_version_id", "content_id", "native_path"),
+    ),
+    "macos-exec-image-v1": (MacosExecImage, ("cpu_subtype", "dyld_exec_path")),
+    "macos-occurrence-digest-v1": (MacosOccurrenceDigest, ("count", "digest")),
+    "macos-aggregate-birth-sample-v1": (MacosAggregateBirthSample, ("image", "started_at")),
+    "macos-process-census-v2": (
+        MacosProcessCensus,
+        (
+            "start",
+            "end",
+            "forks",
+            "execs",
+            "aggregate_births",
+            "aggregate_samples",
+            "exits",
+            "known_exits",
+        ),
+    ),
+    "macos-terminal-session-v1": (
+        MacosTerminalSession,
+        ("session", "ordinal", "slot", "native_path", "metadata_json"),
+    ),
+    "macos-image-security-v1": (
+        MacosImageSecurity,
+        ("codesigning_flags", "is_platform_binary", "validation_category"),
+    ),
+    "process-responsibility-v1": (ProcessResponsibility, ("responsible",)),
+    "process-parentage-v1": (ProcessParentage, ("original", "current")),
+    "process-parentage-change-v1": (ProcessParentageChange, ("before", "after", "changed_at")),
+    "macos-execution-directory-v1": (
+        MacosExecutionDirectory,
+        ("hostname", "native_path", "observed_at", "metadata"),
+    ),
+    "process-executable-version-v1": (
+        ProcessExecutableVersion,
+        ("platform", "identity_kind", "content_id", "artifact_version_id"),
+    ),
+    "running-process-v21": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "macos-descriptor-binding-v3": (
+        MacosDescriptorBinding,
+        ("fd", "kind", "object_id", "close_on_exec", "native_pipe_id", "is_terminal"),
+    ),
+    "macos-descriptor-table-v2": (
+        MacosDescriptorTable,
+        ("hostname", "observed_at", "bindings", "native_last_fd"),
+    ),
+    "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
+    "macos-policy-target-v1": (
+        MacosPolicyRefusalTarget,
+        ("hostname", "object_id", "pid", "image", "refused_at", "allocation_position"),
+    ),
+    "macos-policy-receipt-v1": (
+        MacosPolicyRefusalReceipt,
+        ("target", "kernel_thread_id", "initiator_object_id"),
+    ),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,
@@ -364,7 +564,11 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v14": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "posix-process-credentials-v1": (
+        PosixProcessCredentials,
+        ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
+    ),
     "session-identity": (SessionIdentity, _SESSION_IDENTITY_FIELDS),
     "session-end-plan": (SessionEndPlan, _SESSION_END_PLAN_FIELDS),
     "smb-file-state": (SmbFileState, _SMB_FILE_STATE_FIELDS),
@@ -394,7 +598,15 @@ def encode_state_value(value: object) -> object:
     if type(value) is RdpSessionState:
         return ["rdp-session-state", value.value]
     value_type = type(value)
+    if value_type is MacosDirectoryMetadata:
+        return ["macos-directory-metadata-v1", value.canonical_json()]
     record_tag = _TAGS_BY_TYPE.get(value_type)
+    if value_type is ActiveSession and value.ssh_command_streams is None:
+        return [
+            "record",
+            "active-session-v2",
+            [encode_state_value(getattr(value, name)) for name in _ACTIVE_SESSION_FIELDS[:-1]],
+        ]
     if record_tag is not None:
         _schema_type, names = _SCHEMAS[record_tag]
         return [
@@ -467,10 +679,168 @@ def decode_state_value(value: object) -> object:
             return RdpSessionState(state)
         except ValueError as error:
             raise CheckpointCorruptionError("RDP checkpoint session state is invalid") from error
+    if tag == "macos-directory-metadata-v1":
+        _tag, encoded = _tagged(tagged, length=2)
+        if type(encoded) is not str:
+            raise CheckpointCorruptionError("Mac directory metadata encoding is invalid")
+        try:
+            return MacosDirectoryMetadata.model_validate_json(encoded)
+        except ValueError as error:
+            raise CheckpointCorruptionError("Mac directory metadata is invalid") from error
     if tag == "record":
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        if record_tag == "open-connection" and len(encoded_fields) == 21:
+            record_tag = "open-connection-v2"
+            # Historical rows do not establish their original physical ledger.
+            encoded_fields = [*encoded_fields[:17], None, *encoded_fields[17:]]
+        if record_tag == "network-sensor-observation" and len(encoded_fields) == 23:
+            record_tag = "network-sensor-observation-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "tcp-stream-extent-v1" and len(encoded_fields) == 2:
+            try:
+                return TcpStreamExtent(*(decode_state_value(item) for item in encoded_fields))
+            except ValueError as error:
+                raise CheckpointCorruptionError(
+                    "TCP stream extent checkpoint is invalid"
+                ) from error
+        if record_tag == "macos-process-service-drop-v1" and len(encoded_fields) == 10:
+            record_tag = "macos-process-service-drop-v2"
+            encoded_fields = [*encoded_fields, None, None, None, None]
+        if record_tag == "macos-process-census-v1" and len(encoded_fields) == 6:
+            record_tag = "macos-process-census-v2"
+            encoded_fields = [*encoded_fields, None, None]
+        if record_tag == "macos-descriptor-binding-v1" and len(encoded_fields) == 4:
+            record_tag = "macos-descriptor-binding-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "macos-descriptor-binding-v2" and len(encoded_fields) == 5:
+            record_tag = "macos-descriptor-binding-v3"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "macos-descriptor-table-v1" and len(encoded_fields) == 3:
+            record_tag = "macos-descriptor-table-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "active-session" and len(encoded_fields) == 34:
+            record_tag = "active-session-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "active-session-v2" and len(encoded_fields) == 35:
+            record_tag = "active-session-v3"
+            encoded_fields = [*encoded_fields, None]
+        # Explicit, lossless upgrade of pre-exec process records. Old readers reject
+        # the versioned tags; new readers retain legacy scenarios/checkpoint state.
+        if record_tag == "running-process" and len(encoded_fields) == 21:
+            record_tag = "running-process-v2"
+            encoded_fields = [
+                *encoded_fields,
+                encode_state_value(0),
+                encode_state_value(None),
+                encode_state_value(()),
+                encode_state_value(""),
+            ]
+        elif record_tag == "process-identity" and len(encoded_fields) == 12:
+            record_tag = "process-identity-v2"
+            encoded_fields = [
+                *encoded_fields,
+                encode_state_value(0),
+                encode_state_value(None),
+                encode_state_value(""),
+            ]
+        # v3 adds optional explicit credentials. Never infer them from a principal
+        # or a restored session: old records did not establish those facts.
+        if record_tag == "running-process-v2" and len(encoded_fields) == 25:
+            record_tag = "running-process-v3"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        elif record_tag == "process-identity-v2" and len(encoded_fields) == 15:
+            record_tag = "process-identity-v3"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        # Older snapshots have no native process version; never invent history.
+        if record_tag == "running-process-v3" and len(encoded_fields) == 26:
+            record_tag = "running-process-v4"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        elif record_tag == "process-identity-v3" and len(encoded_fields) == 16:
+            record_tag = "process-identity-v4"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v4" and len(encoded_fields) == 27:
+            record_tag = "running-process-v5"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v5" and len(encoded_fields) == 28:
+            record_tag = "running-process-v6"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v6" and len(encoded_fields) == 29:
+            record_tag = "running-process-v7"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v7" and len(encoded_fields) == 30:
+            record_tag = "running-process-v8"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v8" and len(encoded_fields) == 31:
+            record_tag = "running-process-v9"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v4" and len(encoded_fields) == 17:
+            record_tag = "process-identity-v5"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v9" and len(encoded_fields) == 32:
+            record_tag = "running-process-v10"
+            encoded_fields = [*encoded_fields, None, encode_state_value(())]
+        if record_tag == "process-identity-v5" and len(encoded_fields) == 18:
+            record_tag = "process-identity-v6"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v10" and len(encoded_fields) == 34:
+            record_tag = "running-process-v11"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v6" and len(encoded_fields) == 19:
+            record_tag = "process-identity-v7"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v11" and len(encoded_fields) == 35:
+            record_tag = "running-process-v12"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v12" and len(encoded_fields) == 36:
+            record_tag = "running-process-v13"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
+        if record_tag == "process-identity-v7" and len(encoded_fields) == 20:
+            record_tag = "process-identity-v8"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v13" and len(encoded_fields) == 37:
+            record_tag = "running-process-v14"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v8" and len(encoded_fields) == 21:
+            record_tag = "process-identity-v9"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v14" and len(encoded_fields) == 38:
+            record_tag = "running-process-v15"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v9" and len(encoded_fields) == 22:
+            record_tag = "process-identity-v10"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v15" and len(encoded_fields) == 39:
+            record_tag = "running-process-v16"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v10" and len(encoded_fields) == 23:
+            record_tag = "process-identity-v11"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v16" and len(encoded_fields) == 40:
+            record_tag = "running-process-v17"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v17" and len(encoded_fields) == 41:
+            record_tag = "running-process-v18"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
+        if record_tag == "running-process-v18" and len(encoded_fields) == 42:
+            record_tag = "running-process-v19"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
+        if record_tag == "process-identity-v11" and len(encoded_fields) == 24:
+            record_tag = "process-identity-v12"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v19" and len(encoded_fields) == 43:
+            record_tag = "running-process-v20"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v12" and len(encoded_fields) == 25:
+            record_tag = "process-identity-v13"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v20" and len(encoded_fields) == 44:
+            record_tag = "running-process-v21"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v13" and len(encoded_fields) == 26:
+            record_tag = "process-identity-v14"
+            encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:
             raise CheckpointCorruptionError("StateManager checkpoint record type is unsupported")

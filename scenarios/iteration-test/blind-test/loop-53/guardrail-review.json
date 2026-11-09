@@ -1,0 +1,20 @@
+{
+  "status": "REVIEW",
+  "acceptance_passed": false,
+  "failed_criteria": [
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 78.01047120418848,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    }
+  ],
+  "investigation": "Carried pivot-linkability failure from52, essentially unchanged by HTTP request-header repair; see52/guardrail-review.json. Do not infer it resolved from aggregate score or change thresholds.",
+  "decision": "Retain original authoritative score and failure, independent blind assessment, continue canonical/visibility/timing reconciliation."
+}

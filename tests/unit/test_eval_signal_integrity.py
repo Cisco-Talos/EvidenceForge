@@ -24,6 +24,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import permutations
 from pathlib import Path
 
 from evidenceforge.evaluation.context import EvaluationContext
@@ -1281,6 +1282,58 @@ class TestPivotLinkability:
 
 
 class TestTemporalIntegrity:
+    def test_yaml_grouping_does_not_impose_chronology(self) -> None:
+        events = [
+            ResolvedEvent(
+                index=index,
+                time=T0 + timedelta(minutes=index * 10),
+                actor="jsmith",
+                system="WS-01",
+                system_ip="192.0.2.10",
+                details={},
+                activity="Invented timed step",
+                event_types=["process"],
+                traces=[_record("ecar", {}, T0 + timedelta(minutes=index * 10, seconds=1))],
+            )
+            for index in range(3)
+        ]
+        for ordering in permutations(events):
+            resolved = list(ordering)
+            result = SignalIntegrityScorer()._score_temporal_integrity(
+                resolved, EvaluationContext()
+            )
+            assert result.score == 100.0 and not result.sample_failures
+            assert resolved == list(ordering)
+
+    def test_chronological_comparison_still_rejects_premature_evidence(self) -> None:
+        events = [
+            ResolvedEvent(
+                index=0,
+                time=T0 + timedelta(minutes=1),
+                actor="jsmith",
+                system="WS-01",
+                system_ip="192.0.2.10",
+                details={},
+                activity="Later step with prematurely observed evidence",
+                event_types=["process"],
+                traces=[_record("ecar", {}, T0 - timedelta(seconds=10))],
+            ),
+            ResolvedEvent(
+                index=1,
+                time=T0,
+                actor="jsmith",
+                system="WS-01",
+                system_ip="192.0.2.10",
+                details={},
+                activity="Earlier step listed second",
+                event_types=["process"],
+                traces=[_record("ecar", {}, T0)],
+            ),
+        ]
+        result = SignalIntegrityScorer()._score_temporal_integrity(events, EvaluationContext())
+        assert result.score == 50.0
+        assert result.sample_failures == ["Event 0: out of order relative to previous"]
+
     def test_correct_order(self):
         scenario = _scenario_with_storyline(
             [

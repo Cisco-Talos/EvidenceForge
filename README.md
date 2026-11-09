@@ -33,8 +33,8 @@ baseline-only scenarios explicitly state that no malicious events were generated
 
 - **Guided scenario authoring** — Agent skills turn exercise ideas into validated scenario
   definitions, environment briefings, reusable packs, and configuration changes.
-- **Multi-source evidence generation** — Produce Windows, Linux, EDR, network, IDS, firewall, web,
-  proxy, and email evidence from one scenario.
+- **Multi-source evidence generation** — Produce Windows, Linux, experimental macOS workstation,
+  EDR, network, IDS, firewall, web, proxy, and email evidence from one scenario.
 - **Baseline and storyline modeling** — Combine ordinary user and system activity, benign red
   herrings, and typed attack events in the same dataset.
 - **Repeatable generation at scale** — Deterministic seeds, resource forecasts, progress reporting,
@@ -151,18 +151,44 @@ See the [Studio guide](docs/studio.md) for installation, workflows, and backup/r
 
 ## Supported Log Formats
 
-| Format | Description |
-|--------|-------------|
-| Windows Security Events | 30 event IDs covering authentication, process activity, Kerberos, persistence, account and group management, permitted connections, and log clearing |
-| Windows Sysmon | Events 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22 for process, network, module, injection, file, registry, and DNS activity |
-| Zeek (16 log types) | conn, dhcp, dns, files, http, ntp, ocsp, packet_filter, pe, reporter, smb_files, smb_mapping, smtp, ssl, weird, and x509 |
-| eCAR | Simulated EDR/XDR telemetry for processes, files, flows, registry, modules, threads, user sessions, and services |
-| Linux syslog | Authentication, session, service, package, scheduler, maintenance, firewall, Samba, and other role-aware system activity |
-| Bash history | Per-user timestamped command history |
-| Snort/Suricata alerts | Fast-format IDS alerts with sensor-aware filtering and correlation to network evidence |
-| Cisco ASA | Connection, teardown, deny, NAT, and threat-detection syslog from modeled firewall control points |
-| Web access | Apache/Nginx combined text or Splunk-compatible JSON, depending on the output target |
-| HTTP proxy | Extended Apache/Nginx combined text, SOF-ELK®-compatible combined text, or Splunk-compatible JSON, depending on the output target |
+These tables describe the **current source checkout**. Published installers contain the
+capabilities of their release; consult its release notes and `eforge info formats --json`.
+The OS being simulated is independent of the computer running EvidenceForge or Studio.
+
+### Host logs by simulated operating system
+
+| Simulated OS | Available host formats | Scope |
+| --- | --- | --- |
+| Windows workstations and servers | Windows Security (`windows_event_security`), Sysmon (`windows_event_sysmon`), eCAR (`ecar`) | Authentication, process and endpoint activity; Windows-specific registry, module and service evidence where modeled. |
+| Linux workstations and servers | Linux syslog (`syslog`), Bash history (`bash_history`), eCAR (`ecar`) | Role-aware authentication, sessions, services, package/scheduler/maintenance activity, interactive Bash and endpoint evidence. |
+| macOS 27 arm64 workstations **(experimental)** | Endpoint Security (`macos_endpoint_security`), Unified Log (`macos_unified_log`), zsh history (`zsh_history`), explicit interactive Bash history (`bash_history`), eCAR (`ecar`) | Qualified v11 process and bounded file operations; selected workspace, policy-refusal and SSH authentication messages. See [Mac scope and limits](docs/macos.md). |
+
+Host formats stay on their owning platform: a Mac client contacting a Windows server can leave
+Windows evidence **on the server**, alongside its own Mac and network evidence. eCAR families vary
+by platform; selecting eCAR on Linux or macOS does not create Windows registry/module telemetry.
+History requires a modeled interactive shell. macOS 26 and other unqualified Mac targets are not
+currently admitted for generation.
+
+### Network sensors and control points
+
+These observe eligible traffic from any simulated OS; they are not additional endpoint OSes.
+
+| Source | Available formats | Deployment requirement |
+| --- | --- | --- |
+| Zeek | 16 JSON log types: conn, dhcp, dns, files, http, ntp, ocsp, packet_filter, pe, reporter, smb_files, smb_mapping, smtp, ssl, weird and x509 | A configured network sensor with appropriate visibility. Each protocol needs matching modeled activity. |
+| Snort/Suricata IDS | Fast-format correlated alerts (`snort_alert`) | A configured IDS sensor and eligible signatures/network evidence. |
+| Cisco ASA firewall | Connection, teardown, deny, NAT and threat-detection syslog (`cisco_asa`) | A configured firewall control point; traffic visibility and policy determine its evidence. |
+
+### Application/server logs and artifacts
+
+| Source | Available output | Where it is produced |
+| --- | --- | --- |
+| Web server | Apache/Nginx combined text or target-specific JSON (`web_access`) | A Windows/Linux host with the `web_server` role. Clients may use any supported OS. |
+| Forward proxy | Extended combined text, SOF-ELK® combined text or Splunk-compatible JSON (`proxy_access`) | A Windows/Linux host with the `forward_proxy` role and configured proxy routing. |
+| Email | Optional RFC 5322 `.eml` artifacts and manifest, correlated SMTP/network evidence | Configured email routes and authored/background messages; artifacts are separate from log-format selection. |
+
+Selecting a format does not create every source or guarantee a file. Deployment, roles,
+activity, collection windows and sensor placement determine what is actually emitted.
 
 The default target uses SIEM-neutral output. `--target sof-elk` produces layouts and source-native
 variants suitable for SOF-ELK, including Snare Windows events and year-partitioned RFC3164
@@ -173,6 +199,14 @@ across targets.
 See the [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for field-level details and
 the [Output Target Ingest Guides](docs/output-targets/README.md) for target-specific ingestion and
 parser support.
+
+### Modeled macOS workstations (experimental branch work)
+
+The current checkout's experimental macOS 27 arm64 model includes qualified process startup,
+selected helper families, bounded native filesystem telemetry, interactive history and selected
+Unified Log messages. See [Simulating macOS workstations](docs/macos.md) for available sources,
+examples, coverage interpretation and explicit limits. This source-tree work does not describe
+capabilities already shipped in an older installer.
 
 ## Quick Start
 
@@ -272,9 +306,9 @@ Useful `generate` flags include `--verbose` / `--debug`, `--formats` / `-F`,
 default checkpoint cadence is 24 simulated hours; `0` disables new checkpoints. `validate` accepts
 the same checkpoint-cadence option so its resource forecast reflects the intended run.
 
-`resources predict` uses the same calibrated forecast as validation and generation. Supply
-`--project-root` for a workspace's packs and overlays, and `--destination` to check the filesystem
-where output will be saved. Its JSON report includes estimate ranges, resource pressure, and a
+`resources predict` uses the same calibrated forecast as validation and generation. Run from
+the project root to use its packs and overlays; `--project-root` explicitly overrides that
+working-directory context. Use `--destination` to check the filesystem where output will be saved. Its JSON report includes estimate ranges, resource pressure, and a
 machine snapshot. Prediction availability does not certify scenario validity; validate separately.
 
 Resume defaults to `--resume-policy compatible`. It attempts environment drift such as Python,
@@ -300,7 +334,7 @@ The recommended approach is the agent skill (`/eforge config` in Claude Code or 
 ChatGPT/Codex):
 
 ```text
-/eforge config add a nurse persona for a healthcare scenario
+/eforge config inspect my project overlay and explain which defaults it changes
 ```
 
 For the overlay workflow, manual editing, and cross-file dependencies, see
@@ -371,6 +405,7 @@ source launches, installer builds, test tiers, coding conventions and external-p
   immutable local releases, linked upgrades, and portable scenario/pack archives
 - [Scenario Reference](docs/reference/scenario-reference.md) — Scenario fields, includes, typed
   events, and validation rules
+- [Simulating macOS workstations](docs/macos.md) — Sources, examples, file telemetry and scope
 - [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — Output layout, log types,
   field details, and known limitations
 - [Reusable Scenario Packs](docs/reference/SCENARIO_PACKS.md) — Industry and organization pack

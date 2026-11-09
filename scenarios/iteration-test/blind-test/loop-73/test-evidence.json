@@ -1,0 +1,23 @@
+{
+  "focused_tests": [
+    {
+      "command": ".venv/bin/pytest tests/unit/test_logind_temporal_identity.py tests/unit/test_activity.py -k 'logind or self_sourced_type3' -q --tb=short",
+      "result": "5 passed"
+    },
+    {
+      "command": ".venv/bin/pytest tests/unit/test_baseline_terminal_family_admission.py -k logind -q --tb=short",
+      "result": "2 passed"
+    },
+    {
+      "command": ".venv/bin/pytest tests/unit/test_incremental_checkpoints.py::test_state_manager_head_seals_only_new_allocator_records_and_restores -q --tb=short",
+      "result": "1 passed"
+    }
+  ],
+  "quality_gates": {
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "generation_behavior_manifest": "passed at revision 492"
+  },
+  "scenario_validation": "passed; existing low-baseline warning and storyline pivot notices only",
+  "full_routine_suite": "not run"
+}

@@ -1,0 +1,14 @@
+{
+  "focused_protocol_tests": 203,
+  "selected_slow_cross_platform_smb": 1,
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "validate_config": {
+    "files": 101,
+    "errors": 0,
+    "warnings": 0
+  },
+  "behavior_revision": 445,
+  "behavior_digest": "80d4f0147272157c104dcf4b35dd1d17b013a126fd60ebb6b8e6895212294f66",
+  "full_routine_suite": "Pre-push gate/reconciliation; not repeated per uncommitted loop"
+}

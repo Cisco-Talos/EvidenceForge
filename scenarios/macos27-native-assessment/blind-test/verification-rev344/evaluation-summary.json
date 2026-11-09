@@ -1,0 +1,39 @@
+{
+  "source_commit": "54e5a8ab",
+  "generation_behavior_revision": 344,
+  "total_records": 10634,
+  "overall_score": 90.18015768026952,
+  "acceptance_passed": true,
+  "pillars": {
+    "Parseability": 100.0,
+    "Plausibility": 91.32653840683975,
+    "Causality": 97.41372053872054,
+    "Timing": 64.97546471939721
+  },
+  "source_counts": {
+    "bash_history": 71,
+    "ecar": 4045,
+    "macos_endpoint_security": 14,
+    "macos_unified_log": 3,
+    "syslog": 507,
+    "windows_event_security": 622,
+    "windows_event_sysmon": 454,
+    "zeek_conn": 2095,
+    "zeek_dns": 992,
+    "zeek_files": 423,
+    "zeek_http": 42,
+    "zeek_ntp": 12,
+    "zeek_ocsp": 26,
+    "zeek_smb_files": 94,
+    "zeek_smb_mapping": 52,
+    "zeek_ssl": 852,
+    "zeek_x509": 318,
+    "zsh_history": 12
+  },
+  "flags": [
+    "Anomaly Rate: 40/100 (20/5000 events anomalous (0.4%), target 1-5%)",
+    "System Process Regularity: 49/100 (Interval CV: 1.507 (1 service groups, 302 events))",
+    "Volume Adequacy: 0/100 (Noise:signal 408:1 (target 2000:1 for medium))"
+  ],
+  "blind_reassessment": "NOT_PERFORMED"
+}

@@ -36,6 +36,7 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
     NetworkTuple,
+    TcpStreamExtent,
 )
 from evidenceforge.generation.application_channels import (
     ApplicationChannelAdmissionReceipt,
@@ -561,6 +562,7 @@ _SMB_ADMISSION_GRAPH_TYPES = frozenset(
         NatSensorObservation,
         FileSensorObservation,
         NetworkSensorObservation,
+        TcpStreamExtent,
         NetworkTransactionPlan,
     }
 )

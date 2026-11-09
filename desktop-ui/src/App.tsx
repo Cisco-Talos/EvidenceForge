@@ -5,7 +5,7 @@ import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filte
 import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, PackReview, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type PackCreation } from "./api";
+import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, PackReview, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type PackCreation, type ValidationResult } from "./api";
 import { formatBundleSize, formatTime, shortPath } from "./components";
 import { BundleLibrary } from "./BundleLibrary";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
@@ -31,7 +31,7 @@ import { NewPackDialog } from "./NewPackDialog";
 import { PackFilters, emptyPackFilters } from "./PackFilters";
 import { ArtifactPropertiesDialog, type PropertiesSection } from "./ArtifactProperties";
 import { ArtifactTitle } from "./ArtifactTitle";
-import { ScenarioWorkspace, type WorkspaceTarget } from "./ScenarioWorkspace";
+import { ScenarioWorkspace, type ValidationActivity, type WorkspaceTarget } from "./ScenarioWorkspace";
 import { MissingScenarioSource } from "./MissingScenarioSource";
 import { belongsToScenario } from "./scenarioSources";
 import { workspaceConversations } from "./workspaceConversations";
@@ -39,6 +39,7 @@ import { ImportDialog } from "./ImportDialog";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { useStudio } from "./useStudio";
 import { useNotice } from "./useNotice";
+import { RequestFeedback, RequestSpinner, type RequestState } from "./RequestFeedback";
 import { StudioBrand } from "./StudioBrand";
 import { CatalogActionContext, projectAssignmentAction } from "./CatalogObjectMenu";
 import { ActionShortcut, ObjectMenu, RemovalButton, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
@@ -108,6 +109,12 @@ function App() {
   }, [snapshot, studio.upgradeNotice, studio.clearUpgradeNotice, showNotice]);
   const [environmentRefreshingId, setEnvironmentRefreshingId] = useState<string | null>(null);
   const [environmentVersions, setEnvironmentVersions] = useState<Record<string, number>>({});
+  const [environmentFeedback, setEnvironmentFeedback] = useState<Record<string, RequestState & { source: string }>>({});
+  const [packValidationFeedback, setPackValidationFeedback] = useState<Record<string, RequestState & { source: string }>>({});
+  const [libraryFeedback, setLibraryFeedback] = useState<RequestState>({ pending: false });
+  const libraryWorkspace = useRef(snapshot?.settings.workspace);
+  libraryWorkspace.current = snapshot?.settings.workspace;
+  useEffect(() => { setLibraryFeedback({ pending: false }); }, [snapshot?.settings.workspace]);
   const [packReviews, setPackReviews] = useState<Record<string, { source: string; review: PackReview }>>({});
   const updatePackReview = useCallback((target: CatalogItem, review: PackReview) => setPackReviews((current) => ({ ...current, [target.id]: { source: target.source_sha256, review } })), []);
   const [assetTarget, setAssetTarget] = useState<{ item: CatalogItem; add: boolean } | null>(null);
@@ -117,6 +124,7 @@ function App() {
   const [removingRegistration, setRemovingRegistration] = useState<CatalogItem | null>(null);
   const [deletingView, setDeletingView] = useState<SavedView | null>(null);
   const [busy, setBusy] = useState(false);
+  const [validationActivities, setValidationActivities] = useState<Record<string, ValidationActivity>>({});
   const [closeFailed, setCloseFailed] = useState(false);
   const [closeProblem, setCloseProblem] = useState<CloseProblem | null>(null);
   const [closeChoices, setCloseChoices] = useState<Record<string, "continue" | "stop" | "">>({});
@@ -502,12 +510,25 @@ function App() {
   }
 
   async function validateItem(target: CatalogItem | null = item) {
-    if (!api || !target) return;
+    if (!api || !target || busy) return;
+    const activityKey = `${target.workspace}:${target.id}`;
+    const priorActivity = validationActivities[activityKey];
+    const savedResult = studio.validations[target.id] || snapshot?.validations[target.id]?.result;
+    const previousResult = savedResult?.report ? savedResult : priorActivity?.status === "failed" ? priorActivity.previousResult : undefined;
+    const updateActivity = (activity: ValidationActivity) => {
+      if (target.kind === "scenario") setValidationActivities((current) => ({ ...current, [activityKey]: activity }));
+    };
+    const updatePackFeedback = (feedback: RequestState) => {
+      if (target.kind !== "scenario") setPackValidationFeedback((current) => ({ ...current, [activityKey]: { ...feedback, source: target.source_sha256 } }));
+    };
     openItem(target);
     setBusy(true);
+    updateActivity({ status: "running" });
+    updatePackFeedback({ pending: true });
     setWorkspaceTarget("validation");
     try {
-      if (target.kind === "scenario") await api.request("/v1/validate", "POST", { scenario_id: target.id });
+      let result: ValidationResult | undefined;
+      if (target.kind === "scenario") result = await api.request<ValidationResult>("/v1/validate", "POST", { scenario_id: target.id });
       else {
         try {
           const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
@@ -517,8 +538,12 @@ function App() {
         }
       }
       await studio.reload();
+      updatePackFeedback({ pending: false, completedAt: Date.now() / 1000 });
+      updateActivity(result?.report
+        ? { status: "completed", completedAt: Date.now() / 1000 }
+        : { status: "failed", error: result?.error || `Validation could not finish (CLI exit code ${result?.exit_code}).`, previousResult });
     }
-    catch (error) { setNotice(String(error)); }
+    catch (error) { updateActivity({ status: "failed", error: String(error), previousResult }); updatePackFeedback({ pending: false, error: `Validation request failed: ${String(error)}` }); setNotice(String(error)); }
     finally { setBusy(false); }
   }
 
@@ -528,6 +553,20 @@ function App() {
       if (result.status === "saved") showNotice(`Pack saved to ${result.path}`);
     } catch (error) { setNotice(String(error)); }
     finally { setExportProgress(null); }
+  }
+
+  async function refreshLibrary() {
+    if (!api || libraryFeedback.pending) return;
+    setLibraryFeedback({ pending: true });
+    const workspace = snapshot?.settings.workspace;
+    try {
+      await api.request("/v1/library/refresh", "POST");
+      if (libraryWorkspace.current !== workspace) return;
+      await studio.reload();
+      if (libraryWorkspace.current !== workspace) return;
+      setLibraryFeedback({ pending: false, completedAt: Date.now() / 1000 });
+      showNotice("Library refreshed.");
+    } catch (error) { if (libraryWorkspace.current === workspace) setLibraryFeedback({ pending: false, error: String(error) }); }
   }
 
   async function viewYaml(target: CatalogItem | null = item) {
@@ -821,8 +860,10 @@ function App() {
       { id: "refresh-environment", label: "Refresh environment", group: "work", disabled: blocked || environmentRefreshingId === target.id, reason: environmentRefreshingId === target.id ? "Environment refresh is in progress" : reason, run: async () => {
         if (environmentRefreshingId === target.id) return;
         setEnvironmentRefreshingId(target.id);
-        try { await api!.request(`/v1/scenarios/${target.id}/dependencies/refresh`, "POST", undefined, 180000); await studio.reload(); setEnvironmentVersions((current) => ({ ...current, [target.id]: (current[target.id] || 0) + 1 })); }
-        catch (error) { setNotice(String(error)); }
+        const key = `${target.workspace}:${target.id}`;
+        setEnvironmentFeedback((current) => ({ ...current, [key]: { pending: true, source: target.source_sha256 } }));
+        try { await api!.request(`/v1/scenarios/${target.id}/dependencies/refresh`, "POST", undefined, 180000); await studio.reload(); setEnvironmentVersions((current) => ({ ...current, [target.id]: (current[target.id] || 0) + 1 })); setEnvironmentFeedback((current) => ({ ...current, [key]: { pending: false, completedAt: Date.now() / 1000, source: target.source_sha256 } })); }
+        catch (error) { setEnvironmentFeedback((current) => ({ ...current, [key]: { pending: false, error: String(error), source: target.source_sha256 } })); }
         finally { setEnvironmentRefreshingId(null); }
       } },
       { id: "forecast", label: size, group: "work", disabled: !!starter || sourceMissing, reason: starter ? "Continue authoring before forecasting" : reason, run: () => { forecastOrigin.current = document.activeElement as HTMLElement; setForecastTarget(target); } },
@@ -850,7 +891,7 @@ function App() {
 
   const resumeHeldAction: ObjectAction = { id: "resume-held", label: "Resume paused jobs", group: "work", disabled: !hasPausedJobs, reason: "No paused jobs to resume", run: async () => { try { await api!.request("/v1/jobs/resume", "POST", {}); await studio.reload(); } catch (error) { setNotice(String(error)); } } };
   const showLibrary = ["scenarios", "packs"].includes(section);
-  return <Tooltip.Provider><CatalogActionContext.Provider value={{ api, busy, onError: setNotice, environmentRefreshing: environmentRefreshingId, environmentRefreshVersion: (target) => environmentVersions[target.id] || 0, onPackReview: updatePackReview, packReview: (target) => packReviews[target.id]?.source === target.source_sha256 ? packReviews[target.id].review : null, actions: catalogActions, onChanged: studio.reload, onOpenArtifact: openArtifactPath, onVersions: (target) => setPropertiesTarget({ id: target.id, section: "versions" }) }}><JobActionContext.Provider value={{ jobs: snapshot.jobs, removedIds: snapshot.removed_job_ids || [], showGeneration: (id) => { setSection("jobs"); setSelectedId(null); setFocusJobId(id); } }}><div className="app-shell">
+  return <Tooltip.Provider><CatalogActionContext.Provider value={{ api, busy, onError: setNotice, environmentRefreshing: environmentRefreshingId, environmentRefreshVersion: (target) => environmentVersions[target.id] || 0, environmentFeedback: (target) => environmentFeedback[`${target.workspace}:${target.id}`]?.source === target.source_sha256 ? environmentFeedback[`${target.workspace}:${target.id}`] : undefined, packValidationFeedback: (target) => packValidationFeedback[`${target.workspace}:${target.id}`]?.source === target.source_sha256 ? packValidationFeedback[`${target.workspace}:${target.id}`] : undefined, onPackReview: updatePackReview, packReview: (target) => packReviews[target.id]?.source === target.source_sha256 ? packReviews[target.id].review : null, actions: catalogActions, onChanged: studio.reload, onOpenArtifact: openArtifactPath, onVersions: (target) => setPropertiesTarget({ id: target.id, section: "versions" }) }}><JobActionContext.Provider value={{ jobs: snapshot.jobs, removedIds: snapshot.removed_job_ids || [], showGeneration: (id) => { setSection("jobs"); setSelectedId(null); setFocusJobId(id); } }}><div className="app-shell">
     <aside className="sidebar">
       <StudioBrand compact />
       <nav className="primary-nav" aria-label="Main navigation">
@@ -863,7 +904,7 @@ function App() {
       <div className="sidebar-bottom"><button className={section === "settings" ? "selected" : ""} onClick={() => { setSection("settings"); setSelectedId(null); setDraftConversationId(null); }}><Settings2 size={18} /> Settings</button></div>
     </aside>
     <main className={`main-area ${showLibrary && ((item && workspaceTarget === "conversations") || draftConversationId) ? "chat-main" : ""}`}>
-      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="button-quiet" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}>Refresh library</button>}<CodexStatusIndicator health={codexHealth} api={api} activeTurns={snapshot.conversations.filter((chat) => chat.active).length} reconnecting={reconnecting} canReconnect={studio.liveState === "connected"} onReconnect={reconnectCodex} onError={setNotice} /></div></header>
+      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <><button className="button-quiet" title="Refresh library" aria-label="Refresh library" disabled={libraryFeedback.pending} onClick={() => void refreshLibrary()}>{libraryFeedback.pending && <RequestSpinner />}{libraryFeedback.pending ? "Refreshing…" : "Refresh library"}</button>{libraryFeedback.error && <div className="library-refresh-feedback"><RequestFeedback {...libraryFeedback} label="Refreshing library…" previousLabel="The previous library contents remain visible." /></div>}</>}<CodexStatusIndicator health={codexHealth} api={api} activeTurns={snapshot.conversations.filter((chat) => chat.active).length} reconnecting={reconnecting} canReconnect={studio.liveState === "connected"} onReconnect={reconnectCodex} onError={setNotice} /></div></header>
 
       <RuntimeCleanupNotice report={snapshot.runtime_cleanup} />
       <LinuxSandboxNotice notice={snapshot.linux_sandbox_notice} onError={setNotice} />
@@ -904,7 +945,7 @@ function App() {
 
       {showLibrary && item && snapshot.missing_sources?.includes(item.id) && <MissingScenarioSource key={item.id} item={item} conversations={conversations} jobs={itemJobs} api={api} onRecovered={async (recovered) => { await studio.reload(); openItem(recovered); }} onRemoved={async () => { await studio.reload(); setSelectedId(null); }} onRuns={() => setSection("jobs")} />}
 
-      {showLibrary && item && !snapshot.missing_sources?.includes(item.id) && <ScenarioWorkspace onProperties={(section = "general") => setPropertiesTarget({ id: item.id, section })} key={item.id} item={item} snapshot={snapshot} conversations={conversations} selectedConversation={selectedConversation} target={workspaceTarget} jobs={itemJobs} api={api} codexHealth={codexHealth} busy={busy} validation={studio.validations[item.id] || snapshot.validations[item.id]?.result} focusJobId={focusJobId} initialDraft={fixDraft?.conversationId === selectedConversation ? fixDraft.text : undefined} subscribeEvents={studio.subscribeEvents}
+      {showLibrary && item && !snapshot.missing_sources?.includes(item.id) && <ScenarioWorkspace onProperties={(section = "general") => setPropertiesTarget({ id: item.id, section })} key={item.id} item={item} snapshot={snapshot} conversations={conversations} selectedConversation={selectedConversation} target={workspaceTarget} jobs={itemJobs} api={api} codexHealth={codexHealth} busy={busy} validation={studio.validations[item.id] || snapshot.validations[item.id]?.result} validationActivity={validationActivities[`${item.workspace}:${item.id}`]} focusJobId={focusJobId} initialDraft={fixDraft?.conversationId === selectedConversation ? fixDraft.text : undefined} subscribeEvents={studio.subscribeEvents}
         onNavigate={(target, jobId) => { setWorkspaceTarget(target); if (jobId !== undefined) setFocusJobId(jobId); }}
         onOpenConversation={(chat) => { setSelectedConversation(chat.id); setWorkspaceTarget("conversations"); }}
         onCreateConversation={() => void createConversation()} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}

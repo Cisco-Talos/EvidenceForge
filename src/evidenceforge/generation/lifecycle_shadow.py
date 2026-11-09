@@ -33,7 +33,9 @@ from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
-_PROCESS_START_TYPES = frozenset({EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE})
+_PROCESS_START_TYPES = frozenset(
+    {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
+)
 _PROCESS_CLOSE_TYPES = frozenset({EventKind.PROCESS_TERMINATE})
 _SESSION_START_TYPES = frozenset({EventKind.LOGON, EventKind.MACHINE_LOGON, EventKind.SSH_SESSION})
 _SESSION_CLOSE_TYPES = frozenset({EventKind.LOGOFF})
@@ -207,9 +209,9 @@ class LifecycleShadow:
             object_id=identity.object_id,
             pid=identity.pid,
             started_at=identity.started_at,
-            image=identity.image,
+            image=identity.initial_image,
             parent_object_id=parent_object_id,
-            role=self._process_role(identity.image),
+            role=self._process_role(identity.initial_image),
         )
         return candidate, token, membership
 
@@ -463,6 +465,15 @@ class LifecycleShadow:
     ) -> ProcessLifecycleIdentity:
         existing = self._registry.get_process(identity.object_id)
         if existing is not None:
+            original_parent = (
+                identity.parentage.original if identity.parentage is not None else None
+            )
+            if (
+                original_parent is not None
+                and original_parent.object_id != existing.identity.parent_object_id
+            ):
+                raise StateError("Lifecycle process changed its exact original parent")
+            current_token = existing.current_view.token
             candidate, token, membership = self._project_process(
                 identity,
                 session=session,
@@ -477,8 +488,8 @@ class LifecycleShadow:
                 token = ProcessTokenIdentity(
                     principal=token.principal,
                     logon_id=token.logon_id,
-                    session_id=existing.token.session_id,
-                    logon_type=existing.token.logon_type,
+                    session_id=current_token.session_id,
+                    logon_type=current_token.logon_type,
                     integrity_level=token.integrity_level,
                 )
             if not token.integrity_level or token.session_id is None or token.logon_type is None:
@@ -492,25 +503,25 @@ class LifecycleShadow:
                     session_id=(
                         token.session_id
                         if token.session_id is not None
-                        else existing.token.session_id
+                        else current_token.session_id
                     ),
                     logon_type=(
                         token.logon_type
                         if token.logon_type is not None
-                        else existing.token.logon_type
+                        else current_token.logon_type
                     ),
-                    integrity_level=token.integrity_level or existing.token.integrity_level,
+                    integrity_level=token.integrity_level or current_token.integrity_level,
                 )
             if (
                 existing.identity != candidate
-                or existing.token != token
+                or current_token != token
                 or existing.membership != membership
             ):
                 raise StateError(
                     "Lifecycle shadow process identity changed after publication: "
                     f"{identity.object_id}; "
                     f"identity={existing.identity!r} candidate_identity={candidate!r}; "
-                    f"token={existing.token!r} candidate_token={token!r}; "
+                    f"token={current_token!r} candidate_token={token!r}; "
                     f"membership={existing.membership!r} "
                     f"candidate_membership={membership!r}"
                 )
@@ -527,6 +538,16 @@ class LifecycleShadow:
             parent = self._state_manager.get_process_identity(
                 identity.hostname, identity.parent_pid
             )
+            reference = identity.parentage.current if identity.parentage is not None else None
+            if (
+                parent is not None
+                and reference is not None
+                and (
+                    parent.object_id != reference.object_id
+                    or parent.started_at != reference.started_at
+                )
+            ):
+                raise StateError("Lifecycle parent reference cannot be replaced by a reused PID")
             if parent is not None and self._state_manager.is_process_active_at(
                 identity.hostname,
                 identity.parent_pid,
@@ -553,6 +574,7 @@ class LifecycleShadow:
             identity,
             session=effective_session,
             parent_object_id=parent_object_id,
+            require_initial_token=True,
         )
         action_id = stable_uuid("lifecycle-shadow-start-action", "process", identity.object_id)
         self._registry.register_process(
@@ -574,8 +596,31 @@ class LifecycleShadow:
         *,
         session: SessionIdentity | None,
         parent_object_id: str,
+        require_initial_token: bool = False,
     ) -> tuple[ProcessLifecycleIdentity, ProcessTokenIdentity, LifecycleMembership]:
         running = self._state_manager.get_process(identity.hostname, identity.pid)
+        if require_initial_token and (
+            identity.execution_ordinal != 0
+            or (
+                running is not None
+                and running.ecar_object_id == identity.object_id
+                and running.execution_ordinal != 0
+            )
+        ):
+            raise StateError(
+                "Cannot bootstrap a process after exec; publish its execution transition "
+                "through lifecycle authority before changing State"
+            )
+        if (
+            require_initial_token
+            and running is not None
+            and running.ecar_object_id == identity.object_id
+            and (running.privilege_drop is not None or running.service_drop is not None)
+        ):
+            raise StateError(
+                "Cannot bootstrap a process after SSH privilege drop; publish its credential "
+                "transition through lifecycle authority before changing State"
+            )
         token = self._process_token(identity, running)
         membership_session = session
         if membership_session is not None and (
@@ -609,9 +654,9 @@ class LifecycleShadow:
                 object_id=identity.object_id,
                 pid=identity.pid,
                 started_at=identity.started_at,
-                image=identity.image,
+                image=identity.initial_image,
                 parent_object_id=parent_object_id,
-                role=self._process_role(identity.image),
+                role=self._process_role(identity.initial_image),
             ),
             token,
             membership,

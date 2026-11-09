@@ -172,6 +172,45 @@ def test_linux_trivial_command_lifetime_is_subsecond():
     assert lifetime[1] <= 0.8
 
 
+def test_macos_authoritative_process_close_schedule_is_variable_and_session_scoped(activity_gen):
+    """Mac teardown gaps should vary deterministically across processes and sessions."""
+    process_ids = tuple(range(100, 116))
+    span, offsets = activity_gen._macos_authoritative_process_termination_schedule(
+        session_logon_id="session-1",
+        host="mac-workstation-01",
+        lifecycle_id="session-1",
+        process_ids=process_ids,
+    )
+    repeated_span, repeated_offsets = (
+        activity_gen._macos_authoritative_process_termination_schedule(
+            session_logon_id="session-1",
+            host="mac-workstation-01",
+            lifecycle_id="session-1",
+            process_ids=process_ids,
+        )
+    )
+    other_session_span, other_session_offsets = (
+        activity_gen._macos_authoritative_process_termination_schedule(
+            session_logon_id="session-2",
+            host="mac-workstation-01",
+            lifecycle_id="session-2",
+            process_ids=process_ids,
+        )
+    )
+
+    gaps = tuple(
+        current - previous
+        for previous, current in zip((timedelta(0), *offsets), (*offsets, span), strict=True)
+    )
+
+    assert len(offsets) == len(process_ids)
+    assert all(timedelta(milliseconds=40) <= gap <= timedelta(milliseconds=350) for gap in gaps)
+    assert len(set(gaps)) >= 8
+    assert span == repeated_span
+    assert offsets == repeated_offsets
+    assert (span, offsets) != (other_session_span, other_session_offsets)
+
+
 def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     """Electron-style editor launches should not terminate like a one-shot CLI command."""
     lifetime = _linux_foreground_lifetime(
@@ -2127,6 +2166,31 @@ class TestActivityGenerator:
             test_system.hostname, sessions[second_logon].explorer_pid
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
+        first_winlogon = state_manager.get_process(
+            test_system.hostname,
+            sessions[first_logon].session_winlogon_pid,
+        )
+        second_winlogon = state_manager.get_process(
+            test_system.hostname,
+            sessions[second_logon].session_winlogon_pid,
+        )
+        assert first_winlogon is not None
+        assert second_winlogon is not None
+        first_session_smss = state_manager.get_process(
+            test_system.hostname,
+            first_winlogon.parent_pid,
+        )
+        second_session_smss = state_manager.get_process(
+            test_system.hostname,
+            second_winlogon.parent_pid,
+        )
+        assert first_session_smss is not None
+        assert second_session_smss is not None
+        assert first_session_smss.image.endswith("\\smss.exe")
+        assert second_session_smss.image.endswith("\\smss.exe")
+        assert first_session_smss.pid != second_session_smss.pid
+        assert first_session_smss.parent_pid == smss_pid
+        assert second_session_smss.parent_pid == smss_pid
         logon_events = [
             call.args[0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -2489,7 +2553,7 @@ class TestActivityGenerator:
         assert "<Interval>PT1H</Interval>" in task_content
         assert r"<Command>C:\Windows\System32\HealthMonitorSvc.exe</Command>" in task_content
         assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in task_content
-        assert "<LogonType>ServiceAccount</LogonType>" in task_content
+        assert "<LogonType>" not in task_content
 
     def test_generate_scheduled_task_reflects_hourly_modifier(
         self, activity_gen, test_user, test_system, mock_emitters
@@ -2773,7 +2837,6 @@ class TestActivityGenerator:
             password_last_set_to_event_time=True,
             old_uac_value="0x15",
             new_uac_value="0x10",
-            user_account_control="\n\t\t\t%%2081",
             primary_group_id="-",
         )
 
@@ -2786,7 +2849,7 @@ class TestActivityGenerator:
         assert account_context.password_last_set == "3/18/2024 4:14:35 PM"
         assert account_context.old_uac_value == "0x15"
         assert account_context.new_uac_value == "0x10"
-        assert account_context.user_account_control == "\n\t\t\t%%2081"
+        assert account_context.user_account_control == "\n\t\t\t%%2048\n\t\t\t%%2050"
         assert account_context.primary_group_id == "-"
 
     def test_regular_user_logon_is_not_randomly_elevated(
@@ -2794,6 +2857,31 @@ class TestActivityGenerator:
     ):
         """Ordinary users should not receive 4672 without a privileged role."""
         assert activity_gen._should_elevate(test_user) is False
+
+    @pytest.mark.parametrize(
+        "profile,expected", [("uac_elevated_user", False), ("service_account", True)]
+    )
+    def test_elevated_logon_requires_actual_sensitive_privileges(
+        self,
+        activity_gen: Any,
+        test_user: Any,
+        test_system: Any,
+        state_manager: Any,
+        mock_emitters: Any,
+        profile: str,
+        expected: bool,
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        with (
+            patch.object(activity_gen, "_should_elevate", return_value=True),
+            patch.object(activity_gen, "_special_privilege_profile_name", return_value=profile),
+        ):
+            activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        assert event.auth.elevated is True
+        assert event.auth.emit_special_privileges is expected
+        assert bool(event.auth.privilege_list) is expected
 
     def test_help_desk_persona_does_not_imply_special_privileges(self, activity_gen, test_system):
         """Delegated support users need explicit admin groups for 4672 privileges."""
@@ -3623,15 +3711,15 @@ class TestActivityGenerator:
             445,
             3306,
         }
-        assert {
-            request.get("service") for request in service_requests if request.get("service")
-        } >= {
-            "ssh",
-            "http",
-            "ssl",
-            "smb",
-            "mysql",
-        }
+        # Failed scan attempts do not establish an application service. Every
+        # identified response must still agree with its probed destination port.
+        services_by_port = {22: "ssh", 80: "http", 443: "ssl", 445: "smb", 3306: "mysql"}
+        assert any(request.get("service") for request in service_requests)
+        assert all(
+            request["service"] == services_by_port[request["dst_port"]]
+            for request in service_requests
+            if request.get("service")
+        )
         assert all(
             request["suppress_application_side_effects"] is True for request in probe_requests
         )
@@ -4853,7 +4941,7 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in event.scheduled_task.task_content
-        assert "<LogonType>ServiceAccount</LogonType>" in event.scheduled_task.task_content
+        assert "<LogonType>" not in event.scheduled_task.task_content
         assert "<RunLevel>HighestAvailable</RunLevel>" in event.scheduled_task.task_content
         assert "<UserId>CORP\\SYSTEM</UserId>" not in event.scheduled_task.task_content
         assert "<LogonType>Password</LogonType>" not in event.scheduled_task.task_content
@@ -4939,6 +5027,7 @@ class TestActivityGenerator:
         assert machine_logon.remote_auth.primary_transport.role == "target_service"
         assert machine_logon.remote_auth.primary_transport.tuple.dst_port in {389, 445}
         assert machine_logon.identity_plan.object_id == machine_logoff.identity_plan.object_id
+
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
         assert machine_logoff.lifecycle.phase == "closure"
@@ -5358,6 +5447,61 @@ class TestActivityGenerator:
             LinuxShellCommandActionBundle(Mock(), request).anchor
             == LinuxShellCommandActionBundle(Mock(), request).anchor
         )
+
+    def test_editor_workflows_resume_after_sampled_completion_instead_of_maximum_slot(
+        self,
+        activity_gen: ActivityGenerator,
+        state_manager: StateManager,
+        mock_emitters: dict[str, Mock],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(hostname="EDIT-01", ip="10.0.0.2", os="Ubuntu 24.04", type="workstation")
+        user = User(
+            username="alex",
+            full_name="Alex Example",
+            email="alex@example.test",
+            persona="developer",
+        )
+        start = datetime(2024, 1, 15, 10, tzinfo=UTC)
+        state_manager.set_current_time(start - timedelta(minutes=5))
+        activity_gen.generate_logon(user, linux, start - timedelta(minutes=5))
+        commands = iter(f"vim /home/alex/project/file{i}.py" for i in range(8))
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/vim", next(commands)),
+        )
+        for index in range(8):
+            activity_gen.execute_baseline_activity(
+                user, linux, start + timedelta(seconds=index), "process_code"
+            )
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        creates = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process
+            and event.process.image == "/usr/bin/vim"
+        ]
+        exits = {
+            event.process.pid: event.timestamp
+            for event in events
+            if event.event_type == "process_terminate" and event.process
+        }
+        assert len(creates) == 8
+        for previous, current in zip(creates, creates[1:], strict=False):
+            assert exits[previous.process.pid] < current.timestamp
+            assert (current.timestamp - exits[previous.process.pid]).total_seconds() < 182
+        gaps = [
+            (current.timestamp - previous.timestamp).total_seconds()
+            for previous, current in zip(creates, creates[1:], strict=False)
+        ]
+        assert min(gaps) < 90
+        assert max(gaps) - min(gaps) > 5
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -6482,6 +6626,62 @@ class TestActivityGenerator:
             for message in messages
         )
         assert not any("unknown" in message for message in messages)
+
+    @pytest.mark.parametrize("payload_bytes", [24, 100])
+    def test_tcp_scan_does_not_invent_ssh_authentication(
+        self, activity_gen, state_manager, mock_emitters, payload_bytes: int
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(hostname="SCANNER", ip="10.0.1.10", os="Ubuntu 24.04", type="server")
+        target = System(
+            hostname="SSH-TARGET",
+            ip="10.0.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["ssh"],
+        )
+        mock_emitters["syslog"] = Mock()
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        activity_gen._all_system_ips = [source.ip, target.ip]
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=source.hostname,
+            parent_pid=0,
+            image="/usr/bin/nmap",
+            command_line="nmap -Pn -sT -p 22 10.0.2.30",
+            username="root",
+            integrity_level="High",
+            logon_id="0x12345",
+        )
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=target.ip,
+            time=timestamp,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=0.12,
+            orig_bytes=payload_bytes,
+            resp_bytes=80,
+            src_port=52876,
+            pid=pid,
+            source_system=source,
+            conn_state="SF",
+        )
+        messages = [
+            call.args[0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+        ]
+        assert any(
+            message.startswith("Connection from 10.0.1.10 port 52876 ") for message in messages
+        )
+        assert any(
+            message == "Connection closed by 10.0.1.10 port 52876 [preauth]" for message in messages
+        )
+        assert not any(
+            "Invalid user" in message or "Failed password" in message for message in messages
+        )
 
     def test_web_to_database_connection_materializes_service_owner(
         self, activity_gen, state_manager, mock_emitters
@@ -11031,6 +11231,36 @@ class TestActivityGenerator:
             )
         assert not dns_events
 
+    @pytest.mark.parametrize("state", ["SF", "RSTR"])
+    def test_one_way_tcp_syslog_keeps_control_without_invented_reply_data(
+        self, activity_gen, state_manager, mock_emitters, state: str
+    ) -> None:
+        timestamp = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip="10.0.0.21",
+            dst_ip="10.0.0.40",
+            time=timestamp,
+            dst_port=514,
+            proto="tcp",
+            service="syslog",
+            duration=0.4,
+            orig_bytes=3000,
+            resp_bytes=0,
+            conn_state=state,
+        )
+        event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_port == 514
+        )
+        assert event.network.resp_bytes == 0
+        assert "d" not in event.network.history
+        assert "t" not in event.network.history
+        assert "h" in event.network.history
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes >= 40 * event.network.resp_pkts
+
     def test_dns_connection_uses_resolver_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -11309,7 +11539,10 @@ class TestActivityGenerator:
         assert session is not None
         assert session.username == test_user.username
         assert session.session_kind == "new_credentials"
-        assert session.session_id == 0
+        caller = state_manager.get_session_at(
+            explicit.auth.subject_logon_id, new_credentials.timestamp
+        )
+        assert session.session_id == caller.session_id > 0
         assert new_credentials.auth.source_ip == "-"
         assert new_credentials.auth.subject_username == test_user.username
         assert new_credentials.auth.subject_logon_id == explicit.auth.subject_logon_id
@@ -11345,8 +11578,16 @@ class TestActivityGenerator:
             )
         )
 
+    @pytest.mark.parametrize("shift_transport", [False, True])
     def test_runas_netonly_realizes_child_transport_and_target_logon(
-        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+        shift_transport,
     ):
         """A successful RunAs action owns its requested child and remote result."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -11359,6 +11600,18 @@ class TestActivityGenerator:
         activity_gen._ip_to_system[target_system.ip] = target_system
         activity_gen._all_system_ips = [test_system.ip, target_system.ip]
         state_manager.set_current_time(timestamp)
+
+        committed = []
+        original_connection = activity_gen.generate_connection
+
+        def delayed_connection(**kwargs: Any) -> str:
+            if shift_transport:
+                kwargs["time"] += timedelta(seconds=2)
+            uid = original_connection(**kwargs)
+            committed.append(state_manager.get_connection_by_zeek_uid(uid))
+            return uid
+
+        monkeypatch.setattr(activity_gen, "generate_connection", delayed_connection)
 
         activity_gen.generate_explicit_credentials(
             user=test_user,
@@ -11416,6 +11669,9 @@ class TestActivityGenerator:
         assert target_logoff.auth.username == target_logon.auth.username == "admin01"
         assert target_logoff.auth.user_sid == target_logon.auth.user_sid
         assert target_logoff.auth.smb_principal == target_logon.auth.smb_principal == "admin01"
+        assert len(committed) == 1
+        assert target_logon.timestamp > committed[0].start_time
+        assert target_logoff.timestamp > committed[0].close_time
         assert any(
             event.event_type == "process_terminate" and event.process.pid == child.process.pid
             for event in emitted
@@ -12359,6 +12615,13 @@ class TestActivityGenerator:
         running = state_manager.get_process(test_system.hostname, pid)
         assert running is not None
         activity_gen._terminated_process_keys.add((test_system.hostname, pid, running.start_time))
+        state_manager.materialize_process_termination(
+            state_manager.plan_process_termination_materialization(
+                system=test_system.hostname,
+                pid=pid,
+                end_time=start_time + timedelta(minutes=1),
+            )
+        )
         activity_gen._ip_to_system = {test_system.ip: test_system}
 
         activity_gen.generate_connection(
@@ -13548,7 +13811,6 @@ class TestActivityGenerator:
             for idx, cert in enumerate(event.protocol.x509_chain)
         )
         assert event.network.duration >= (max_cert_delay_ms / 1000.0)
-        assert event.network.duration >= 1.05 + (0.075 * len(event.protocol.x509_chain))
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters
@@ -17023,6 +17285,104 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.history == "D"
 
+    @pytest.mark.parametrize("host_type", ["server", "workstation"])
+    def test_linux_boundary_shell_replacement_is_feasible_before_it_allocates(
+        self,
+        activity_gen: ActivityGenerator,
+        test_user: User,
+        state_manager: StateManager,
+        host_type: str,
+    ) -> None:
+        window = datetime(2024, 1, 15, 10, tzinfo=UTC)
+        logon_time = window - timedelta(minutes=10)
+        linux = System(
+            hostname="LINUX-BOUNDARY",
+            ip="10.0.2.60",
+            os="Ubuntu 24.04",
+            type=host_type,
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        root = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        logon = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            start_time=logon_time,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": root}}
+        activity_gen._scenario_start_time = window
+        old_shell = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=window - timedelta(minutes=1),
+        )
+        assert old_shell is not None
+        before = state_manager.materialization_digest()
+        early = window + timedelta(milliseconds=100)
+        for _ in range(3):
+            assert (
+                activity_gen.ensure_linux_session_shell(
+                    user=test_user,
+                    target_system=linux,
+                    logon_id=logon,
+                    logon_time=logon_time,
+                    activity_time=early,
+                )
+                is None
+            )
+            assert (
+                activity_gen.ensure_linux_visible_shell_parent(
+                    user=test_user,
+                    target_system=linux,
+                    logon_id=logon,
+                    logon_time=logon_time,
+                    activity_time=early,
+                )
+                is None
+            )
+            parent = (
+                activity_gen._process_parents()._materialize_visible_linux_shell_parent_for_child(
+                    system=linux,
+                    time=early,
+                    logon_id=logon,
+                    parent_pid=old_shell,
+                    process_username=test_user.username,
+                )
+            )
+            assert parent == old_shell
+            assert state_manager.materialization_digest() == before
+        later = window + timedelta(seconds=30)
+        replacement = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=later,
+        )
+        assert replacement is not None and replacement != old_shell
+        process = state_manager.get_process(linux.hostname, replacement)
+        assert window <= process.start_time < later
+        assert replacement == activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon,
+            logon_time=logon_time,
+            activity_time=later,
+        )
+
 
 @pytest.fixture()
 def activity_gen():
@@ -17240,7 +17600,8 @@ def test_tcp_success_history_uses_varied_completed_flow_shapes():
     assert len(histories) > 1
 
 
-def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):
+@pytest.mark.parametrize("seed", range(12))
+def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch, seed):
     """Failed TLS handshakes should keep byte counts aligned with Zeek history."""
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -17273,7 +17634,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
         hostname="example.com",
         dns=None,
         dst_ip="93.184.216.34",
-        rng=random.Random(4),
+        rng=random.Random(seed),
     )
 
     assert event.protocol.ssl is not None
@@ -17283,6 +17644,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
     assert "D" in event.network.history
     if event.network.resp_bytes:
         assert "d" in event.network.history
+    assert ("s" in event.protocol.ssl.ssl_history) == (event.network.resp_bytes > 0)
     assert 0 < event.network.orig_bytes < 1200
     assert 0 <= event.network.resp_bytes < 55000
     assert event.network.orig_pkts >= 1

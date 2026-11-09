@@ -1,0 +1,38 @@
+{
+  "family": "macOS authoritative process teardown cadence",
+  "output": "/private/tmp/eforge-iteration-test-macos-loop-14",
+  "observations": [
+    {
+      "host": "MAC-MROSS-01.meridianhcs.local",
+      "endpoint_exit_count": 10,
+      "first_exit_utc": "2026-11-02T18:54:58.555344Z",
+      "last_exit_utc": "2026-11-02T18:54:59.800000Z",
+      "inter_exit_gaps_ms": [111.2, 90.8, 204.3, 172.6, 76.1, 149.0, 179.4, 144.8, 116.4],
+      "gap_coefficient_of_variation": 0.29,
+      "ecar_local_session_logout_utc": "2026-11-02T18:55:01.020Z"
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "endpoint_exit_count": 16,
+      "first_exit_utc": "2026-11-02T18:56:57.390285Z",
+      "last_exit_utc": "2026-11-02T18:56:59.806152Z",
+      "inter_exit_gaps_ms": [
+        215.1, 172.9, 104.1, 215.2, 185.0, 116.3, 161.6, 101.3,
+        175.3, 91.1, 181.3, 106.6, 292.7, 140.7, 156.8
+      ],
+      "gap_coefficient_of_variation": 0.33,
+      "ecar_local_session_logout_utc": "2026-11-02T18:57:03.134Z"
+    }
+  ],
+  "evaluation": {
+    "accepted": true,
+    "total_records": 133413,
+    "overall_score": 96.69735121882162,
+    "pillars": {
+      "Parseability": 100.0,
+      "Plausibility": 96.79941796948748,
+      "Causality": 95.9151083523695,
+      "Timing": 92.59359819178687
+    }
+  }
+}

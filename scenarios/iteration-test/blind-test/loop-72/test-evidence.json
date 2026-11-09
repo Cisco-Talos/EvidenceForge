@@ -1,0 +1,27 @@
+{
+  "scenario_validation": "pass; existing low-baseline warning and pivot notices only",
+  "focused_tests": {
+    "command": ".venv/bin/pytest tests/unit/test_browser_instances.py -q --tb=short",
+    "passed": 12,
+    "failed": 0
+  },
+  "generation": {
+    "seed": 42,
+    "status": "complete",
+    "records": 141745,
+    "data_files": 115
+  },
+  "evaluation": {
+    "score": 96.11812621700025,
+    "acceptance": "PASS",
+    "parseability": 100.0,
+    "plausibility": 96.8680472758937,
+    "causality": 95.7186,
+    "timing": 89.8573
+  },
+  "browser_probe": {
+    "macos": "one visible Chrome main-root exec per host; each exited within visible window; helper execs excluded",
+    "windows": "maximum concurrent Chrome roots per observed host/user is one; WS-PPATEL roots are sequential, not overlapping",
+    "neutral_copy_identical": true
+  }
+}

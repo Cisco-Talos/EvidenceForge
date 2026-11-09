@@ -110,3 +110,17 @@ test("bundle technical details show aggregate data, disk size and present log ty
   expect(screen.getByText("Zeek")).toBeVisible();
   await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/jobs/run/properties"));
 });
+
+test("Mac log labels appear in captured selections and present output without implying broader native coverage", async () => {
+  const request = vi.fn(async () => ({ path: "/bundle", complete: true, size_bytes: 4096, data_bytes: 2048, data_files: 3, scenario: "Mac run", evidenceforge_version: "2.2.0a4", formats: ["macos_unified_log", "macos_endpoint_security", "zsh_history"], log_types: ["macos_unified_log", "macos_endpoint_security", "zsh_history"], unrecognized_data_files: 0, selected_packs: [], artifact: {}, overrides: {}, findings: [] }));
+  render(<Tooltip.Provider><BundlePropertiesDialog id="mac-run" api={{ request } as unknown as StudioApi} onClose={vi.fn()} /></Tooltip.Provider>);
+  await screen.findByRole("heading", { name: "Mac run" });
+  const user = userEvent.setup();
+  for (const section of ["Technical details", "Captured inputs"]) {
+    await user.click(screen.getByRole("button", { name: section }));
+    expect(screen.getByText("macOS Unified Log")).toBeVisible();
+    expect(screen.getByText("macOS Endpoint Security")).toBeVisible();
+    expect(screen.getByText("zsh history")).toBeVisible();
+    expect(screen.queryByText("macos endpoint security")).toBeNull();
+  }
+});

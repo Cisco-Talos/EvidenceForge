@@ -1,0 +1,87 @@
+{
+  "ssh_root_login_session_records": [
+    {
+      "source_ip": "10.10.3.10",
+      "source_port": "59707",
+      "connection_syslog": true,
+      "accepted_syslog": true,
+      "pam_open_syslog": true,
+      "all_three_present": true
+    },
+    {
+      "source_ip": "10.10.4.10",
+      "source_port": "35261",
+      "connection_syslog": true,
+      "accepted_syslog": true,
+      "pam_open_syslog": true,
+      "all_three_present": true
+    }
+  ],
+  "ssh_complete_contract_count": 2,
+  "ssh_login_count": 2,
+  "mac_native_transition_events": [
+    {
+      "time": "2026-11-02T13:07:43.420283000Z",
+      "pid": 42171,
+      "global_seq_num": 1,
+      "event_type": 9
+    },
+    {
+      "time": "2026-11-02T13:07:43.439181000Z",
+      "pid": 42171,
+      "global_seq_num": 2,
+      "event_type": 9
+    },
+    {
+      "time": "2026-11-02T13:07:43.449316000Z",
+      "pid": 42171,
+      "global_seq_num": 3,
+      "event_type": 11
+    },
+    {
+      "time": "2026-11-02T13:07:43.470817000Z",
+      "pid": 42172,
+      "global_seq_num": 4,
+      "event_type": 9
+    },
+    {
+      "time": "2026-11-02T13:07:43.477385000Z",
+      "pid": 42172,
+      "global_seq_num": 5,
+      "event_type": 11
+    }
+  ],
+  "mac_ecar_process_rows": [
+    {
+      "timestamp_ms": 1793624864584,
+      "pid": 42171,
+      "operation": "fork",
+      "execution_id": "cb534f62-5b5a-4ea5-b11f-67341b041f82:exec:0"
+    },
+    {
+      "timestamp_ms": 1793624864584,
+      "pid": 42171,
+      "operation": "exec",
+      "execution_id": "cb534f62-5b5a-4ea5-b11f-67341b041f82:exec:1"
+    },
+    {
+      "timestamp_ms": 1793624864584,
+      "pid": 42171,
+      "operation": "exec",
+      "execution_id": "cb534f62-5b5a-4ea5-b11f-67341b041f82:exec:2"
+    },
+    {
+      "timestamp_ms": 1793624864622,
+      "pid": 42172,
+      "operation": "fork",
+      "execution_id": "179b50f4-8f8c-47cc-94e7-17bf2eb27d0f:exec:0"
+    },
+    {
+      "timestamp_ms": 1793624864622,
+      "pid": 42172,
+      "operation": "exec",
+      "execution_id": "179b50f4-8f8c-47cc-94e7-17bf2eb27d0f:exec:1"
+    }
+  ],
+  "mac_distinct_ecar_timestamp_count": 2
+}

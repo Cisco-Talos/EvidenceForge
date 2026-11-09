@@ -10,7 +10,10 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from evidenceforge.events.content_identity import ServiceDeploymentIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
+from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.parentage import ProcessParentageChange
 from evidenceforge.utils.time import ensure_utc
 
 LifecyclePhase = Literal["start", "dependent", "closure"]
@@ -18,7 +21,7 @@ SessionEndAuthority = Literal["explicit_storyline", "action_bundle", "generated"
 LifecycleEntityKind = Literal["process", "session", "service", "transport"]
 LifecycleOwnerKind = Literal["boot", "service", "session", "transport", "detached"]
 LifecycleCloseAuthority = Literal["authoritative", "generated"]
-LifecycleServiceKind = Literal["builtin", "installed"]
+LifecycleServiceKind = Literal["builtin", "installed", "launchd"]
 TransportSessionBindingRole = Literal[
     "authentication",
     "session",
@@ -49,7 +52,7 @@ _LIFECYCLE_TRANSITION_KINDS = frozenset(
         "closed",
     }
 )
-_LIFECYCLE_SERVICE_KINDS = frozenset({"builtin", "installed"})
+_LIFECYCLE_SERVICE_KINDS = frozenset({"builtin", "installed", "launchd"})
 _TRANSPORT_SESSION_BINDING_ROLES = frozenset(
     {"authentication", "session", "control", "application", "scanner"}
 )
@@ -151,6 +154,151 @@ class ProcessLifecycleIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessGUIAttribution:
+    """Retained account-binding frontier when transition details are compacted."""
+
+    before: ProcessTokenIdentity
+    after: ProcessTokenIdentity
+    changed_at: datetime
+    revision: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.before) is not ProcessTokenIdentity
+            or type(self.after) is not ProcessTokenIdentity
+            or self.before.principal != "root"
+            or self.before.integrity_level != "System"
+            or self.after.principal == "root"
+            or self.after.integrity_level != "Medium"
+            or not self.after.logon_id
+            or self.after.logon_type != 2
+            or self.after.session_id is None
+            or type(self.changed_at) is not datetime
+            or self.changed_at.utcoffset() is None
+            or type(self.revision) is not int
+            or self.revision < 1
+        ):
+            raise ValueError("GUI runtime attribution requires an exact root-to-local-user binding")
+        object.__setattr__(self, "changed_at", ensure_utc(self.changed_at))
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeView:
+    """Current execution facts, separate from immutable lifetime ownership."""
+
+    revision: int
+    execution_ordinal: int
+    changed_at: datetime
+    image: str
+    role: str
+    token: ProcessTokenIdentity
+    gui_attribution: ProcessGUIAttribution | None = None
+
+    def __post_init__(self) -> None:
+        """Require an exact bounded projection before lifecycle admission."""
+        if any(
+            type(value) is not int or value < 0 for value in (self.revision, self.execution_ordinal)
+        ):
+            raise ValueError("Process runtime view requires nonnegative integer ordinals")
+        if type(self.changed_at) is not datetime or self.changed_at.utcoffset() is None:
+            raise ValueError("Process runtime view requires an aware change time")
+        if any(type(value) is not str or not value for value in (self.image, self.role)):
+            raise ValueError("Process runtime view requires an image and role")
+        if type(self.token) is not ProcessTokenIdentity:
+            raise TypeError("Process runtime view requires an exact token")
+        if self.gui_attribution is not None and (
+            type(self.gui_attribution) is not ProcessGUIAttribution
+            or self.gui_attribution.after != self.token
+            or self.gui_attribution.changed_at > self.changed_at
+            or self.gui_attribution.revision > self.revision
+        ):
+            raise ValueError("GUI runtime view changed its retained attribution frontier")
+        object.__setattr__(self, "changed_at", ensure_utc(self.changed_at))
+
+    @classmethod
+    def initial(
+        cls, identity: ProcessLifecycleIdentity, token: ProcessTokenIdentity
+    ) -> ProcessRuntimeView:
+        """Project an unchanged process without adding mutable lifetime fields."""
+        return cls(0, 0, identity.started_at, identity.image, identity.role, token)
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeChange:
+    """One exact execution or credential transition within a process lifetime."""
+
+    before: ProcessRuntimeView
+    after: ProcessRuntimeView
+    kind: Literal["exec", "credentials", "gui_credentials"]
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous image, token and revision transitions."""
+        if (
+            type(self.before) is not ProcessRuntimeView
+            or type(self.after) is not ProcessRuntimeView
+        ):
+            raise TypeError("Process runtime change requires exact before/after views")
+        if (
+            self.after.revision != self.before.revision + 1
+            or self.after.changed_at < self.before.changed_at
+        ):
+            raise ValueError(
+                "Process runtime change must advance its revision and preserve time order"
+            )
+        previous, current = self.before.token, self.after.token
+        if self.kind == "gui_credentials":
+            if (
+                self.before.gui_attribution is not None
+                or self.after.gui_attribution
+                != ProcessGUIAttribution(
+                    previous,
+                    current,
+                    self.after.changed_at,
+                    self.after.revision,
+                )
+                or self.before.execution_ordinal != 1
+                or self.before.image != "/usr/libexec/xpcproxy"
+            ):
+                raise ValueError("GUI credential change lost its exact launcher attribution")
+        elif self.before.gui_attribution != self.after.gui_attribution:
+            raise ValueError("Process runtime change cannot rewrite GUI attribution")
+        if self.kind != "gui_credentials" and (
+            previous.logon_id,
+            previous.session_id,
+            previous.logon_type,
+        ) != (
+            current.logon_id,
+            current.session_id,
+            current.logon_type,
+        ):
+            raise ValueError("Process runtime change cannot change authentication ownership")
+        if self.kind == "exec":
+            if self.after.execution_ordinal != self.before.execution_ordinal + 1:
+                raise ValueError("Process exec must advance exactly one execution ordinal")
+        elif self.kind in {"credentials", "gui_credentials"}:
+            if (self.after.execution_ordinal, self.after.image, self.after.role) != (
+                self.before.execution_ordinal,
+                self.before.image,
+                self.before.role,
+            ):
+                raise ValueError("Credential changes must preserve execution image and role")
+            if current == previous:
+                raise ValueError("Credential changes require a different token")
+            if self.kind == "gui_credentials" and (
+                previous.principal != "root"
+                or current.principal == "root"
+                or not current.logon_id
+                or current.logon_type != 2
+                or current.integrity_level != "Medium"
+            ):
+                raise ValueError(
+                    "GUI credential adoption requires a root child and local user token"
+                )
+        else:
+            raise ValueError("Unsupported process runtime change kind")
+
+
+@dataclass(frozen=True, slots=True)
 class SessionLifecycleIdentity:
     """Immutable identity for one canonical authentication/session lifecycle."""
 
@@ -208,6 +356,10 @@ class LogicalServiceIdentity:
             raise ValueError(f"Unsupported lifecycle service kind {self.service_kind!r}")
         if self.service_kind == "installed" and not self.deployment_service_id:
             raise ValueError("Installed logical services require a deployment service identity")
+        if self.service_kind == "launchd" and (
+            self.deployment_service_id or self.deployment_identity
+        ):
+            raise ValueError("Launchd installation belongs to its loaded runtime definition")
         deployment_identity = self.deployment_identity
         if deployment_identity is None:
             return
@@ -236,6 +388,7 @@ class ServiceInstanceLifecycleIdentity:
     instance_id: str
     started_at: datetime
     parent_service_object_id: str = ""
+    launchd_job: LaunchdSystemJobDefinition | None = None
 
     def __post_init__(self) -> None:
         """Normalize start time and require a complete boot-scoped identity."""
@@ -252,6 +405,16 @@ class ServiceInstanceLifecycleIdentity:
             raise ValueError(
                 "Service instances require host, object, logical service, boot, and instance IDs"
             )
+        if (
+            self.launchd_job is not None
+            and self.launchd_job.plist.hostname != self.hostname.strip().casefold()
+        ):
+            raise ValueError("Loaded launchd definition host must match its runtime instance")
+        if (
+            self.launchd_job is not None
+            and self.launchd_job.logical_service_id != self.logical_service_id
+        ):
+            raise ValueError("Loaded launchd definition must match its logical service ID")
         if self.parent_service_object_id == self.object_id:
             raise ValueError("A service instance cannot parent itself")
         object.__setattr__(self, "started_at", ensure_utc(self.started_at))
@@ -456,6 +619,8 @@ class LifecycleTransition:
     action_id: str
     reason: str = ""
     transition_ordinal: int = 0
+    process_change: ProcessRuntimeChange | None = None
+    parentage_change: ProcessParentageChange | None = None
 
     def __post_init__(self) -> None:
         """Normalize transition time and require stable action-relative identity."""
@@ -467,6 +632,23 @@ class LifecycleTransition:
         if self.transition_ordinal < 0:
             raise ValueError("Lifecycle transition_ordinal must be non-negative")
         object.__setattr__(self, "canonical_time", ensure_utc(self.canonical_time))
+        if self.parentage_change is not None:
+            if type(self.parentage_change) is not ProcessParentageChange:
+                raise TypeError("Lifecycle parent change requires an exact transition")
+            if (
+                self.subject.kind != "process"
+                or self.kind != "dependent"
+                or self.process_change is not None
+                or self.parentage_change.changed_at != self.canonical_time
+            ):
+                raise ValueError("Parent adoption requires its own dependent process transition")
+        if self.process_change is not None:
+            if type(self.process_change) is not ProcessRuntimeChange:
+                raise TypeError("Lifecycle process change requires an exact transition")
+            if self.subject.kind != "process" or self.kind != "dependent":
+                raise ValueError("Runtime changes require a dependent process transition")
+            if self.process_change.after.changed_at != self.canonical_time:
+                raise ValueError("Runtime change time must match its lifecycle transition")
 
     @property
     def commit_identity(self) -> LifecycleActionCommit:
@@ -743,6 +925,21 @@ class ProcessLifecycleSnapshot:
     hold_ledger_digest: str = ""
     latest_dependent_at: datetime | None = None
     latest_hold_until: datetime | None = None
+    runtime_view: ProcessRuntimeView | None = None
+    parentage_change: ProcessParentageChange | None = None
+
+    @property
+    def current_parent_object_id(self) -> str:
+        """Return the current relationship without rewriting the birth parent."""
+        if self.parentage_change is not None:
+            assert self.parentage_change.after.current is not None
+            return self.parentage_change.after.current.object_id
+        return self.identity.parent_object_id
+
+    @property
+    def current_view(self) -> ProcessRuntimeView:
+        """Return current execution facts without rewriting the lifetime start."""
+        return self.runtime_view or ProcessRuntimeView.initial(self.identity, self.token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -784,6 +981,8 @@ class ServiceInstanceLifecycleSnapshot:
     hold_ledger_digest: str = ""
     latest_dependent_at: datetime | None = None
     latest_hold_until: datetime | None = None
+
+    process_group: PosixGroupIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,11 +1,12 @@
 # Host activity, authentication, observation, and timing overlays
 
-Read only the matching section. Inspect packaged YAML and the existing overlay before editing; use
-validation as the schema authority.
+Inspect the matching packaged YAML and existing overlay before editing; validation is the schema authority.
 
 ## Contents
 
 - [Linux activity](#linux-activity)
+- [Mac native source profiles](#mac-native-source-profiles)
+- [Mac filesystem and execution metadata](#modeled-mac-filesystem-and-execution-metadata)
 - [SMB client and server profiles](#smb-client-and-server-profiles)
 - [Authentication and endpoint noise](#authentication-and-endpoint-noise)
 - [Volume and distribution](#volume-and-distribution)
@@ -16,33 +17,23 @@ validation as the schema authority.
 
 ### `bash_commands.yaml`
 
-Deep-merges shared command roles and behavior models: `common`, persona/shared roles,
-`storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`,
-`keyboard_adjacency`, and `params`.
+Deep-merges command roles and models: `common`, persona/shared roles, `storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`, `keyboard_adjacency`, and `params`.
 
-Runtime maps personas to reusable roles—for example, developers can use `dba`/`webadmin` and
-security analysts can use `security`. Do not add duplicate persona-named pools.
-
-Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths.
-Probabilities must be 0-1 and count/range bounds ordered.
+Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names. Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered.
 
 ### `systemd_schedules.yaml`
 
-`schedules` append. Each has a unique service identity, type/frequency/hour/jitter/distro, and
-optional role/service/probability/cron fields. Avoid fixed fleet-wide cadence.
+`schedules` append. Each has a unique service identity, type/frequency/hour/jitter/distro, and optional role/service/probability/cron fields. Avoid fixed fleet-wide cadence.
 
 ### `extra_syslog_messages.yaml`
 
-`programs` append with program, templates, parameter profiles, host filters, rarity, and window
-limits. Canonical activity bundles—not ambient messages—own lifecycle evidence.
+`programs` append with program, templates, parameter profiles, host filters, rarity, and window limits. Canonical activity bundles own lifecycle evidence.
 
 ## SMB client and server profiles
 
 ### `smb_profiles.yaml`
 
-Deep-merges reusable SMB provider defaults and source-native process morphology. Scenario or
-organization YAML—not this file—owns storage topology, share access and selected audit profile,
-mappings, credential mode/principal, and explicit `smb_activity.client_access` intent.
+Deep-merges reusable SMB provider defaults and source-native process morphology. Scenario or organization YAML owns storage topology, share access and selected audit profile, mappings, credential mode/principal, and explicit `smb_activity.client_access` intent.
 
 The strict `schema_version: 1` document has six mapping roots:
 
@@ -60,10 +51,8 @@ operands; `rename` uses remote source/destination; mounted `transfer` requires n
 `client_path`, `local_path`, `source_path`, `destination_path`, `username`, `smb_principal`,
 `auth_options`, `operation`, and `client_ip`; traversal, conversions, and format specs are invalid.
 
-Mounted CIFS uses kernel transport plus an explicit operation actor; `mount.cifs` does not own later
-I/O. Direct `smbclient` is operation/process-owned, Explorer is resident, and GVFS is background
-texture only. Samba uses a service listener plus a per-transport `smbd` worker. Audit `minimal` is
-lifecycle-only; operation/failure tiers permit only monotonic `standard`/`high` mappings.
+Mounted CIFS uses kernel transport plus an explicit operation actor; `mount.cifs` does not own later I/O. Direct `smbclient` is operation/process-owned, Explorer is resident, and GVFS is background texture only.
+Samba uses a service listener plus a per-transport `smbd` worker. Audit `minimal` is lifecycle-only; operation/failure tiers permit only monotonic `standard`/`high` mappings.
 
 An overlay supplies only changed nested fields:
 
@@ -147,3 +136,15 @@ reserved-host allowlists extend. They cannot authorize live credentials/hosts, p
 
 Treat cadence, rate, role, missingness, or safety changes as semantic. Run `eforge validate-config
 --json` fresh after every edit; validate affected scenarios from the same working directory.
+
+## Mac native source profiles
+
+`macos_unified_log_profiles.yaml` selects modeled macOS 27 workspace/policy/SSH messages. `macos_endpoint_security_profiles.yaml` selects arm64 v11 process/files (`fork exec exit create close rename unlink`). These are simulated collectors; generation inspects no host logs. Frozen inputs retain their captured subscriptions and facts. Catalog edits do not qualify unmeasured native families.
+
+## Modeled Mac filesystem and execution metadata
+
+`macos_installed_files.yaml` owns nominal volume/object/stat, root/user ownership, size/allocation and pre-window timestamps. `macos_execution_metadata.yaml` owns terminal devices, ordered environments, known directories, native slice/runtime validation, audit/responsibility, pipes and descriptors. Unknown facts stay unknown; allocation/metadata roll back and checkpoint with canonical State.
+
+Its `filesystem_workload` selects live Code document activity: bounded names/counts/sizes/delays, idle/atomic-replacement/cleanup probabilities and nominal permissions/allocation. Preserve the qualified pre-operation stat phase. This adds neither an authored file event nor generic SMB/download/plist conversion, reads or mappings. Values model workload, not measured Code/APFS behavior.
+
+See `/eforge:references:evidence-endpoint-macos` for admitted process/file contracts and the repository's `docs/reference/CUSTOMIZING_CONFIG.md` for an overlay example. Validate configuration and affected scenarios from the same project root after edits.

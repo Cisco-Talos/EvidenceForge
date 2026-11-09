@@ -1,0 +1,17 @@
+{
+  "command": [
+    "uv",
+    "run",
+    "--no-sync",
+    "eforge",
+    "generate",
+    "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-macos/scenario.yaml",
+    "--output",
+    "/private/tmp/eforge-iteration-macos-loop1-njdnyda_/bundle-attempt-8",
+    "--verbose"
+  ],
+  "exit_code": 21,
+  "elapsed_seconds": 159.07,
+  "source_sha256": "fcd076f283422c7ee7495a7bd30dc85cc1f8859134a653000b639debd71be2a8",
+  "bundle": "/private/tmp/eforge-iteration-macos-loop1-njdnyda_/bundle-attempt-8"
+}

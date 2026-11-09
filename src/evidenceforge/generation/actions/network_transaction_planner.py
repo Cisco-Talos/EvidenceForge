@@ -118,12 +118,8 @@ from evidenceforge.generation.activity.network_proxy import (
 )
 from evidenceforge.generation.activity.network_transport import (
     _AUTO_WEIRD_ENABLED,
-    _TCP_CONN_ENTRIES,
-    _TCP_CONN_WEIGHTS,
     _TCP_OVERHEAD_VALUES,
     _TCP_OVERHEAD_WEIGHTS,
-    _UDP_CONN_ENTRIES,
-    _UDP_CONN_WEIGHTS,
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
     _align_tcp_network_payload_with_history,
@@ -131,10 +127,13 @@ from evidenceforge.generation.activity.network_transport import (
     _icmp_echo_duration,
     _icmp_echo_payload_size,
     _preserve_explicit_tcp_payload_overrides,
+    _tcp_history_consistent_with_payload,
     _tcp_ip_byte_count,
     _tcp_packet_counts_from_payload_and_history,
     _tcp_payload_bytes_consistent_with_history,
     _tcp_success_history,
+    connection_state_distribution,
+    native_connection_history,
 )
 from evidenceforge.generation.http_channels import HttpChannelAffinity
 from evidenceforge.generation.lifecycle_authority import (
@@ -230,9 +229,6 @@ _DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US = 12_001
 _TLS_COMPLETED_EXTENSION_MAXIMUM_US = 8_000_000
 _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH = 3
 _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS = 0.005
-_TLS_CERTIFICATE_MINIMUM_BASE_SECONDS = 1.05
-_TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS = 0.075
-_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US = 25_001
 _NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_US = 997
 _NTP_RTT_MAXIMUM_US = 300_001
 _NTP_PROCESSING_MAXIMUM_US = 10_001
@@ -284,16 +280,13 @@ def _tls_certificate_duration_floor_bound_seconds() -> float:
         certificate_analyzer_delay_bound_ms(maximum_position=maximum_position) / 1_000
         + _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS
     )
-    chain_floor_seconds = _TLS_CERTIFICATE_MINIMUM_BASE_SECONDS + (
-        _TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS
-        * _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH
-    )
-    return max(analyzer_floor_seconds, chain_floor_seconds)
+    return analyzer_floor_seconds
 
 
 def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
     """Return the configured HTTP minimum and sampled floor slack maximum."""
 
+    from evidenceforge.generation.activity.network_params import http_transport_floor_slack_config
     from evidenceforge.generation.activity.timing_profiles import get_timing_window
 
     timing_window = get_timing_window(
@@ -304,7 +297,7 @@ def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
         default_class="same_observation",
     )
     minimum_seconds = (timing_window.max_ms + 5) / 1_000
-    return minimum_seconds, _HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US / 1_000_000
+    return minimum_seconds, http_transport_floor_slack_config().maximum_ms / 1_000
 
 
 def http_completed_transport_close_bound_seconds(
@@ -1114,13 +1107,16 @@ class NetworkTransactionPlanner:
         if not specs:
             return ()
         batch = root.state_plan.batch
-        if batch is None:
+        if batch is None and (
+            authority.strict_state_authority is None
+            or not authority.strict_state_authority.allocation_free_rdp_reconnect
+        ):
             raise StateError("Deferred session dependent specifications lost their State batch")
         if batch is not authority.state_batch:
             raise StateError("Deferred session dependent specifications changed their State owner")
         members = (
-            *((batch.session,) if batch.session is not None else ()),
-            *batch.processes,
+            *((batch.session,) if batch is not None and batch.session is not None else ()),
+            *(batch.processes if batch is not None else ()),
             *(
                 (root.state_plan.existing_session_patch,)
                 if root.state_plan.existing_session_patch is not None
@@ -1307,6 +1303,7 @@ class NetworkTransactionPlanner:
                     identity_plan=EventIdentityPlan(
                         subject=identity,
                         actor=member.parent_identity,
+                        session=owning_session if member.forked else None,
                     ),
                     lifecycle=ActionLifecycleContext(
                         group_id=identity.lifecycle_group_id,
@@ -1458,15 +1455,38 @@ class NetworkTransactionPlanner:
             )
         return duration + self._tls_completed_extension_seconds(request)
 
+    def _http_request_phase_delay(self, request: NetworkConnectionRequest) -> timedelta:
+        """Sample one canonical first-request delay without millisecond quantization."""
+        from evidenceforge.generation.activity.network_params import http_request_phase_config
+
+        profile = http_request_phase_config()
+        return self._timing_runtime.sampler.sample_timedelta(
+            TruncatedLognormalDistribution(
+                median=profile.median_ms * 1_000,
+                sigma=profile.sigma,
+                minimum=profile.minimum_ms * 1_000,
+                maximum=profile.maximum_ms * 1_000,
+            ),
+            relationship_key="network.http.first_request_after_transport",
+            scope=self._timing_scope(request),
+            sample_key="request_phase",
+        )
+
     def _http_floor_slack_seconds(self, request: NetworkConnectionRequest) -> float:
         """Sample positive source-admission slack above an HTTP duration floor."""
 
+        from evidenceforge.generation.activity.network_params import (
+            http_transport_floor_slack_config,
+        )
+
+        profile = http_transport_floor_slack_config()
+
         return self._timing_runtime.sampler.sample_timedelta(
             TruncatedLognormalDistribution(
-                median=3_600.0,
-                sigma=0.88,
-                minimum=0.0,
-                maximum=float(_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US),
+                median=profile.median_ms * 1_000,
+                sigma=profile.sigma,
+                minimum=profile.minimum_ms * 1_000,
+                maximum=profile.maximum_ms * 1_000,
             ),
             relationship_key="network.http.duration_floor_slack",
             scope=self._timing_scope(request),
@@ -1910,11 +1930,29 @@ class NetworkTransactionPlanner:
         """Fit canonical application objects and framing inside transport payload."""
 
         network = event.network
-        if network is None or network.protocol != "tcp" or network.conn_state != "SF":
+        if network is None or network.protocol != "tcp":
+            return False
+        dns_payload_state = event.dns is not None and network.conn_state in {
+            "SF",
+            "S2",
+            "S3",
+            "RSTO",
+            "RSTR",
+            "OTH",
+        }
+        if network.conn_state != "SF" and not dns_payload_state:
             return False
 
         orig_floor = 0
         resp_floor = 0
+        if dns_payload_state:
+            _duration, orig_floor, resp_floor = _dns_payload_accounting(
+                dns=event.dns,
+                duration=network.duration,
+                orig_bytes=network.orig_bytes,
+                resp_bytes=network.resp_bytes,
+                proto="tcp",
+            )
         if event.http is not None:
             http_orig, http_resp = _http_flow_payload_bytes(event.http)
             orig_floor = max(orig_floor, http_orig)
@@ -1969,11 +2007,13 @@ class NetworkTransactionPlanner:
             network.orig_bytes,
             network.orig_pkts,
             accounting_rng,
+            retransmitted="T" in (network.history or ""),
         )
         network.resp_ip_bytes = _tcp_ip_byte_count(
             network.resp_bytes,
             network.resp_pkts,
             accounting_rng,
+            retransmitted="t" in (network.history or ""),
         )
         return True
 
@@ -2621,7 +2661,9 @@ class NetworkTransactionPlanner:
         this decision neither creates nor releases a process reservation.
         """
         executor = self._executor
-        resolved_process = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+        resolved_process = executor.state_manager.get_process_at(
+            resolved_source_system.hostname, pid, time
+        )
         drop_explicit_pid_without_inference = False
         if resolved_process and resolved_process.start_time and time < resolved_process.start_time:
             logger.debug(
@@ -2637,7 +2679,7 @@ class NetworkTransactionPlanner:
             pid = -1
             resolved_process = None
             drop_explicit_pid_without_inference = caller_supplied_pid
-        elif executor._process_termination_recorded(
+        elif resolved_process is None and executor._process_termination_recorded(
             resolved_source_system.hostname,
             pid,
             resolved_process.start_time if resolved_process is not None else None,
@@ -3153,6 +3195,7 @@ class NetworkTransactionPlanner:
                     event=attribution,
                     source_system=source_system,
                     hostname=hostname or http.host,
+                    request_header_finalized=proxy is not None,
                 )
                 http = attribution.http
             if command_http_needs_response_size and http is not None:
@@ -3355,6 +3398,8 @@ class NetworkTransactionPlanner:
                         http,
                         trans_depth=reuse.trans_depth,
                         canonical_request_time=reuse.canonical_request_time,
+                        request_stream_offset=reuse.request_stream_offset,
+                        response_stream_offset=reuse.response_stream_offset,
                     )
                 if not http_application_layer_only:
                     http = replace(http, trans_depth=1)
@@ -3464,6 +3509,7 @@ class NetworkTransactionPlanner:
                 event=attribution,
                 source_system=resolved_source_system,
                 hostname=hostname or http.host,
+                request_header_finalized=proxy is not None,
             )
             if attribution.network.initiating_pid != pid:
                 pid = attribution.network.initiating_pid
@@ -3790,11 +3836,8 @@ class NetworkTransactionPlanner:
         elif service == "ntp" and resp_bytes and resp_bytes > 0:
             conn_state, history = "SF", "Dd"
         else:
-            entry = rng.choices(
-                _UDP_CONN_ENTRIES,
-                weights=_UDP_CONN_WEIGHTS,
-                k=1,
-            )[0]
+            entries = connection_state_distribution("udp")
+            entry = rng.choices(entries, weights=[row[1] for row in entries], k=1)[0]
             conn_state, _, history = entry
         if conn_state == "S0":
             duration = None
@@ -3813,12 +3856,12 @@ class NetworkTransactionPlanner:
     ) -> tuple[str, str, float | None, int | None, int | None]:
         """Choose an observation state and reconcile its payload and finite attempt interval."""
         if duration is not None:
-            tcp_entries = _TCP_CONN_ENTRIES
-            tcp_weights = _TCP_CONN_WEIGHTS
+            tcp_entries = connection_state_distribution("tcp")
+            tcp_weights = [row[1] for row in tcp_entries]
             if caller_provided_payload:
                 candidates = [
                     entry
-                    for entry in _TCP_CONN_ENTRIES
+                    for entry in tcp_entries
                     if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
                 ]
                 if candidates:
@@ -3875,8 +3918,20 @@ class NetworkTransactionPlanner:
                 resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
         elif conn_state == "OTH":
             # OTH/Cc = midstream capture fragment — minimal data visible
-            orig_bytes = rng.randint(0, 200)
-            resp_bytes = rng.randint(0, 200)
+            sampled_orig_bytes = rng.randint(0, 200)
+            sampled_resp_bytes = rng.randint(0, 200)
+            # A capture fragment cannot invent data in a direction whose
+            # application owner supplied a zero (or smaller known) budget.
+            orig_bytes = (
+                min(orig_bytes, sampled_orig_bytes)
+                if request.orig_bytes is not None and orig_bytes is not None
+                else sampled_orig_bytes
+            )
+            resp_bytes = (
+                min(resp_bytes, sampled_resp_bytes)
+                if request.resp_bytes is not None and resp_bytes is not None
+                else sampled_resp_bytes
+            )
             if duration is not None:
                 duration = self._failed_transport_duration_seconds(
                     request,
@@ -4045,6 +4100,7 @@ class NetworkTransactionPlanner:
                     duration=duration,
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
+                    proto=protocol_evidence.proto,
                 )
                 if protocol_evidence.dns.rtt is not None:
                     duration = self._dns_transport_duration_seconds(
@@ -4072,6 +4128,7 @@ class NetworkTransactionPlanner:
                     duration=duration,
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
+                    proto=protocol_evidence.proto,
                 )
             else:
                 duration = self._sample_duration_seconds(
@@ -4269,7 +4326,12 @@ class NetworkTransactionPlanner:
                 resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
             duration = self._completed_tls_duration_seconds(request, duration)
 
-        if not facts.suppress_application_side_effects and http is not None and conn_state == "SF":
+        if (
+            not facts.suppress_application_side_effects
+            and http is not None
+            and conn_state == "SF"
+            and not facts.http_application_layer_only
+        ):
             duration = self._completed_http_duration_seconds(request, duration)
 
         dns_owns_duration = (
@@ -4429,12 +4491,14 @@ class NetworkTransactionPlanner:
                 orig_pkts,
                 rng,
                 overhead_override=facts.packet_overhead_bytes,
+                retransmitted="T" in (history or ""),
             )
             resp_ip_bytes = _tcp_ip_byte_count(
                 resp_bytes,
                 resp_pkts,
                 rng,
                 overhead_override=facts.packet_overhead_bytes,
+                retransmitted="t" in (history or ""),
             )
         else:
             orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
@@ -4652,6 +4716,12 @@ class NetworkTransactionPlanner:
         ):
             prepare_generic_smb_responder = True
 
+        if protocol_evidence.proto == "tcp":
+            # Zeek history collapses repeated ACK/data flags. Removing a data
+            # flag does not remove an observed packet: retain its already
+            # sampled physical budget, compatible with another pure ACK.
+            history = _tcp_history_consistent_with_payload(history, orig_bytes, resp_bytes)
+
         event = _NetworkOccurrenceDraft(
             timestamp=time,
             parent_action_group_id=facts.parent_action_group_id,
@@ -4861,11 +4931,13 @@ class NetworkTransactionPlanner:
                         event.network.orig_bytes,
                         event.network.orig_pkts,
                         rng,
+                        retransmitted="T" in (event.network.history or ""),
                     )
                     event.network.resp_ip_bytes = _tcp_ip_byte_count(
                         event.network.resp_bytes,
                         event.network.resp_pkts,
                         rng,
+                        retransmitted="t" in (event.network.history or ""),
                     )
             event.network.duration = self._dns_transport_duration_seconds(
                 request,
@@ -4971,25 +5043,8 @@ class NetworkTransactionPlanner:
         domain_tags: list[str],
     ) -> str:
         """Return the stable browser identity for one canonical process PID."""
-        process = self._executor.state_manager.get_process(
-            source_system.hostname,
-            pid,
-        )
-        if process is None:
-            return ""
-        from evidenceforge.generation.activity.proxy_user_agents import (
-            stable_browser_user_agent_for_process,
-        )
-
-        process_identity = process.ecar_object_id or (
-            f"{process.pid}:{process.start_time.isoformat()}"
-        )
-        return stable_browser_user_agent_for_process(
-            source_system,
-            process.image,
-            process_identity,
-            hostname=hostname,
-            domain_tags=domain_tags,
+        return self._executor.browser_user_agent_for_process(
+            source_system, pid, hostname=hostname, domain_tags=domain_tags
         )
 
     def _bind_browser_user_agent_to_process(
@@ -4998,9 +5053,17 @@ class NetworkTransactionPlanner:
         event: _NetworkOccurrenceDraft,
         source_system: System | None,
         hostname: str,
+        request_header_finalized: bool = False,
     ) -> None:
-        """Project one browser process identity onto its canonical HTTP request."""
-        if source_system is None or event.http is None or event.network.initiating_pid <= 0:
+        """Apply a process default before an action freezes its request header."""
+        if (
+            source_system is None
+            or event.http is None
+            or event.network.initiating_pid <= 0
+            or (request_header_finalized and not event.http.user_agent_is_generated_default)
+            or event.http.user_agent_known_absent
+            or (event.http.user_agent and not event.http.user_agent_is_generated_default)
+        ):
             return
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
 
@@ -5010,8 +5073,26 @@ class NetworkTransactionPlanner:
             hostname=hostname,
             domain_tags=get_domain_tags(hostname),
         )
-        if process_ua:
-            event.http = replace(event.http, user_agent=process_ua)
+        self._apply_browser_process_user_agent(event, process_ua)
+
+    @staticmethod
+    def _apply_browser_process_user_agent(
+        event: _NetworkOccurrenceDraft,
+        process_user_agent: str,
+    ) -> None:
+        """Bind a generated default HTTP header to its owning browser process."""
+        if (
+            not process_user_agent
+            or event.http is None
+            or event.http.user_agent_known_absent
+            or (event.http.user_agent and not event.http.user_agent_is_generated_default)
+        ):
+            return
+        event.http = replace(
+            event.http,
+            user_agent=process_user_agent,
+            user_agent_is_generated_default=False,
+        )
 
     def _prepare_transparent_proxy_evidence(
         self,
@@ -5059,8 +5140,7 @@ class NetworkTransactionPlanner:
                 hostname=proxy_hostname,
                 domain_tags=domain_tags,
             )
-            if process_ua and event.http is not None:
-                event.http = replace(event.http, user_agent=process_ua)
+            self._apply_browser_process_user_agent(event, process_ua)
             proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
                 self._proxy_request_presentation(
                     event.http,
@@ -5089,6 +5169,10 @@ class NetworkTransactionPlanner:
                 apply_domain_override=apply_domain_user_agent,
                 source_identity=endpoints.src_ip,
             )
+            if event.http is not None:
+                # The existing request owns its actual wire header, including
+                # intentional absence or an application-selected/spoofed value.
+                user_agent = event.http.user_agent
             proxy_referrer = _source_native_http_referrer(
                 user_agent,
                 proxy_referrer,
@@ -5313,6 +5397,7 @@ class NetworkTransactionPlanner:
             uri=uri,
             version="1.1",
             user_agent=ua,
+            user_agent_is_generated_default=not bool(process_ua),
             request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
             response_body_len=resp_body_len,
             status_code=status_code,
@@ -5470,6 +5555,7 @@ class NetworkTransactionPlanner:
             event.http is not None
             and event.network.protocol == "tcp"
             and event.network.conn_state == "SF"
+            and not event.network.application_layer_only
         ):
             event.network.duration = self._completed_http_duration_seconds(
                 request,
@@ -5536,11 +5622,13 @@ class NetworkTransactionPlanner:
                 event.network.orig_bytes,
                 event.network.orig_pkts,
                 rng,
+                retransmitted="T" in (event.network.history or ""),
             )
             event.network.resp_ip_bytes = _tcp_ip_byte_count(
                 event.network.resp_bytes,
                 event.network.resp_pkts,
                 rng,
+                retransmitted="t" in (event.network.history or ""),
             )
 
     def _plan_network_protocol_evidence(
@@ -5698,6 +5786,16 @@ class NetworkTransactionPlanner:
                 rng=rng,
             )
 
+        # Automatic HTTP evidence may be assembled after process attribution and
+        # after proxy planning. Rebind its generated profile default now that the
+        # final canonical process owner is available, before source fan-out.
+        if event.http is not None and endpoints.source_system is not None:
+            self._bind_browser_user_agent_to_process(
+                event=event,
+                source_system=endpoints.source_system,
+                hostname=event.http.host or endpoints.hostname or "",
+            )
+
         if not facts.suppress_application_side_effects:
             _attach_http_file_transfers(
                 event,
@@ -5751,7 +5849,9 @@ class NetworkTransactionPlanner:
                 network_point_expires_at=boundary.network_runtime.window_end,
             )
 
+        event.network.history = native_connection_history(event.network.history or "")
         _align_tcp_network_payload_with_history(event.network, rng)
+        event.network.history = native_connection_history(event.network.history or "")
         if facts.preserve_explicit_payload:
             _preserve_explicit_tcp_payload_overrides(
                 event.network,
@@ -5827,16 +5927,20 @@ class NetworkTransactionPlanner:
             if event.network.duration is not None
             else None
         )
-        if (
-            event.network.service
-            and event.network.protocol != "icmp"
-            and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) == 0
-        ):
-            # Zeek's conn.log service field records a protocol analyzer that
-            # confirmed payload parsing, not a well-known-port guess. Retain
-            # the requested service while planning children, then clear it at
-            # the canonical boundary when no application bytes were observed.
-            event.network.service = ""
+        from evidenceforge.generation.activity.network_transport import (
+            confirmed_service_for_payload,
+        )
+
+        # Preserve service intent throughout construction, then publish only
+        # confirmation supported by the settled canonical payload/history facts.
+        event.network.service = confirmed_service_for_payload(
+            event.network.service,
+            protocol=event.network.protocol,
+            history=event.network.history,
+            orig_bytes=event.network.orig_bytes or 0,
+            resp_bytes=event.network.resp_bytes or 0,
+            missed_bytes=event.network.missed_bytes,
+        )
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
         if event.network.protocol in {"tcp", "udp"} and not event.network.application_layer_only:
@@ -5923,16 +6027,9 @@ class NetworkTransactionPlanner:
                         canonical_start + minimum_request_gap,
                     )
                 else:
-                    delay_ms = 12 + (
-                        _stable_seed(
-                            "http_request_after_transport:"
-                            f"{event.network.src_ip}:{event.network.src_port}:"
-                            f"{event.network.dst_ip}:{event.network.dst_port}:"
-                            f"{canonical_start.isoformat()}"
-                        )
-                        % 74
+                    application_request_time = canonical_start + self._http_request_phase_delay(
+                        request
                     )
-                    application_request_time = canonical_start + timedelta(milliseconds=delay_ms)
                 if canonical_close is not None:
                     available = canonical_close - canonical_start
                     application_request_time = min(
@@ -5949,6 +6046,34 @@ class NetworkTransactionPlanner:
                 )
             else:
                 application_request_time = canonical_start
+
+        if event.http is not None and event.network.application_layer_only:
+            parent = executor.state_manager.get_connection(event.network.conn_id)
+            if parent is None:
+                raise StateError("HTTP application child has no canonical capture transport")
+            capture = parent.http_capture_transaction
+            if capture is None:
+                raise StateError("HTTP application child lost its frozen physical capture basis")
+            request_offset = event.http.request_stream_offset
+            response_offset = event.http.response_stream_offset
+            if request.explicit_proxy_request_preparation is not None:
+                snapshot = request.explicit_proxy_request_preparation.snapshot.application_snapshot
+                request_offset = snapshot.reserved_initiator_bytes
+                response_offset = snapshot.reserved_responder_bytes
+            elif request.prepared_application_token is not None:
+                snapshot = request.prepared_application_token.application_token._expected_snapshot
+                if snapshot is None:
+                    raise StateError("Prepared HTTP child lost its authenticated byte offsets")
+                request_offset = snapshot.reserved_initiator_bytes
+                response_offset = snapshot.reserved_responder_bytes
+            event.http = replace(
+                event.http,
+                capture_traffic=capture.traffic,
+                capture_history=capture.history,
+                capture_transaction_id=capture.stable_id,
+                request_stream_offset=request_offset,
+                response_stream_offset=response_offset,
+            )
 
         phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
         if any((event.dns, event.http, event.ssl, event.smtp, event.proxy)) and not (
@@ -6205,10 +6330,32 @@ class NetworkTransactionPlanner:
                 SessionActivityPatch,
             )
 
-            process_identity = executor.state_manager.get_process_identity(
-                endpoints.resolved_source_system.hostname,
+            source_host = endpoints.resolved_source_system.hostname
+            occurrence_owner = executor.state_manager.get_process_identity_at(
+                source_host,
                 publication_inputs.pid,
+                publication_inputs.event.network.started_at,
             )
+            live = executor.state_manager.get_process(source_host, publication_inputs.pid)
+            latest_identity = (
+                executor.state_manager.get_process_identity(source_host, publication_inputs.pid)
+                if live is not None
+                else None
+            )
+            process_identity = (
+                latest_identity
+                if latest_identity is not None
+                and occurrence_owner is not None
+                and latest_identity.object_id == occurrence_owner.object_id
+                and (
+                    publication_inputs.process_ctx is None
+                    or publication_inputs.process_ctx.start_time is None
+                    or publication_inputs.process_ctx.start_time == occurrence_owner.started_at
+                )
+                else None
+            )
+            # Retained historical attribution describes past evidence. It cannot
+            # mutate an ended owner or a later lifetime that reused the PID.
             activity_time = (
                 publication_inputs.event.network.closed_at
                 or publication_inputs.event.network.started_at
@@ -7029,7 +7176,7 @@ class NetworkTransactionPlanner:
             publication_inputs.generic_ssh_preauth_pid is not None
             and endpoints.target_system is not None
         ):
-            executor._emit_generic_ssh_preauth_failure_syslog(
+            executor._emit_generic_ssh_preauth_syslog(
                 target_system=endpoints.target_system,
                 target_host=endpoints.dst_host_ctx,
                 time=publication_inputs.event.timestamp,

@@ -17,6 +17,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.schemas import SmbArrivalProfile
 from evidenceforge.utils.rng import _stable_seed
 
 _PROFILES_PATH = get_activity_directory() / "host_activity_profiles.yaml"
@@ -77,6 +78,11 @@ def load_host_activity_profiles() -> dict[str, Any]:
         deep_merge_dict,
     )
     return _CACHED_DATA
+
+
+def smb_arrival_profile() -> SmbArrivalProfile:
+    """Read validated arrival shape from the frozen host-activity policy."""
+    return SmbArrivalProfile.model_validate(load_host_activity_profiles().get("smb_arrivals", {}))
 
 
 def reset_cache() -> None:

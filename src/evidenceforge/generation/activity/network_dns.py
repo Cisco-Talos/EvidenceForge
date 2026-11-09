@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 
 from evidenceforge.events.contexts import (
     DnsContext,
 )
+from evidenceforge.generation.dns_rdata import dns_txt_character_strings
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -70,9 +70,8 @@ def _dns_rr_rdata_size(query_type: str, answer: str) -> int:
         if len(parts) >= 2:
             return _dns_name_wire_size(parts[0]) + _dns_name_wire_size(parts[1]) + 20
         return max(24, len(answer.encode("utf-8", errors="ignore")))
-    if query_type == "TXT":
-        text_len = len(answer.encode("utf-8", errors="ignore"))
-        return text_len + max(1, math.ceil(text_len / 255))
+    if query_type in {"TXT", "SPF"}:
+        return sum(1 + len(part.encode("utf-8")) for part in dns_txt_character_strings(answer))
     return max(4, len(answer.encode("utf-8", errors="ignore")))
 
 
@@ -129,8 +128,9 @@ def _dns_payload_accounting(
     duration: float | None,
     orig_bytes: int | None,
     resp_bytes: int | None,
+    proto: str = "udp",
 ) -> tuple[float | None, int, int]:
-    """Normalize DNS conn.log payload accounting to the DNS transaction."""
+    """Account for a DNS message and its transport-specific framing."""
     query = dns.query or ""
     query_type = (dns.query_type or "").upper()
     response_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
@@ -150,7 +150,9 @@ def _dns_payload_accounting(
             response=False,
         )
     )
-    normalized_orig = max(28, min(query_payload_size, 1232))
+    normalized_orig = max(
+        28, query_payload_size if proto == "tcp" else min(query_payload_size, 1232)
+    )
 
     if not has_response:
         normalized_resp = 0
@@ -160,7 +162,16 @@ def _dns_payload_accounting(
             question_size=question_size,
             query_type=query_type,
         )
-        normalized_resp = max(40, min(response_payload_size, 1232))
+        normalized_resp = max(
+            40, response_payload_size if proto == "tcp" else min(response_payload_size, 1232)
+        )
+
+    if proto == "tcp":
+        # RFC1035 section4.2.2: each DNS message carries a two-octet
+        # length prefix in the TCP stream. An absent response has no prefix.
+        normalized_orig += 2
+        if has_response:
+            normalized_resp += 2
 
     normalized_duration = duration
     if dns.rtt is not None:

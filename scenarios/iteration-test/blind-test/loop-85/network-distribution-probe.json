@@ -1,0 +1,26 @@
+{
+  "window_utc": "2026-11-02T14:30:00Z/2026-11-02T14:45:00Z",
+  "zeek_core": {
+    "connection_count": 2093,
+    "source_10_10_3_10": 1528,
+    "matching_nmap_target_subnet_and_ports": 1268
+  },
+  "zeek_dmz": {
+    "connection_count": 2029,
+    "source_10_10_3_10": 1547,
+    "matching_nmap_target_subnet_and_ports": 1271
+  },
+  "visible_endpoint_scan_processes": [
+    {
+      "pid": 2705081,
+      "command_line": "nmap -sn 10.10.2.0/24",
+      "timestamp": "2026-11-02T14:39:52.139Z"
+    },
+    {
+      "pid": 2705106,
+      "command_line": "nmap -Pn -sT -p 22,80,443,445,3306 10.10.2.0/24",
+      "timestamp": "2026-11-02T14:40:04.742Z"
+    }
+  ],
+  "classification": "The main source/target/port tuple surge is visibly correlated with the authored endpoint Nmap sweep; no generation change selected."
+}

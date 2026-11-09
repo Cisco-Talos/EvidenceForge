@@ -1,0 +1,18 @@
+schema_version: "1.0"
+profiles:
+  gzip:
+    output_size_log10:
+      min: 4.0
+      max: 6.8
+  tar:
+    output_size_log10:
+      min: 4.0
+      max: 7.6
+  zip:
+    output_size_log10:
+      min: 4.0
+      max: 7.4
+  powershell_compress_archive:
+    output_size_log10:
+      min: 4.0
+      max: 7.4

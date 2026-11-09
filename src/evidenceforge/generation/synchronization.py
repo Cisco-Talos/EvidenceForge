@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from threading import Condition, Lock, RLock
+from threading import Condition, Lock, RLock, get_ident
 
 
 class MutationWatermarkGate:
@@ -20,11 +20,12 @@ class MutationWatermarkGate:
     for admission, exception cleanup and independent-instance contracts.
     """
 
-    __slots__ = ("_condition", "_readers", "_waiting_writers", "_writer")
+    __slots__ = ("_condition", "_reader_depths", "_readers", "_waiting_writers", "_writer")
 
     def __init__(self) -> None:
         self._condition = Condition(Lock())
         self._readers = 0
+        self._reader_depths: dict[int, int] = {}
         self._writer = False
         self._waiting_writers = 0
 
@@ -32,14 +33,27 @@ class MutationWatermarkGate:
         """Enter the shared mutation lane without allocating a context wrapper."""
 
         with self._condition:
-            while self._writer or self._waiting_writers:
+            thread_id = get_ident()
+            depth = self._reader_depths.get(thread_id, 0)
+            # Already admitted work must finish its nested owner operations;
+            # blocking it behind its own waiting watermark would deadlock.
+            while not depth and (self._writer or self._waiting_writers):
                 self._condition.wait()
+            self._reader_depths[thread_id] = depth + 1
             self._readers += 1
 
     def exit_mutation(self) -> None:
         """Leave one shared mutation lane entered by :meth:`enter_mutation`."""
 
         with self._condition:
+            thread_id = get_ident()
+            depth = self._reader_depths.get(thread_id, 0)
+            if not depth:
+                raise RuntimeError("Mutation admission must exit on its owning thread")
+            if depth == 1:
+                del self._reader_depths[thread_id]
+            else:
+                self._reader_depths[thread_id] = depth - 1
             self._readers -= 1
             if self._readers == 0:
                 self._condition.notify_all()

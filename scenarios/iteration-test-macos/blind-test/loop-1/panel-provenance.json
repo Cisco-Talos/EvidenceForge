@@ -1,0 +1,26 @@
+{
+  "threat_hunter": {
+    "sha256": "303501ad5f004ea83f564a7ff94c2643ba7e2899977389aa25ea26b7e6dbad18",
+    "words": 2589,
+    "fresh_context": true,
+    "data_only": true
+  },
+  "detection_engineer": {
+    "sha256": "adc26e510210749a8a51400a45b8a46cdbfa9c95a88b3dbb8de27ea241973b41",
+    "words": 3144,
+    "fresh_context": true,
+    "data_only": true
+  },
+  "network_forensics": {
+    "sha256": "7efab4ab2a054a746939e1ca500d5f8f4498e537b2ffa244c40ca1f0a77c5765",
+    "words": 2578,
+    "fresh_context": true,
+    "data_only": true
+  },
+  "host_forensics": {
+    "sha256": "2c3fec093ae426603675e898d6a214a7ae070fde37c87d75f4df317fe1c72236",
+    "words": 2723,
+    "fresh_context": true,
+    "data_only": true
+  }
+}

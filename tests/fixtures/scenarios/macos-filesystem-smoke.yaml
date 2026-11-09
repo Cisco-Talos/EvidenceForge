@@ -1,0 +1,102 @@
+# Invented, bounded packaged-runtime workload; never inspects the generating host.
+version: '1.0'
+name: macos-filesystem-smoke
+description: Native Mac process, workspace, filesystem and interactive-history smoke
+generation_seed: 373
+observation_profile: complete
+macos_process_coverage: complete
+environment:
+  description: Invented single-workstation lab for installed runtime verification
+  domain: example.test
+  users:
+    - username: alex
+      full_name: Alex Example
+      email: alex@example.test
+      primary_system: MAC-SMOKE
+  systems:
+    - hostname: MAC-SMOKE
+      ip: 192.0.2.10
+      os: macOS 27
+      os_build: modeled-macos27-arm64
+      architecture: arm64
+      type: workstation
+      assigned_user: alex
+  deployment_overrides:
+    - system: MAC-SMOKE
+      user_applications:
+        - user: alex
+          applications: [macos-terminal, vscode]
+  network:
+    segments:
+      - name: workstations
+        cidr: 192.0.2.0/24
+        exposure: internal
+        systems: [MAC-SMOKE]
+    sensors:
+      - name: core-zeek
+        type: network
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+time_window:
+  start: '2026-11-02T13:00:00Z'
+  duration: 2h
+  warmup: 1h
+baseline_activity:
+  description: Small baseline alongside explicit positive native commands
+  intensity: low
+  variation: medium
+  traffic_rates: {user_activity: 1, persona_connections: 1}
+output:
+  logs:
+    - format: ecar
+    - format: macos_endpoint_security
+    - format: macos_unified_log
+    - format: zsh_history
+    - format: zeek
+  destination: ./output
+  compression: false
+storyline:
+  - id: close-warmup
+    time: +5s
+    actor: alex
+    system: MAC-SMOKE
+    activity: Close any warmup GUI session
+    events: [{type: logoff}]
+  - id: login
+    time: +1m
+    actor: alex
+    system: MAC-SMOKE
+    activity: Open the bounded local GUI session
+    events: [{type: logon, logon_type: 2}]
+  - id: identity
+    time: +2m
+    actor: alex
+    system: MAC-SMOKE
+    activity: Run an interactive identity query
+    events:
+      - type: process
+        process_name: /usr/bin/id
+        command_line: /usr/bin/id
+        supplementary: none
+  - id: version
+    time: +3m
+    actor: alex
+    system: MAC-SMOKE
+    activity: Run an interactive OS version query
+    events:
+      - type: process
+        process_name: /usr/bin/sw_vers
+        command_line: /usr/bin/sw_vers
+        supplementary: none
+  - id: editor
+    time: +4m
+    actor: alex
+    system: MAC-SMOKE
+    activity: Keep the editor open for bounded nominal document work
+    events:
+      - type: process
+        process_name: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+        command_line: '"/Applications/Visual Studio Code.app/Contents/MacOS/Code"'
+        supplementary: none

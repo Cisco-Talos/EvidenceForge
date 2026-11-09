@@ -1,0 +1,13 @@
+{
+  "checked_clean_tcp_address_answers": 8,
+  "impossible_response_payloads": 1,
+  "examples": [
+    {
+      "sensor": "zeek-core",
+      "dns_line": 2174,
+      "uid": "CRkx67bXuEAx6OIOJY",
+      "response_bytes": 25,
+      "absolute_minimum": 29
+    }
+  ]
+}

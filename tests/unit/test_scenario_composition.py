@@ -84,6 +84,9 @@ _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")
 _NORTHSTAR_LINUX = Path("tests/fixtures/scenarios/northstar-health-linux-pack.yaml")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ITERATION_ARCHIVE = _PROJECT_ROOT / "tests/fixtures/scenarios/iteration-test-1_0/scenario.yaml"
+_ITERATION_PRE_MACOS = (
+    _PROJECT_ROOT / "tests/fixtures/scenarios/iteration-test-pre-macos/scenario.yaml"
+)
 _ITERATION_PACKED = _PROJECT_ROOT / "scenarios/iteration-test/scenario.yaml"
 
 
@@ -130,7 +133,7 @@ def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> Non
     """The current assessment retains its archive while adding explicit coverage."""
 
     archived = compile_scenario(_ITERATION_ARCHIVE, project_root=_PROJECT_ROOT)
-    packed = compile_scenario(_ITERATION_PACKED, project_root=_PROJECT_ROOT)
+    packed = compile_scenario(_ITERATION_PRE_MACOS, project_root=_PROJECT_ROOT)
 
     assert packed.scenario.environment.users == archived.scenario.environment.users
     assert packed.scenario.baseline_activity == archived.scenario.baseline_activity
@@ -187,6 +190,31 @@ def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> Non
         assigned_personas.isdisjoint(traffic["data"]["audience"])
         for traffic in packed.effective_config.catalogs["traffic_catalog"].values()
     )
+
+    current = compile_scenario(_ITERATION_PACKED, project_root=_PROJECT_ROOT)
+    current_users = {user.username: user for user in current.scenario.environment.users}
+    assert all(current_users[user.username] == user for user in packed.scenario.environment.users)
+    assert set(current_users) - {user.username for user in packed.scenario.environment.users} == {
+        "maya.ross"
+    }
+    current_hosts = {system.hostname for system in current.scenario.environment.systems}
+    assert current_hosts - packed_hosts == {"MAC-MROSS-01", "MAC-MROSS-02"}
+    assert packed_hosts <= current_hosts
+    assert current.scenario.baseline_activity == packed.scenario.baseline_activity
+    assert current.scenario.time_window.duration == packed.scenario.time_window.duration
+    assert current.scenario.time_window.warmup == packed.scenario.time_window.warmup
+    current_storyline = {event.id: event for event in current.scenario.storyline}
+    assert packed_storyline_ids <= current_storyline.keys()
+    assert all(
+        current_storyline[event.id] == event
+        for event in packed.scenario.storyline
+        if event.id != "evt-005"  # The raw Apache record follows the new collection epoch.
+    )
+    assert current.scenario.red_herrings == packed.scenario.red_herrings
+    assert {log["format"] for log in current.scenario.output.logs} == {
+        log["format"] for log in packed.scenario.output.logs
+    } | {"macos_endpoint_security", "macos_unified_log", "zsh_history"}
+    assert current.selected_packs == packed.selected_packs
 
 
 def test_organization_pack_brings_exact_industry_and_environment() -> None:

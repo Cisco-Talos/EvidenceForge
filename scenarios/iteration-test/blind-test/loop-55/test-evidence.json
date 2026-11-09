@@ -1,0 +1,8 @@
+{
+  "focused": "131 emitter/frozen-lock +126 source timing/cohort +163 selected slow =420 passing checks",
+  "new_cases": "5 protected timing cases: admission reordering, mixed raw/frozen, legacy prior state, memory and spool output",
+  "fixture_corrections": "New fixture first used an obsolete marker and raw admission strips private markers; corrected to model trusted canonical renderer marker. Earlier raw repair test was mislabeled frozen with a nonmatching marker; retained as raw compatibility. ICMP typed fixture updated to OTH/no-history from50.",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "selected_slow": "163 Windows source-finalization/exact projection tests passed, no coverage"
+}

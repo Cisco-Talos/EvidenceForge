@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 prerelease published and verified; stable target 2.2.0
+**Status:** 2.2.0a4 published; 2.2.0a5 source prepared and source-launched Studio accepted; integration and final-snapshot release gates remain; stable target 2.2.0
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-14
+**Last Roadmap Review:** 2026-10-21
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -71,6 +71,232 @@ Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
+
+- [x] **P1 — Alpha-5 source-launched Studio acceptance:** On November 9 the user
+  reported Studio testing is fine after chat-engine alignment, request feedback,
+  Environment inspection retention and the IOS XE/XR classification correction.
+  Final integration and exact-release-snapshot automated gates remain separate.
+  See the [release handoff](docs/worklog/2026-11-07-alpha5-readiness.md).
+
+- [x] **P0 — Restore integrated MacOS-test acceptance:** Revision 482 passes the
+  unchanged workload with 200/200 native forks, 256/256 execs, 176/176 known exits,
+  all 85 authored Mac starts and zero same-profile browser overlaps. Evaluation
+  passes at 95.70 across 251,687 records; combined workstation and positive
+  filesystem exact recovery/filter checks pass. Shared launch preflight and
+  event-time process/network ownership address the causes. Broader catalog
+  audit across platforms, user acceptance and release gates remain separate. See the
+  [fresh acceptance worklog](docs/worklog/2026-11-06-macos-final-acceptance.md).
+
+- [x] **P1 — Standard Mac app/tool launch qualification:** All sixteen standard/default
+  persona profiles pass native launch preflight. Fifteen installed CLI/runtime images
+  have functional tests and repeated startup-signing checks; four desktop mains use
+  user-accepted provisional research models. Query admission, bundled Python shell
+  ownership and PowerShell's real image/exec environment are repaired. Full helper
+  graphs, exact build parity and broader catalog behavior remain separate. See the
+  [catalog worklog](docs/worklog/2026-11-07-macos-catalog-qualification.md) and
+  [metadata scope](docs/design/macos-workstation-feasibility/catalog-native-metadata.md).
+
+- [ ] **P2 — Audit the entire application catalog on every supported platform:**
+  Perform specific installations and execution tests for Windows, Linux and macOS
+  catalog apps/tools/runtimes. Review paths, versions, executable/signing metadata,
+  launch ownership, argv, helpers, completion and process/network attribution;
+  replace research/model assumptions with measured contracts where practical.
+  The user accepts provisional researched desktop-app metadata for this release.
+  Current Mac qualification evidence and remaining assumptions are tracked in the
+  [catalog worklog](docs/worklog/2026-11-07-macos-catalog-qualification.md).
+
+- [x] **P1 — Bounded Mac background/helper expansion:** Shared pre-window root
+  cfprefsd/launchservicesd and qualified VS Code main/helpers now use canonical
+  ownership and recovery. Browser instance ownership and process/network attribution
+  are repaired. Docker Desktop and broader helper populations remain explicitly
+  deferred; additional installations are not required for this release. See the
+  [research scope](docs/design/macos-workstation-feasibility/background-process-research.md)
+  and [follow-through worklog](docs/worklog/2026-11-06-macos-realism-follow-through.md).
+
+- [x] **P1 — Bounded native Mac filesystem integration:** Controlled create,
+  modified-close, rename/replacement and unlink references now drive canonical
+  file/process identity and native/eCAR rendering, including positive VS Code save
+  activity and exact recovery/filter tests. Broader reads, mapping and filesystem
+  artifacts remain outside scope. See the same follow-through worklog.
+
+- [ ] **P2 — Recalibrate Mac-inclusive memory forecasts:** Compare forecasts with
+  retained measurements of Mac native/process/helper workloads, including peak live
+  process-tree RSS and checkpoint hydration. The bounded 26-hour three-host probe
+  reaches about 320 MiB, slightly above its 314 MiB upper estimate; the earlier
+  six-host MacOS-test run showed a larger miss. Improve per-family budgeting using
+  representative measured inputs; do not present forecast ranges as hard capacity
+  guarantees. See the [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
+
+- [ ] **P2 — Retire owned Windows/Sysmon scratch after checkpoint operations:**
+  A verified 26-hour mixed-fleet suspend/verify/resume run leaves four owned SQLite
+  spool directories (about 7.5 MiB allocated) after successful completion. Preserve
+  immutable recovery and source-finalization safety while releasing obsolete runtime
+  scratch from suspension and verification; add exact owned-path/identity cleanup
+  checks. Keep this distinct from broader spool relocation. Evidence is in the
+  [alpha-5 readiness worklog](docs/worklog/2026-11-07-alpha5-readiness.md).
+
+- [x] **P0 — Native Mac mounted-SMB helper coverage:** Mounted-share helpers now use
+  the supported native process lifecycle. The fixed Mac-inclusive assessment keeps
+  complete fork/exec/exit coverage and matches all eleven mounted-helper exits in
+  loop62, with zero aggregate births. Native identity chronology was repaired
+  separately in loop64. See the [loop worklog](docs/worklog/2026-11-05-iteration-test-loops44-63.md).
+- [x] **P0 — Native Mac identity chronology:** Loop64 assigns public generations from
+  one canonical chronological allocation ledger while preserving immutable planning
+  reservations and proofs. Fresh data has zero reversals across 219 new allocations,
+  1,608 consistent token references and 117 matching native/eCAR exec transitions.
+  Exact checkpoint/resume and native-only filter equivalence pass; source dictionary/
+  array tokens, schema types and rollback remain covered. This closes the observed
+  chronology defect, not broader claims about hidden host churn or native fidelity.
+  See the [new loop worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
+- [x] **P0 — Mac process-start coverage:** The bounded two-Mac workstation matrix now
+  reconciles every in-window canonical fork/exec, rejects unsupported starts, and passes
+  combined exact recovery/filter equivalence with positive background activity. The quiet
+  primary remains separately reported. See the [contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md),
+  [recovery acceptance](scenarios/macos-workstation-recovery/README.md) and
+  [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [x] **P0 — Actual MacOS-test start coverage:** The unchanged November 4 workload now
+  passes complete ES coverage: 229/229 forks, 291/291 execs, zero aggregate starts,
+  all 85 authored Mac starts and all 291 eCAR exec transitions independently matched.
+  Root caller/job ownership, literal argv, Homebrew tools and fifteen existing GUI
+  main templates are repaired. This is start-coverage acceptance; unknown exits,
+  runtime model choices and exact vendor-build limits remain explicit. See the same
+  [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [x] **P1 — Mac walkthrough defects:** Revision 381 constrains successful sleep completion
+  and requires canonical interactive-shell eligibility for history. Unchanged MacOS-test
+  now measures 600.005884 seconds for sleep-600; all thirteen removed history entries
+  belong to noninteractive SSH commands that remain in ES. Start coverage remains complete.
+  See the same [worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [x] **P1 — Actual MacOS-test exit completeness:** The approved ordinary-close model and
+  canonical command/accounting repairs now publish all 200 in-window exits, with exact
+  eCAR lifetime/final-execution matches and zero unknown results. All 23 existing failed
+  PostgreSQL/MySQL attempts have nonzero native results. Start coverage remains 229/229
+  forks, 291/291 execs and 85/85 authored starts. See the same worklog.
+- [ ] Finish user acceptance of the finite Mac endpoint delivery sequence: supported
+  process starts/exits, reference-qualified minimum Unified Log coverage and combined
+  recovery/filter verification now pass within the documented scope. No open-ended
+  catalog expansion or repeated blind-assessment loop. Scope and
+  evidence blockers are fixed in the [delivery plan](docs/design/macos-workstation-feasibility/endpoint-delivery-acceptance.md)
+  and the same worklog. New SSH/launchd ULF templates require bounded native references;
+  existing ES-only references do not close those gates. Ordinary-verbosity SSH accepted
+  authentication is implemented; the user retained that verbosity and left VERBOSE
+  session messages gated on November 3. Launchd ULF remains unqualified after a
+  final corrected capture with passing controls/cleanup and zero qualifying rows.
+  The finite collection sequence has ended; no diagnostic-file source is implicitly added.
+  On November 4 the user agreed to keep that family gated and requested a fresh
+  `MacOS-test` regeneration/review before accepting the approach. Do not open a PR
+  into `dev` until the user is satisfied with that result.
+
+- [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
+  canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
+  checkpoint/resume now pass; see the [coverage worklog](docs/worklog/2026-10-27-macos-native-coverage.md).
+
+- [x] **P1** Add current-profile Mac command coverage diagnostics, qualified plain nested-shell
+  producers and mixed-workload acceptance. Shared passive Zeek histories and bounded Mac query
+  timing were repaired after the first panel. This is bounded engineering acceptance, with no
+  renewed authenticity claim. See the same coverage worklog and the
+  [next GUI launch reference proposal](docs/design/macos-workstation-feasibility/gui-launch-reference-plan.md).
+
+- [ ] **P1 — Baseline-volume feasibility warning:** Replace the storyline-count-only
+  warning with an estimate that accounts for environment size, collection duration,
+  benign authored activity and evidence expansion. Reconcile the validator's
+  500:1 low-intensity target with the evaluator's 200:1 target through one owned
+  policy, and distinguish the rough record-to-storyline proxy from actual
+  benign-to-attack volume. The Mac-inclusive iteration benchmark warns at 107
+  entries despite its preceding output scoring 100 for volume adequacy (1208:1).
+  Keep its baseline unchanged while this diagnostic repair is deferred; see the
+  [promotion worklog](docs/worklog/2026-11-05-iteration-test-promotion.md).
+- [x] **P1 — Canonical HTTP request-target normalization:** Loop47 separates navigation
+  URLs from wire targets and Referers before shared HTTP/proxy construction; encoded
+  fragments and query strings retain their meaning. Family probes and focused tests
+  cover both source views. See the same [loop worklog](docs/worklog/2026-11-05-iteration-test-loops44-63.md).
+- [x] **P1 — Native TCP counter projections:** Loop45 separates sequence-derived stream
+  extent from captured payload/packet ledgers, including application children sharing
+  a transport. Legacy observations preserve unknown extent rather than inventing it.
+  HTTP file/body gap reconciliation is recorded separately below.
+- [x] **P0 — TCP capture-loss packet/history accounting:** Loop49 enforces physical
+  packet minima for observed exclusive history classes through the shared network
+  observation owner and SMB rebinding. Fresh family probes retain zero qualified
+  contradictions; see the same loop worklog.
+- [x] **P1 — HTTP file/body/transport loss semantics:** A frozen physical capture basis
+  and channel-owned byte spans now reconcile transport loss, file completeness and
+  recognized HTTP body gaps. Loop68 retains zero body/direction/aggregate-budget defects
+  across 501 qualified entities. Compression, raw omissions and analyzer-local gaps remain
+  separate qualifications. See the [new worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
+- [ ] **P1 — Application-bound proxy request identity:** Loop63 finds seven exact-tuple
+  browser-family mismatches and 29 Zoom-owned CONNECT flows carrying mixed Edge/Firefox
+  identities. Bind actual client/process identity before request header, byte budget and
+  proxy affinity freeze; preserve loop57's agreement between finalized source views.
+  Known browser/helper defaults now bind before freeze: loop68 has zero family mismatches
+  across 802 joined browser flows. Nonbrowser application routing and mobile/default agents
+  remain open, including 44 Zoom-owned browser-header flows. Preserve actual client intent
+  and explicit header overrides rather than inventing a vendor agent or blanking the field.
+  Header overrides/intermediaries remain alternatives, so qualify the intended client model.
+  See the [new worklog](docs/worklog/2026-11-06-iteration-test-loops64-68.md).
+- [x] **P1 — Site-owned web asset identity:** Default resource size/content identity now
+  belongs to its origin/path; explicit shared resources retain shared bytes. Loop68 has
+  47 favicon sizes across 47 hosts and eight logo sizes across eight hosts; the modeled
+  common font stays shared. Same-site repeats remain stable. See the same new worklog.
+- [x] **P1 — Windows logon failure-condition semantics:** A typed canonical condition
+  supplies main status, specific substatus and the matching native resource reason.
+  Microsoft documentation confirms the previous lockout resource was wrong for the
+  generic disabled-account failure. Loop68 has zero mismatches across 20 failures,
+  retaining disabled-state normalization. See the same new worklog.
+- [x] **P0 — MySQL protocol confirmation prerequisites:** Canonical finalization now
+  separates a requested service from supported analyzer confirmation. Fresh full-open,
+  no-gap exchanges require the configured payload directions; malformed/client-only
+  and banner-only bytes remain intact without an unsupported MySQL label. Loop68 has
+  zero violations across 492 qualified sensor observations; midstream/gapped evidence
+  remains qualified. See the same new worklog and tagged Zeek 8.0.5 references there.
+- [x] **P1 — Native Mac inode allocation chronology:** Installed-file identity now
+  follows existing modeled birth chronology instead of lexical path order. Both Mac
+  inventories retain stable metadata and zero birth-order inversions; exact native
+  recovery/filter checks pass. Dense allocation is still a bounded model, not full APFS
+  fidelity. See the same new worklog.
+- [ ] **P1 — Interactive workflow pacing:** Replace repeated approximately 96-second
+  editor/build launch slots with task/completion/think-time ownership, preserving
+  explicitly intended automation. Two independent reviewers identify the same measured
+  developer burst in loops66–67. Verify the planner rather than adding emitter jitter.
+  See the same new worklog.
+- [ ] **P1 — UDP source-state lifetime and duration:** Separate ASA datagram state
+  expiration from application completion, qualifying configured idle policy, DNS inspection
+  and exceptional removal. Reconcile Zeek duration presence with measured elapsed time
+  rather than one-way state labels. Loop67 finds 11 same-second UDP syslog state deletions
+  and systematic one-way duration omissions. See the same new worklog.
+- [ ] **P1 — Windows session bootstrap ownership:** Verify and repair the session-specific
+  SMSS parent across local and RDP bootstrap paths, preserving canonical identities and
+  source agreement. Loop65 identifies 24 Winlogon creations on six hosts sharing one
+  per-host parent across distinct terminal sessions. See the same new worklog.
+- [ ] **P1 — Browser instance lifecycle:** Model persistent browser ownership per host,
+  user and resolved user-data directory, with short forwarding invocations for additional
+  windows when appropriate. Loop65 finds seven visibly overlapping Mac roots and a Windows
+  sibling; retain profile-isolation alternatives and authored process intent. See the same
+  new worklog.
+- [ ] **P1 — Linux logind allocation chronology:** Replace the elapsed-time-derived
+  eight/nine-IDs-per-minute model with actual modeled session allocation ownership,
+  including supported background sessions. Loop64 measures near-clock progression on
+  three hosts. Preserve rollback, out-of-order planning and recovery; do not conceal the
+  pattern with arbitrary gaps. See the same new worklog.
+- [ ] **P2 — Bounded source follow-ups:** Qualify snapd task IDs and stateful daemon
+  diagnostics; inspect Windows registry actor authority and request/use timing; review
+  Mac short-utility outcomes and terminal ancestor-close fences. Keep version, collection,
+  blocking and asynchronous-reporting alternatives explicit. Evidence and ranked scope
+  remain in the same new worklog rather than a growing roadmap history.
+- [ ] **P1** Investigate the repeated Windows process-birth readiness floor through its activity
+  and timing owners. The historical panel identifies 14 Windows births in two milliseconds;
+  retain startup and collection alternatives. The separate bounded Mac query timing repair
+  is recorded in the current coverage worklog above. See the same assessment.
+- [ ] **P1** Migrate the Mac branch's remaining continuous timing-RNG call sites to the
+  shared timing owner and reconcile moved selectors without weakening the inventory cap.
+  The slow static guard has nine pre-existing excess calls; the November 4 exit repair
+  adds none. See the [Mac worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+- [ ] **P2** Add native sqlcmd process/network correlation with explicit endpoint ownership.
+  Keep the new network action independent of
+  later activity selection/ownership; prototype failures and scope are recorded in the
+  same Mac worklog. This is separate from the supported workload's exit-completeness gate.
+- [ ] **P1/P2** Correct native SMB service-type and NTP reference-ID semantics through the
+  protocol facts/projection owners after qualifying the exporter contract. Keep broader
+  HTTP owner and remote-auth visibility findings as qualified leads, not assumed defects.
+  See the same assessment for primary references, scope and remaining uncertainty.
 
 - [x] **P1** Include verified published Schema 3 industry/organization packs in CLI discovery
   and dependency locking, with exact references, isolated integrity findings and consistent
@@ -235,6 +461,22 @@ Windows maintenance cadence/runtime, and source-aware LSASS call traces. Keep
 further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
+
+- [ ] **P2 — Revamp OS-family modeling and classification:** Evaluate an explicit typed
+  OS-family field in the scenario/system schema, retaining OS name/version/build as
+  descriptive metadata and an intentional category for network appliances/other systems.
+  Resolve platform identity once for validation, generation, deployment, storage,
+  evaluation and resource forecasting. Define conflict diagnostics, legacy-input inference
+  and migration, and corresponding Studio/skill authoring support; keep version,
+  architecture and source-capability admission separate. Field names and schema scope
+  remain design work. Keep the current classifier while this is deferred; the motivating
+  IOS XE/XR collision is recorded in the
+  [classification worklog](docs/worklog/2026-11-09-ios-platform-classification.md).
+
+- [x] **P2** Preserve SSH receiver evidence when filtering an external-source SSH scenario
+  from eCAR/Zeek/syslog to eCAR alone. Exact publication now supports an absent Zeek owner;
+  direct/deferred, threaded, checkpoint and fresh-process filtering regressions pass.
+  See the [Mac implementation worklog](docs/worklog/2026-10-15-macos-workstation-implementation.md).
 
 - [ ] **P2** Design and implement general authored entity availability/participation controls
   across all evidence families. Support entities appearing during a scenario without generating
@@ -530,6 +772,29 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Separate student/instructor output packages.
 
 ### Medium-Term
+
+- [x] Implement and assess the bounded macOS 26 arm64 **modeled workstation** scope,
+  including mixed-fleet benchmarks, reviewer updates, modeled SSH fork/v10, catalog and
+  owner-level repairs, filtering and exact recovery. Experimental engineering acceptance
+  is not full native fidelity or an authenticity pass. See the
+  [acceptance record](scenarios/macos-assessment/ACCEPTANCE.md) and
+  [assessment worklog](docs/worklog/2026-10-21-macos-assessment.md).
+- The active generation target has moved to **macOS 27 arm64** through a selectable
+  profile catalog; all unqualified Mac targets fail validation independently of selected sources.
+  Human-reviewed private shape evidence admits bounded v11 fork/exec/known-exit projection.
+  The fixed local/Terminal/iTerm2/Finder/Chrome/SSH/selected-system-job workload now passes
+  complete independent process-start census, filtering and exact recovery. Unknown terminal
+  outcomes, unqualified app/launch families and launchd ULF remain explicit limits. See the
+  [current delivery results](scenarios/macos-workstation-acceptance/REPORT.md) and
+  [profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
+- [x] Implement bounded macOS 27 native app-policy refusal through explicit
+  `process.outcome: policy_refused`, with canonical target PID, boot-owned kernel writer and
+  distinct sender facts. Existing pre-child/returning-exec semantics remain intact. Exact
+  cause and fork/exec stage remain unqualified; no repeat capture is required. See the
+  [acceptance and limits](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
+  Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and
+  Mac SMB serving remain outside the bounded scope. See the
+  [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md).
 
 - [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
   suitable test host is available. User explicitly deferred account creation on

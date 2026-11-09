@@ -1,0 +1,99 @@
+{
+  "previous_loops": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "historical_mean": 57.8125,
+  "historical_median": 56.625,
+  "historical_min": 40.5,
+  "historical_max": 79.5,
+  "reviewer_means": {
+    "threat_hunter": 60.45,
+    "detection_engineer": 53.65,
+    "network_forensics": 52,
+    "host_forensics": 65.15
+  },
+  "reviewer_medians": {
+    "threat_hunter": 58.5,
+    "detection_engineer": 55.0,
+    "network_forensics": 54.0,
+    "host_forensics": 66.5
+  },
+  "adjacent_previous": {
+    "schema_version": "eforge-assess-scores/v1",
+    "loop": 21,
+    "automated_eval": {
+      "score": 96.34950094006459,
+      "status": "PASS",
+      "records": 132196,
+      "interpretation": "PASS / high quality",
+      "pillars": {
+        "parseability": 100.0,
+        "plausibility": 96.84083154396616,
+        "causality": 95.32696811048713,
+        "timing": 91.53775513225635
+      }
+    },
+    "blind_initial": {
+      "threat_hunter": {
+        "assessment": "Inconclusive",
+        "verdict_confidence": 82,
+        "synthetic_confidence": 32,
+        "interpretation": "mixed/inconclusive",
+        "report_path": "threat-hunter.md"
+      },
+      "detection_engineer": {
+        "assessment": "Plausible",
+        "verdict_confidence": 84,
+        "synthetic_confidence": 28,
+        "interpretation": "mostly realistic",
+        "report_path": "detection-engineer.md"
+      },
+      "network_forensics": {
+        "assessment": "Synthetic",
+        "verdict_confidence": 95,
+        "synthetic_confidence": 88,
+        "interpretation": "confidently synthetic",
+        "report_path": "network-forensics.md"
+      },
+      "host_forensics": {
+        "assessment": "Inconclusive",
+        "verdict_confidence": 86,
+        "synthetic_confidence": 50,
+        "interpretation": "mixed/inconclusive",
+        "report_path": "host-edr-forensics.md"
+      },
+      "average_synthetic_confidence": 49.5,
+      "average_interpretation": "mixed/inconclusive"
+    },
+    "deliberation": {
+      "triggered": true,
+      "reason": "Split verdicts and 60-point synthetic-confidence score spread",
+      "average_synthetic_confidence": 59.25,
+      "average_interpretation": "likely synthetic",
+      "report_path": "deliberation.md"
+    }
+  },
+  "current_average": 58.75,
+  "current_vs_loop21_delta": 9.25,
+  "current_vs_previous20_mean_delta": 0.9375,
+  "interpretation": "Same-data assessment change; no measured data-quality change. One panel does not isolate model effect from reviewer variance."
+}

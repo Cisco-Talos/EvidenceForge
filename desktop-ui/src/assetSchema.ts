@@ -29,6 +29,7 @@ export function choicesFor(schema: FieldSchema): string[] | undefined {
 }
 
 export function labelFor(name: string, schema?: FieldSchema): string {
+  if (name === "macos") return "macOS";
   return schema?.title || name.replace(/_/g, " ").replace(/^./, (first) => first.toUpperCase());
 }
 

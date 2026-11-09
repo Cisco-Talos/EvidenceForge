@@ -1,0 +1,561 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Read-only native process preparation for complete explicit runtime-file facts.
+
+This is not an ES event emitter or a sink transaction. Filesystem facts must be
+supplied explicitly; terminal devices require their own supported provider.
+"""
+
+from datetime import datetime
+from typing import Literal
+
+from evidenceforge.events.content_identity import canonical_native_path
+from evidenceforge.events.contexts import ProcessContext
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
+from evidenceforge.events.macos_process_observation import (
+    MacosGUIExecResponsibilityObservation,
+    MacosProcessCollectionObservation,
+)
+from evidenceforge.events.process_observation import ProcessRelationshipObservation
+from evidenceforge.formats.macos_endpoint_security import ESFile, ESProcess
+from evidenceforge.formats.macos_file_metadata import (
+    es_file_from_runtime_record,
+    es_script_at_execution,
+)
+from evidenceforge.formats.macos_process_snapshot import es_process_from_observations
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactVersionRegistry,
+)
+from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
+from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
+    MaterializationBatchPlan,
+    StateManager,
+)
+from evidenceforge.models.exceptions import StateError
+
+
+def prepare_installed_es_process_snapshot(
+    state: StateManager,
+    deployments: DeploymentContentRegistry,
+    *,
+    process: ProcessIdentity,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
+) -> ESProcess:
+    """Join a live installed execution to explicit occurrence-time filesystem stat.
+
+    The immutable deployment owner validates the installation and release; it
+    does not invent inode, allocation or times. A modeled filesystem caller must
+    provide those facts. No generator-host filesystem is consulted.
+    """
+    if (
+        type(state) is not StateManager
+        or type(deployments) is not DeploymentContentRegistry
+        or type(process) is not ProcessIdentity
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Installed ES preparation requires exact canonical owners")
+    collection.__post_init__()
+    at = collection.observed_at
+    with state._lock:
+        image = process.executable_version
+        if (
+            collection.process != process
+            or state._pid_os.get(process.hostname) != "macos"
+            or state.get_process(process.hostname, process.pid) is None
+            or not state.is_process_active_at(process.hostname, process.pid, at)
+            or state.get_process_identity(process.hostname, process.pid) != process
+            or image is None
+            or image.identity_kind != "installed_release"
+        ):
+            raise StateError("Installed ES preparation requires its exact live loaded execution")
+        relationships = state.observe_process_relationships(process, observed_at=at)
+        return _project_installed_process(
+            deployments,
+            relationships,
+            collection,
+            metadata=metadata,
+            filesystem=filesystem,
+            version=version,
+        )
+
+
+def _project_installed_process(
+    deployments: DeploymentContentRegistry,
+    relationships: ProcessRelationshipObservation,
+    collection: MacosProcessCollectionObservation,
+    *,
+    version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
+    gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
+) -> ESProcess:
+    process = collection.process
+    image = process.executable_version
+    if image is None or image.identity_kind != "installed_release":
+        raise StateError("Installed ES preparation requires its exact loaded release")
+    installation = deployments.installation_for_image(
+        process.hostname, process.image, "macos", principal=process.principal
+    )
+    binary = deployments.resolve_binary(
+        process.hostname, process.image, "macos", principal=process.principal
+    )
+    if installation is None or binary is None or binary.content_id != image.content_id:
+        raise StateError("Installed ES preparation lost its exact deployed release")
+    if filesystem is not None:
+        if type(filesystem) is not MacosInstalledFilesystem or metadata is not None:
+            raise StateError("Installed ES preparation requires one exact filesystem fact owner")
+        metadata = filesystem.observe(
+            deployments, process, observed_at=collection.observed_at
+        ).metadata
+    try:
+        executable = MacosInstalledFileObservation(
+            installation, binary, process.image, collection.observed_at, metadata
+        )
+        context = ProcessContext(
+            process.pid,
+            process.parent_pid,
+            process.image,
+            process.command_line,
+            process.principal,
+            logon_id=process.logon_id,
+            start_time=process.started_at,
+            binary_identity=binary,
+        )
+        return es_process_from_observations(
+            relationships,
+            collection,
+            context,
+            executable,
+            version=version,
+            gui_responsibility=gui_responsibility,
+        )
+    except ValueError as error:
+        raise StateError(f"Incomplete installed ES process facts: {error}") from error
+
+
+def prepare_runtime_es_process_snapshot(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    process: ProcessIdentity,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Join an exact live execution to its retained file and immutable relationships.
+
+    The caller supplies explicit event-time client and terminal knowledge. State
+    owns the execution; the artifact registry owns its already-resolved version.
+    An overwritten path cannot supply replacement content. Prepare while the
+    execution is live, then retain the result for delayed rendering; this helper
+    cannot reacquire an exited process or a reused PID as the original subject.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(process) is not ProcessIdentity
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("ES process preparation requires exact canonical owners and observations")
+    collection.__post_init__()
+    at = collection.observed_at
+    with state._lock:
+        if (
+            collection.process != process
+            or state._pid_os.get(process.hostname) != "macos"
+            or state.get_process(process.hostname, process.pid) is None
+            or not state.is_process_active_at(process.hostname, process.pid, at)
+            or state.get_process_identity(process.hostname, process.pid) != process
+        ):
+            raise StateError("ES process preparation requires its exact live Mac execution")
+        relationships = state.observe_process_relationships(process, observed_at=at)
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def prepare_planned_runtime_es_process_snapshot(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Prepare a new Mac process before commit using authenticated State birth facts.
+
+    The executable must already be retained. Parent/session/responsible owners
+    may be already published or explicit births in the same sealed cohort. The
+    caller must still revalidate and atomically publish the process and source
+    transaction. A successful projection is not a commit authorization.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Planned ES preparation requires exact canonical owners and observations")
+    collection.__post_init__()
+    with state._lock:
+        relationships = state.observe_planned_process_relationships(
+            cohort, process=collection.process
+        )
+        process = relationships.parent.process
+        if collection.process != process or collection.observed_at != process.started_at:
+            raise StateError("Planned ES preparation requires the exact process birth observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def _project_runtime_process(
+    artifacts: LocalArtifactVersionRegistry,
+    relationships: ProcessRelationshipObservation,
+    collection: MacosProcessCollectionObservation,
+    *,
+    version: int,
+    gui_responsibility: MacosGUIExecResponsibilityObservation | None = None,
+) -> ESProcess:
+    process = collection.process
+    image = process.executable_version
+    if image is None or image.identity_kind != "local_artifact":
+        raise StateError("ES process preparation requires a known runtime executable version")
+    assert image.artifact_version_id is not None
+    record = artifacts.resolve_version(image.artifact_version_id)
+    if record is None:
+        raise StateError("ES process preparation requires its exact retained executable version")
+    placement = artifacts.observe_macos_file_placement(
+        image.artifact_version_id, collection.observed_at
+    )
+    if placement is None:
+        raise StateError(
+            "Incomplete ES runtime process facts: requires known retained executable placement"
+        )
+    context = ProcessContext(
+        pid=process.pid,
+        parent_pid=process.parent_pid,
+        image=process.image,
+        command_line=process.command_line,
+        username=process.principal,
+        logon_id=process.logon_id,
+        start_time=process.started_at,
+        binary_identity=record.binary,
+    )
+    try:
+        return es_process_from_observations(
+            relationships,
+            collection,
+            context,
+            placement,
+            version=version,
+            gui_responsibility=gui_responsibility,
+        )
+    except ValueError as error:
+        raise StateError(f"Incomplete ES runtime process facts: {error}") from error
+
+
+def prepare_runtime_es_exec_script(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    process: ProcessIdentity,
+) -> ESFile | None:
+    """Prepare known script facts for the exact live execution before delayed rendering.
+
+    A reference must already be retained by its artifact owner. This helper neither
+    interprets commands nor extends retention nor admits a native event family.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(process) is not ProcessIdentity
+    ):
+        raise StateError("ES script preparation requires exact canonical owners")
+    with state._lock:
+        if (
+            state._pid_os.get(process.hostname) != "macos"
+            or state.get_process_identity(process.hostname, process.pid) != process
+            or not state.is_process_active_at(
+                process.hostname, process.pid, process.execution_started_at
+            )
+        ):
+            raise StateError("ES script preparation requires its exact live Mac execution")
+        return project_runtime_es_exec_script(artifacts, process)
+
+
+def project_runtime_es_exec_script(
+    artifacts: LocalArtifactVersionRegistry | None, process: ProcessIdentity
+) -> ESFile | None:
+    """Project exact script placement for a live or State-authenticated planned exec.
+
+    This read-only join grants no State authority. The caller must authenticate
+    the execution. Known absence stays distinct from missing script history.
+    """
+    if type(process) is not ProcessIdentity or process.exec_script is None:
+        raise StateError("ES script preparation requires explicitly known script facts")
+    script = process.exec_script
+    if script.artifact_version_id is None:
+        return es_script_at_execution(process)
+    if type(artifacts) is not LocalArtifactVersionRegistry:
+        raise StateError("ES script placement requires its runtime artifact owner")
+    placement = artifacts.observe_macos_file_placement(
+        script.artifact_version_id, process.execution_started_at
+    )
+    if placement is None:
+        raise StateError("Incomplete ES script facts: exact file placement is unavailable")
+    try:
+        return es_script_at_execution(process, placement)
+    except ValueError as error:
+        raise StateError(f"Incomplete ES script facts: {error}") from error
+
+
+def prepare_planned_runtime_es_source(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    source: Literal["fork", "exec"],
+    version: int,
+    fork_child: ProcessIdentity | None = None,
+) -> ESProcess:
+    """Prepare the performing execution using the same mixed-cohort relationship view.
+
+    The exact fork child or before-exec identity selects its canonical occurrence.
+    This freezes source bytes without publishing any process or collector state.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+        or type(source) is not str
+        or source not in {"fork", "exec"}
+    ):
+        raise StateError("Planned ES source requires exact canonical owners and a transition")
+    collection.__post_init__()
+    with state._lock:
+        if source == "fork":
+            if type(fork_child) is not ProcessIdentity:
+                raise StateError("Planned ES fork source requires its exact selected child")
+            relationships = state.observe_planned_fork_parent_relationships(
+                cohort, child=fork_child
+            )
+        else:
+            relationships = state.observe_planned_execution_relationships(
+                cohort, process=collection.process, source=True
+            )
+        if (
+            relationships.parent.process != collection.process
+            or relationships.parent.observed_at != collection.observed_at
+        ):
+            raise StateError("Planned ES source requires its exact transition observation")
+        return _project_runtime_process(
+            artifacts,
+            relationships,
+            collection,
+            version=version,
+            gui_responsibility=(
+                _planned_gui_exec_responsibility(cohort, collection, version=version)
+                if source == "exec"
+                else None
+            ),
+        )
+
+
+def _planned_gui_exec_responsibility(
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    *,
+    version: int,
+) -> MacosGUIExecResponsibilityObservation | None:
+    """Sample only the preimage of an already State-authenticated GUI exec.
+
+    Call under the same State boundary as relationship observation. The sealed
+    GUI session authority selects this path; an image name or PID alone cannot.
+    Target/exit snapshots and ordinary execs keep their canonical token mapping.
+    """
+    execution = next(
+        item for item in cohort.process_executions if item.target == collection.process
+    )
+    if execution.gui_session is None:
+        return None
+    if version != 11:
+        raise StateError("GUI responsibility sampling requires the reviewed v11 profile")
+    try:
+        return MacosGUIExecResponsibilityObservation.from_transition(
+            execution.target, execution.after
+        )
+    except ValueError as error:
+        raise StateError(f"Incomplete GUI responsibility observation: {error}") from error
+
+
+def prepare_planned_runtime_es_exec_target(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Prepare a complete process target for one sealed exec without replacing live State.
+
+    This is a process snapshot, not an ES exec event or event-family admission.
+    Full exec fields, collector sequencing and atomic native publication remain
+    separate owners. A prepared result supplies no authority to commit the cohort.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Planned ES exec target requires exact canonical owners")
+    collection.__post_init__()
+    with state._lock:
+        relationships = state.observe_planned_execution_relationships(
+            cohort, process=collection.process
+        )
+        target = relationships.parent.process
+        if collection.process != target or collection.observed_at != target.execution_started_at:
+            raise StateError("Planned ES exec target requires its exact execution observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def prepare_planned_runtime_es_terminal_process(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Freeze one terminal process snapshot before the canonical lifetime closes.
+
+    A process snapshot is distinct from an exit event. Explicit outcome facts,
+    target-version wire admission and atomic sink publication remain required.
+    No unknown exit status, collector membership or file fact is synthesized.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Planned ES terminal process requires exact canonical owners")
+    collection.__post_init__()
+    with state._lock:
+        relationships = state.observe_planned_termination_relationships(
+            cohort, process=collection.process
+        )
+        if (
+            collection.process != relationships.parent.process
+            or collection.observed_at != relationships.parent.observed_at
+        ):
+            raise StateError("Planned ES terminal process requires its exact terminal observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def prepare_planned_installed_es_process_snapshot(
+    state: StateManager,
+    deployments: DeploymentContentRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan | MaterializationBatchPlan,
+    collection: MacosProcessCollectionObservation,
+    phase: Literal["birth", "exec", "terminal", "exec_source", "fork_source"],
+    fork_child: ProcessIdentity | None = None,
+    version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
+) -> ESProcess:
+    """Prepare an installed process at an explicitly selected canonical transition.
+
+    Deployment resolves the retained release/placement; a modeled filesystem
+    owner must still supply exact stat. The selected sealed State boundary owns
+    birth/exec/terminal time and relationships, with its existing composition
+    limits. This helper grants no native event admission or commit authority.
+    """
+    if (
+        type(state) is not StateManager
+        or type(deployments) is not DeploymentContentRegistry
+        or type(cohort) not in {ActionCohortMaterializationPlan, MaterializationBatchPlan}
+        or type(collection) is not MacosProcessCollectionObservation
+        or type(phase) is not str
+        or phase not in {"birth", "exec", "terminal", "exec_source", "fork_source"}
+    ):
+        raise StateError("Planned installed ES process requires exact canonical owners and phase")
+    collection.__post_init__()
+    if type(cohort) is MaterializationBatchPlan and phase not in {"birth", "fork_source"}:
+        raise StateError("Deferred installed ES observation supports its initial fork only")
+    with state._lock:
+        if phase == "birth":
+            relationships = state.observe_planned_process_relationships(
+                cohort, process=collection.process
+            )
+        elif phase in {"exec", "exec_source"}:
+            relationships = state.observe_planned_execution_relationships(
+                cohort, process=collection.process, source=phase == "exec_source"
+            )
+        elif phase == "fork_source":
+            if type(fork_child) is not ProcessIdentity:
+                raise StateError("Planned installed fork source requires its exact selected child")
+            relationships = state.observe_planned_fork_parent_relationships(
+                cohort, child=fork_child
+            )
+        else:
+            relationships = state.observe_planned_termination_relationships(
+                cohort, process=collection.process
+            )
+        if (
+            collection.process != relationships.parent.process
+            or collection.observed_at != relationships.parent.observed_at
+        ):
+            raise StateError("Planned installed ES process requires its exact phase observation")
+        return _project_installed_process(
+            deployments,
+            relationships,
+            collection,
+            metadata=metadata,
+            filesystem=filesystem,
+            version=version,
+            gui_responsibility=(
+                _planned_gui_exec_responsibility(cohort, collection, version=version)
+                if phase == "exec_source"
+                else None
+            ),
+        )
+
+
+def validate_runtime_es_executable_snapshot(
+    artifacts: LocalArtifactVersionRegistry | None,
+    process: ProcessIdentity,
+    observed_at: datetime,
+    snapshot: ESProcess,
+) -> None:
+    """Reject pending runtime native bytes after their canonical placement changes.
+
+    This is a validation contract, not an action trigger or a registry claim.
+    Installed stat remains an explicit observation owned by its separate producer.
+    Completed source bytes are historical and must not be revalidated here.
+    """
+    reference = process.executable_version
+    if reference is None:
+        raise StateError("Native executable placement requires a loaded reference")
+    if reference.identity_kind == "installed_release":
+        return
+    if type(artifacts) is not LocalArtifactVersionRegistry:
+        raise StateError("Native executable placement lost its runtime artifact owner")
+    assert reference.artifact_version_id is not None
+    placement = artifacts.observe_macos_file_placement(reference.artifact_version_id, observed_at)
+    if (
+        placement is None
+        or placement.reference.artifact.hostname != process.hostname.casefold()
+        or placement.reference.artifact.normalized_native_path
+        != canonical_native_path(process.image, "macos")
+        or es_file_from_runtime_record(placement.placed) != snapshot.executable
+    ):
+        raise StateError("Native executable placement changed after source preparation")

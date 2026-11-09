@@ -13,11 +13,13 @@ from typing import cast
 
 from evidenceforge.events.content_identity import (
     Architecture,
+    LocalArtifactBinaryIdentity,
     Platform,
     UnresolvedBinaryIdentity,
     canonical_native_path,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.generation.actions import (
     ExecutionEffectNode,
     ExecutionEffectPlan,
@@ -60,6 +62,10 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
+from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+)
 from evidenceforge.generation.activity.service_process_profiles import matching_service_worker
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -68,6 +74,7 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     RuntimeContentOwnerError,
+    runtime_executable_lease_owner,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime, TimingSampler
@@ -285,6 +292,7 @@ class ProcessPreflightPlanner:
             root_binary_publication = self._reserve_root_binary(
                 request, anchor, selection, endpoint, reservations, newly_reserved
             )
+            root_script_publication = self._reserve_root_script(request, selection, newly_reserved)
             return ProcessExecutionPreparedEffects(
                 root_anchor=anchor,
                 actor=selection.actor,
@@ -293,6 +301,7 @@ class ProcessPreflightPlanner:
                 lifetime_plan=lifetime.lifetime_plan,
                 provisional_termination=lifetime.termination_time,
                 root_binary_publication=root_binary_publication,
+                root_script_publication=root_script_publication,
             )
         except RuntimeContentOwnerError as exc:
             if runtime_content_manager is not None:
@@ -334,7 +343,13 @@ class ProcessPreflightPlanner:
             "psexesvc.exe",
             "healthmonitorsvc.exe",
         }
-        if request.ensure_file_event and not bundle_owned_service_payload:
+        if (
+            request.ensure_file_event
+            and not bundle_owned_service_payload
+            and os_category != "macos"
+        ):
+            # A Mac execution does not establish installation or a self-write.
+            # Its files require explicit command/artifact effects below.
             lower_path = process_name.lower()
             windows_path = lower_path.replace("/", "\\")
             is_system_binary = (
@@ -656,6 +671,26 @@ class ProcessPreflightPlanner:
                         platform,
                     ) == canonical_native_path(selection.actor.image, platform)
                     executable = same_as_actor_image and effective_architecture is not None
+                    authored_size_bytes = None
+                    if effect.spec.instance_key == "semantic-command-file" and payload.action in {
+                        FileEffectAction.CREATE,
+                        FileEffectAction.MODIFY,
+                    }:
+                        from evidenceforge.generation.activity.process_output_profiles import (
+                            process_output_size_bytes,
+                        )
+
+                        authored_size_bytes = process_output_size_bytes(
+                            process_name=selection.actor.image,
+                            command_line=selection.actor.command_line,
+                            stable_id=f"{anchor.action_id}:{effect.spec.instance_key}:{payload.path}",
+                        )
+                    observed_at = effect.spec.occurrence_times[0]
+                    deadline = (
+                        self._runtime_executable_deadline(observed_at, platform)
+                        if executable
+                        else None
+                    )
                     publication = runtime_content_manager.prepare_effect_publication(
                         root_action_id=anchor.action_id,
                         stable_source_id=(
@@ -668,7 +703,16 @@ class ProcessPreflightPlanner:
                         architecture=effective_architecture,
                         native_path=payload.path,
                         action=payload.action.value,
-                        observed_at=effect.spec.occurrence_times[0],
+                        observed_at=observed_at,
+                        retention=deadline - observed_at if deadline is not None else None,
+                        lease_owner=(
+                            runtime_executable_lease_owner(request.system.hostname, deadline)
+                            if deadline is not None
+                            else ""
+                        ),
+                        lease_until=(
+                            deadline + timedelta(microseconds=1) if deadline is not None else None
+                        ),
                         owner_kind=_runtime_artifact_owner_kind(
                             platform,
                             selection.actor.username,
@@ -677,6 +721,7 @@ class ProcessPreflightPlanner:
                         deployment_registry=deployment_registry,
                         actor_image=selection.actor.image,
                         executable=executable,
+                        authored_size_bytes=authored_size_bytes,
                     )
                     if publication is not None:
                         newly_reserved.append(publication)
@@ -809,6 +854,26 @@ class ProcessPreflightPlanner:
                 selection.actor.image,
                 platform,
             )
+            deadline = self._runtime_executable_deadline(selection.actor.started_at, platform)
+            if (
+                not endpoint_has_binary
+                and type(resolved_binary) is LocalArtifactBinaryIdentity
+                and deadline is not None
+            ):
+                record = runtime_content_manager.registry.resolve_version(
+                    resolved_binary.artifact_version_id
+                )
+                if record is None or record.binary != resolved_binary:
+                    raise StateError("Loaded executable retention lost its exact runtime version")
+                root_binary_publication = runtime_content_manager.registry.prepare_publish_version(
+                    record,
+                    selection.actor.started_at,
+                    retention=deadline - selection.actor.started_at,
+                    lease_owner=runtime_executable_lease_owner(request.system.hostname, deadline),
+                    lease_until=deadline + timedelta(microseconds=1),
+                    require_existing=True,
+                )
+                newly_reserved.append(root_binary_publication)
             if not endpoint_has_binary and isinstance(
                 resolved_binary,
                 UnresolvedBinaryIdentity,
@@ -828,6 +893,17 @@ class ProcessPreflightPlanner:
                     native_path=selection.actor.image,
                     action="create",
                     observed_at=selection.actor.started_at,
+                    retention=(
+                        deadline - selection.actor.started_at if deadline is not None else None
+                    ),
+                    lease_owner=(
+                        runtime_executable_lease_owner(request.system.hostname, deadline)
+                        if deadline is not None
+                        else ""
+                    ),
+                    lease_until=(
+                        deadline + timedelta(microseconds=1) if deadline is not None else None
+                    ),
                     owner_kind=_runtime_artifact_owner_kind(
                         platform,
                         selection.actor.username,
@@ -844,6 +920,54 @@ class ProcessPreflightPlanner:
                     )
                 newly_reserved.append(root_binary_publication)
         return root_binary_publication
+
+    def _reserve_root_script(
+        self,
+        request: ProcessExecutionRequest,
+        selection: SelectedProcessEffects,
+        newly_reserved: list[LocalArtifactPublishToken],
+    ) -> LocalArtifactPublishToken | None:
+        """Retain one explicitly supplied existing shebang file, never infer its role."""
+        script = request.exec_script
+        if script is None or script.artifact_version_id is None:
+            return None
+        manager = self._runtime_content_manager
+        deadline = self._runtime_executable_deadline(
+            selection.actor.started_at, selection.os_category
+        )
+        if manager is None or deadline is None:
+            raise StateError(
+                "Mac script launch requires runtime content and a finite retention horizon"
+            )
+        record = manager.registry.resolve_version(script.artifact_version_id)
+        if record is None or MacosExecScript.from_runtime_record(record) != script:
+            raise StateError("Mac script launch lost its exact retained file version")
+        publication = manager.registry.prepare_publish_version(
+            record,
+            selection.actor.started_at,
+            retention=deadline - selection.actor.started_at,
+            lease_owner=runtime_executable_lease_owner(request.system.hostname, deadline),
+            lease_until=deadline + timedelta(microseconds=1),
+            require_existing=True,
+        )
+        newly_reserved.append(publication)
+        return publication
+
+    def _runtime_executable_deadline(self, started_at: datetime, platform: str) -> datetime | None:
+        """Protect Mac loaded content through an explicit finite generation and history window."""
+        if platform != "macos":
+            return None
+        boundaries = tuple(
+            ensure_utc(value)
+            for value in (self._scenario_end_time, self.dispatcher.output_end_time)
+            if isinstance(value, datetime) and value.replace(tzinfo=None) != datetime.max
+        )
+        if not boundaries:
+            return None
+        horizon = min(boundaries)
+        if horizon <= ensure_utc(started_at):
+            return None
+        return self.state_manager.process_history_retained_until(horizon)
 
     @staticmethod
     def _process_endpoint_effect_rng(
@@ -902,8 +1026,8 @@ class ProcessPreflightPlanner:
                 sample_key=sample_key,
             )
 
-        if os_category != "linux" or not _linux_shell_process_reserves_foreground(
-            actor.image, actor.command_line
+        if os_category not in {"linux", "macos"} or not _posix_shell_process_reserves_foreground(
+            os_category, actor.image, actor.command_line
         ):
             return None
         actor_exe = actor.image.rsplit("/", 1)[-1].lower()
@@ -965,6 +1089,19 @@ class ProcessPreflightPlanner:
         os_category = _get_os_category(request.system.os)
         if os_category == "windows":
             return _windows_process_lifetime_plan(actor.image, actor.command_line)
+        if os_category == "macos":
+            lifetime = _posix_foreground_lifetime(os_category, actor.image, actor.command_line)
+            if lifetime is not None:
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.BOUNDED,
+                    minimum_seconds=lifetime[0],
+                    maximum_seconds=lifetime[1],
+                    classification="macos-profiled-foreground-command",
+                )
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.SESSION_OWNED,
+                classification="macos-session-or-operation-process",
+            )
         if os_category == "linux":
             lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
             if lifetime is not None:

@@ -1,0 +1,99 @@
+{
+  "matched": 315,
+  "families": {
+    "Firefox": 101,
+    "Edg": 61,
+    "Chrome": 153
+  },
+  "mismatches": 134,
+  "examples": [
+    {
+      "tuple": [
+        "10.10.1.34",
+        "51064",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{5af96291-8cf5-6ae8-6300-0000fb98bf99}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        "52634",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{5af96291-8cf5-6ae8-6300-0000fb98bf99}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        "50574",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{5af96291-8cf5-6ae8-6300-0000fb98bf99}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        "49610",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{5af96291-8cf5-6ae8-6300-0000fb98bf99}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.34",
+        "60287",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{5af96291-8cf5-6ae8-6300-0000fb98bf99}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        "58396",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{f613acc2-9fcb-6ae8-7f00-0010c94419a3}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        "61599",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{f613acc2-9fcb-6ae8-7f00-0010c94419a3}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    },
+    {
+      "tuple": [
+        "10.10.1.36",
+        "64583",
+        "10.10.3.20",
+        "8080"
+      ],
+      "guid": "{f613acc2-9fcb-6ae8-7f00-0010c94419a3}",
+      "file_version": "120.0.6099.225",
+      "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    }
+  ]
+}

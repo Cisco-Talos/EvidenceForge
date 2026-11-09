@@ -123,6 +123,24 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "bash_history",
         notes="Target-invariant shell history text.",
     ),
+    "zsh_history": TargetFormatPolicy(
+        "zsh_history",
+        "extended_incremental",
+        "extended_incremental",
+        notes="Experimental native history text; SIEM ingestion is not validated.",
+    ),
+    "macos_unified_log": TargetFormatPolicy(
+        "macos_unified_log",
+        "ndjson",
+        "ndjson",
+        notes="Experimental workspace-entry export; external SIEM ingestion is not validated.",
+    ),
+    "macos_endpoint_security": TargetFormatPolicy(
+        "macos_endpoint_security",
+        "ndjson",
+        "ndjson",
+        notes="Experimental modeled v10 fork export; external SIEM ingestion is not validated.",
+    ),
     "snort_alert": TargetFormatPolicy("snort_alert", "fast_alert", "fast_alert"),
     "cisco_asa": TargetFormatPolicy(
         "cisco_asa",

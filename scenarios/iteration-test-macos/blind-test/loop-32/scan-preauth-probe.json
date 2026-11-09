@@ -1,0 +1,27 @@
+{
+  "scan_processes": 1,
+  "scan_flows": 1263,
+  "unknown_auth_from_scan_host": [],
+  "unnamed_preauth_closures": [
+    [
+      "LOG-MON-01.meridianhcs.local/syslog.log",
+      119,
+      "<86>1 2026-11-02T14:40:37.360705Z LOG-MON-01 sshd 705201 - - Connection closed by 10.10.3.10 port 42865 [preauth]"
+    ],
+    [
+      "PROXY-01.meridianhcs.local/syslog.log",
+      121,
+      "<86>1 2026-11-02T14:27:37.941775Z PROXY-01 sshd 2379416 - - Connection closed by 10.10.3.10 port 39664 [preauth]"
+    ],
+    [
+      "FILE-LNX-01.meridianhcs.local/syslog.log",
+      179,
+      "<86>1 2026-11-02T14:40:35.834329Z FILE-LNX-01 sshd 2700893 - - Connection closed by 10.10.3.10 port 47335 [preauth]"
+    ],
+    [
+      "APP-INT-01.meridianhcs.local/syslog.log",
+      105,
+      "<86>1 2026-11-02T14:40:39.696878Z APP-INT-01 sshd 2946353 - - Connection closed by 10.10.3.10 port 58416 [preauth]"
+    ]
+  ]
+}

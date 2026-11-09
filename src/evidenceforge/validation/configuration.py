@@ -332,6 +332,7 @@ def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any
         "policy_decision_after_request_ms",
         "dns_query_after_decision_ms",
         "tls_after_origin_connect_ms",
+        "origin_request_after_setup_ms",
         "origin_service_ms",
         "client_flush_after_response_ms",
         "terminal_response_after_decision_ms",
@@ -1114,12 +1115,18 @@ def _validate_effective_configuration(
         load_process_access_patterns,
     )
     from evidenceforge.generation.activity.process_network import load_process_network_map
+    from evidenceforge.generation.activity.process_output_profiles import (
+        load_process_output_profiles,
+    )
     from evidenceforge.generation.activity.proxy_phase_profiles import load_proxy_phase_profiles
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.public_identity_profiles import (
         load_public_identity_profiles,
+    )
+    from evidenceforge.generation.activity.runtime_executable_profiles import (
+        load_runtime_executable_profiles,
     )
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
@@ -1171,6 +1178,47 @@ def _validate_effective_configuration(
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = deepcopy(load_timing_profiles())
     web_session_profiles_data = load_web_session_profiles()
+    from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
+        load_macos_endpoint_security_profile,
+    )
+    from evidenceforge.generation.activity.macos_execution_metadata import (
+        load_macos_execution_metadata_profile,
+    )
+    from evidenceforge.generation.activity.macos_installed_files import (
+        load_macos_installed_file_profile,
+    )
+    from evidenceforge.generation.activity.macos_unified_log_profiles import (
+        load_macos_unified_log_profiles,
+    )
+
+    try:
+        load_macos_endpoint_security_profile()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue("ERROR", "macos_endpoint_security_profiles.yaml", f"invalid ES profile: {exc}")
+        )
+    try:
+        load_macos_execution_metadata_profile()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "macos_execution_metadata.yaml",
+                f"invalid execution metadata profile: {exc}",
+            )
+        )
+    try:
+        load_macos_installed_file_profile()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue("ERROR", "macos_installed_files.yaml", f"invalid installed-file profile: {exc}")
+        )
+    try:
+        load_macos_unified_log_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue("ERROR", "macos_unified_log_profiles.yaml", f"invalid native log profile: {exc}")
+        )
     try:
         load_smb_profiles()
     except ValidationError as exc:
@@ -1179,6 +1227,26 @@ def _validate_effective_configuration(
                 "ERROR",
                 "smb_profiles.yaml",
                 f"invalid SMB profiles config: {exc}",
+            )
+        )
+    try:
+        load_process_output_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "process_output_profiles.yaml",
+                f"invalid process output profile: {exc}",
+            )
+        )
+    try:
+        load_runtime_executable_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "runtime_executable_profiles.yaml",
+                f"invalid runtime executable profile: {exc}",
             )
         )
     storage_catalog_data = _load_catalog_config()
@@ -1773,6 +1841,49 @@ def _validate_dns_and_ids(
                             f'Domain "{domain}" class "{domain_class}" uses browser-like path "{path}"',
                         )
                     )
+    browser_families = proxy_ua_data.get("browser_process_families", {})
+    from evidenceforge.config.schemas import BrowserProfileRoots
+
+    browser_roots = proxy_ua_data.get("browser_profile_roots", {})
+    if not isinstance(browser_roots, dict):
+        result.issues.append(
+            Issue("ERROR", "proxy_user_agents.yaml", "Browser profile roots must be a mapping")
+        )
+    else:
+        for family, roots in browser_roots.items():
+            try:
+                BrowserProfileRoots.model_validate(roots)
+            except ValidationError:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_user_agents.yaml",
+                        f"Invalid browser profile roots for {family}",
+                    )
+                )
+    if not isinstance(browser_families, dict):
+        result.issues.append(
+            Issue("ERROR", "proxy_user_agents.yaml", "Browser process families must be a mapping")
+        )
+        browser_families = {}
+    seen_executables: set[str] = set()
+    for family, executables in browser_families.items():
+        if (
+            family not in {"chrome", "edge", "firefox", "safari", "opera"}
+            or not isinstance(executables, list)
+            or not executables
+            or any(type(exe) is not str or not exe.strip() for exe in executables)
+        ):
+            result.issues.append(
+                Issue("ERROR", "proxy_user_agents.yaml", "Invalid browser process family aliases")
+            )
+            continue
+        aliases = {exe.casefold() for exe in executables}
+        if len(aliases) != len(executables) or seen_executables.intersection(aliases):
+            result.issues.append(
+                Issue("ERROR", "proxy_user_agents.yaml", "Browser process aliases must be unique")
+            )
+        seen_executables.update(aliases)
     proxy_ua_hosts: set[str] = set()
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         for override in proxy_ua_data.get("domain_overrides", {}).values():
@@ -1884,6 +1995,16 @@ def _validate_timing_profiles(
                         "ERROR",
                         "timing_profiles.yaml",
                         f'Relationship "{rel_name}" max_ms must be a non-negative integer',
+                    )
+                )
+            if rel_name == "posix.foreground_shell_resume" and (
+                type(min_ms) is not int or min_ms <= 0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "posix.foreground_shell_resume requires a positive min_ms",
                     )
                 )
             if isinstance(min_ms, int) and isinstance(max_ms, int) and max_ms < min_ms:
@@ -2147,7 +2268,10 @@ def _validate_timing_profiles(
                         )
                     )
                     continue
-                for os_name in ("windows", "linux"):
+                for os_name in ("windows", "linux", "macos"):
+                    # Existing two-platform overlays retain their zero-clock Mac fallback.
+                    if os_name == "macos" and os_name not in profile_data:
+                        continue
                     os_profile = profile_data.get(os_name)
                     if not isinstance(os_profile, dict):
                         result.issues.append(
@@ -2175,7 +2299,7 @@ def _validate_timing_profiles(
                             continue
                         min_value = bounds.get("min")
                         max_value = bounds.get("max")
-                        if not isinstance(min_value, int) or min_value < minimum:
+                        if type(min_value) is not int or min_value < minimum:
                             result.issues.append(
                                 Issue(
                                     "ERROR",
@@ -2184,7 +2308,7 @@ def _validate_timing_profiles(
                                     f"{profile_name}.{os_name}.{field_name}.min must be an integer >= {minimum}",
                                 )
                             )
-                        if not isinstance(max_value, int) or max_value > maximum:
+                        if type(max_value) is not int or max_value > maximum:
                             result.issues.append(
                                 Issue(
                                     "ERROR",
@@ -2194,8 +2318,8 @@ def _validate_timing_profiles(
                                 )
                             )
                         if (
-                            isinstance(min_value, int)
-                            and isinstance(max_value, int)
+                            type(min_value) is int
+                            and type(max_value) is int
                             and max_value < min_value
                         ):
                             result.issues.append(
@@ -2824,10 +2948,12 @@ def _validate_process_chains(
     sys_proc_data: dict[str, Any],
 ) -> None:
     """Validate process chains in the established diagnostic order."""
+    from evidenceforge.generation.activity.application_catalog import child_image_from_command
+
     # --- Checks 18-20: Process Chain ---
     # Collect all exe basenames from spawn rules
     spawn_children: set[str] = set()
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         for _parent, parent_data in os_rules.items():
             if isinstance(parent_data, dict):
                 for child in parent_data.get("children", []):
@@ -2835,12 +2961,19 @@ def _validate_process_chains(
 
     # Collect all exe basenames from app catalog
     catalog_exes: set[str] = set()
+    persona_exes: set[str] = set()
     for app in apps:
-        for platform in app.get("platforms", {}).values():
+        for platform_name, platform in app.get("platforms", {}).items():
             image_path = platform.get("image_path", "")
             if image_path:
                 basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                 catalog_exes.add(basename)
+                if app.get("personas"):
+                    persona_exes.add(basename)
+                for command in platform.get("children", ()):
+                    child_image = child_image_from_command(platform_name, command, image_path)
+                    basename = child_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                    catalog_exes.add(basename)
 
     # sys_proc_data loaded above via overlay-aware loader
     system_exes: set[str] = set()
@@ -2880,14 +3013,16 @@ def _validate_process_chains(
 
     # Check 19: Missing spawn rules (apps not in any spawn rule, case-insensitive)
     spawn_all_entries: set[str] = set()
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         spawn_all_entries.update(os_rules.keys())
         for parent_data in os_rules.values():
             if isinstance(parent_data, dict):
                 spawn_all_entries.update(parent_data.get("children", []))
     spawn_all_entries_lower = {e.lower() for e in spawn_all_entries}
 
-    for exe in catalog_exes:
+    # Catalog-only service identities are available for reference validation,
+    # but empty persona eligibility does not promise baseline spawning.
+    for exe in sorted(persona_exes):
         if exe.lower() not in spawn_all_entries_lower:
             result.issues.append(
                 Issue(
@@ -3047,6 +3182,7 @@ def _validate_reachability(
         "dba",
         "webadmin",
         "security",
+        "help_desk_server",
     }
     from evidenceforge.generation.activity.bash_commands import load_bash_commands
 
@@ -3499,7 +3635,7 @@ def _validate_merged_schemas(
 
     # spawn_rules.yaml: spawn rule entries
     all_spawn_entries = []
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         for _parent, parent_data in os_rules.items():
             if isinstance(parent_data, dict):
                 all_spawn_entries.append(parent_data)
@@ -3967,10 +4103,15 @@ def _collect_network_parameter_schema_checks(
     """Validate network parameter families at the original loader and diagnostic boundary."""
     from evidenceforge.config.schemas import (
         DnsTunnelRttConfig,
+        HttpRequestPhaseConfig,
+        HttpTransportFloorSlackConfig,
         NmapCommandProbeConfig,
         OuiEntry,
+        ProtocolConfirmationConfig,
         PublicDnsResolverEntry,
         PublicNtpServerEntry,
+        SslHistoryEntry,
+        TransportHistoryEntry,
         validate_entry,
     )
 
@@ -3979,6 +4120,43 @@ def _collect_network_parameter_schema_checks(
 
     net_params = load_network_params()
     if net_params:
+        for family, names, model in (
+            ("transport_histories", ("tcp", "udp"), TransportHistoryEntry),
+            (
+                "ssl_histories",
+                ("tls12_full", "tls12_resumed", "tls13_full", "tls13_resumed", "failure"),
+                SslHistoryEntry,
+            ),
+        ):
+            profiles = net_params.get(family, {})
+            for name in names:
+                rows = profiles.get(name) if isinstance(profiles, dict) else None
+                if not isinstance(rows, list) or not rows:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"network_params.yaml ({family}.{name})",
+                            "expected a nonempty weighted history list",
+                        )
+                    )
+                else:
+                    schema_checks.append((rows, model, f"network_params.yaml ({family}.{name})"))
+        err = validate_entry(
+            net_params.get("http_transport_floor_slack", {}),
+            HttpTransportFloorSlackConfig,
+            "network_params.yaml (http_transport_floor_slack)",
+        )
+        if err:
+            result.issues.append(
+                Issue("ERROR", "network_params.yaml (http_transport_floor_slack)", err)
+            )
+        err = validate_entry(
+            net_params.get("http_request_phase", {}),
+            HttpRequestPhaseConfig,
+            "network_params.yaml (http_request_phase)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (http_request_phase)", err))
         schema_checks.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
         schema_checks.append(
             (
@@ -4008,6 +4186,13 @@ def _collect_network_parameter_schema_checks(
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
+        err = validate_entry(
+            net_params.get("protocol_confirmation", {}),
+            ProtocolConfirmationConfig,
+            "network_params.yaml (protocol_confirmation)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (protocol_confirmation)", err))
         _validate_dns_tunnel_parameters(
             result=result,
             net_params=net_params,

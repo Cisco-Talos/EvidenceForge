@@ -144,12 +144,12 @@ so otherwise reproducible replays need not have byte-identical manifest files.
   before treating it as an engine defect.
 
 Read only the smallest relevant reference when exact paths, fields, joins, or limitations matter:
-
 - `/eforge:references:generation-bundle-targets` for bundle paths, checkpoints, and targets.
 - `/eforge:references:checkpoint-recovery` for status, verification, drift, and safe resume.
 - `/eforge:references:evidence-windows` for Windows Security and Sysmon.
 - `/eforge:references:evidence-network-ids` for Zeek, IDS, and Cisco ASA.
 - `/eforge:references:evidence-web-email` for HTTP/files, web, proxy, email, and SMTP.
 - `/eforge:references:evidence-endpoint-linux` for eCAR, Linux syslog, and bash history.
+- `/eforge:references:evidence-endpoint-macos` for modeled Mac coverage and limits.
 
 Read `/eforge:references:record-validation` for validation policy and compatibility.

@@ -1,0 +1,20 @@
+{
+  "status": "REVIEW",
+  "acceptance_passed": false,
+  "failed_criteria": [
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 72.77486910994764,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    }
+  ],
+  "investigation": "Frozen Windows compatibility adapter defect fixed/tested, but55outputcomparison determines it did not cause this benchmark failure. Source matching/canonical no-op/scheduling truth remains under investigation; no claim of gate repair.",
+  "decision": "Preserve original failed gate and independent review, no thresholds or seeds changed."
+}

@@ -1,0 +1,18 @@
+{
+  "host": "WEB-EXT-01",
+  "source": "ecar.json",
+  "typed_pipeline_root_pid": 2702831,
+  "events": [
+    {"object": "PROCESS", "action": "CREATE", "pid": 2702831, "parent_pid": 23966, "image": "/bin/bash", "timestamp": "2026-11-02T14:20:10.078000Z"},
+    {"object": "PROCESS", "action": "CREATE", "pid": 2702832, "parent_pid": 2702831, "image": "/usr/bin/base64", "timestamp": "2026-11-02T14:20:10.122000Z"},
+    {"object": "PROCESS", "action": "CREATE", "pid": 2702833, "parent_pid": 2702831, "image": "/bin/bash", "timestamp": "2026-11-02T14:20:10.152000Z"},
+    {"object": "PROCESS", "action": "TERMINATE", "pid": 2702832, "image": "/usr/bin/base64", "timestamp": "2026-11-02T14:20:16.437000Z"},
+    {"object": "FLOW", "action": "CONNECT", "pid": 2702833, "image": "/bin/bash", "dst_ip": "45.33.32.30", "dst_port": "8443", "timestamp": "2026-11-02T14:20:21.349000Z"},
+    {"object": "PROCESS", "action": "TERMINATE", "pid": 2702833, "image": "/bin/bash", "timestamp": "2026-11-02T14:20:35.700000Z"},
+    {"object": "PROCESS", "action": "TERMINATE", "pid": 2702831, "image": "/bin/bash", "timestamp": "2026-11-02T14:20:36.690000Z"}
+  ],
+  "flow_owner_matches_final_child": true,
+  "final_child_terminates_after_flow": true,
+  "parent_terminates_after_final_child": true,
+  "parent_close_gap_ms": 990
+}

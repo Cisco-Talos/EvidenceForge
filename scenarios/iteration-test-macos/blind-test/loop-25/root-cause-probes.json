@@ -1,0 +1,18 @@
+{
+  "MAC-MROSS-02.meridianhcs.local": {
+    "paths": 33,
+    "stat_times": 132,
+    "nonzero": 87,
+    "tiny_fraction_under_1000ns": 0,
+    "zero_preserved": 45,
+    "max_ns": 961990401
+  },
+  "MAC-MROSS-01.meridianhcs.local": {
+    "paths": 32,
+    "stat_times": 128,
+    "nonzero": 94,
+    "tiny_fraction_under_1000ns": 0,
+    "zero_preserved": 34,
+    "max_ns": 946430963
+  }
+}

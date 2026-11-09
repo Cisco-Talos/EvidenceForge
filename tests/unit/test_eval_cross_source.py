@@ -52,6 +52,108 @@ CAUSALITY_SUB_SCORE_KEYS = [
 ]
 
 
+def test_mac_profile_describes_conditional_native_sources_and_actual_process_coverage() -> None:
+    from evidenceforge.evaluation.pillars.causality import _build_host_log_profile
+    from tests.unit.test_macos_installed_provisioning import _scenario
+
+    scenario = _scenario()
+    formats = {
+        "ecar",
+        "bash_history",
+        "zsh_history",
+        "macos_unified_log",
+        "macos_endpoint_security",
+    }
+    scenario.output.logs = [{"format": name} for name in sorted(formats)]
+    vis = VisibilityModel(scenario, formats)
+    records = {
+        "ecar": [
+            _record(
+                "ecar",
+                {
+                    "hostname": "MAC-01.example.test",
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "operation": "fork",
+                },
+            ),
+            _record("ecar", {"hostname": "MAC-01", "object": "PROCESS", "action": "CREATE"}),
+        ],
+        "macos_endpoint_security": [
+            ParsedRecord(
+                source_format="macos_endpoint_security",
+                raw="invented",
+                source_instance="MAC-01.example.test",
+                fields={"event_type": 11},
+            )
+        ],
+    }
+    profile = _build_host_log_profile(records, vis)["mac-01"]
+    assert profile["deployment_verified"] is True
+    assert profile["missing_formats"] == []
+    assert "macos_endpoint_security" in profile["present_formats"]
+    assert set(profile["inactive_conditional_formats"]) == {
+        "bash_history",
+        "zsh_history",
+        "macos_unified_log",
+    }
+    assert profile["process_coverage"] == {
+        "ecar_process_creates": 2,
+        "ecar_forks": 1,
+        "ecar_aggregate_creates": 1,
+        "native_es_event_11": 1,
+    }
+
+
+def test_host_profile_uses_exact_source_disablement() -> None:
+    from tests.unit.test_macos_installed_provisioning import _scenario
+
+    scenario = _scenario()
+    scenario.output.logs = [{"format": "ecar"}, {"format": "zsh_history"}]
+    from evidenceforge.models.scenario import SourceObservationOverride
+
+    scenario.environment.observation_overrides = [
+        SourceObservationOverride(source_instance="ecar:mac-01", enabled=False)
+    ]
+    vis = VisibilityModel(scenario, {"ecar", "zsh_history"})
+    assert vis.deployment_verified
+    assert vis.get_expected_formats("MAC-01") == {"zsh_history"}
+
+
+def test_process_trace_matches_exec_transition_and_quoted_history() -> None:
+    from evidenceforge.evaluation.storyline import ResolvedEvent
+
+    command = '/usr/bin/find /Users/alex/Documents -maxdepth 2 -type f -name "*.pdf"'
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="alex",
+        system="MAC-01",
+        system_ip="192.0.2.10",
+        activity="Find documents",
+        details={"process_name": "/usr/bin/find", "command_line": command},
+        event_types=["process"],
+    )
+    scorer = CausalityScorer()
+    history = _record("zsh_history", {"hostname": "MAC-01", "username": "alex", "command": command})
+    execution = _record(
+        "ecar",
+        {
+            "hostname": "MAC-01",
+            "principal": "alex",
+            "object": "PROCESS",
+            "action": "MODIFY",
+            "operation": "exec",
+            "image_path": "/usr/bin/find",
+            "command_line": command.replace('"*.pdf"', "'*.pdf'"),
+        },
+    )
+    assert scorer._record_matches(history, "zsh_history", event, "process")
+    assert scorer._record_matches(execution, "ecar", event, "process")
+    execution.fields["operation"] = "job_control"
+    assert not scorer._record_matches(execution, "ecar", event, "process")
+
+
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
     return ParsedRecord(source_format=fmt, raw="test", fields=fields, timestamp=ts)
 

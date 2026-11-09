@@ -551,6 +551,15 @@ class EvaluationEngine:
         records: dict[str, list[ParsedRecord]] = {}
         source_counts: dict[str, int] = {}
         total_records = 0
+        declared_hosts = {
+            system.hostname.casefold(): system.hostname
+            for system in self.scenario.environment.systems
+        }
+        if self.scenario.environment.domain:
+            for system in self.scenario.environment.systems:
+                if "." not in system.hostname:
+                    fqdn = f"{system.hostname}.{self.scenario.environment.domain}"
+                    declared_hosts[fqdn.casefold()] = system.hostname
 
         total_formats = len(file_map)
         for i, (format_name, paths) in enumerate(sorted(file_map.items()), 1):
@@ -580,6 +589,11 @@ class EvaluationEngine:
                     parsed.append(record)
                 for record in parsed:
                     record.source_instance = source_instance
+                    if format_name in {"macos_endpoint_security", "macos_unified_log"}:
+                        # Native exports carry no hostname. Attribute them only when
+                        # the bundle's source directory identifies a declared host;
+                        # direct exports and unknown/sensor directories stay unattributed.
+                        record.source_host = declared_hosts.get(source_instance.casefold())
                 parsed.sort(key=lambda record: (record.line_number or 0, record.raw))
                 format_records.extend(parsed)
             records[format_name] = format_records

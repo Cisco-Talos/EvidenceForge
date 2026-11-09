@@ -24,6 +24,9 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
     NetworkTuple,
+    TcpStreamExtent,
+    tcp_history_packet_minima,
+    validate_tcp_history_packets,
 )
 from evidenceforge.generation.activity.timing_profiles import (
     FirewallObservationTiming,
@@ -33,6 +36,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
 )
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
+from evidenceforge.generation.asa_semantics import asa_tcp_close_reason
 from evidenceforge.generation.source_timing import (
     SourceTimingPlan,
     SourceTimingPlanner,
@@ -82,6 +86,25 @@ def network_source_timing_key(format_name: str, object_id: str = "") -> str:
     """Return the immutable key for one sensor-native network row."""
 
     return format_name if not object_id else f"{format_name}:{object_id}"
+
+
+def plan_tcp_stream_extent(
+    canonical: NetworkTrafficLedger, protocol: str, history: str
+) -> TcpStreamExtent | None:
+    """Retain full-wire sequence extent only for source-visible complete boundaries."""
+    if protocol != "tcp":
+        return None
+    orig = (
+        canonical.orig.payload_bytes
+        if ("S" in history or "H" in history) and "F" in history
+        else None
+    )
+    resp = (
+        canonical.resp.payload_bytes
+        if ("s" in history or "h" in history) and "f" in history
+        else None
+    )
+    return None if orig is None and resp is None else TcpStreamExtent(orig, resp)
 
 
 _PERSISTENT_SMB_MAX_SCALAR = (1 << 63) - 1
@@ -141,6 +164,7 @@ _NETWORK_OBSERVATION_FIELDS = (
     "nat",
     "source_times",
     "source_durations",
+    "tcp_stream",
 )
 _NETWORK_TRANSACTION_FIELDS = (
     "stable_id",
@@ -189,6 +213,7 @@ def _persistent_smb_schema_preflight() -> None:
         (NatSensorObservation, _NAT_OBSERVATION_FIELDS),
         (FileSensorObservation, _FILE_OBSERVATION_FIELDS),
         (NetworkSensorObservation, _NETWORK_OBSERVATION_FIELDS),
+        (TcpStreamExtent, ("orig_bytes", "resp_bytes")),
         (NetworkTransactionPlan, _NETWORK_TRANSACTION_FIELDS),
         (PersistentSmbTrafficRebindBinding, _PERSISTENT_SMB_BINDING_FIELDS),
     )
@@ -287,6 +312,7 @@ def _persistent_smb_validate_final_tcp_history(
         raise ValueError(f"{label} omits originator data claimed by its traffic ledger")
     if traffic.resp_payload and "d" not in history:
         raise ValueError(f"{label} omits responder data claimed by its traffic ledger")
+    validate_tcp_history_packets(history, traffic.orig_packets, traffic.resp_packets)
 
 
 def _persistent_smb_source_key_is_visible(key: str, formats: tuple[str, ...]) -> bool:
@@ -639,6 +665,9 @@ def _preflight_persistent_smb_observation(
         f"{label}.traffic",
         budget,
     )
+    _snapshot_persistent_smb_tcp_stream(
+        object.__getattribute__(value, "tcp_stream"), f"{label}.tcp_stream", budget
+    )
     formats = object.__getattribute__(value, "visible_formats")
     budget.consume_work()
     if type(formats) is not frozenset:
@@ -881,6 +910,7 @@ class _PersistentSmbObservationFacts:
     nat: _PersistentSmbNatFacts | None = None
     source_times: tuple[tuple[str, datetime], ...] = ()
     source_durations: tuple[tuple[str, float], ...] = ()
+    tcp_stream: tuple[int | None, int | None] | None = None
 
 
 @dataclass(frozen=True, slots=True, weakref_slot=True)
@@ -913,6 +943,39 @@ class _PersistentSmbTrafficAuthorityRecord:
     transport: NetworkTransactionPlan
     observations: tuple[NetworkSensorObservation, ...]
     lossless_ordinals: tuple[int, ...]
+
+
+def _snapshot_persistent_smb_tcp_stream(
+    value: object,
+    label: str,
+    budget: _PersistentSmbAggregateBudget | None = None,
+) -> tuple[int | None, int | None] | None:
+    if budget is not None:
+        budget.consume_work()
+    if value is None:
+        return None
+    orig, resp = _persistent_smb_slots(value, TcpStreamExtent, ("orig_bytes", "resp_bytes"), label)
+    if budget is not None:
+        budget.consume_work(2)
+    return (
+        None if orig is None else _persistent_smb_int(orig, f"{label}.orig_bytes"),
+        None if resp is None else _persistent_smb_int(resp, f"{label}.resp_bytes"),
+    )
+
+
+def _persistent_smb_validate_tcp_stream(
+    canonical: NetworkTrafficLedger,
+    history: str,
+    extent: tuple[int | None, int | None] | None,
+) -> None:
+    if extent is None:
+        return
+    expected = plan_tcp_stream_extent(canonical, "tcp", history)
+    expected_values = (
+        (None, None) if expected is None else (expected.orig_bytes, expected.resp_bytes)
+    )
+    if extent != expected_values:
+        raise ValueError("Persistent TCP stream extent lost canonical boundary truth")
 
 
 def _snapshot_persistent_smb_traffic(
@@ -1355,6 +1418,7 @@ def _snapshot_persistent_smb_observation(
         nat,
         source_times,
         source_durations,
+        tcp_stream,
     ) = _persistent_smb_slots(
         value,
         NetworkSensorObservation,
@@ -1452,6 +1516,7 @@ def _snapshot_persistent_smb_observation(
             f"{label}.source_durations",
             budget,
         ),
+        tcp_stream=_snapshot_persistent_smb_tcp_stream(tcp_stream, f"{label}.tcp_stream", budget),
     )
     if facts.sensor_identity != facts.sensor_identity.strip():
         raise ValueError(f"{label} requires a canonical sensor identity")
@@ -1661,7 +1726,7 @@ def _persistent_smb_observation_digest(
     lossless: bool,
 ) -> str:
     digest = hashlib.sha256()
-    _persistent_smb_stream_field(digest, b"persistent-smb-traffic-observation-v2")
+    _persistent_smb_stream_field(digest, b"persistent-smb-traffic-observation-v3")
     _persistent_smb_stream_int(digest, ordinal)
     _persistent_smb_stream_bool(digest, lossless)
     _persistent_smb_stream_text(digest, value.sensor_identity)
@@ -1688,6 +1753,12 @@ def _persistent_smb_observation_digest(
     for key, duration in value.source_durations:
         _persistent_smb_stream_text(digest, key)
         _persistent_smb_stream_text(digest, duration.hex())
+    _persistent_smb_stream_bool(digest, value.tcp_stream is not None)
+    if value.tcp_stream is not None:
+        for extent in value.tcp_stream:
+            _persistent_smb_stream_bool(digest, extent is not None)
+            if extent is not None:
+                _persistent_smb_stream_int(digest, extent)
     return digest.hexdigest()
 
 
@@ -1963,6 +2034,7 @@ def _materialize_persistent_smb_observation(
         nat=None if facts.nat is None else facts.nat.materialize(),
         source_times=tuple(facts.source_times),
         source_durations=tuple(facts.source_durations),
+        tcp_stream=None if facts.tcp_stream is None else TcpStreamExtent(*facts.tcp_stream),
     )
 
 
@@ -2055,6 +2127,9 @@ class PersistentSmbTrafficRebindAuthority:
                 snapshot.traffic,
                 f"observations[{ordinal}]",
             )
+            _persistent_smb_validate_tcp_stream(
+                canonical.traffic.materialize(), snapshot.history, snapshot.tcp_stream
+            )
             lossless = _persistent_smb_traffic_values_equal(
                 canonical.traffic,
                 snapshot.traffic,
@@ -2118,10 +2193,20 @@ class PersistentSmbTrafficRebindAuthority:
             sensor_identities.add(sensor)
             connection_uids.add(observation.connection_uid)
             observed_traffic = _snapshot_materialized_traffic(observation.traffic)
+            validate_tcp_history_packets(
+                observation.history, observed_traffic.orig_packets, observed_traffic.resp_packets
+            )
             _persistent_smb_validate_capture(
                 canonical_traffic,
                 observed_traffic,
                 f"observations[{ordinal}]",
+            )
+            _persistent_smb_validate_tcp_stream(
+                transport.traffic,
+                observation.history,
+                _snapshot_persistent_smb_tcp_stream(
+                    observation.tcp_stream, f"observations[{ordinal}].tcp_stream"
+                ),
             )
             lossless = _persistent_smb_traffic_values_equal(
                 canonical_traffic,
@@ -2228,6 +2313,9 @@ class PersistentSmbTrafficRebindAuthority:
                     observation,
                     traffic=rebound_candidate,
                     history=_persistent_smb_history(observation.history, final_candidate),
+                    tcp_stream=plan_tcp_stream_extent(
+                        rebound_traffic, transport.protocol, observation.history
+                    ),
                 )
             )
         rebound_transport = replace(
@@ -2440,14 +2528,48 @@ class NetworkObservationPlanner:
                 observed_close,
                 scope=observation_scope,
                 runtime=runtime,
+                source_interface=(
+                    (event.firewall.src_interface if event.firewall is not None else "")
+                    or (
+                        self.visibility_engine.sensor_interface(sensor_identity, tuple_view.src_ip)
+                        if self.visibility_engine is not None
+                        else ""
+                    )
+                ),
+                destination_interface=(
+                    (event.firewall.dst_interface if event.firewall is not None else "")
+                    or (
+                        self.visibility_engine.sensor_interface(sensor_identity, tuple_view.dst_ip)
+                        if self.visibility_engine is not None
+                        else ""
+                    )
+                ),
+                security_levels=sensor.interface_security_levels if sensor is not None else None,
             )
             firewall_teardown_observed = self._before_output_end(firewall_teardown)
+            http = event.protocol.http
+            capture_traffic = (
+                http.capture_traffic
+                if http is not None and http.capture_traffic is not None
+                else transaction.traffic
+            )
+            capture_history = (
+                http.capture_history
+                if http is not None and http.capture_traffic is not None
+                else transaction.history
+            )
+            capture_identity = (
+                http.capture_transaction_id
+                if http is not None and http.capture_transaction_id
+                else transaction.stable_id
+            )
             observed_traffic = self._observed_traffic(
-                transaction.traffic,
+                capture_traffic,
                 timing,
                 sensor_identity,
-                transaction.stable_id,
+                capture_identity,
                 transaction.protocol,
+                capture_history,
             )
             history, file_observations, request_body_len, response_body_len = (
                 self._observed_protocol(event, observed_traffic)
@@ -2509,6 +2631,9 @@ class NetworkObservationPlanner:
                     ),
                     source_times=source_times,
                     source_durations=source_durations,
+                    tcp_stream=plan_tcp_stream_extent(
+                        capture_traffic, transaction.protocol, history
+                    ),
                 )
             )
         return tuple(observations)
@@ -2562,7 +2687,17 @@ class NetworkObservationPlanner:
         if network is None:
             return "", (), None, None
 
-        history = network.history
+        http = event.protocol.http
+        canonical_traffic = (
+            http.capture_traffic
+            if http is not None and http.capture_traffic is not None
+            else network.traffic
+        )
+        history = (
+            http.capture_history
+            if http is not None and http.capture_traffic is not None
+            else network.history
+        )
         if network.protocol.lower() == "tcp":
             if traffic.missed_orig_bytes > 0 and "G" not in history:
                 history += "G"
@@ -2570,18 +2705,52 @@ class NetworkObservationPlanner:
                 history += "g"
 
         orig_ratio = cls._payload_observation_ratio(
-            network.traffic.orig.payload_bytes,
+            canonical_traffic.orig.payload_bytes,
             traffic.orig.payload_bytes,
         )
         resp_ratio = cls._payload_observation_ratio(
-            network.traffic.resp.payload_bytes,
+            canonical_traffic.resp.payload_bytes,
             traffic.resp.payload_bytes,
         )
         files: list[FileSensorObservation] = []
         for transfer in event.protocol.file_transfers:
             ratio = orig_ratio if transfer.is_orig else resp_ratio
             total = transfer.total_bytes
-            if (
+            if transfer.source == "HTTP" and http is not None:
+                canonical_direction = (
+                    canonical_traffic.orig if transfer.is_orig else canonical_traffic.resp
+                )
+                directional_missed = (
+                    traffic.missed_orig_bytes if transfer.is_orig else traffic.missed_resp_bytes
+                )
+                offset = (
+                    http.request_stream_offset if transfer.is_orig else http.response_stream_offset
+                )
+                span = transfer.wire_length or transfer.seen_bytes
+                offset += transfer.wire_offset or 0
+                extent = canonical_direction.payload_bytes + (
+                    canonical_traffic.missed_orig_bytes
+                    if transfer.is_orig
+                    else canonical_traffic.missed_resp_bytes
+                )
+                # Disjoint canonical byte spans share one directional gap budget.
+                # Integer cumulative allocation avoids per-message rounding inflation.
+                if extent > 0:
+                    start = min(offset, extent)
+                    end = min(offset + span, extent)
+                    missing_wire = end * directional_missed // extent - (
+                        start * directional_missed // extent
+                    )
+                else:
+                    missing_wire = 0
+                decoded_missing = (
+                    min(transfer.seen_bytes, missing_wire * transfer.seen_bytes // span)
+                    if span > 0
+                    else 0
+                )
+                seen = transfer.seen_bytes - decoded_missing
+                missing = transfer.missing_bytes + decoded_missing
+            elif (
                 transfer.entity_body_len is not None
                 and transfer.wire_offset is not None
                 and transfer.wire_length is not None
@@ -2622,22 +2791,11 @@ class NetworkObservationPlanner:
 
         request_body_len = None
         response_body_len = None
-        http = event.protocol.http
         if http is not None:
-            canonical_request = max(
-                0,
-                http.flow_request_body_len
-                if http.flow_request_body_len is not None
-                else http.request_body_len,
-            )
-            canonical_response = max(
-                0,
-                http.flow_response_body_len
-                if http.flow_response_body_len is not None
-                else http.response_body_len,
-            )
-            request_body_len = min(http.request_body_len, int(canonical_request * orig_ratio))
-            response_body_len = min(http.response_body_len, int(canonical_response * resp_ratio))
+            # Zeek's recognized content-length/chunk gaps count toward message
+            # body length (HTTP_Entity::Undelivered), unlike file seen_bytes.
+            request_body_len = http.request_body_len
+            response_body_len = http.response_body_len
 
         return history, tuple(files), request_body_len, response_body_len
 
@@ -2755,6 +2913,9 @@ class NetworkObservationPlanner:
         *,
         scope: TimingScope,
         runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        source_interface: str = "",
+        destination_interface: str = "",
+        security_levels: Mapping[str, int] | None = None,
     ) -> tuple[str, datetime | None]:
         """Plan source-native ASA teardown time from canonical state and policy."""
 
@@ -2765,11 +2926,21 @@ class NetworkObservationPlanner:
             return "", None
         if network.protocol != "tcp":
             anchor = observed_close or observed_start
+            window = get_timing_window(
+                "source.firewall.datagram_teardown",
+                default_min_ms=1000,
+                default_max_ms=120000,
+                default_position="after",
+                default_class="teardown",
+            )
             return (
                 "",
                 runtime.sampler.after(
                     anchor,
-                    cls._right_skew_distribution(83, 8_500),
+                    cls._right_skew_distribution(
+                        window.min_ms * 1000,
+                        window.max_ms * 1000,
+                    ),
                     relationship_key="source.firewall.datagram_teardown",
                     scope=scope,
                     sample_key="datagram",
@@ -2793,12 +2964,9 @@ class NetworkObservationPlanner:
                     sample_key="syn-timeout",
                 ),
             )
-        reason = {
-            "REJ": "TCP Reset-O",
-            "RSTO": "TCP Reset-O",
-            "RSTR": "TCP Reset-I",
-            "OTH": "TCP Reset-O",
-        }.get(state, "TCP FINs")
+        reason = asa_tcp_close_reason(
+            state, network.history, source_interface, destination_interface, security_levels or {}
+        )
         if observed_close is not None:
             anchor = observed_close
             minimum_us, maximum_us = (91, 12_500)
@@ -3678,6 +3846,7 @@ class NetworkObservationPlanner:
         sensor_identity: str,
         transaction_id: str,
         protocol: str,
+        history: str = "",
     ) -> NetworkTrafficLedger:
         if protocol.lower() != "tcp":
             # The canonical ledger does not retain individual datagram sizes.
@@ -3712,10 +3881,15 @@ class NetworkObservationPlanner:
         else:
             lose_orig = has_orig
             lose_resp = has_resp
+        minimum_orig, minimum_resp = tcp_history_packet_minima(history)
         if lose_orig:
-            orig, missed_orig = cls._lose_direction(canonical.orig, timing, rng)
+            orig, missed_orig = cls._lose_direction(
+                canonical.orig, timing, rng, minimum_packets=max(1, minimum_orig)
+            )
         if lose_resp:
-            resp, missed_resp = cls._lose_direction(canonical.resp, timing, rng)
+            resp, missed_resp = cls._lose_direction(
+                canonical.resp, timing, rng, minimum_packets=max(1, minimum_resp)
+            )
         if missed_orig + missed_resp <= 0:
             return canonical
         return NetworkTrafficLedger(
@@ -3730,33 +3904,51 @@ class NetworkObservationPlanner:
         canonical: DirectionalTrafficLedger,
         timing: NetworkSensorObservationTiming,
         rng: random.Random,
+        *,
+        minimum_packets: int = 1,
     ) -> tuple[DirectionalTrafficLedger, int]:
-        if canonical.payload_bytes <= 0:
+        if canonical.payload_bytes <= 1 or canonical.packets <= minimum_packets:
+            return canonical, 0
+        # This family models partial capture. Unknown/raw ledgers lacking TCP
+        # header or MTU truth cannot authorize a new physical loss projection.
+        overhead = canonical.ip_bytes - canonical.payload_bytes
+        if overhead < 40 * canonical.packets or canonical.ip_bytes > 1500 * canonical.packets:
             return canonical, 0
         fraction = rng.uniform(
             timing.capture_loss_min_fraction,
             timing.capture_loss_max_fraction,
         )
         missed = min(
-            canonical.payload_bytes,
+            canonical.payload_bytes - 1,
             timing.capture_loss_max_missed_bytes,
             max(1, int(round(canonical.payload_bytes * fraction))),
         )
         payload = canonical.payload_bytes - missed
+        minimum_lost = max(1, math.ceil(missed / 1460))
+        maximum_lost = min(
+            canonical.packets - minimum_packets,
+            canonical.packets - max(minimum_packets, math.ceil(payload / 1460)),
+        )
+        if maximum_lost < minimum_lost:
+            return canonical, 0
         lost_packets = min(
-            canonical.packets,
-            max(1, int(round(canonical.packets * fraction))),
+            maximum_lost, max(minimum_lost, int(round(canonical.packets * fraction)))
         )
         packets = canonical.packets - lost_packets
-        header_bytes = max(0, canonical.ip_bytes - canonical.payload_bytes)
-        lost_headers = min(
-            header_bytes,
-            int(round(header_bytes * fraction)),
-        )
-        ip_bytes = canonical.ip_bytes - missed - lost_headers
-        if ip_bytes > 0 and packets == 0:
-            packets = 1
-        return DirectionalTrafficLedger(payload, packets, max(payload, ip_bytes)), missed
+        # Non-unique wire bytes include headers and any retransmitted payload.
+        # Bound both sides of the partition, instead of scaling headers by a
+        # byte fraction independently of the integer number of lost packets.
+        lower = max(40 * lost_packets, canonical.ip_bytes - missed - 1500 * packets)
+        upper = min(overhead - 40 * packets, 1500 * lost_packets - missed)
+        quantum = 4 if overhead % 4 == 0 else 1
+        lower = math.ceil(lower / quantum) * quantum
+        upper = math.floor(upper / quantum) * quantum
+        if lower > upper:
+            return canonical, 0
+        preferred = round(overhead * lost_packets / canonical.packets / quantum) * quantum
+        lost_nonunique = min(upper, max(lower, preferred))
+        ip_bytes = canonical.ip_bytes - missed - lost_nonunique
+        return DirectionalTrafficLedger(payload, packets, ip_bytes), missed
 
 
 RUNTIME_OWNED_ZEEK_FORMATS = frozenset(

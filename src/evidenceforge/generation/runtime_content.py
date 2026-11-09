@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import ntpath
 import posixpath
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -23,18 +25,27 @@ from evidenceforge.events.content_identity import (
     LocalArtifactBinaryIdentity,
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
+    MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metadata
+from evidenceforge.events.macos_file_operation import MacosFileRenameObservation
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
+    LocalArtifactPreparedGroupCommit,
+    LocalArtifactPublicationGroupReceipt,
     LocalArtifactPublishToken,
     LocalArtifactRegistryCensus,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.time import ensure_utc
 
 RuntimeArtifactOwnerKind = Literal["user", "system"]
 RuntimeFileEffectAction = Literal["create", "modify", "read", "delete"]
@@ -73,6 +84,10 @@ class RuntimeArtifactDescriptor:
     executable: bool = False
     architecture: Architecture | None = None
     pe_version_info: PeVersionInfo | None = None
+    launchd_job: LaunchdSystemJobSpec | None = None
+    macos_file: MacosFileMetadata | None = None
+    code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
 
     def __post_init__(self) -> None:
         """Fail before registry admission on incomplete or contradictory metadata."""
@@ -112,6 +127,47 @@ class RuntimeArtifactDescriptor:
             )
         if self.pe_version_info is not None and self.platform != "windows":
             raise ValueError("PE metadata is valid only for Windows runtime artifacts")
+        if (self.code_signature is not None or self.mach_o_image is not None) and (
+            not self.executable or self.platform != "macos"
+        ):
+            raise ValueError("Mach-O metadata requires an executable Mac runtime artifact")
+
+
+class PreparedMacosFileRename:
+    """Artifact-only rename capability; loaded executions retain their old version."""
+
+    __slots__ = ("_registry", "_publication")
+
+    def __init__(
+        self,
+        registry: LocalArtifactVersionRegistry,
+        publication: LocalArtifactPreparedGroupCommit,
+    ) -> None:
+        self._registry = registry
+        self._publication = publication
+
+    @property
+    def expected_receipt(self) -> LocalArtifactPublicationGroupReceipt:
+        """Return the exact receipt for lost-acknowledgement authentication."""
+        return self._publication.expected_receipt
+
+    @property
+    def committed_receipt(self) -> LocalArtifactPublicationGroupReceipt | None:
+        """Return a completed receipt, including after a lost commit return."""
+        receipt = self._publication.receipt
+        if self._publication.committed and self._registry.authenticates_publication_group_receipt(
+            receipt
+        ):
+            return receipt
+        return None
+
+    def observe(self) -> MacosFileRenameObservation:
+        """Freeze prepared before/after file facts without granting commit authority."""
+        return self._registry.observe_macos_file_rename(self._publication)
+
+    def commit(self) -> LocalArtifactPublicationGroupReceipt:
+        """Withdraw the old name and publish the new name atomically."""
+        return self._registry.commit_macos_file_rename(self._publication)
 
 
 class RuntimeContentIdentityManager:
@@ -168,11 +224,15 @@ class RuntimeContentIdentityManager:
                 architecture=architecture,
                 artifact_name=_artifact_name(descriptor.native_path, descriptor.platform),
                 pe_version_info=descriptor.pe_version_info,
+                code_signature=descriptor.code_signature,
+                mach_o_image=descriptor.mach_o_image,
             )
         return LocalArtifactVersionRecord(
             artifact=artifact,
             content=content,
             binary=binary,
+            launchd_job=descriptor.launchd_job,
+            macos_file=descriptor.macos_file,
         )
 
     def prepare_publication(
@@ -193,6 +253,63 @@ class RuntimeContentIdentityManager:
             lease_owner=lease_owner,
             lease_until=lease_until,
         )
+
+    @contextmanager
+    def prepared_macos_file_rename(
+        self,
+        source: LocalArtifactVersionRecord,
+        *,
+        native_path: str,
+        artifact_version: int,
+        metadata: MacosFileMetadata,
+        observed_at: datetime,
+        retention: timedelta | None = None,
+        replacement: LocalArtifactVersionRecord | None = None,
+    ) -> Iterator[PreparedMacosFileRename]:
+        """Prepare an explicit same-directory rename without inventing file facts.
+
+        Replacement requires the exact currently placed destination record.
+        Hard links, cross-directory/cross-volume moves and aliases are excluded.
+        Only the supplied change time
+        may differ in stat. Historical loaded-image references keep their exact
+        version and leases; this operation does not rewrite process observations.
+        """
+        artifact = replace(source.artifact, native_path=native_path, version=artifact_version)
+        binary = (
+            None
+            if source.binary is None
+            else replace(
+                source.binary,
+                artifact_version_id=artifact.artifact_version_id,
+                artifact_name=_artifact_name(native_path, "macos"),
+            )
+        )
+        target = replace(
+            source, artifact=artifact, binary=binary, macos_file=detach_file_metadata(metadata)
+        )
+        self._registry.validate_macos_file_rename(source, target, replacement=replacement)
+        with ExitStack() as cleanup:
+            removals: list[LocalArtifactPublishToken] = []
+            for record in (source,) if replacement is None else (source, replacement):
+                removal = self._registry.prepare_publish_version(
+                    record,
+                    observed_at,
+                    retention=retention,
+                    withdraw_placement=True,
+                    require_existing=True,
+                )
+                cleanup.callback(self._registry.cancel_prepared, removal)
+                removals.append(removal)
+            horizon = self._registry.retained_version_deadline(source.artifact.artifact_version_id)
+            if horizon is None:
+                raise StateError("Mac rename requires its exact source retention horizon")
+            target_retention = max(horizon, removals[0].retained_until) - observed_at
+            publication = self._registry.prepare_publish_version(
+                target, observed_at, retention=target_retention
+            )
+            cleanup.callback(self._registry.cancel_prepared, publication)
+            with self._registry.prepared_publication_group((*removals, publication)) as group:
+                yield PreparedMacosFileRename(self._registry, group)
 
     def prepare_effect_publication(
         self,
@@ -217,6 +334,10 @@ class RuntimeContentIdentityManager:
         content_version: int = 1,
         artifact_version: int = 1,
         pe_version_info: PeVersionInfo | None = None,
+        launchd_job: LaunchdSystemJobSpec | None = None,
+        macos_file: MacosFileMetadata | None = None,
+        code_signature: MachOCodeSignature | None = None,
+        mach_o_image: MachOImageIdentity | None = None,
         retention: timedelta | None = None,
         lease_owner: str = "",
         lease_until: datetime | None = None,
@@ -232,12 +353,22 @@ class RuntimeContentIdentityManager:
         Production user ownership resolves the exact compiled user and actor
         application profile once. A typed system owner receives an explicit
         runtime system profile and never masquerades as a user installation.
-        Missing byte length is represented as zero (unknown modeled length),
-        and executable MIME is derived only from the explicit platform flag.
+        An explicit Mac filesystem observation supplies object and length facts;
+        any independently authored values must agree. Missing non-executable
+        length remains unknown. Unresolved executable images receive a deterministic
+        positive size from the runtime executable profile catalog.
         """
 
         normalized_action = str(action).strip().casefold()
+        if launchd_job is not None:
+            if platform != "macos" or executable or normalized_action not in {"create", "modify"}:
+                raise ValueError("launchd job semantics require a non-executable Mac file write")
+            if authored_content_seed_ref and authored_content_seed_ref != launchd_job.content_seed:
+                raise ValueError("launchd file content seed must match its bounded job semantics")
+            authored_content_seed_ref = launchd_job.content_seed
         if normalized_action in {"read", "delete"}:
+            if any(value is not None for value in (macos_file, code_signature, mach_o_image)):
+                raise ValueError("Runtime metadata publication requires a create/modify effect")
             return None
         if normalized_action not in {"create", "modify"}:
             raise ValueError("runtime file effect action must be create, modify, read, or delete")
@@ -312,13 +443,45 @@ class RuntimeContentIdentityManager:
             ).replace("-", "")[:32]
         )
 
+        if macos_file is not None:
+            if platform != "macos":
+                raise ValueError("Mac file metadata requires a Mac runtime file effect")
+            # The complete filesystem observation owns these facts. Do not require
+            # callers to restate them in parallel scalar fields, or replace known
+            # length with the legacy unknown-length sentinel.
+            macos_file = detach_file_metadata(macos_file)
+            if (
+                authored_file_object_id.strip()
+                and authored_file_object_id.strip() != macos_file.file_object_id
+            ):
+                raise ValueError(
+                    "Authored file object disagrees with its Mac filesystem observation"
+                )
+            if authored_size_bytes is not None and (
+                type(authored_size_bytes) is not int or authored_size_bytes != macos_file.size_bytes
+            ):
+                raise ValueError("Authored file size disagrees with its Mac filesystem observation")
+            authored_file_object_id = macos_file.file_object_id
+            authored_size_bytes = macos_file.size_bytes
+
         file_object_id = authored_file_object_id.strip() or stable_uuid(
             "runtime-file-content-object",
             stable_source_id,
         )
         seed_ref = authored_content_seed_ref.strip() or (f"runtime-file-content:{stable_source_id}")
         mime_type = authored_mime_type.strip() or _runtime_mime_type(platform, executable)
-        size_bytes = 0 if authored_size_bytes is None else authored_size_bytes
+        size_bytes = authored_size_bytes
+        if size_bytes is None and executable:
+            from evidenceforge.generation.activity.runtime_executable_profiles import (
+                runtime_executable_size_bytes,
+            )
+
+            size_bytes = runtime_executable_size_bytes(
+                platform=platform,
+                stable_id=stable_source_id,
+            )
+        if size_bytes is None:
+            size_bytes = 0
         descriptor = RuntimeArtifactDescriptor(
             hostname=hostname,
             principal=principal,
@@ -342,6 +505,10 @@ class RuntimeContentIdentityManager:
             executable=executable,
             architecture=resolved_architecture if executable else None,
             pe_version_info=pe_version_info,
+            launchd_job=launchd_job,
+            macos_file=macos_file,
+            code_signature=code_signature,
+            mach_o_image=mach_o_image,
         )
         return self.prepare_publication(
             descriptor,
@@ -385,6 +552,8 @@ def _artifact_name(path: str, platform: Platform) -> str:
 
     if platform == "windows":
         return ntpath.basename(path.replace("/", "\\"))
+    if platform == "macos":
+        return posixpath.basename(path)
     return posixpath.basename(path.replace("\\", "/"))
 
 
@@ -407,3 +576,25 @@ __all__ = [
     "RuntimeContentIdentityManager",
     "RuntimeFileEffectAction",
 ]
+
+
+def runtime_executable_lease_owner(hostname: str, retained_until: datetime) -> str:
+    """Share one finite run-window lease across executions of each retained version.
+
+    The registry keys leases by version and owner. Using a window owner bounds
+    lease count by retained file versions rather than historical process count.
+    This conservative owner must not be released when an individual process exits.
+    """
+    if (
+        type(hostname) is not str
+        or not hostname.strip()
+        or "\0" in hostname
+        or type(retained_until) is not datetime
+        or retained_until.utcoffset() is None
+    ):
+        raise ValueError("Executable window lease requires an exact host and aware deadline")
+    return stable_uuid(
+        "macos-runtime-executable-window",
+        hostname.casefold(),
+        ensure_utc(retained_until).isoformat(),
+    )

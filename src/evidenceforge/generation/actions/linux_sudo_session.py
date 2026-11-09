@@ -30,19 +30,36 @@ from typing import Protocol
 
 from evidenceforge.events.contexts import AuthContext
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
+from evidenceforge.generation.timing import TimingRuntime, TimingScope, TriangularDistribution
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
+
+
+def _sudo_window(name: str, minimum: int, maximum: int) -> TimingWindow:
+    """Read the validated bounds shared by execution and admission."""
+    return get_timing_window(
+        f"linux.sudo.{name}",
+        default_min_ms=minimum,
+        default_max_ms=maximum,
+        default_position="before" if name in {"process_lead", "child_close_lead"} else "after",
+    )
 
 
 def linux_sudo_intrinsic_close_headroom() -> timedelta:
     """Return the maximum bundle-owned tail after the requested command runtime.
 
-    The PAM close may trail the runtime by 950 milliseconds and the owning sudo
-    process terminates at most another 50 milliseconds later. Executor-owned TTY
-    serialization is separate and is returned as ``timing_shift`` during execution.
+    Derive this bound from the same configured phase windows as execution.
+    Executor-owned TTY serialization is separate and returned as ``timing_shift``.
     """
 
-    return timedelta(seconds=1)
+    tail = _sudo_window("close_tail", 120, 950).max_ms
+    open_max = _sudo_window("pam_open", 12, 300).max_ms
+    child_ready = _sudo_window("child_ready", 1, 4).max_ms
+    child_close = _sudo_window("child_close_lead", 1, 8).max_ms
+    parent_tail = _sudo_window("parent_exit", 10, 50).max_ms
+    child_floor = timedelta(milliseconds=open_max + child_ready + child_close, microseconds=1)
+    return max(timedelta(milliseconds=tail), child_floor) + timedelta(milliseconds=parent_tail)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,9 +151,34 @@ class LinuxSudoSessionActionBundle:
         self,
         executor: LinuxSudoSessionExecutor,
         request: LinuxSudoSessionRequest,
+        timing_runtime: TimingRuntime | None = None,
     ) -> None:
         self._executor = executor
         self._request = request
+        self._timing_runtime = timing_runtime or TimingRuntime(
+            reference_time=request.time, namespace="linux-sudo-compatibility"
+        )
+
+    def _phase_delay(self, name: str, minimum: int, maximum: int) -> timedelta:
+        """Plan a source phase once from durable intent and the engine seed."""
+        window = _sudo_window(name, minimum, maximum)
+        if window.min_ms == window.max_ms:
+            return timedelta(milliseconds=window.min_ms)
+        return self._timing_runtime.sampler.sample_timedelta(
+            TriangularDistribution(
+                minimum=window.min_ms * 1_000,
+                mode=(window.min_ms + (window.max_ms - window.min_ms) * 0.25) * 1_000,
+                maximum=window.max_ms * 1_000,
+            ),
+            relationship_key=f"linux.sudo.{name}",
+            scope=TimingScope(
+                stable_id=self._request.stable_id,
+                host=self._request.system.hostname,
+                source="linux-sudo",
+                lifecycle_id=self._request.stable_id,
+            ),
+            sample_key="phase_gap",
+        )
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -158,16 +200,15 @@ class LinuxSudoSessionActionBundle:
             result="success",
             elevated=True,
         )
-        timing_seed = _stable_seed(f"{request.stable_id}:source_timing")
-        process_time = request.time - timedelta(milliseconds=30 + ((timing_seed >> 24) % 71))
-        open_time = request.time + timedelta(milliseconds=12 + (timing_seed % 289))
-        close_time = (
-            request.time
-            + request.runtime
-            + timedelta(milliseconds=120 + ((timing_seed >> 12) % 831))
+        process_time = request.time - self._phase_delay("process_lead", 30, 100)
+        open_time = request.time + self._phase_delay("pam_open", 12, 300)
+        child_time = open_time + self._phase_delay("child_ready", 1, 4)
+        child_close_lead = self._phase_delay("child_close_lead", 1, 8)
+        close_time = max(
+            request.time + request.runtime + self._phase_delay("close_tail", 120, 950),
+            child_time + child_close_lead + timedelta(microseconds=1),
         )
-        close_time = max(close_time, open_time + timedelta(milliseconds=1))
-        parent_end_time = close_time + timedelta(milliseconds=10 + ((timing_seed >> 32) % 41))
+        parent_end_time = close_time + self._phase_delay("parent_exit", 10, 50)
         command = request.command_message.split("COMMAND=", 1)[1].strip()
         tty = (
             request.command_message.split("TTY=", 1)[1].split(" ;", 1)[0].strip()
@@ -178,7 +219,7 @@ class LinuxSudoSessionActionBundle:
         pid, child_pid, timing_shift, effective_tty = self._executor.generate_linux_sudo_processes(
             system=request.system,
             sudo_time=process_time,
-            child_time=open_time + timedelta(milliseconds=1),
+            child_time=child_time,
             sudo_user=request.sudo_user,
             tty=tty,
             command=command,
@@ -235,7 +276,8 @@ class LinuxSudoSessionActionBundle:
             self._executor.terminate_linux_sudo_process(
                 system=request.system,
                 time=max(
-                    open_time + timedelta(milliseconds=2), close_time - timedelta(milliseconds=1)
+                    child_time + timing_shift + timedelta(microseconds=1),
+                    close_time - child_close_lead,
                 ),
                 pid=child_pid,
             )

@@ -21,6 +21,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     certificate_subject_key_profile,
     chain_template_for_issuer,
+    public_leaf_validity_period,
     signature_algorithm_for_issuer,
 )
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
@@ -120,6 +121,7 @@ class TlsCertificatePlanner:
         validity_days_min: int,
         validity_days_max: int,
         not_before_max_days: int,
+        publicly_trusted_leaf: bool = False,
     ) -> tuple[int, int]:
         """Return an order-independent certificate-rotation window containing the event."""
 
@@ -129,6 +131,11 @@ class TlsCertificatePlanner:
             source="tls_certificate",
             lifecycle_id=f"{identity}|validity-policy",
         )
+        policy_start_day = 0
+        if publicly_trusted_leaf:
+            policy_start_day, maximum_days = public_leaf_validity_period(event_time)
+            validity_days_min = min(validity_days_min, maximum_days)
+            validity_days_max = min(validity_days_max, maximum_days)
         validity_days = _sample_inclusive_integer(
             self._timing_runtime,
             minimum=validity_days_min,
@@ -139,7 +146,9 @@ class TlsCertificatePlanner:
         )
         rotation_days = max(1, int(validity_days * 0.72))
         event_day = int(event_time.timestamp()) // 86400
-        bucket_start_day = (event_day // rotation_days) * rotation_days
+        bucket_start_day = (
+            policy_start_day + ((event_day - policy_start_day) // rotation_days) * rotation_days
+        )
         available_overlap = max(1, validity_days - rotation_days)
         max_back_days = max(1, min(not_before_max_days, available_overlap))
         bucket_scope = TimingScope(
@@ -249,6 +258,7 @@ class TlsCertificatePlanner:
             validity_days_min=int(issuer_config.get("validity_days_min", validity_fallback)),
             validity_days_max=int(issuer_config.get("validity_days_max", validity_fallback)),
             not_before_max_days=int(issuer_config.get("not_before_max_days", 300)),
+            publicly_trusted_leaf=bool(issuer_config.get("publicly_trusted", False)),
         )
         validity = self._bound_to_issuer(
             validity,

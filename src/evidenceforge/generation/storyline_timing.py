@@ -18,6 +18,8 @@ from evidenceforge.generation.timing import (
     WeightedDistribution,
 )
 
+STORYLINE_EVENT_JITTER_SECONDS = 30
+
 
 @dataclass(frozen=True, slots=True)
 class StorylineTimingPlanner:

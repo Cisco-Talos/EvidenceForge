@@ -25,6 +25,7 @@ class EventKind(StrEnum):
     ACCOUNT_CREATED = "account_created"
     ACCOUNT_DELETED = "account_deleted"
     BASH_COMMAND = "bash_command"
+    ZSH_COMMAND = "zsh_command"
     CONNECTION = "connection"
     CREATE_REMOTE_THREAD = "create_remote_thread"
     DHCP_LEASE = "dhcp_lease"
@@ -34,6 +35,8 @@ class EventKind(StrEnum):
     FILE_DELETE = "file_delete"
     FILE_MODIFY = "file_modify"
     FILE_READ = "file_read"
+    FILE_RENAME = "file_rename"
+    FILE_CLOSE = "file_close"
     GROUP_MEMBER_ADDED_GLOBAL = "group_member_added_global"
     GROUP_MEMBER_ADDED_LOCAL = "group_member_added_local"
     GROUP_MEMBER_ADDED_UNIVERSAL = "group_member_added_universal"
@@ -49,11 +52,19 @@ class EventKind(StrEnum):
     LOGOFF = "logoff"
     LOGON = "logon"
     MACHINE_LOGON = "machine_logon"
+    MACOS_WORKSPACE_REQUEST = "macos_workspace_request"
+    MACOS_POLICY_REFUSAL = "macos_policy_refusal"
     NTLM_VALIDATION = "ntlm_validation"
     PASSWORD_CHANGE = "password_change"
     PASSWORD_RESET = "password_reset"
     PROCESS_ACCESS = "process_access"
     PROCESS_CREATE = "process_create"
+    PROCESS_FORK = "process_fork"
+    PROCESS_EXEC = "process_exec"
+    PROCESS_JOB_CONTROL = "process_job_control"
+    PROCESS_AUDIT_BIND = "process_audit_bind"
+    PROCESS_PRIVILEGE_DROP = "process_privilege_drop"
+    PROCESS_SERVICE_DROP = "process_service_drop"
     PROCESS_TERMINATE = "process_terminate"
     RDP_DISCONNECT = "rdp_disconnect"
     RDP_RECONNECT = "rdp_reconnect"
@@ -99,6 +110,9 @@ class ContextKind(StrEnum):
     IMAGE_LOAD = "image_load"
     KERBEROS = "kerberos"
     LIFECYCLE = "lifecycle"
+    MACOS_WORKSPACE = "macos_workspace"
+    MACOS_POLICY_REFUSAL = "macos_policy_refusal"
+    MACOS_SSH_AUTHENTICATION = "macos_ssh_authentication"
     NAT = "nat"
     NETWORK = "network"
     NETWORK_ENDPOINT = "network_endpoint"
@@ -130,8 +144,11 @@ class FormatKind(StrEnum):
     """Closed set of concrete source projections at the reviewed baseline."""
 
     BASH_HISTORY = "bash_history"
+    ZSH_HISTORY = "zsh_history"
     CISCO_ASA = "cisco_asa"
     ECAR = "ecar"
+    MACOS_UNIFIED_LOG = "macos_unified_log"
+    MACOS_ENDPOINT_SECURITY = "macos_endpoint_security"
     PROXY_ACCESS = "proxy_access"
     SNORT_ALERT = "snort_alert"
     SYSLOG = "syslog"
@@ -240,6 +257,8 @@ class EffectOccurrenceOwner(StrEnum):
     SMB_PROTOCOL_FILE_PHASE = "smb_protocol_file_phase"
     EMAIL_ATTACHMENT_FILE_ROOT = "email_attachment_file_root"
     HTTP_MULTIPART_LOCAL_READ = "http_multipart_local_read"
+    MACOS_LAUNCH_ITEM_FILE = "macos_launch_item_file"
+    MACOS_FILESYSTEM = "macos_filesystem"
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +519,7 @@ class ContractViolationCode(StrEnum):
     MISSING_CONTEXT = "missing_context"
     FORBIDDEN_CONTEXT = "forbidden_context"
     MISSING_IDENTITY = "missing_identity"
+    INVALID_IDENTITY = "invalid_identity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,6 +581,7 @@ def _contract(
     *,
     required: frozenset[ContextKind],
     optional: frozenset[ContextKind] = frozenset(),
+    forbidden: frozenset[ContextKind] = frozenset(),
     src: HostSemantic = HostSemantic.OPTIONAL,
     dst: HostSemantic = HostSemantic.OPTIONAL,
     identity: IdentityRequirement = IdentityRequirement.OPTIONAL,
@@ -572,7 +593,7 @@ def _contract(
         kind=kind,
         required_contexts=required,
         optional_contexts=optional,
-        forbidden_contexts=frozenset(),
+        forbidden_contexts=forbidden,
         source_host_role=src,
         destination_host_role=dst,
         identity_requirement=identity,
@@ -606,6 +627,28 @@ _TASK_REQUIRED = _contexts(ContextKind.AUTH, ContextKind.SCHEDULED_TASK, Context
 
 
 EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
+    EventKind.MACOS_POLICY_REFUSAL: _contract(
+        EventKind.MACOS_POLICY_REFUSAL,
+        required=_contexts(
+            ContextKind.SRC_HOST, ContextKind.MACOS_POLICY_REFUSAL, ContextKind.LIFECYCLE
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.MACOS_UNIFIED_LOG),
+    ),
+    EventKind.MACOS_WORKSPACE_REQUEST: _contract(
+        EventKind.MACOS_WORKSPACE_REQUEST,
+        required=_contexts(
+            ContextKind.SRC_HOST, ContextKind.MACOS_WORKSPACE, ContextKind.LIFECYCLE
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.MACOS_UNIFIED_LOG),
+    ),
     EventKind.ACCOUNT_CHANGED: _contract(
         EventKind.ACCOUNT_CHANGED,
         required=_ACCOUNT_REQUIRED,
@@ -626,6 +669,13 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         dst=HostSemantic.TARGET,
         state=StateEffect.WRITE,
         emitters=_WINDOWS_SECURITY,
+    ),
+    EventKind.ZSH_COMMAND: _contract(
+        EventKind.ZSH_COMMAND,
+        required=_contexts(ContextKind.AUTH, ContextKind.SHELL, ContextKind.SRC_HOST),
+        src=HostSemantic.LOCAL_ACTOR,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.ZSH_HISTORY),
     ),
     EventKind.BASH_COMMAND: _contract(
         EventKind.BASH_COMMAND,
@@ -739,6 +789,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
             EventKind.FILE_DELETE,
             EventKind.FILE_MODIFY,
             EventKind.FILE_READ,
+            EventKind.FILE_RENAME,
+            EventKind.FILE_CLOSE,
         )
     },
     **{
@@ -938,6 +990,79 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_WINDOWS_ENDPOINT,
     ),
+    EventKind.PROCESS_FORK: _contract(
+        EventKind.PROCESS_FORK,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.START,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
+    EventKind.PROCESS_EXEC: _contract(
+        EventKind.PROCESS_EXEC,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
+    EventKind.PROCESS_JOB_CONTROL: _contract(
+        EventKind.PROCESS_JOB_CONTROL,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
+    EventKind.PROCESS_AUDIT_BIND: _contract(
+        EventKind.PROCESS_AUDIT_BIND,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        optional=_contexts(ContextKind.AUTH, ContextKind.MACOS_SSH_AUTHENTICATION),
+        forbidden=frozenset(ContextKind)
+        - _contexts(
+            ContextKind.PROCESS,
+            ContextKind.SRC_HOST,
+            ContextKind.LIFECYCLE,
+            ContextKind.AUTH,
+            ContextKind.MACOS_SSH_AUTHENTICATION,
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR, FormatKind.MACOS_UNIFIED_LOG),
+    ),
+    EventKind.PROCESS_PRIVILEGE_DROP: _contract(
+        EventKind.PROCESS_PRIVILEGE_DROP,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
+    EventKind.PROCESS_SERVICE_DROP: _contract(
+        EventKind.PROCESS_SERVICE_DROP,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_TERMINATE: _contract(
         EventKind.PROCESS_TERMINATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
@@ -1111,6 +1236,163 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                 message=f"{event.event_type} requires a canonical identity plan",
             )
         )
+
+    process = getattr(event, "process", None)
+    outcome = getattr(process, "exit_outcome", None)
+    if outcome is not None:
+        from evidenceforge.events.process_outcome import PosixProcessExit
+
+        try:
+            if (
+                contract.kind is not EventKind.PROCESS_TERMINATE
+                or type(outcome) is not PosixProcessExit
+                or getattr(getattr(event, "src_host", None), "os_category", None)
+                not in {"macos", "linux"}
+            ):
+                raise ValueError("Explicit POSIX exit result requires a POSIX termination")
+            outcome.__post_init__()
+        except ValueError as exc:
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message=str(exc),
+                )
+            )
+
+    if contract.kind in {
+        EventKind.PROCESS_FORK,
+        EventKind.PROCESS_EXEC,
+        EventKind.PROCESS_JOB_CONTROL,
+        EventKind.PROCESS_AUDIT_BIND,
+        EventKind.PROCESS_PRIVILEGE_DROP,
+        EventKind.PROCESS_SERVICE_DROP,
+    }:
+        from evidenceforge.events.process import (
+            process_credential_identities,
+            process_exec_identities,
+            process_fork_identities,
+            process_job_control_identities,
+        )
+
+        try:
+            if contract.kind is EventKind.PROCESS_FORK:
+                process_fork_identities(event)
+            elif contract.kind is EventKind.PROCESS_JOB_CONTROL:
+                process_job_control_identities(event)
+            elif contract.kind is EventKind.PROCESS_EXEC:
+                process_exec_identities(event)
+            else:
+                process_credential_identities(event)
+        except ValueError as exc:
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message=str(exc),
+                )
+            )
+
+    if getattr(event, "macos_ssh_authentication", None) is not None or (
+        contract.kind is EventKind.PROCESS_AUDIT_BIND and getattr(event, "auth", None) is not None
+    ):
+        from evidenceforge.events.identity import ProcessIdentity
+        from evidenceforge.events.macos_logging import MacosSshAuthentication
+
+        authentication = getattr(event, "macos_ssh_authentication", None)
+        host, auth = getattr(event, "src_host", None), getattr(event, "auth", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(authentication) is not MacosSshAuthentication
+            or host is None
+            or host.os_category != "macos"
+            or authentication.session.hostname != host.hostname
+            or authentication.authenticated_at != event.timestamp
+            or auth is None
+            or auth.username != authentication.session.principal
+            or auth.logon_id != authentication.session.logon_id
+            or auth.source_ip != authentication.source_ip
+            or auth.source_port != authentication.source_port
+            or identities is None
+            or contract.kind is not EventKind.PROCESS_AUDIT_BIND
+            or type(identities.subject) is not ProcessIdentity
+            or identities.subject.object_id != authentication.writer.object_id
+            or identities.session != authentication.session
+            or identities.actor != authentication.writer
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != authentication.writer.lifecycle_group_id
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac SSH authentication must preserve its exact peer, session and root writer",
+                )
+            )
+
+    if contract.kind is EventKind.MACOS_WORKSPACE_REQUEST:
+        from evidenceforge.events.macos_logging import MacosWorkspaceRequest
+
+        workspace = getattr(event, "macos_workspace", None)
+        host = getattr(event, "src_host", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(workspace) is not MacosWorkspaceRequest
+            or host is None
+            or host.os_category != "macos"
+            or workspace.session.hostname != host.hostname
+            or workspace.requested_at != event.timestamp
+            or identities is None
+            or identities.subject != workspace.session
+            or identities.session != workspace.session
+            or identities.actor != workspace.writer
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != workspace.session.lifecycle_group_id
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac workspace request must preserve its exact host, session and writer roles",
+                )
+            )
+
+    if contract.kind is EventKind.MACOS_POLICY_REFUSAL:
+        from evidenceforge.events.macos_logging import MacosPolicyRefusal
+
+        refusal = getattr(event, "macos_policy_refusal", None)
+        host = getattr(event, "src_host", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(refusal) is not MacosPolicyRefusal
+            or host is None
+            or host.os_category != "macos"
+            or refusal.target.hostname != host.hostname
+            or refusal.target.refused_at != event.timestamp
+            or identities is None
+            or identities.subject != refusal.target.entity
+            or identities.actor != (refusal.native.writer if refusal.native else None)
+            or identities.session is not None
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != refusal.target.object_id
+            or lifecycle.canonical_start != refusal.target.refused_at
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac policy refusal must preserve its exact host, attempt and kernel writer roles",
+                )
+            )
 
     occurrence = CanonicalOccurrenceSnapshot(
         kind=contract.kind,

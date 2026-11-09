@@ -1,0 +1,13 @@
+{
+  "user_approved": true,
+  "semantic_differences": {
+    "macos_process_coverage": {
+      "main": "complete",
+      "diagnostic": "partial"
+    }
+  },
+  "all_other_authored_fields_identical": true,
+  "main_sha256": "fcd076f283422c7ee7495a7bd30dc85cc1f8859134a653000b639debd71be2a8",
+  "diagnostic_sha256": "4efe8b314eea988083e1e86eea88facf55f21af419f820cae254bb58a0d4fdaf",
+  "complete_process_acceptance_claimed": false
+}

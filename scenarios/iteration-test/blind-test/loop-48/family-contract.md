@@ -1,0 +1,11 @@
+# Loop48 contract: coherent remote-session observation through closure
+
+Target carried Detection45 gap: in-window native process/transport closure but no normalized Mac SSH logout. Source inspection verifies `ObservationPolicy._ecar_remote_session_group_key` includes transport/login but excludes logoff; closure then uses a different lifecycle key and independent drop/delay. Classification family_level. This is observation truth, not absent native termination or an eCAR string-format defect.
+
+Owner: source observation policy's remote-session tuple identity. Invariant: target eCAR transport/login/logout share source-local drop and delay for the same host, remote endpoint tuple and protocol. Explicit typed session kind owns SSH/RDP classification; use documented legacy OS-aware Type10 fallback only where typed identity is absent. Distinct tuple/protocol/host remains independent; SMB/local/failed attempts must not become SSH/RDP merely for carrying auth fields. Preserve native collection scope, source timing, event IDs and canonical closure; do not force records visible.
+
+Entry inventory: exact SSH Mac/Linux action-bundle terminal cohorts, compatibility Linux SSH paths, Windows RDP logon/logoff, direct typed observation consumers and dispatcher legacy/compiled routing. Consumers: normalized eCAR FLOW and USER_SESSION, observation drops/delays, exact omission receipts, coverage accounting; native ES/syslog and Zeek retain their owners. Raw escape hatches remain format-specific.
+
+Sibling coverage: Mac/Linux SSH and Windows RDP, nonzero missingness and delay, typed identity versus auth kind/protocol versus legacy OS fallback, changed remote tuple, local/SMB exclusion. Check actual fresh Mac SSH closure and reference all logouts to visible session identity. No source-local emitter repair or sample-specific forced retention.
+
+Higher-severity newly proven native Mac audit-counter chronology remains open. Its owning State allocation is planning-order based and crosses immutable identity/proof and all source references. A correct chronological native allocation owner requires a broader design; this bounded loop explicitly defers that high-risk family rather than renumbering one emitter or modifying timestamps. Continue to report it at P0. Browser/privilege/runtime/scanner families also remain separate.

@@ -61,10 +61,12 @@ use the generation-behavior manifest workflow and prove raw-byte compatibility s
 
 ## Validation coverage and execution failures
 
-Every parser source has an explicit package-owned validation route. Native log sources require a
-format schema; email artifact manifest entries use structural artifact validation and retain their
-specialized email consistency checks. An unknown source or unavailable native schema is an engine
-error, never an implicitly passing record. Empty email sections and optional metadata remain valid.
+Every parser source has an explicit package-owned validation route. Generated native formats use
+packaged format schemas. The bounded macOS export readers use explicit `native_codec` routes backed
+by versioned nested wire models; they do not register generation emitters or flat-schema diagnostic
+rules. Email manifest entries retain structural artifact validation and email consistency checks.
+An unknown source or missing validator/schema is an engine error, never an implicitly passing record.
+Empty email sections and optional metadata remain valid.
 
 A failed scoring pillar stops evaluation with exit 22 and no quality report. Successful JSON mode
 writes one report object to stdout; warnings and progress go to stderr. A completed report may still

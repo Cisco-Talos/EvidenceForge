@@ -2664,13 +2664,13 @@
           "call": "AuthContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1366,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "AuthContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1391,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "AuthContext",
@@ -4945,13 +4945,13 @@
           "call": "SyslogContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1374,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "SyslogContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1399,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "SyslogContext",
@@ -7475,6 +7475,67 @@
         "tests/unit/test_network_observation.py"
       ],
       "validators": []
+    },
+    {
+      "constructors": [
+        {
+          "call": "MacosWorkspaceRequest",
+          "file": "src/evidenceforge/generation/macos_logging.py",
+          "line": 83,
+          "scope": "prepare_workspace_request"
+        }
+      ],
+      "fields": [
+        {
+          "annotation": "SessionIdentity",
+          "default": "",
+          "name": "session"
+        },
+        {
+          "annotation": "datetime",
+          "default": "",
+          "name": "requested_at"
+        },
+        {
+          "annotation": "ProcessIdentity | None",
+          "default": "",
+          "name": "writer"
+        },
+        {
+          "annotation": "MacosUnifiedLogObservation | None",
+          "default": "",
+          "name": "native"
+        },
+        {
+          "annotation": "Literal[\"\", \"writer_unavailable\", \"native_image_unavailable\", \"profile_unavailable\"]",
+          "default": "\"\"",
+          "name": "unavailable_reason"
+        }
+      ],
+      "file": "src/evidenceforge/events/macos_logging.py",
+      "frozen": true,
+      "line": 157,
+      "name": "MacosWorkspaceRequest",
+      "occurrence_builder_slots": [
+        "macos_workspace"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Exact session and optional writer snapshot describe method entry only; source absence cannot change the canonical request or imply desktop completion.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session workspace request preparation"
+      },
+      "review_status": "path_review_complete",
+      "slots": true,
+      "source_consumer_files": [
+        "src/evidenceforge/generation/emitters/macos_unified_log.py"
+      ],
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ],
+      "validators": [
+        "__post_init__"
+      ]
     }
   ],
   "events": [
@@ -7732,6 +7793,22 @@
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
             "auth",
+            "identity_plan",
+            "lifecycle",
+            "shell",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 25493,
+          "resolved_dynamically": true,
+          "scope": "ActivityGenerator.emit_macos_shell_history"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
             "shell",
             "src_host"
           ],
@@ -7740,12 +7817,14 @@
             "bash_command"
           ],
           "file": "src/evidenceforge/generation/activity/generator.py",
-          "line": 19499,
+          "line": 25530,
           "scope": "ActivityGenerator._emit_bash_command_event"
         }
       ],
       "contexts_attached_at_literal_constructors": [
         "auth",
+        "identity_plan",
+        "lifecycle",
         "shell",
         "src_host"
       ],
@@ -7766,7 +7845,7 @@
           "call": "OccurrenceBuilder",
           "file": "src/evidenceforge/generation/activity/generator.py",
           "kind": "call_keyword",
-          "line": 19499,
+          "line": 25530,
           "scope": "ActivityGenerator._emit_bash_command_event"
         }
       ],
@@ -10103,8 +10182,25 @@
             "logoff"
           ],
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
-          "line": 1362,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "line": 5747,
+          "scope": "SshSessionActionBundle._dispatch_session_logout"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
+            "dst_host",
+            "identity_plan",
+            "lifecycle",
+            "syslog"
+          ],
+          "event_type_expression": "'logoff'",
+          "event_type_literals": [
+            "logoff"
+          ],
+          "file": "src/evidenceforge/generation/actions/ssh_session_events.py",
+          "line": 60,
+          "scope": "ssh_logout_occurrence"
         },
         {
           "call": "OccurrenceBuilder",
@@ -10155,6 +10251,7 @@
       "contexts_attached_at_literal_constructors": [
         "auth",
         "dst_host",
+        "identity_plan",
         "lifecycle",
         "syslog"
       ],
@@ -10176,8 +10273,15 @@
           "call": "OccurrenceBuilder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "kind": "call_keyword",
-          "line": 1362,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "line": 5747,
+          "scope": "SshSessionActionBundle._dispatch_session_logout"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/actions/ssh_session_events.py",
+          "kind": "call_keyword",
+          "line": 60,
+          "scope": "ssh_logout_occurrence"
         },
         {
           "call": "OccurrenceBuilder",
@@ -10258,9 +10362,11 @@
         "tests/unit/test_eval_signal_integrity.py",
         "tests/unit/test_identity_lifecycle.py",
         "tests/unit/test_logonid_scoping.py",
+        "tests/unit/test_macos_ssh_logout.py",
         "tests/unit/test_phase5_logoff.py",
         "tests/unit/test_phase5_sid.py",
         "tests/unit/test_source_timing.py",
+        "tests/unit/test_ssh_deferred_production.py",
         "tests/unit/test_storyline_command_networks.py",
         "tests/unit/test_validation.py",
         "tests/unit/test_world_model.py",
@@ -10945,6 +11051,53 @@
         {
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 76,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_audit_bind",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_credential_projection.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
             "auth",
             "process",
             "src_host"
@@ -11116,6 +11269,147 @@
         {
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 76,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_exec",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_exec_projection.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 76,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_privilege_drop",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_credential_projection.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 76,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_service_drop",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_credential_projection.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
             "auth",
             "process",
             "src_host"
@@ -11142,6 +11436,22 @@
           "file": "src/evidenceforge/generation/activity/generator.py",
           "line": 20252,
           "scope": "ActivityGenerator.generate_system_process_termination"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "'process_terminate'",
+          "event_type_literals": [
+            "process_terminate"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 151,
+          "scope": "process_exit_occurrence"
         }
       ],
       "contexts_attached_at_literal_constructors": [
@@ -11275,49 +11585,6 @@
         "tests/unit/test_ids_alert_attachments.py",
         "tests/unit/test_storyline_command_networks.py",
         "tests/unit/test_utils.py"
-      ]
-    },
-    {
-      "authored_spec": {
-        "event_type": "rdp_session",
-        "fields": [
-          "type",
-          "source_ip"
-        ],
-        "file": "src/evidenceforge/models/scenario.py",
-        "line": 1130,
-        "model": "RdpSessionEventSpec",
-        "validators": []
-      },
-      "constructors": [],
-      "contexts_attached_at_literal_constructors": [],
-      "emitter_consumers": [],
-      "event_type": "rdp_session",
-      "kind": "authored_intent",
-      "path_classification": "intentional_adapter",
-      "path_review": {
-        "assessment": "These are authored intent names, not canonical occurrence kinds. Their branches deliberately expand into lower-level occurrences.",
-        "classification": "intentional_adapter",
-        "owner": "typed storyline dispatcher and the delegated action/generator family"
-      },
-      "review_status": "path_review_complete",
-      "static_references": [],
-      "storyline_dispatch": {
-        "calls": [
-          {
-            "call": "self.activity_generator.generate_rdp_session",
-            "line": 4778,
-            "name": "generate_rdp_session"
-          }
-        ],
-        "file": "src/evidenceforge/generation/engine/storyline.py",
-        "line": 4743
-      },
-      "test_files": [
-        "tests/integration/test_ids_alert_generation.py",
-        "tests/unit/test_ground_truth.py",
-        "tests/unit/test_install_skills.py",
-        "tests/unit/test_storyline_command_networks.py"
       ]
     },
     {
@@ -11471,6 +11738,49 @@
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_rdp_deferred_production.py"
+      ]
+    },
+    {
+      "authored_spec": {
+        "event_type": "rdp_session",
+        "fields": [
+          "type",
+          "source_ip"
+        ],
+        "file": "src/evidenceforge/models/scenario.py",
+        "line": 1130,
+        "model": "RdpSessionEventSpec",
+        "validators": []
+      },
+      "constructors": [],
+      "contexts_attached_at_literal_constructors": [],
+      "emitter_consumers": [],
+      "event_type": "rdp_session",
+      "kind": "authored_intent",
+      "path_classification": "intentional_adapter",
+      "path_review": {
+        "assessment": "These are authored intent names, not canonical occurrence kinds. Their branches deliberately expand into lower-level occurrences.",
+        "classification": "intentional_adapter",
+        "owner": "typed storyline dispatcher and the delegated action/generator family"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": {
+        "calls": [
+          {
+            "call": "self.activity_generator.generate_rdp_session",
+            "line": 4778,
+            "name": "generate_rdp_session"
+          }
+        ],
+        "file": "src/evidenceforge/generation/engine/storyline.py",
+        "line": 4743
+      },
+      "test_files": [
+        "tests/integration/test_ids_alert_generation.py",
+        "tests/unit/test_ground_truth.py",
+        "tests/unit/test_install_skills.py",
+        "tests/unit/test_storyline_command_networks.py"
       ]
     },
     {
@@ -12643,7 +12953,7 @@
           ],
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1387,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "OccurrenceBuilder",
@@ -12725,7 +13035,7 @@
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "kind": "call_keyword",
           "line": 1387,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "OccurrenceBuilder",
@@ -13169,6 +13479,394 @@
         "tests/unit/test_emitters.py",
         "tests/unit/test_eval_record_fidelity.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
+            "identity_plan",
+            "lifecycle",
+            "shell",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 25493,
+          "resolved_dynamically": true,
+          "scope": "ActivityGenerator.emit_macos_shell_history"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "auth",
+        "identity_plan",
+        "lifecycle",
+        "shell",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "zsh_history"
+      ],
+      "event_type": "zsh_command",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "All discovered authored, baseline, causal, and internal entries converge on one occurrence-construction family. Several bundles are thin facades, which is tracked as an architectural risk rather than a second output path.",
+        "classification": "single_canonical_path",
+        "owner": "named action bundle or its current ActivityGenerator executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": []
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "'process_fork'",
+          "event_type_literals": [
+            "process_fork"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 114,
+          "scope": "process_fork_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_fork",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "An internal fork observation binds to an explicitly forked State start and its immutable parent execution. Generic launches cannot substitute; authored producers and Mac receivers remain gated.",
+        "classification": "single_canonical_path",
+        "owner": "State fork cohort, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 4565,
+          "scope": "EventDispatcher.prepare_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 6003,
+          "scope": "EventDispatcher._validate_action_cohort_dispatch_coverage"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 6023,
+          "scope": "EventDispatcher._validate_action_cohort_dispatch_coverage"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 7694,
+          "scope": "EventDispatcher._exact_action_cohort_projection_kind"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 16014,
+          "scope": "EventDispatcher._projection_admission_time"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "kind": "call_keyword",
+          "line": 114,
+          "scope": "process_fork_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/ecar.py",
+          "kind": "comparison",
+          "line": 345,
+          "scope": "EcarEmitter._apply_edr_context"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/ecar.py",
+          "kind": "comparison",
+          "line": 720,
+          "scope": "EcarEmitter._render_process_create"
+        },
+        {
+          "file": "src/evidenceforge/generation/identity_lifecycle.py",
+          "kind": "comparison",
+          "line": 61,
+          "scope": "IdentityLifecyclePlanner.plan"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_fork_projection.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "macos_workspace",
+            "src_host"
+          ],
+          "event_type_expression": "'macos_workspace_request'",
+          "event_type_literals": [
+            "macos_workspace_request"
+          ],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 11828,
+          "scope": "ActivityGenerator._emit_macos_workspace_request"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "macos_workspace",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "macos_unified_log"
+      ],
+      "event_type": "macos_workspace_request",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The shared auth/session executor owns the distinct workspace-request occurrence; it cannot assert desktop completion. Native projection reads immutable writer facts only.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session action bundle compatibility executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_job_control"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 110,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_job_control",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Internal membership changes retain exact before/after state and the actual changing actor. Dispatcher coverage requires the authenticated singleton State cohort; eCAR observation, collection omission and source recovery cannot redefine the action. Production boot/session/job composition remains unavailable.",
+        "classification": "single_canonical_path",
+        "owner": "State POSIX membership patch, canonical occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_posix_job_control.py",
+        "tests/unit/test_posix_job_control_projection.py",
+        "tests/unit/test_posix_job_control_checkpoint.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "macos_policy_refusal",
+            "src_host"
+          ],
+          "event_type_expression": "'macos_policy_refusal'",
+          "event_type_literals": [
+            "macos_policy_refusal"
+          ],
+          "file": "src/evidenceforge/generation/actions/process_policy.py",
+          "line": 56,
+          "scope": "generate_policy_refusal"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "macos_policy_refusal",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "macos_unified_log"
+      ],
+      "event_type": "macos_policy_refusal",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The explicit policy-refused process outcome uses a State-owned attempt allocation and independent kernel observation. No target process execution or terminal phase is inferred.",
+        "classification": "single_canonical_path",
+        "owner": "process-policy action bundle"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_policy_refusal.py",
+        "tests/integration/test_macos_policy_refusal.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "effect_provenance",
+            "file",
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/actions/macos_filesystem.py",
+          "line": 130,
+          "resolved_dynamically": true,
+          "scope": "MacosFilesystemActionBundle.prepare"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "effect_provenance",
+        "file",
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "file_close",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+        "classification": "single_canonical_path",
+        "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/generation/source_timing.py",
+          "kind": "comparison",
+          "line": 4955,
+          "scope": "SourceTimingPlanner._endpoint_event_source_key"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_filesystem_action.py",
+        "tests/unit/test_macos_vscode_generation.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "effect_provenance",
+            "file",
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/actions/macos_filesystem.py",
+          "line": 130,
+          "resolved_dynamically": true,
+          "scope": "MacosFilesystemActionBundle.prepare"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "effect_provenance",
+        "file",
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "file_rename",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Explicit bounded file close and same-directory rename facts have one canonical producer. Artifact placement fences and exact source recovery are shared; generic file effects are not silently upgraded to native operations.",
+        "classification": "single_canonical_path",
+        "owner": "MacosFilesystemActionBundle and the existing canonical State/artifact/source journal"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/generation/source_timing.py",
+          "kind": "comparison",
+          "line": 4955,
+          "scope": "SourceTimingPlanner._endpoint_event_source_key"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_filesystem_action.py",
+        "tests/unit/test_macos_vscode_generation.py"
+      ]
     }
   ],
   "formats": [
@@ -13176,7 +13874,7 @@
       "definition": "src/evidenceforge/config/formats/bash_history.yaml",
       "emitter_class": "BashHistoryEmitter",
       "emitter_file": "src/evidenceforge/generation/emitters/bash_history.py",
-      "emitter_line": 140,
+      "emitter_line": 3254,
       "evaluator_files": [
         "src/evidenceforge/evaluation/_shared.py",
         "src/evidenceforge/evaluation/anomaly.py",
@@ -13186,6 +13884,7 @@
         "src/evidenceforge/evaluation/pillars/parseability.py",
         "src/evidenceforge/evaluation/pillars/plausibility.py",
         "src/evidenceforge/evaluation/pillars/timing.py",
+        "src/evidenceforge/evaluation/validation_routes.py",
         "src/evidenceforge/evaluation/visibility.py"
       ],
       "format": "bash_history",
@@ -13209,7 +13908,10 @@
       "test_files": [
         "tests/integration/test_format_definitions.py",
         "tests/integration/test_spillage_generation.py",
+        "tests/support/native_records.py",
         "tests/unit/test_activity.py",
+        "tests/unit/test_artifact_properties.py",
+        "tests/unit/test_bash_history_export_plan_identity.py",
         "tests/unit/test_bash_history_noise.py",
         "tests/unit/test_eval_cross_source.py",
         "tests/unit/test_eval_cross_source_pairs.py",
@@ -13218,11 +13920,18 @@
         "tests/unit/test_eval_signal_integrity.py",
         "tests/unit/test_eval_strict_parsers.py",
         "tests/unit/test_eval_temporal.py",
+        "tests/unit/test_exact_publication_bash_snort.py",
         "tests/unit/test_external_parser_runner.py",
         "tests/unit/test_ground_truth.py",
+        "tests/unit/test_incremental_checkpoints.py",
+        "tests/unit/test_macos_foundations.py",
+        "tests/unit/test_native_record_mutations.py",
+        "tests/unit/test_source_deployment_compiler.py",
         "tests/unit/test_spillage.py",
         "tests/unit/test_splunk_harness.py",
         "tests/unit/test_validation.py",
+        "tests/unit/test_validation_routes.py",
+        "tests/unit/test_windows_filesystem.py",
         "tests/unit/test_zeek_activity_contexts.py"
       ]
     },
@@ -14466,6 +15175,99 @@
         "tests/unit/test_zeek_multiplex.py",
         "tests/unit/test_zeek_ssl.py"
       ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/zsh_history.yaml",
+      "emitter_class": "ZshHistoryEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/zsh_history.py",
+      "emitter_line": 10,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/_shared.py",
+        "src/evidenceforge/evaluation/parsers/__init__.py",
+        "src/evidenceforge/evaluation/parsers/zsh_history.py",
+        "src/evidenceforge/evaluation/pillars/parseability.py",
+        "src/evidenceforge/evaluation/pillars/timing.py",
+        "src/evidenceforge/evaluation/visibility.py"
+      ],
+      "format": "zsh_history",
+      "occurrence_builder_fields_consumed": [
+        "event_type",
+        "shell",
+        "src_host"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Static inspection found no sibling-generation trigger or shared-fact ownership in these emitters; detailed source-fidelity review remains separate.",
+        "classification": "single_canonical_path",
+        "owner": "source-native emitter projection"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [
+        "zsh_command"
+      ],
+      "test_files": [
+        "tests/integration/test_format_definitions.py",
+        "tests/unit/test_macos_foundations.py"
+      ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/macos_unified_log.yaml",
+      "emitter_class": "MacosUnifiedLogEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/macos_unified_log.py",
+      "emitter_line": 26,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/parsers/macos_native.py"
+      ],
+      "format": "macos_unified_log",
+      "occurrence_builder_fields_consumed": [
+        "event_type",
+        "macos_workspace",
+        "src_host",
+        "timestamp"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The shared auth/session executor owns the distinct workspace-request occurrence; it cannot assert desktop completion. Native projection reads immutable writer facts only.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session action bundle compatibility executor"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [
+        "macos_workspace_request"
+      ],
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/macos_endpoint_security.yaml",
+      "emitter_class": "MacosEndpointSecurityEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/macos_endpoint_security.py",
+      "emitter_line": 24,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/native_codecs.py",
+        "src/evidenceforge/evaluation/parsers/macos_native.py",
+        "src/evidenceforge/evaluation/validation_routes.py"
+      ],
+      "format": "macos_endpoint_security",
+      "occurrence_builder_fields_consumed": [],
+      "path_classification": "intentional_adapter",
+      "path_review": {
+        "assessment": "The ordinary event queue is explicitly rejected. The source admits supported canonical fork occurrences before State commit and publishes authenticated nested native records through the exact journal and shared host-output lifecycle; exec and exit remain gated.",
+        "classification": "intentional_adapter",
+        "owner": "MacosEsSource collection admission and authenticated exact native publication"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [],
+      "test_files": [
+        "tests/integration/test_format_definitions.py",
+        "tests/unit/test_macos_es_source_integration.py",
+        "tests/unit/test_macos_es_source_profile.py",
+        "tests/unit/test_macos_native_ingestion.py",
+        "tests/unit/test_macos_native_output_lifecycle.py",
+        "tests/unit/test_source_deployment_compiler.py",
+        "tests/unit/test_zeek_format_accuracy.py"
+      ]
     }
   ],
   "method": "python-ast-static-inventory",
@@ -14713,7 +15515,7 @@
         ],
         "file": "src/evidenceforge/generation/actions/ssh_session.py",
         "line": 1362,
-        "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+        "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
       },
       {
         "call": "OccurrenceBuilder",
@@ -14728,7 +15530,7 @@
         ],
         "file": "src/evidenceforge/generation/actions/ssh_session.py",
         "line": 1387,
-        "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+        "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
       },
       {
         "call": "OccurrenceBuilder",
@@ -15529,6 +16331,22 @@
         "file": "src/evidenceforge/generation/engine/storyline.py",
         "line": 3778,
         "scope": "StorylineMixin._execute_typed_event"
+      },
+      {
+        "call": "OccurrenceBuilder",
+        "contexts_attached_at_construction": [
+          "identity_plan",
+          "lifecycle",
+          "macos_workspace",
+          "src_host"
+        ],
+        "event_type_expression": "'macos_workspace_request'",
+        "event_type_literals": [
+          "macos_workspace_request"
+        ],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 11828,
+        "scope": "ActivityGenerator._emit_macos_workspace_request"
       }
     ],
     "dynamic_event_type_constructors": [
@@ -15970,6 +16788,18 @@
         "default": "'visible'",
         "line": 187,
         "name": "_source_observation_status"
+      },
+      {
+        "annotation": "MacosWorkspaceRequest | None",
+        "default": "None",
+        "line": 134,
+        "name": "macos_workspace"
+      },
+      {
+        "annotation": "MacosSshAuthentication | None",
+        "default": "None",
+        "line": 140,
+        "name": "macos_ssh_authentication"
       }
     ],
     "file": "src/evidenceforge/events/base.py",
@@ -15991,6 +16821,9 @@
       "image_load",
       "kerberos",
       "lifecycle",
+      "macos_policy_refusal",
+      "macos_ssh_authentication",
+      "macos_workspace",
       "nat",
       "network",
       "network_endpoint",
@@ -16114,13 +16947,13 @@
           "call": "self.executor.dispatcher.dispatch_builder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1361,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "self.executor.dispatcher.dispatch_builder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1386,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "self._executor.dispatcher.dispatch_builder",
@@ -17453,7 +18286,7 @@
             "call": "self.executor.generate_process_termination",
             "file": "src/evidenceforge/generation/actions/ssh_session.py",
             "line": 1528,
-            "scope": "SshSessionActionBundle._terminate_receiver_sshd_process"
+            "scope": "SshSessionActionBundle._terminate_receiver_process"
           },
           {
             "call": "self._executor.generate_process_termination",
@@ -19308,7 +20141,7 @@
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1505,
           "receiver": "self.executor.state_manager",
-          "scope": "SshSessionActionBundle._terminate_receiver_sshd_process"
+          "scope": "SshSessionActionBundle._terminate_receiver_process"
         },
         {
           "call": "self._executor.state_manager.get_process",

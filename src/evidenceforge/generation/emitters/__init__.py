@@ -51,6 +51,7 @@ from evidenceforge.generation.emitters.zeek_smtp import ZeekSmtpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_weird import ZeekWeirdEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
+from evidenceforge.generation.emitters.zsh_history import ZshHistoryEmitter
 
 __all__ = [
     "LogEmitter",
@@ -76,6 +77,7 @@ __all__ = [
     "EcarEmitter",
     "SyslogEmitter",
     "BashHistoryEmitter",
+    "ZshHistoryEmitter",
     "ProxyEmitter",
     "SnortEmitter",
     "SysmonEventEmitter",

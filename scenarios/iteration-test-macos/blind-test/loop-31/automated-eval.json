@@ -1,0 +1,3646 @@
+{
+  "scenario_name": "iteration-test-macos",
+  "generated_at": "2026-11-02T13:00:00Z",
+  "evaluated_at": "2026-11-05T20:59:27.926725Z",
+  "total_records": 134567,
+  "source_counts": {
+    "bash_history": 309,
+    "cisco_asa": 21990,
+    "ecar": 35583,
+    "email_artifacts": 35,
+    "macos_endpoint_security": 305,
+    "macos_unified_log": 5,
+    "proxy_access": 3387,
+    "snort_alert": 159,
+    "syslog": 4249,
+    "web_access": 870,
+    "windows_event_security": 18945,
+    "windows_event_sysmon": 11789,
+    "zeek_conn": 21473,
+    "zeek_dhcp": 60,
+    "zeek_dns": 4002,
+    "zeek_files": 2210,
+    "zeek_http": 4573,
+    "zeek_ocsp": 85,
+    "zeek_pe": 3,
+    "zeek_smb_files": 199,
+    "zeek_smb_mapping": 115,
+    "zeek_smtp": 67,
+    "zeek_ssl": 2947,
+    "zeek_x509": 1167,
+    "zsh_history": 40
+  },
+  "overall_score": 96.67530483535866,
+  "pillars": [
+    {
+      "number": 1,
+      "name": "Parseability",
+      "weight": 0.3,
+      "score": 100.0,
+      "sub_scores": [
+        {
+          "name": "Spec Conformance",
+          "key": "spec_conformance",
+          "weight": 0.55,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "134567/134567 records pass schema validation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Format Constraints",
+          "key": "format_constraints",
+          "weight": 0.45,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "134567/134567 records pass constraint validation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 2,
+      "name": "Plausibility",
+      "weight": 0.25,
+      "score": 96.17402266996584,
+      "sub_scores": [
+        {
+          "name": "Value & OS Plausibility",
+          "key": "value_plausibility",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "23503/23503 records pass OS/value plausibility checks",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Co-occurrence Rules",
+          "key": "co_occurrence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "48672/48672 co-occurrence checks pass",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Distribution Fit",
+          "key": "distribution_fit",
+          "weight": 0.15,
+          "score": 78.57644906820879,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "ecar.object: 70; ecar.action: 61; web_access.method: 89; windows_event_security.EventID: 49; zeek_conn.proto: 98; zeek_conn.conn_state: 85; zeek_dns.qtype_name: 92; zeek_dns.rcode_name: 99; zeek_http.method: 37; zeek_http.status_code: 85; zeek_ssl.version: 84; zeek_ssl.established: 92",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Cross-Source Field Agreement",
+          "key": "field_agreement",
+          "weight": 0.15,
+          "score": 99.91703539823008,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "32517/32544 matched pivot pairs agree",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "HTTP resp fuid FlVovQbG3I1YxS1lYgQ has no files.log row",
+            "HTTP resp sparse MIME projection differs from files.log",
+            "HTTP resp fuid F58zqTS4bdajY2lrQWy has no files.log row",
+            "HTTP resp sparse MIME projection differs from files.log",
+            "HTTP resp fuid FsTRAPWf8GLHHBYaLLA has no files.log row",
+            "HTTP resp sparse MIME projection differs from files.log",
+            "HTTP resp fuid Fo0iMIFdsEHFKuil9y has no files.log row",
+            "HTTP resp sparse MIME projection differs from files.log",
+            "HTTP resp fuid Fb7eUhYO1rAgu9ZFA has no files.log row",
+            "HTTP resp sparse MIME projection differs from files.log"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "User Behavioral Diversity",
+          "key": "user_diversity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Avg pairwise similarity: 0.19 across 72 users",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Anomaly Rate",
+          "key": "anomaly_rate",
+          "weight": 0.1,
+          "score": 94.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "47/5000 events anomalous (0.9%), target 1-5%",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "IDS Correlation Integrity",
+          "key": "ids_integrity",
+          "weight": 0.0,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "133/133 IDS integrity checks pass",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 3,
+      "name": "Causality",
+      "weight": 0.25,
+      "score": 96.60883344991973,
+      "sub_scores": [
+        {
+          "name": "Causal Ordering",
+          "key": "causal_ordering",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "17584/17584 causal pairs correctly ordered",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Event Presence",
+          "key": "event_presence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": 93.45794392523365,
+          "adjusted": true,
+          "details": "100/100 expected-visible storyline events have traces in logs; raw 100/107 (93.5/100), 7 excluded by generation/observation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Indicator Accuracy",
+          "key": "indicator_accuracy",
+          "weight": 0.15,
+          "score": 98.79113498992612,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "1471/1489 indicator checks correct",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Event 16: source_ip mismatch in windows_event_security",
+            "Event 17: username mismatch in ecar",
+            "Event 17: username mismatch in ecar",
+            "Event 21: username mismatch in ecar",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 25: username mismatch in windows_event_security",
+            "Event 25: username mismatch in windows_event_security"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Pivot Linkability",
+          "key": "pivot_linkability",
+          "weight": 0.15,
+          "score": 89.41798941798942,
+          "raw_score": null,
+          "adjusted": true,
+          "details": "169/189 inferred expected-visible narrative edges retain a shared rendered pivot; 1 isolated events, 7 contract-exempt",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Events 5→16: expected pivot not present in both rendered traces (root@LT-MRIVERA-02 → marcus.chen@WS-MCHEN-01)",
+            "Events 9→85: expected pivot not present in both rendered traces (apache@WEB-EXT-01 → maya.ross@MAC-MROSS-01)",
+            "Events 15→36: expected pivot not present in both rendered traces (root@APP-INT-01 → root@APP-INT-01)",
+            "Events 16→17: expected pivot not present in both rendered traces (marcus.chen@WS-MCHEN-01 → root@WS-AJOHNSON-01)",
+            "Events 18→21: expected pivot not present in both rendered traces (root@WS-AJOHNSON-01 → aisha.johnson@WS-AJOHNSON-01)",
+            "Events 34→38: expected pivot not present in both rendered traces (marcus.chen@WS-AJOHNSON-01 → marcus.chen@WS-AJOHNSON-01)",
+            "Events 34→43: expected pivot not present in both rendered traces (marcus.chen@WS-AJOHNSON-01 → SYSTEM@DC-01)",
+            "Events 38→46: expected pivot not present in both rendered traces (marcus.chen@WS-AJOHNSON-01 → marcus.chen@DC-02)",
+            "Events 56→58: expected pivot not present in both rendered traces (root@MAC-MROSS-01 → root@MAC-MROSS-01)",
+            "Events 62→64: expected pivot not present in both rendered traces (root@MAC-MROSS-02 → root@MAC-MROSS-02)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Temporal Integrity",
+          "key": "temporal_integrity",
+          "weight": 0.15,
+          "score": 92.0,
+          "raw_score": 85.98130841121495,
+          "adjusted": true,
+          "details": "92/100 expected-visible events correctly timed and ordered; raw 92/107 (86.0/100), 7 excluded by generation/observation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Event 0: trace at -129s from expected (tolerance ±120s)",
+            "Event 4: out of order relative to previous",
+            "Event 54: out of order relative to previous",
+            "Event 11: trace at -218s from expected (tolerance ±120s)",
+            "Event 24: trace at -168s from expected (tolerance ±120s)",
+            "Event 86: out of order relative to previous",
+            "Event 28: trace at +123s from expected (tolerance ±120s)",
+            "Event 29: trace at +373s from expected (tolerance ±120s)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Storyline Trace Coverage",
+          "key": "storyline_trace_coverage",
+          "weight": 0.1,
+          "score": 95.77464788732394,
+          "raw_score": 94.44444444444444,
+          "adjusted": true,
+          "details": "136/142 expected-visible format-traces found; raw 136/144 (94.4/100), 2 excluded by generation/observation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Event 1: no trace in mailbox group for diego.ramirez@WS-DRAMIREZ-01",
+            "Event 5: no trace in network_transport group for root@LT-MRIVERA-02",
+            "Event 7: no trace in mailbox group for omar.haddad@WS-OHADDAD-01",
+            "Event 20: no trace in mailbox group for aisha.johnson@WS-AJOHNSON-01",
+            "Event 28: no trace in http group for SYSTEM@DC-01",
+            "Event 38: no trace in http group for marcus.chen@WS-AJOHNSON-01"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Intent Reconciliation",
+          "key": "intent_reconciliation",
+          "weight": 0.0,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "221/221 authored/planner reconciliation assertions pass; 204 intents dispatched canonical events and 204 had visible or delayed source evidence",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Effect Reconciliation",
+          "key": "effect_reconciliation",
+          "weight": 0.0,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Legacy ground truth has no execution-effect reconciliation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        }
+      ],
+      "supplementary": {
+        "host_log_profile": {
+          "app-int-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 34,
+              "ecar": 777,
+              "syslog": 245
+            }
+          },
+          "db-prod-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 42,
+              "ecar": 580,
+              "syslog": 216
+            }
+          },
+          "dc-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 5592,
+              "windows_event_security": 6702
+            }
+          },
+          "dc-02": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 4849,
+              "windows_event_security": 6115
+            }
+          },
+          "file-lnx-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 39,
+              "ecar": 1339,
+              "syslog": 529
+            }
+          },
+          "file-srv-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 1315,
+              "windows_event_security": 1332
+            }
+          },
+          "log-mon-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 21,
+              "ecar": 723,
+              "syslog": 247
+            }
+          },
+          "lt-mrivera-02": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 1,
+              "ecar": 368,
+              "syslog": 169
+            }
+          },
+          "mac-mross-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "present_formats": [
+              "ecar",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "inactive_conditional_formats": [
+              "bash_history"
+            ],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 464,
+              "macos_endpoint_security": 144,
+              "macos_unified_log": 3,
+              "zsh_history": 20
+            },
+            "process_coverage": {
+              "ecar_process_creates": 48,
+              "ecar_forks": 48,
+              "ecar_execs": 55,
+              "native_es_event_11": 48,
+              "native_es_event_9": 55,
+              "native_es_event_15": 41
+            },
+            "coverage_notes": [
+              "Shell history requires an explicit interactive submission to its live shell.",
+              "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+              "Endpoint Security covers qualified v11 fork/exec/known-exit observations; aggregate process CREATE is not a fork. App-policy refusal establishes neither a target execution stage nor a specific refusal cause."
+            ]
+          },
+          "mac-mross-02": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "present_formats": [
+              "ecar",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history",
+              "macos_endpoint_security",
+              "macos_unified_log",
+              "zsh_history"
+            ],
+            "inactive_conditional_formats": [
+              "bash_history"
+            ],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 622,
+              "macos_endpoint_security": 161,
+              "macos_unified_log": 2,
+              "zsh_history": 20
+            },
+            "process_coverage": {
+              "ecar_process_creates": 52,
+              "ecar_forks": 52,
+              "ecar_execs": 63,
+              "native_es_event_11": 52,
+              "native_es_event_9": 63,
+              "native_es_event_15": 46
+            },
+            "coverage_notes": [
+              "Shell history requires an explicit interactive submission to its live shell.",
+              "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+              "Endpoint Security covers qualified v11 fork/exec/known-exit observations; aggregate process CREATE is not a fork. App-policy refusal establishes neither a target execution stage nor a specific refusal cause."
+            ]
+          },
+          "mail-clin-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 24,
+              "ecar": 604,
+              "syslog": 296
+            }
+          },
+          "mail-edge-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 39,
+              "ecar": 588,
+              "syslog": 432
+            }
+          },
+          "mail-fin-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 953,
+              "windows_event_security": 821
+            }
+          },
+          "proxy-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "proxy_access",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "proxy_access",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 22,
+              "ecar": 5264,
+              "proxy_access": 3387,
+              "syslog": 222
+            }
+          },
+          "web-ext-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 23,
+              "ecar": 4104,
+              "syslog": 1418,
+              "web_access": 870
+            }
+          },
+          "ws-ajohnson-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 1423,
+              "windows_event_security": 782
+            }
+          },
+          "ws-dramirez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 874,
+              "windows_event_security": 623
+            }
+          },
+          "ws-ebrooks-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 936,
+              "windows_event_security": 577
+            }
+          },
+          "ws-lnguyen-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 47,
+              "ecar": 544,
+              "syslog": 285
+            }
+          },
+          "ws-mchen-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 1121,
+              "windows_event_security": 636
+            }
+          },
+          "ws-ohaddad-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [
+              "bash_history"
+            ],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "bash_history": 17,
+              "ecar": 508,
+              "syslog": 190
+            }
+          },
+          "ws-ppatel-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 1212,
+              "windows_event_security": 764
+            }
+          },
+          "ws-smartinez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "conditional_formats": [],
+            "inactive_conditional_formats": [],
+            "deployment_verified": true,
+            "volume_by_format": {
+              "ecar": 823,
+              "windows_event_security": 593
+            }
+          }
+        },
+        "macos_native_coverage": {
+          "schema_version": 3,
+          "scope": "canonical_process_window",
+          "policy": "complete",
+          "hosts": [
+            {
+              "hostname": "MAC-MROSS-01",
+              "source_profile": "modeled-macos27-arm64-process-v1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 55
+                },
+                {
+                  "phase": "exit",
+                  "reason": "exit_outcome_unknown",
+                  "status": "filtered",
+                  "count": 6
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 41
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 48
+                }
+              ],
+              "authored_actions": [
+                {
+                  "storyline_cluster_id": "mac-1-admin-shell",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-browser",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 5
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 4
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-inventory-run-1",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-inventory-run-2",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-inventory-run-3",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-logout",
+                  "observations": [
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 12
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-1",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 7
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 6
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-2",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-3",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-4",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-5",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-6",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-1-terminal-task-7",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-chat",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-linux-admin",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-nonpty",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-pty",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 6
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 6
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-pty-checks",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-pty-close",
+                  "observations": [
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                }
+              ],
+              "process_census": {
+                "window_start": "2026-11-02T13:00:00Z",
+                "window_end": "2026-11-02T19:00:00Z",
+                "expected_forks": 48,
+                "expected_execs": 55,
+                "published_forks": 48,
+                "published_execs": 55,
+                "fork_identities_match": true,
+                "exec_identities_match": true,
+                "aggregate_births": 0,
+                "aggregate_examples": [],
+                "complete": true,
+                "expected_exits": 47,
+                "observed_exits": 47,
+                "known_exits": 41,
+                "published_exits": 41,
+                "exit_accounting_complete": true,
+                "known_exit_identities_match": true,
+                "exit_complete": false
+              }
+            },
+            {
+              "hostname": "MAC-MROSS-02",
+              "source_profile": "modeled-macos27-arm64-process-v1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 63
+                },
+                {
+                  "phase": "exit",
+                  "reason": "exit_outcome_unknown",
+                  "status": "filtered",
+                  "count": 5
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 46
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 52
+                }
+              ],
+              "authored_actions": [
+                {
+                  "storyline_cluster_id": "mac-2-admin-shell",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-browser",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 5
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 4
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-inventory-run-1",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-inventory-run-2",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-inventory-run-3",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-logout",
+                  "observations": [
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 13
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-1",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 9
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 7
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-2",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-3",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-4",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-5",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-6",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-2-terminal-task-7",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-document",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-mail",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-meeting",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 2
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-nonpty",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 6
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 6
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-nonpty-checks",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 3
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-nonpty-close",
+                  "observations": [
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 4
+                    }
+                  ]
+                },
+                {
+                  "storyline_cluster_id": "mac-ssh-pty",
+                  "observations": [
+                    {
+                      "phase": "exec",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "exit",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    },
+                    {
+                      "phase": "fork",
+                      "reason": "supported",
+                      "status": "visible",
+                      "count": 1
+                    }
+                  ]
+                }
+              ],
+              "process_census": {
+                "window_start": "2026-11-02T13:00:00Z",
+                "window_end": "2026-11-02T19:00:00Z",
+                "expected_forks": 52,
+                "expected_execs": 63,
+                "published_forks": 52,
+                "published_execs": 63,
+                "fork_identities_match": true,
+                "exec_identities_match": true,
+                "aggregate_births": 0,
+                "aggregate_examples": [],
+                "complete": true,
+                "expected_exits": 51,
+                "observed_exits": 51,
+                "known_exits": 46,
+                "published_exits": 46,
+                "exit_accounting_complete": true,
+                "known_exit_identities_match": true,
+                "exit_complete": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "number": 4,
+      "name": "Timing",
+      "weight": 0.2,
+      "score": 92.39795402693633,
+      "sub_scores": [
+        {
+          "name": "Attack Chain Timing",
+          "key": "attack_chain_timing",
+          "weight": 0.15,
+          "score": 84.90566037735849,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "90/106 storyline transitions within bounds",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Events 32→33: 0s < min 5s ('Attacker tests the compromised help desk')",
+            "Events 48→49: 0s < min 5s ('End the prior local engineering session ')",
+            "Events 55→56: 8580s > max 7200s ('Run one requested OS inventory check and')",
+            "Events 58→59: 0s < min 5s ('End the prior local engineering session ')",
+            "Events 64→65: 7440s > max 7200s ('Run one requested OS inventory check and')",
+            "Events 65→66: 7500s > max 7200s ('Run one requested OS inventory check and')",
+            "Events 68→69: 0s < min 5s ('Local terminal checks of OS, account, st')",
+            "Events 75→76: 0s < min 5s ('Local terminal checks of OS, account, st')",
+            "Events 82→83: 0s < min 5s ('Open Chrome from Finder for the engineer')",
+            "Events 85→86: 7800s > max 7200s ('Browse the company EHR integration porta')"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Human Burstiness",
+          "key": "burstiness",
+          "weight": 0.2,
+          "score": 98.14578759314603,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "CV scores for 36 users (target CV 1.0-3.0)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "System Process Regularity",
+          "key": "system_regularity",
+          "weight": 0.15,
+          "score": 77.02237764210724,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Interval CV: 1.230 (10 service groups, 2450 events)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Diurnal Pattern",
+          "key": "diurnal_pattern",
+          "weight": 0.2,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Scenario spans 6.0h across 1 weekday(s) — too short to measure diurnal pattern (needs ≥24h and ≥2 weekdays)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "Volume Adequacy",
+          "key": "volume_adequacy",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Noise:signal 1257:1 (target 200:1 for low)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Rate Plausibility",
+          "key": "rate_plausibility",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "18852/18852 timing checks plausible",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    }
+  ],
+  "categories": [
+    {
+      "key": "source_schema",
+      "name": "Parseability & Source Schema",
+      "score": 100.0,
+      "sub_score_keys": [
+        "spec_conformance",
+        "format_constraints"
+      ],
+      "details": "2/2 configured measures scored"
+    },
+    {
+      "key": "canonical_invariants",
+      "name": "Canonical Cross-Source Invariants",
+      "score": 99.98617256637168,
+      "sub_score_keys": [
+        "value_plausibility",
+        "co_occurrence",
+        "field_agreement",
+        "ids_integrity",
+        "causal_ordering",
+        "rate_plausibility"
+      ],
+      "details": "6/6 configured measures scored"
+    },
+    {
+      "key": "scenario_completeness",
+      "name": "Declared Scenario Completeness",
+      "score": 95.99729538253992,
+      "sub_score_keys": [
+        "intent_reconciliation",
+        "event_presence",
+        "indicator_accuracy",
+        "pivot_linkability",
+        "temporal_integrity",
+        "storyline_trace_coverage"
+      ],
+      "details": "6/7 configured measures scored"
+    },
+    {
+      "key": "distribution_realism",
+      "name": "Distribution & Realism Diagnostics",
+      "score": 90.37861066868865,
+      "sub_score_keys": [
+        "distribution_fit",
+        "user_diversity",
+        "anomaly_rate",
+        "attack_chain_timing",
+        "burstiness",
+        "system_regularity",
+        "volume_adequacy"
+      ],
+      "details": "7/8 configured measures scored"
+    },
+    {
+      "key": "expert_comparison",
+      "name": "Optional Expert Comparison",
+      "score": null,
+      "sub_score_keys": [],
+      "details": "No expert assessment was supplied to this deterministic evaluation run"
+    }
+  ],
+  "acceptance_passed": true,
+  "acceptance_criteria": [
+    {
+      "name": "parseability.spec_conformance",
+      "pillar": "parseability",
+      "sub_score_key": "spec_conformance",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "parseability.format_constraints",
+      "pillar": "parseability",
+      "sub_score_key": "format_constraints",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.value_plausibility",
+      "pillar": "plausibility",
+      "sub_score_key": "value_plausibility",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.field_agreement",
+      "pillar": "plausibility",
+      "sub_score_key": "field_agreement",
+      "threshold": 85.0,
+      "aspirational": 97.0,
+      "actual": 99.91703539823008,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.ids_integrity",
+      "pillar": "plausibility",
+      "sub_score_key": "ids_integrity",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.causal_ordering",
+      "pillar": "causality",
+      "sub_score_key": "causal_ordering",
+      "threshold": 90.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.event_presence",
+      "pillar": "causality",
+      "sub_score_key": "event_presence",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.intent_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "intent_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.effect_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "effect_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.indicator_accuracy",
+      "pillar": "causality",
+      "sub_score_key": "indicator_accuracy",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 98.79113498992612,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 89.41798941798942,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.temporal_integrity",
+      "pillar": "causality",
+      "sub_score_key": "temporal_integrity",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 92.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.storyline_trace_coverage",
+      "pillar": "causality",
+      "sub_score_key": "storyline_trace_coverage",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 95.77464788732394,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    }
+  ],
+  "aspirational_met": 15,
+  "aspirational_total": 21,
+  "flags": [],
+  "supplementary": {
+    "output_target": "default",
+    "evaluation_capacity": {
+      "files": 120,
+      "corpus_bytes": 81550777,
+      "parsed_records": 134567,
+      "limits_overridden": false
+    },
+    "host_log_profile": {
+      "app-int-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 34,
+          "ecar": 777,
+          "syslog": 245
+        }
+      },
+      "db-prod-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 42,
+          "ecar": 580,
+          "syslog": 216
+        }
+      },
+      "dc-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 5592,
+          "windows_event_security": 6702
+        }
+      },
+      "dc-02": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 4849,
+          "windows_event_security": 6115
+        }
+      },
+      "file-lnx-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 39,
+          "ecar": 1339,
+          "syslog": 529
+        }
+      },
+      "file-srv-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 1315,
+          "windows_event_security": 1332
+        }
+      },
+      "log-mon-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 21,
+          "ecar": 723,
+          "syslog": 247
+        }
+      },
+      "lt-mrivera-02": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 1,
+          "ecar": 368,
+          "syslog": 169
+        }
+      },
+      "mac-mross-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "present_formats": [
+          "ecar",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "inactive_conditional_formats": [
+          "bash_history"
+        ],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 464,
+          "macos_endpoint_security": 144,
+          "macos_unified_log": 3,
+          "zsh_history": 20
+        },
+        "process_coverage": {
+          "ecar_process_creates": 48,
+          "ecar_forks": 48,
+          "ecar_execs": 55,
+          "native_es_event_11": 48,
+          "native_es_event_9": 55,
+          "native_es_event_15": 41
+        },
+        "coverage_notes": [
+          "Shell history requires an explicit interactive submission to its live shell.",
+          "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+          "Endpoint Security covers qualified v11 fork/exec/known-exit observations; aggregate process CREATE is not a fork. App-policy refusal establishes neither a target execution stage nor a specific refusal cause."
+        ]
+      },
+      "mac-mross-02": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "present_formats": [
+          "ecar",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history",
+          "macos_endpoint_security",
+          "macos_unified_log",
+          "zsh_history"
+        ],
+        "inactive_conditional_formats": [
+          "bash_history"
+        ],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 622,
+          "macos_endpoint_security": 161,
+          "macos_unified_log": 2,
+          "zsh_history": 20
+        },
+        "process_coverage": {
+          "ecar_process_creates": 52,
+          "ecar_forks": 52,
+          "ecar_execs": 63,
+          "native_es_event_11": 52,
+          "native_es_event_9": 63,
+          "native_es_event_15": 46
+        },
+        "coverage_notes": [
+          "Shell history requires an explicit interactive submission to its live shell.",
+          "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+          "Endpoint Security covers qualified v11 fork/exec/known-exit observations; aggregate process CREATE is not a fork. App-policy refusal establishes neither a target execution stage nor a specific refusal cause."
+        ]
+      },
+      "mail-clin-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 24,
+          "ecar": 604,
+          "syslog": 296
+        }
+      },
+      "mail-edge-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 39,
+          "ecar": 588,
+          "syslog": 432
+        }
+      },
+      "mail-fin-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 953,
+          "windows_event_security": 821
+        }
+      },
+      "proxy-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "proxy_access",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "proxy_access",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 22,
+          "ecar": 5264,
+          "proxy_access": 3387,
+          "syslog": 222
+        }
+      },
+      "web-ext-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 23,
+          "ecar": 4104,
+          "syslog": 1418,
+          "web_access": 870
+        }
+      },
+      "ws-ajohnson-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 1423,
+          "windows_event_security": 782
+        }
+      },
+      "ws-dramirez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 874,
+          "windows_event_security": 623
+        }
+      },
+      "ws-ebrooks-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 936,
+          "windows_event_security": 577
+        }
+      },
+      "ws-lnguyen-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 47,
+          "ecar": 544,
+          "syslog": 285
+        }
+      },
+      "ws-mchen-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 1121,
+          "windows_event_security": 636
+        }
+      },
+      "ws-ohaddad-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [
+          "bash_history"
+        ],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "bash_history": 17,
+          "ecar": 508,
+          "syslog": 190
+        }
+      },
+      "ws-ppatel-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 1212,
+          "windows_event_security": 764
+        }
+      },
+      "ws-smartinez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "conditional_formats": [],
+        "inactive_conditional_formats": [],
+        "deployment_verified": true,
+        "volume_by_format": {
+          "ecar": 823,
+          "windows_event_security": 593
+        }
+      }
+    },
+    "macos_native_coverage": {
+      "schema_version": 3,
+      "scope": "canonical_process_window",
+      "policy": "complete",
+      "hosts": [
+        {
+          "hostname": "MAC-MROSS-01",
+          "source_profile": "modeled-macos27-arm64-process-v1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 55
+            },
+            {
+              "phase": "exit",
+              "reason": "exit_outcome_unknown",
+              "status": "filtered",
+              "count": 6
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 41
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 48
+            }
+          ],
+          "authored_actions": [
+            {
+              "storyline_cluster_id": "mac-1-admin-shell",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-browser",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 5
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 4
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-inventory-run-1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-inventory-run-2",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-inventory-run-3",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-logout",
+              "observations": [
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 12
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 7
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 6
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-2",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-3",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-4",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-5",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-6",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-1-terminal-task-7",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-chat",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-linux-admin",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-nonpty",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-pty",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 6
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 6
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-pty-checks",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-pty-close",
+              "observations": [
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            }
+          ],
+          "process_census": {
+            "window_start": "2026-11-02T13:00:00Z",
+            "window_end": "2026-11-02T19:00:00Z",
+            "expected_forks": 48,
+            "expected_execs": 55,
+            "published_forks": 48,
+            "published_execs": 55,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true,
+            "expected_exits": 47,
+            "observed_exits": 47,
+            "known_exits": 41,
+            "published_exits": 41,
+            "exit_accounting_complete": true,
+            "known_exit_identities_match": true,
+            "exit_complete": false
+          }
+        },
+        {
+          "hostname": "MAC-MROSS-02",
+          "source_profile": "modeled-macos27-arm64-process-v1",
+          "observations": [
+            {
+              "phase": "exec",
+              "reason": "supported",
+              "status": "visible",
+              "count": 63
+            },
+            {
+              "phase": "exit",
+              "reason": "exit_outcome_unknown",
+              "status": "filtered",
+              "count": 5
+            },
+            {
+              "phase": "exit",
+              "reason": "supported",
+              "status": "visible",
+              "count": 46
+            },
+            {
+              "phase": "fork",
+              "reason": "supported",
+              "status": "visible",
+              "count": 52
+            }
+          ],
+          "authored_actions": [
+            {
+              "storyline_cluster_id": "mac-2-admin-shell",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-browser",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 5
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 4
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-inventory-run-1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-inventory-run-2",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-inventory-run-3",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-logout",
+              "observations": [
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 13
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-1",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 9
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 7
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-2",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-3",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-4",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-5",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-6",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-2-terminal-task-7",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-document",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-mail",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-meeting",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 2
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-nonpty",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 6
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 6
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-nonpty-checks",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 3
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-nonpty-close",
+              "observations": [
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 4
+                }
+              ]
+            },
+            {
+              "storyline_cluster_id": "mac-ssh-pty",
+              "observations": [
+                {
+                  "phase": "exec",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "exit",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                },
+                {
+                  "phase": "fork",
+                  "reason": "supported",
+                  "status": "visible",
+                  "count": 1
+                }
+              ]
+            }
+          ],
+          "process_census": {
+            "window_start": "2026-11-02T13:00:00Z",
+            "window_end": "2026-11-02T19:00:00Z",
+            "expected_forks": 52,
+            "expected_execs": 63,
+            "published_forks": 52,
+            "published_execs": 63,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true,
+            "expected_exits": 51,
+            "observed_exits": 51,
+            "known_exits": 46,
+            "published_exits": 46,
+            "exit_accounting_complete": true,
+            "known_exit_identities_match": true,
+            "exit_complete": false
+          }
+        }
+      ]
+    },
+    "observation_profile": {
+      "profile": "enterprise_standard",
+      "manifest_present": true,
+      "source_summary": {
+        "ids": {
+          "delayed": 156,
+          "visible": 3,
+          "filtered": 412,
+          "dropped": 2
+        },
+        "asa": {
+          "delayed": 2118,
+          "filtered": 410,
+          "visible": 21,
+          "dropped": 6
+        },
+        "ecar": {
+          "visible": 2822,
+          "dropped": 14,
+          "delayed": 659,
+          "out_of_window": 2
+        },
+        "zeek": {
+          "visible": 3588,
+          "filtered": 9,
+          "out_of_window": 3,
+          "dropped": 1
+        },
+        "web": {
+          "delayed": 379,
+          "dropped": 2
+        },
+        "syslog": {
+          "delayed": 189,
+          "visible": 2
+        },
+        "bash_history": {
+          "visible": 24
+        },
+        "sysmon": {
+          "delayed": 912,
+          "filtered": 26,
+          "visible": 104,
+          "dropped": 2,
+          "out_of_window": 1
+        },
+        "windows_security": {
+          "delayed": 706,
+          "visible": 14,
+          "out_of_window": 1
+        },
+        "proxy": {
+          "delayed": 33
+        },
+        "all": {
+          "out_of_window": 16
+        },
+        "macos_endpoint_security": {
+          "visible": 258
+        },
+        "macos_unified_log": {
+          "visible": 5
+        },
+        "zsh_history": {
+          "visible": 38
+        }
+      }
+    }
+  },
+  "llm_spot_checks": null
+}

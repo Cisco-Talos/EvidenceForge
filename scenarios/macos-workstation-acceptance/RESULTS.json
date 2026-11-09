@@ -1,0 +1,763 @@
+{
+  "schema_version": 1,
+  "source": "source/scenario.yaml",
+  "source_sha256": "632fe6d932b6749049d3c8f8d1d559092c7ceb07994a1afd5d619725c769470d",
+  "generation_behavior_revision": 373,
+  "behavior_surface_sha256": "1112d76da93cf383cef734e563f7e3790a021e49d59a8a03ebb52704b0c40a72",
+  "primary_seed": 373,
+  "full_workload_acceptance": "BLOCKED",
+  "full_workload_filter_recovery": "NOT_RUN",
+  "scope_note": "Activity slices overlap and use partial policy; they cannot replace unchanged-source acceptance. Earlier slice runs precede the final visibility-reporting corrections; the combined bundle was regenerated and evaluated after those corrections.",
+  "initial_low_intensity_result": {
+    "full_exit_code": 21,
+    "blocker": "Finder startup requires an explicit app bundle-identifier policy",
+    "baseline_in_window_execs": 0,
+    "inventory_job_exit_code": 21
+  },
+  "measurements": [
+    {
+      "name": "full",
+      "scope": "full",
+      "exit_code": 21,
+      "blocker": "Finder startup requires an explicit app bundle-identifier policy",
+      "native_exec_images": null,
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": null,
+      "activity_supported": false,
+      "census_complete": false,
+      "manifest_sha256": null,
+      "actual_seed": null,
+      "target": null,
+      "hosts": []
+    },
+    {
+      "name": "apple-terminal",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 1,
+        "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+        "/usr/bin/login": 1,
+        "/bin/zsh": 1,
+        "/usr/bin/id": 1,
+        "/bin/ls": 1
+      },
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": true,
+      "census_complete": true,
+      "manifest_sha256": "dc16a1c0ed481f727fa1718a46eda31e12b7218d753dc3fda3d9a560c0966cad",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 5,
+            "expected_execs": 6,
+            "published_forks": 5,
+            "published_execs": 6,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 0,
+            "expected_execs": 0,
+            "published_forks": 0,
+            "published_execs": 0,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "iterm-terminal",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 1,
+        "/Applications/iTerm.app/Contents/MacOS/iTerm2": 1,
+        "/Users/alex/Library/Application Support/iTerm2/iTermServer-3.7.6": 1,
+        "/usr/bin/login": 1,
+        "/Applications/iTerm.app/Contents/MacOS/ShellLauncher": 1,
+        "/bin/zsh": 1,
+        "/usr/bin/sw_vers": 1,
+        "/usr/bin/uname": 1
+      },
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": true,
+      "census_complete": true,
+      "manifest_sha256": "b0abf5e1e0289b2454f1f88c101800b55a2548e378089d1f0b7c44ad8497df56",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 0,
+            "expected_execs": 0,
+            "published_forks": 0,
+            "published_execs": 0,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 6,
+            "expected_execs": 8,
+            "published_forks": 6,
+            "published_execs": 8,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "nonpty-ssh",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 2,
+        "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+        "/usr/bin/login": 1,
+        "/bin/zsh": 2,
+        "/usr/bin/ssh": 1,
+        "/usr/libexec/sshd-keygen-wrapper": 1,
+        "/usr/sbin/sshd": 1,
+        "/usr/libexec/sshd-session": 1,
+        "/usr/libexec/sshd-auth": 1,
+        "/usr/bin/id": 1
+      },
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": true,
+      "census_complete": true,
+      "manifest_sha256": "558daa28a06ecce44fefeae4bad650a05eaa391920d72fa732ae63a5871b4a65",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 4,
+            "expected_execs": 5,
+            "published_forks": 4,
+            "published_execs": 5,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 7,
+            "expected_execs": 7,
+            "published_forks": 7,
+            "published_execs": 7,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "pty-ssh",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 2,
+        "/usr/libexec/sshd-keygen-wrapper": 1,
+        "/usr/sbin/sshd": 1,
+        "/usr/libexec/sshd-session": 1,
+        "/usr/libexec/sshd-auth": 1,
+        "/bin/zsh": 2,
+        "/usr/bin/sw_vers": 1,
+        "/Applications/iTerm.app/Contents/MacOS/iTerm2": 1,
+        "/Users/alex/Library/Application Support/iTerm2/iTermServer-3.7.6": 1,
+        "/usr/bin/login": 1,
+        "/Applications/iTerm.app/Contents/MacOS/ShellLauncher": 1,
+        "/usr/bin/ssh": 1
+      },
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": true,
+      "census_complete": true,
+      "manifest_sha256": "a77600b5f89af1ffb961e97d3844c77d64efab3a6b1c6925bb891d275bae706c",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 7,
+            "expected_execs": 7,
+            "published_forks": 7,
+            "published_execs": 7,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 5,
+            "expected_execs": 7,
+            "published_forks": 5,
+            "published_execs": 7,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "chrome",
+      "scope": "diagnostic_slice",
+      "exit_code": 21,
+      "blocker": "Finder startup requires an explicit app bundle-identifier policy",
+      "native_exec_images": null,
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": null,
+      "activity_supported": false,
+      "census_complete": false,
+      "manifest_sha256": null,
+      "actual_seed": null,
+      "target": null,
+      "hosts": []
+    },
+    {
+      "name": "system-job",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 2,
+        "/usr/bin/sw_vers": 2
+      },
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": true,
+      "census_complete": true,
+      "manifest_sha256": "bcac4c72cf5048d94fec54a1313cbf9aa23741bbb791cd11fa6686fa74dc6cdd",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 2,
+            "expected_execs": 4,
+            "published_forks": 2,
+            "published_execs": 4,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 0,
+            "expected_execs": 0,
+            "published_forks": 0,
+            "published_execs": 0,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {},
+      "missing_images": [],
+      "unrealized_steps": [],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": false,
+      "census_complete": true,
+      "manifest_sha256": "2009779ebd76fcfdb6f41b8224ed1f6c56c194f01a2d1d0eb1d62fb4a889c1be",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 0,
+            "expected_execs": 0,
+            "published_forks": 0,
+            "published_execs": 0,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 0,
+            "expected_execs": 0,
+            "published_forks": 0,
+            "published_execs": 0,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "supported-combined",
+      "scope": "diagnostic_slice",
+      "exit_code": 0,
+      "blocker": null,
+      "native_exec_images": {
+        "/usr/libexec/xpcproxy": 6,
+        "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+        "/usr/bin/login": 2,
+        "/bin/zsh": 4,
+        "/usr/bin/id": 2,
+        "/bin/ls": 1,
+        "/usr/bin/ssh": 2,
+        "/usr/libexec/sshd-keygen-wrapper": 2,
+        "/usr/sbin/sshd": 2,
+        "/usr/libexec/sshd-session": 2,
+        "/usr/libexec/sshd-auth": 2,
+        "/usr/bin/sw_vers": 4,
+        "/Applications/iTerm.app/Contents/MacOS/iTerm2": 1,
+        "/Users/alex/Library/Application Support/iTerm2/iTermServer-3.7.6": 1,
+        "/Applications/iTerm.app/Contents/MacOS/ShellLauncher": 1,
+        "/usr/bin/uname": 1
+      },
+      "missing_images": [],
+      "unrealized_steps": [
+        "close-warmup-mac-apple",
+        "close-warmup-mac-iterm"
+      ],
+      "authored_phase_gaps": [],
+      "background_native_execs": 0,
+      "activity_supported": false,
+      "census_complete": true,
+      "manifest_sha256": "80452ff615439e0abb7a6ef510182bc017c21be7cfd96773bd9ee9ffca6090ed",
+      "actual_seed": 373,
+      "target": "default",
+      "hosts": [
+        {
+          "hostname": "MAC-APPLE",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 15,
+            "expected_execs": 18,
+            "published_forks": 15,
+            "published_execs": 18,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        },
+        {
+          "hostname": "MAC-ITERM",
+          "process_census": {
+            "window_start": "2026-10-19T14:00:00Z",
+            "window_end": "2026-10-19T14:30:00Z",
+            "expected_forks": 14,
+            "expected_execs": 16,
+            "published_forks": 14,
+            "published_execs": 16,
+            "fork_identities_match": true,
+            "exec_identities_match": true,
+            "aggregate_births": 0,
+            "aggregate_examples": [],
+            "complete": true
+          }
+        }
+      ]
+    }
+  ],
+  "supplemental_baseline": [
+    {
+      "seed": 374,
+      "measurement": {
+        "name": "baseline",
+        "scope": "diagnostic_slice",
+        "exit_code": 0,
+        "blocker": null,
+        "native_exec_images": {},
+        "missing_images": [],
+        "unrealized_steps": [],
+        "authored_phase_gaps": [],
+        "background_native_execs": 0,
+        "activity_supported": false,
+        "census_complete": true,
+        "manifest_sha256": "327a5f4bee6b43cf1733a0fbc2c2713b159446e01d11c602c247904e4fdc7a36",
+        "actual_seed": 374,
+        "target": "default",
+        "hosts": [
+          {
+            "hostname": "MAC-APPLE",
+            "process_census": {
+              "window_start": "2026-10-19T14:00:00Z",
+              "window_end": "2026-10-19T14:30:00Z",
+              "expected_forks": 0,
+              "expected_execs": 0,
+              "published_forks": 0,
+              "published_execs": 0,
+              "fork_identities_match": true,
+              "exec_identities_match": true,
+              "aggregate_births": 0,
+              "aggregate_examples": [],
+              "complete": true
+            }
+          },
+          {
+            "hostname": "MAC-ITERM",
+            "process_census": {
+              "window_start": "2026-10-19T14:00:00Z",
+              "window_end": "2026-10-19T14:30:00Z",
+              "expected_forks": 0,
+              "expected_execs": 0,
+              "published_forks": 0,
+              "published_execs": 0,
+              "fork_identities_match": true,
+              "exec_identities_match": true,
+              "aggregate_births": 0,
+              "aggregate_examples": [],
+              "complete": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "seed": 375,
+      "measurement": {
+        "name": "baseline",
+        "scope": "diagnostic_slice",
+        "exit_code": 0,
+        "blocker": null,
+        "native_exec_images": {
+          "/usr/libexec/xpcproxy": 1,
+          "/Applications/iTerm.app/Contents/MacOS/iTerm2": 1,
+          "/Users/alex/Library/Application Support/iTerm2/iTermServer-3.7.6": 1,
+          "/usr/bin/login": 1,
+          "/Applications/iTerm.app/Contents/MacOS/ShellLauncher": 1,
+          "/bin/zsh": 2
+        },
+        "missing_images": [],
+        "unrealized_steps": [],
+        "authored_phase_gaps": [],
+        "background_native_execs": 7,
+        "activity_supported": true,
+        "census_complete": true,
+        "manifest_sha256": "371b709726b7bdd700bf3fd0103ba18fa2ead68463bd1cddb86beba342b34635",
+        "actual_seed": 375,
+        "target": "default",
+        "hosts": [
+          {
+            "hostname": "MAC-APPLE",
+            "process_census": {
+              "window_start": "2026-10-19T14:00:00Z",
+              "window_end": "2026-10-19T14:30:00Z",
+              "expected_forks": 0,
+              "expected_execs": 0,
+              "published_forks": 0,
+              "published_execs": 0,
+              "fork_identities_match": true,
+              "exec_identities_match": true,
+              "aggregate_births": 0,
+              "aggregate_examples": [],
+              "complete": true
+            }
+          },
+          {
+            "hostname": "MAC-ITERM",
+            "process_census": {
+              "window_start": "2026-10-19T14:00:00Z",
+              "window_end": "2026-10-19T14:30:00Z",
+              "expected_forks": 5,
+              "expected_execs": 7,
+              "published_forks": 5,
+              "published_execs": 7,
+              "fork_identities_match": true,
+              "exec_identities_match": true,
+              "aggregate_births": 0,
+              "aggregate_examples": [],
+              "complete": true
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "combined_diagnostic_evaluation": {
+    "acceptance_passed": true,
+    "overall_score": 89.52820803410944,
+    "source_counts": {
+      "ecar": 161,
+      "macos_endpoint_security": 75,
+      "macos_unified_log": 2,
+      "zeek_conn": 34,
+      "zeek_dns": 14,
+      "zeek_files": 4,
+      "zeek_ssl": 15,
+      "zeek_x509": 4,
+      "zsh_history": 8
+    },
+    "acceptance_criteria": [
+      {
+        "name": "parseability.spec_conformance",
+        "pillar": "parseability",
+        "sub_score_key": "spec_conformance",
+        "threshold": 100.0,
+        "aspirational": 100.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "parseability.format_constraints",
+        "pillar": "parseability",
+        "sub_score_key": "format_constraints",
+        "threshold": 100.0,
+        "aspirational": 100.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "plausibility.value_plausibility",
+        "pillar": "plausibility",
+        "sub_score_key": "value_plausibility",
+        "threshold": 95.0,
+        "aspirational": 99.0,
+        "actual": null,
+        "passed": null,
+        "applicable": false,
+        "meets_aspirational": null,
+        "level": "hard"
+      },
+      {
+        "name": "plausibility.field_agreement",
+        "pillar": "plausibility",
+        "sub_score_key": "field_agreement",
+        "threshold": 85.0,
+        "aspirational": 97.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "plausibility.ids_integrity",
+        "pillar": "plausibility",
+        "sub_score_key": "ids_integrity",
+        "threshold": 100.0,
+        "aspirational": 100.0,
+        "actual": null,
+        "passed": null,
+        "applicable": false,
+        "meets_aspirational": null,
+        "level": "hard"
+      },
+      {
+        "name": "causality.causal_ordering",
+        "pillar": "causality",
+        "sub_score_key": "causal_ordering",
+        "threshold": 90.0,
+        "aspirational": 99.0,
+        "actual": null,
+        "passed": null,
+        "applicable": false,
+        "meets_aspirational": null,
+        "level": "hard"
+      },
+      {
+        "name": "causality.event_presence",
+        "pillar": "causality",
+        "sub_score_key": "event_presence",
+        "threshold": 85.0,
+        "aspirational": 95.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "causality.intent_reconciliation",
+        "pillar": "causality",
+        "sub_score_key": "intent_reconciliation",
+        "threshold": 100.0,
+        "aspirational": 100.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "causality.effect_reconciliation",
+        "pillar": "causality",
+        "sub_score_key": "effect_reconciliation",
+        "threshold": 100.0,
+        "aspirational": 100.0,
+        "actual": null,
+        "passed": null,
+        "applicable": false,
+        "meets_aspirational": null,
+        "level": "hard"
+      },
+      {
+        "name": "causality.indicator_accuracy",
+        "pillar": "causality",
+        "sub_score_key": "indicator_accuracy",
+        "threshold": 85.0,
+        "aspirational": 95.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "causality.pivot_linkability",
+        "pillar": "causality",
+        "sub_score_key": "pivot_linkability",
+        "threshold": 80.0,
+        "aspirational": 95.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "causality.temporal_integrity",
+        "pillar": "causality",
+        "sub_score_key": "temporal_integrity",
+        "threshold": 85.0,
+        "aspirational": 95.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      },
+      {
+        "name": "causality.storyline_trace_coverage",
+        "pillar": "causality",
+        "sub_score_key": "storyline_trace_coverage",
+        "threshold": 80.0,
+        "aspirational": 95.0,
+        "actual": 100.0,
+        "passed": true,
+        "applicable": true,
+        "meets_aspirational": true,
+        "level": "hard"
+      }
+    ]
+  },
+  "combined_diagnostic_filtering": {
+    "exit_code": 0,
+    "nonempty": true,
+    "native_bytes_equal": true
+  },
+  "component_cli_recovery_regressions": {
+    "passed": 15,
+    "full_workload_acceptance": false
+  }
+}

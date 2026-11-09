@@ -1,0 +1,379 @@
+name: macos-assessment
+description: Six-hour fictional software-company benchmark. Revision 2 preserves revision 1 behavior and
+  explicitly adds modeled macOS 26 arm64 Endpoint Security fork/v10 coverage; native exec/exit and policy-denial
+  exports remain unavailable.
+status: draft
+draft_id: 9066de90-8a34-4cb9-a70c-645254ff53ed
+publisher: davidjbianco
+parents:
+- kind: scenario
+  publisher: davidjbianco
+  name: macos-assessment
+  draft_id: 65a8d457-254d-4664-bceb-11d42bda468b
+  digest: 9b62fb3d0e4209b91568821b1df90537a8313287a01bb1eb14e0683e42c19144
+display_name: Northstar Software - Native Fork Assessment
+schema_version: '3.0'
+composition: {}
+environment:
+  description: Northstar Software is a small software consultancy. Maya Chen and Owen Patel develop on
+    Apple Silicon Macs; Nora Ellis handles operations on Windows. A Linux build and Samba server supports
+    the observed office LAN. The model is scenario-local and uses no reusable packs.
+  timezone:
+    default: America/New_York
+  users:
+  - username: maya.chen
+    full_name: Maya Chen
+    email: maya.chen@northstar.example
+    persona: developer
+    primary_system: NS-MAC-01
+    groups:
+    - Engineering
+  - username: owen.patel
+    full_name: Owen Patel
+    email: owen.patel@northstar.example
+    persona: developer
+    primary_system: NS-MAC-02
+    groups:
+    - Engineering
+  - username: nora.ellis
+    full_name: Nora Ellis
+    email: nora.ellis@northstar.example
+    persona: sysadmin
+    primary_system: NS-WIN-01
+    groups:
+    - Engineering
+  systems:
+  - hostname: NS-MAC-01
+    ip: 10.42.0.11
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: maya.chen
+    roles:
+    - workstation
+    services:
+    - smb-client
+  - hostname: NS-MAC-02
+    ip: 10.42.0.12
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: owen.patel
+    roles:
+    - workstation
+    services:
+    - ssh
+    - smb-client
+  - hostname: NS-WIN-01
+    ip: 10.42.0.21
+    os: Windows 11
+    architecture: x64
+    type: workstation
+    assigned_user: nora.ellis
+    roles:
+    - workstation
+  - hostname: NS-BUILD-01
+    ip: 10.42.0.31
+    os: Ubuntu 24.04
+    architecture: x64
+    type: server
+    roles:
+    - file_server
+    - app_server
+    services:
+    - ssh
+    - samba
+  groups:
+  - name: Engineering
+    members:
+    - maya.chen
+    - owen.patel
+    - nora.ellis
+  network:
+    segments:
+    - name: office
+      cidr: 10.42.0.0/24
+      exposure: internal
+      systems:
+      - NS-MAC-01
+      - NS-MAC-02
+      - NS-WIN-01
+      - NS-BUILD-01
+    sensors:
+    - type: network
+      name: office-span
+      monitoring_segments:
+      - office
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+  network_identities:
+  - id: release-service
+    hosts:
+    - releases.northstar.example
+    ips:
+    - 203.0.113.61
+    tags:
+    - web
+    dns: true
+  storage:
+    population: small
+    activity: normal
+    servers:
+    - system: NS-BUILD-01
+      presets: []
+      volumes:
+      - id: data
+        mount: /srv/samba
+        filesystem: ext4
+      shares:
+      - id: engineering
+        name: Engineering
+        volume: data
+        root: engineering
+        preset: department
+        population: small
+        access:
+          read:
+          - Engineering
+          modify:
+          - Engineering
+        seed_files:
+        - ref: release-notes
+          path: Releases\release-notes.txt
+          size_bytes: 8192
+    mappings:
+    - id: engineering
+      share: NS-BUILD-01.engineering
+      audience:
+        systems:
+        - NS-MAC-01
+        - NS-MAC-02
+      credential_mode: per_user
+      lifecycle: persistent
+time_window:
+  start: '2026-10-20T13:00:00Z'
+  duration: 6h
+  warmup: 1h
+baseline_activity:
+  description: Ordinary software development, browsing, shared-file work and server administration across
+    a small mixed fleet.
+  intensity: medium
+  variation: high
+  suspicious_noise: medium
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: windows
+  - format: syslog
+  - format: bash_history
+  - format: zsh_history
+  - format: macos_unified_log
+  - format: macos_endpoint_security
+  destination: ./output
+  compression: false
+generation_seed: 327
+observation_profile: complete
+storyline:
+- id: maya-login
+  time: +2m
+  actor: maya.chen
+  system: NS-MAC-01
+  activity: Maya opens a local desktop session.
+  events:
+  - type: logon
+    logon_type: 2
+- id: owen-login
+  time: +4m
+  actor: owen.patel
+  system: NS-MAC-02
+  activity: Owen opens a separate local desktop session.
+  events:
+  - type: logon
+    logon_type: 2
+- id: local-check
+  time: +13m
+  actor: maya.chen
+  system: NS-MAC-01
+  activity: Maya checks the workstation identity.
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id
+    process_ref: maya-caller
+- id: download
+  time: +26m
+  actor: maya.chen
+  system: NS-MAC-01
+  activity: Fetch the internal release manifest into Downloads.
+  events:
+  - type: process
+    process_name: /opt/homebrew/opt/curl/bin/curl
+    command_line: /opt/homebrew/opt/curl/bin/curl -fsSL https://releases.northstar.example/releases/manifest.json
+      -o /Users/maya.chen/Downloads/manifest.json
+  - type: connection
+    dst_ip: 203.0.113.61
+    dst_port: 443
+    hostname: releases.northstar.example
+    service: ssl
+- id: build-login
+  time: +48m
+  actor: maya.chen
+  system: NS-BUILD-01
+  activity: Maya connects from her Mac to the Linux build service.
+  events:
+  - type: ssh_session
+    source_ip: 10.42.0.11
+- id: build-inspection
+  time: +53m
+  actor: maya.chen
+  system: NS-BUILD-01
+  activity: Inspect the build host under the established session.
+  events:
+  - type: process
+    process_name: /usr/bin/uname
+    command_line: uname -a
+- id: build-logoff
+  time: +1h14m
+  actor: maya.chen
+  system: NS-BUILD-01
+  activity: Close the build host session.
+  events:
+  - type: logoff
+- id: release-share
+  time: +1h37m
+  actor: maya.chen
+  system: NS-MAC-01
+  activity: Read release notes through the mounted engineering share.
+  events:
+  - type: smb_activity
+    operation: read
+    target:
+      type: share
+      share: NS-BUILD-01.engineering
+      file_ref: release-notes
+    mapping: engineering
+    path_style: mounted
+    client_access: auto
+    outcome: success
+- id: mac-remote-login
+  time: +2h8m
+  actor: owen.patel
+  system: NS-MAC-02
+  activity: Owen uses a Windows client to reach his SSH-enabled Mac.
+  events:
+  - type: ssh_session
+    source_ip: 10.42.0.21
+- id: remote-check
+  time: +2h13m
+  actor: owen.patel
+  system: NS-MAC-02
+  activity: Inspect the remote Mac environment.
+  events:
+  - type: process
+    process_name: /usr/bin/uname
+    command_line: /usr/bin/uname -a
+- id: mac-remote-logoff
+  time: +2h31m
+  actor: owen.patel
+  system: NS-MAC-02
+  activity: Close the remote Mac session.
+  events:
+  - type: logoff
+- id: provisioner
+  time: +3h2m
+  actor: root
+  system: NS-MAC-01
+  activity: A privileged modeled maintenance agent stages a system job.
+  events:
+  - type: process
+    process_name: /usr/local/libexec/northstar-maintenance
+    process_ref: maintenance
+    supplementary: none
+- id: job-write
+  time: +3h3m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: write.'
+  events:
+  - type: macos_launch_item
+    operation: write
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+    path: /Library/LaunchDaemons/com.northstar.assetcheck.plist
+    program: /usr/local/libexec/northstar-assetcheck
+    arguments:
+    - /usr/local/libexec/northstar-assetcheck
+    - --once
+    size_bytes: 624
+- id: job-bootstrap
+  time: +3h5m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: bootstrap.'
+  events:
+  - type: macos_launch_item
+    operation: bootstrap
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+    path: /Library/LaunchDaemons/com.northstar.assetcheck.plist
+- id: job-activate
+  time: +3h9m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: activate.'
+  events:
+  - type: macos_launch_item
+    operation: activate
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+    process_ref: assetcheck
+- id: job-exit
+  time: +3h11m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: exit.'
+  events:
+  - type: macos_launch_item
+    operation: exit
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+    exit_code: 0
+- id: job-unload
+  time: +3h17m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: unload.'
+  events:
+  - type: macos_launch_item
+    operation: unload
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+- id: job-remove
+  time: +3h19m
+  actor: root
+  system: NS-MAC-01
+  activity: 'Explicit system-job stage: remove.'
+  events:
+  - type: macos_launch_item
+    operation: remove
+    label: com.northstar.assetcheck
+    caller_ref: maintenance
+    path: /Library/LaunchDaemons/com.northstar.assetcheck.plist
+- id: policy-rejection
+  time: +3h20m
+  actor: root
+  system: NS-MAC-01
+  activity: Reject an execution request from the existing maintenance caller before child allocation or
+    command effects.
+  events:
+  - type: process
+    process_name: /Users/maya.chen/Downloads/asset-helper
+    parent_ref: maintenance
+    outcome: denied
+    supplementary: none
+red_herrings: []

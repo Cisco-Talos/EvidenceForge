@@ -1,0 +1,257 @@
+# Independently authored path vocabulary; no captured events or workload weights.
+reviewed_on: '2026-10-15'
+target: macOS 26 arm64
+action_applications:
+- id: macos-ssh
+  image_path: /usr/bin/ssh
+  availability: supported
+  behavior: ssh_client_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/base.xcconfig
+  boundary: Apple build definitions install the ssh target in /usr/bin. Host-build deployment follows
+    the modeled OS; no exact OpenSSH version, signing identity or native collector fidelity is inferred.
+    Only the shared SSH bundle activates this entry.
+- id: macos-sshd-keygen-wrapper
+  image_path: /usr/libexec/sshd-keygen-wrapper
+  availability: supported
+  behavior: ssh_receiver_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build
+    release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments
+    follow the pinned startup path; process titles and environment-specific arguments are not inferred.
+    No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied.
+    Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain
+    unavailable.
+- id: macos-sshd
+  image_path: /usr/sbin/sshd
+  availability: supported
+  behavior: ssh_receiver_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build
+    release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments
+    follow the pinned startup path; process titles and environment-specific arguments are not inferred.
+    No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied.
+    Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain
+    unavailable.
+- id: macos-sshd-session
+  image_path: /usr/libexec/sshd-session
+  availability: supported
+  behavior: ssh_receiver_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build
+    release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments
+    follow the pinned startup path; process titles and environment-specific arguments are not inferred.
+    No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied.
+    Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain
+    unavailable.
+- id: macos-sshd-auth
+  image_path: /usr/libexec/sshd-auth
+  availability: supported
+  behavior: ssh_receiver_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build
+    release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments
+    follow the pinned startup path; process titles and environment-specific arguments are not inferred.
+    No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied.
+    Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain
+    unavailable.
+applications:
+- id: macos-dock
+  image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-windowserver
+  image_path: /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-apsd
+  image_path: /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-cfprefsd
+  image_path: /usr/sbin/cfprefsd
+  availability: supported
+  behavior: preexisting_root_resident
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: A bounded read-only macOS 27 reference confirms this selected path, root command class and
+    launchd parent. One shared canonical instance exists before collection; no observed startup, shutdown,
+    runtime-validation result or per-app respawn is asserted. See background-process-research.md for measured
+    scope.
+- id: macos-configd
+  image_path: /usr/libexec/configd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-coreaudiod
+  image_path: /usr/sbin/coreaudiod
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-corespotlightd
+  image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-distnoted
+  image_path: /usr/sbin/distnoted
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-installd
+  image_path: /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-launchservicesd
+  image_path: /System/Library/CoreServices/launchservicesd
+  availability: supported
+  behavior: preexisting_root_resident
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: A bounded read-only macOS 27 reference confirms this selected path, root command class and
+    launchd parent. One shared canonical instance exists before collection; no observed startup, shutdown,
+    runtime-validation result or per-app respawn is asserted. See background-process-research.md for measured
+    scope.
+- id: macos-mdnsresponder
+  image_path: /usr/sbin/mDNSResponder
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-mdworker_shared
+  image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-nsurlsessiond
+  image_path: /usr/libexec/nsurlsessiond
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-runningboardd
+  image_path: /usr/libexec/runningboardd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-securityd
+  image_path: /usr/sbin/securityd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-sharingd
+  image_path: /usr/libexec/sharingd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-trustd
+  image_path: /usr/libexec/trustd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+- id: macos-usernoted
+  image_path: /usr/sbin/usernoted
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must
+    be selected before baseline activation.
+code_signatures:
+- id: macos-terminal
+  signing_id: com.apple.Terminal
+  team_id: null
+  reference: https://themittenmac.com/tools
+  boundary: Static signing identity corroborated by the previously downloaded historical public SpriteTree
+    eslogger export; not current-build validation. No captured CDHash or event records are copied. The
+    compiler derives its own synthetic CodeDirectory hash for the modeled release/architecture; helper
+    signatures and runtime trust flags remain unavailable.
+administration_applications:
+- id: macos-launchctl
+  image_path: /bin/launchctl
+  availability: supported
+  behavior: explicit_query_process
+  references:
+  - https://support.apple.com/guide/terminal/script-management-with-launchd-apdc6c1077b-5d5d-4d35-9c19-60f2397b2369/2.15/mac/26
+  - https://github.com/apple-oss-distributions/launchd/blob/main/man/launchctl.1
+  - https://attack.mitre.org/techniques/T1569/001/
+  boundary: Native host-build executable vocabulary and a list-only command pool. No automatic baseline
+    selection, job registration, activation, unload, native message, or signing identity is implied. Authored
+    persistence requires its separate lifecycle owner.
+- id: macos-plutil
+  image_path: /usr/bin/plutil
+  availability: supported
+  behavior: explicit_query_process
+  references:
+  - https://beta.splunkresearch.com/endpoint/c11f2b57-92c1-4cd2-b46c-064eafb833ac/
+  - https://github.com/swiftlang/swift-corelibs-foundation/tree/main/Sources/plutil
+  boundary: Native path vocabulary and a help-only command pool. No automatic baseline selection, plist
+    modification or native artifact output. The publisher's osquery detection does not validate EvidenceForge
+    Splunk ingestion or current eslogger fields.
+modeled_ssh_security:
+  reviewed_on: '2026-10-21'
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/OpenSSH.xcodeproj/project.pbxproj
+  signing_identifiers:
+    macos-ssh: com.apple.ssh
+    macos-sshd-keygen-wrapper: com.apple.sshd-keygen-wrapper
+    macos-sshd: com.apple.sshd
+    macos-sshd-session: com.apple.sshd-session
+    macos-sshd-auth: com.apple.sshd-auth
+  boundary: Apple build target naming supplies identifier vocabulary. Static CodeDirectory hashes, host-build
+    release identities and successful validation are explicitly synthetic model choices, not current-build
+    measurements or developer-build trust. The supported metadata-complete SSH path may emit fork/v10;
+    native exec/exit and policy-denial evidence remain gated.
+resident_reviewed_on: '2026-11-06'
+resident_target: macOS 27 arm64

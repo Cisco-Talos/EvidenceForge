@@ -1,0 +1,27 @@
+{
+  "loop": 66,
+  "resources": {
+    "/favicon.ico": {
+      "hosts": 59,
+      "distinct_sizes": 1,
+      "maximum_hosts_sharing_one_size": 59,
+      "same_host_inconsistent_sizes": 0,
+      "available_distinct_sha256": 0
+    },
+    "/assets/img/logo.svg": {
+      "hosts": 22,
+      "distinct_sizes": 1,
+      "maximum_hosts_sharing_one_size": 22,
+      "same_host_inconsistent_sizes": 0,
+      "available_distinct_sha256": 0
+    },
+    "/assets/fonts/inter-var.woff2": {
+      "hosts": 11,
+      "distinct_sizes": 1,
+      "maximum_hosts_sharing_one_size": 11,
+      "same_host_inconsistent_sizes": 0,
+      "available_distinct_sha256": 0
+    }
+  },
+  "scope": "HTTP200GET, sensor repeats deduplicated by host/path/size. Distinct sites may coincidentally share sizes. Common font sharing is explicit model content; source hashes omitted on incomplete files remain unknown."
+}

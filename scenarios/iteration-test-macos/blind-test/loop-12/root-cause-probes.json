@@ -1,0 +1,44 @@
+{
+  "loop": 12,
+  "fix": "Event-time validity is now applied to domain issuer overrides; current Let's Encrypt YR1/YR2 CA and Root YR chain metadata are configured.",
+  "generation": {
+    "bundle": "/private/tmp/eforge-iteration-test-macos-loop-12",
+    "records": 133895,
+    "overall_score": 96.66468151253551,
+    "pillars": {
+      "Parseability": 100.0,
+      "Plausibility": 96.78126516118782,
+      "Causality": 96.28930200588876,
+      "Timing": 91.98519860383179
+    },
+    "generation_seed": 42,
+    "data_files": 115
+  },
+  "tls_certificate_family_probe": {
+    "ssl_sessions_with_linked_leaf": 623,
+    "leaf_valid_at_ssl_timestamp": 623,
+    "leaf_invalid_at_ssl_timestamp": 0,
+    "sessions_with_linked_issuer": 564,
+    "issuer_names_matching_leaf_issuer": 564,
+    "issuer_certificates_valid_at_ssl_timestamp": 564,
+    "issuer_invalid_at_ssl_timestamp": 0,
+    "reddit_sessions": 3,
+    "reddit_leaf_issuer": "CN=YR1, O=Let's Encrypt, C=US",
+    "reddit_leaf_validity_utc": [
+      "2026-09-26T08:12:57+00:00",
+      "2026-12-20T08:12:57+00:00"
+    ],
+    "reddit_observation_times_utc": [
+      "2026-11-02T15:37:16.264354+00:00",
+      "2026-11-02T17:26:24.843682+00:00",
+      "2026-11-02T17:26:27.285516+00:00"
+    ],
+    "reddit_established": true,
+    "reddit_exported_intermediate_rows": 0
+  },
+  "blind_copy": {
+    "path": "/private/tmp/eforge-blind-loop-12/data",
+    "manifest_sha256_verified": true,
+    "files_verified": 115
+  }
+}

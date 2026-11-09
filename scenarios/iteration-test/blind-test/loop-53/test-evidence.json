@@ -1,0 +1,8 @@
+{
+  "focused": "194 passed,2 deselected (proxy bundle/channel/browser/visibility/HTTP channel)",
+  "new_cases": "GET/HEAD/POST x absent/600-char UA plus long Referer; idempotence and body preservation",
+  "fixture_update": "Stale upload test expected290-byte assumed overhead; now permits full observed header budget while bounding below stale payload. All194 pass.",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "scope": "Header budget only; TLS framing tracked separately, raw contexts unchanged outside canonical bundle."
+}

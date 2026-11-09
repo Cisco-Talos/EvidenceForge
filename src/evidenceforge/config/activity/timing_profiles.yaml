@@ -43,6 +43,91 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  baseline.user_activity_dispatch:
+    class: human_workflow
+    position: after
+    min_ms: 0
+    max_ms: 55000
+  macos.baseline.session_lead:
+    class: causal_prerequisite
+    position: before
+    min_ms: 12000
+    max_ms: 20000
+  macos.boot_inventory_gap:
+    class: causal_prerequisite
+    position: after
+    min_ms: 50
+    max_ms: 1900
+  baseline.browser_ready:
+    # Selected main-exec-to-navigation readiness, independent of collection delay.
+    class: human_workflow
+    position: after
+    min_ms: 200
+    max_ms: 4000
+  baseline.foreground_think:
+    # Selected human workflow model after the command's actual completion.
+    # Runtime is owned separately by the process bundle, never this pause.
+    class: human_workflow
+    position: after
+    min_ms: 800
+    # Foreground work includes both quick follow-ups and longer review/decision
+    # pauses. A narrow upper bound can make unrelated commands inherit the same
+    # apparent schedule when process completion is otherwise well modeled.
+    max_ms: 180000
+  source.firewall.datagram_teardown:
+    # A firewall state entry expires after datagram activity; it is not the
+    # transport's application close timestamp. ASA renders the expiry in seconds.
+    class: teardown
+    position: after
+    min_ms: 1000
+    max_ms: 120000
+  posix.foreground_shell_resume:
+    # Modeled foreground wait/wakeup/dispatch cost, not capture-calibrated latency.
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
+  linux.sudo.process_lead:
+    class: source_latency
+    position: before
+    min_ms: 30
+    max_ms: 100
+  linux.sudo.pam_open:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 300
+  linux.sudo.close_tail:
+    class: teardown
+    position: after
+    min_ms: 120
+    max_ms: 950
+  linux.sudo.parent_exit:
+    class: teardown
+    position: after
+    min_ms: 10
+    max_ms: 50
+  linux.sudo.child_ready:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 4
+  linux.sudo.child_close_lead:
+    class: teardown
+    position: before
+    min_ms: 1
+    max_ms: 8
+  macos.workspace_request:
+    # Modeled ordering budget, not empirically calibrated login latency.
+    class: human_workflow
+    position: after
+    min_ms: 25
+    max_ms: 225
+  source.macos_unified_log:
+    class: source_latency
+    position: after
+    min_ms: 0
+    max_ms: 0
   linux.pipeline_stage_start:
     class: burst_fanout
     position: after
@@ -193,6 +278,52 @@ relationships:
     position: after
     min_ms: 12
     max_ms: 520
+  # Modeled terminal readiness; not empirical native timing calibration.
+  macos.ssh_receiver_stage:
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
+  macos.terminal_stage_ready:
+    class: human_workflow
+    position: after
+    min_ms: 1800
+    max_ms: 3000
+  # Selected native transition separation, independently sampled for each phase.
+  # This is synthetic occurrence ordering, not measured startup latency.
+  macos.terminal_native_transition:
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
+  # Modeled shell fork/exec separation, not empirical native calibration.
+  macos.shell_fork_before_exec:
+    class: causal_prerequisite
+    position: before
+    min_ms: 1
+    max_ms: 20
+  macos.browser_fork_before_exec:
+    class: causal_prerequisite
+    position: before
+    min_ms: 1
+    max_ms: 20
+  # Session- and process-scoped intervals for authoritative Mac session teardown.
+  macos.authoritative_process_termination_gap:
+    class: teardown
+    position: before
+    min_ms: 40
+    max_ms: 350
+  # Selected readiness gap, not measured Finder startup latency.
+  macos.finder_preimage_before_exec:
+    class: causal_prerequisite
+    position: before
+    min_ms: 1
+    max_ms: 20
+  macos.ssh_client_before_transport:
+    class: human_workflow
+    position: before
+    min_ms: 6500
+    max_ms: 18000
   source.ecar_process_create:
     class: source_latency
     position: after
@@ -365,6 +496,14 @@ endpoint_clock:
         host_drift_ppm:
           min: 0
           max: 0
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
     enterprise_standard:
       windows:
         host_offset_ms:
@@ -380,6 +519,14 @@ endpoint_clock:
         host_drift_ppm:
           min: -8
           max: 8
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
+        host_offset_ms:
+          min: -900
+          max: 1500
+        host_drift_ppm:
+          min: -8
+          max: 8
     messy_collection:
       windows:
         host_offset_ms:
@@ -389,6 +536,14 @@ endpoint_clock:
           min: -35
           max: 35
       linux:
+        host_offset_ms:
+          min: -4200
+          max: 6200
+        host_drift_ppm:
+          min: -30
+          max: 30
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
         host_offset_ms:
           min: -4200
           max: 6200

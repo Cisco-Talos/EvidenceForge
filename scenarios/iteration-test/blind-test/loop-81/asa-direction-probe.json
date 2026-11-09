@@ -1,0 +1,23 @@
+{
+  "finding": "Outbound ASA proxy-facing tuples appear reversed versus client-origin Zeek tuples",
+  "classification": "false_positive_or_unproven",
+  "representative_zeek": {
+    "file": "zeek-dmz/conn.json",
+    "uid": "CJ8ciDAEuWtHwT194a",
+    "tuple": "10.10.1.35:59155 -> 10.10.3.20:8080",
+    "time": "2026-11-02T18:25:01.708308Z"
+  },
+  "representative_asa": {
+    "file": "fw-perimeter/cisco_asa.log",
+    "connection_id": 1690116,
+    "record": "Built outbound TCP connection ... dmz:10.10.3.20/8080 ... to inside:10.10.1.35/59155",
+    "time": "2026-11-02T18:25:01Z"
+  },
+  "source_native_semantics": "Cisco documents ASA 302013 outbound as a connection initiated from the inside. Cisco's official NAT example logs an inside client-to-outside server flow as 'Built outbound' with the outside server listed first and the inside client second. Reversed address order is therefore expected for this ASA outbound representation.",
+  "generator_semantics": "CiscoAsaEmitter._emit_built selects (responder, originator) when direction is outbound; _connection_direction derives direction from configured interface security levels. The emitted ASA tuple is the source-native projection, while canonical Zeek keeps the originator/responder orientation.",
+  "disposition": "No tuple/context/emitter change. The reviewer compared two source-native direction conventions as if they were both originator-oriented.",
+  "sources": [
+    "https://www.cisco.com/c/en/us/td/docs/security/asa/syslog/asa-syslog/syslog-messages-302003-to-342008.html",
+    "https://www.cisco.com/c/en/us/support/docs/security/adaptive-security-appliance-asa-software/118996-config-asa-00.html"
+  ]
+}

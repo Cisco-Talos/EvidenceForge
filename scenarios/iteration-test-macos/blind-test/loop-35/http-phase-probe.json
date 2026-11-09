@@ -1,0 +1,12 @@
+{
+  "zeek-core": {
+    "first_non_connect": 142,
+    "exact_ms_deltas": 97,
+    "before_transport": 0
+  },
+  "zeek-dmz": {
+    "first_non_connect": 294,
+    "exact_ms_deltas": 193,
+    "before_transport": 0
+  }
+}

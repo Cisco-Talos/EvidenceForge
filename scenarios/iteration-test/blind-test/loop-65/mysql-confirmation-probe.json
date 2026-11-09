@@ -1,0 +1,73 @@
+{
+  "loop": 65,
+  "qualified_confirmed_mysql_observations": 558,
+  "unqualified_midstream_or_gapped": 72,
+  "missing_required_direction": 22,
+  "examples": [
+    {
+      "sensor": "zeek-db",
+      "line": 213,
+      "uid": "CdiYDMHZuZ0xsg87XQI",
+      "orig_bytes": 3845,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 242,
+      "uid": "CEN2OED3Z9YpSHu28c",
+      "orig_bytes": 4632,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 288,
+      "uid": "C3upRA82sAJajPDHaQ",
+      "orig_bytes": 1435,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 301,
+      "uid": "C35tsO2Jp9cNCWT5L",
+      "orig_bytes": 1317,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 327,
+      "uid": "C2RnwS5TNzxJbXRTUe",
+      "orig_bytes": 4760,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 328,
+      "uid": "CoOOURnITUqDr7E01G",
+      "orig_bytes": 1730,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 406,
+      "uid": "CVNd5qntNW2sHA4MqHD",
+      "orig_bytes": 3481,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    },
+    {
+      "sensor": "zeek-db",
+      "line": 420,
+      "uid": "C1uT4DQsCGQm1oYL3Wp",
+      "orig_bytes": 3165,
+      "resp_bytes": 0,
+      "history": "ShADaR"
+    }
+  ],
+  "scope": "Tagged Zeek8.0.5 confirmation prerequisites; full visible TCP open, zero reported capture gap. Counts are sensor observations, not independent logical flows."
+}

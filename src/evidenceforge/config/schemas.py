@@ -17,8 +17,9 @@ import math
 import re
 from copy import deepcopy
 from datetime import date
+from pathlib import PurePosixPath
 from string import Formatter
-from typing import Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -32,6 +33,8 @@ from pydantic import (
 
 from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+from evidenceforge.events.macos_entitlements import NativeEntitlementValue
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.models.http import HttpMultipartEntitySpec
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
@@ -839,6 +842,52 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
         return self
 
 
+class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
+    """Explicit signer facts for the cataloged main executable, not its helpers."""
+
+    signing_id: str = Field(min_length=1, max_length=512)
+    team_id: str | None = Field(default=None, min_length=1, max_length=128)
+    entitlements: Literal["absent"] | dict[str, NativeEntitlementValue] | None = Field(
+        default=None,
+        description=(
+            "Explicit absence or a bounded Boolean/integer/string/string-array/nested object; "
+            "null is unknown"
+        ),
+    )
+
+    @field_validator("entitlements", mode="before")
+    @classmethod
+    def exact_entitlements(cls, value: object) -> object:
+        """Keep unknown, absent and observed immutable value types distinct."""
+        from evidenceforge.events.macos_entitlements import freeze_entitlements, native_entitlements
+
+        if value is None or (type(value) is str and value == "absent"):
+            return value
+        return native_entitlements(freeze_entitlements(value))
+
+    @field_validator("signing_id", "team_id")
+    @classmethod
+    def signature_text_is_exact(cls, value: str | None) -> str | None:
+        """Require explicit absence or exact nonblank, NUL-free metadata."""
+
+        if value is not None and (value != value.strip() or not value or "\0" in value):
+            raise ValueError("code signature identifiers must be nonblank, exact text or null")
+        return value
+
+    @field_validator("signing_id")
+    @classmethod
+    def bounded_identifier_template(cls, value: str) -> str:
+        """Allow only the image-owned UUID token, never arbitrary formatting."""
+        literal = value.replace("{macho_uuid_hex}", "")
+        if (
+            "{" in literal
+            or "}" in literal
+            or len(value.replace("{macho_uuid_hex}", "0" * 32)) > 512
+        ):
+            raise ValueError("signing_id permits only the {macho_uuid_hex} image token")
+        return value
+
+
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
@@ -852,7 +901,15 @@ class PlatformConfig(BaseModel, extra="forbid"):
         | None
     ) = None
     pe_metadata: dict[str, str] | None = None
+    code_signature: MacCodeSignatureEntry | None = None
+    executable_format: Literal["mach_o"] | None = Field(
+        default=None,
+        description="Known main-executable image format; absent means unknown, not a script",
+    )
     command_templates: list[str] | None = None
+    singleton_per_session: bool | None = Field(
+        default=None, description="Override the application instance policy for this platform"
+    )
     command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
@@ -869,6 +926,17 @@ class PlatformConfig(BaseModel, extra="forbid"):
             raise ValueError("application platform available_until precedes available_from")
         return self
 
+    @model_validator(mode="after")
+    def identifier_image_dependency(self) -> Self:
+        """A UUID-based signing identifier requires its explicitly declared Mach-O image."""
+        if (
+            self.code_signature is not None
+            and "{macho_uuid_hex}" in self.code_signature.signing_id
+            and self.executable_format != "mach_o"
+        ):
+            raise ValueError("UUID-based signing_id requires executable_format: mach_o")
+        return self
+
 
 class ApplicationEntry(BaseModel, extra="forbid"):
     """A single application entry in application_catalog.yaml."""
@@ -883,6 +951,12 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     compatibility_group: str | None = None
     compatibility_option: str | None = None
     singleton_per_session: bool = False
+    installed_with: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        description="Helper installed with one independent application; inherits its placement eligibility",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -928,7 +1002,20 @@ class ApplicationEntry(BaseModel, extra="forbid"):
             "original_filename",
         }
         for platform_name, platform in self.platforms.items():
+            if platform.code_signature is not None and platform_name != "macos":
+                raise ValueError(f"{self.id}.{platform_name} code_signature requires macos")
             deployment = platform.deployment
+            if platform.executable_format is not None and (
+                platform_name != "macos"
+                or not isinstance(
+                    deployment, (ApplicationDeploymentEntry, CatalogApplicationDeploymentEntry)
+                )
+                or set(deployment.architectures) != {"arm64"}
+            ):
+                raise ValueError(
+                    f"{self.id}.{platform_name} executable_format=mach_o requires an explicit "
+                    "macos arm64 deployment"
+                )
             if isinstance(deployment, CatalogApplicationDeploymentEntry):
                 if deployment.scope == "machine" and "{username}" in platform.image_path:
                     raise ValueError(
@@ -990,12 +1077,39 @@ class ApplicationEntry(BaseModel, extra="forbid"):
         return self
 
 
+def validate_application_installation_dependencies(
+    entries: list[ApplicationEntry] | tuple[ApplicationEntry, ...],
+) -> None:
+    """Require helpers to name a single independent, platform-compatible owner."""
+    by_id = {entry.id.casefold(): entry for entry in entries}
+    for entry in entries:
+        if entry.installed_with is None:
+            continue
+        owner = by_id.get(entry.installed_with.casefold())
+        if (
+            owner is None
+            or owner is entry
+            or owner.installed_with is not None
+            or not set(entry.platforms).issubset(owner.platforms)
+        ):
+            raise ValueError(
+                f"{entry.id}.installed_with requires one independent catalog application "
+                "supporting every helper platform"
+            )
+
+
 class ApplicationCatalogConfig(BaseModel, extra="forbid"):
     """Versioned application catalog normalized before legacy dict projection."""
 
     schema_version: Literal[2]
     default_deployment: LegacyStaticApplicationDeploymentEntry
     applications: list[ApplicationEntry]
+
+    @model_validator(mode="after")
+    def helpers_have_exact_owners(self) -> Self:
+        """Reject dangling, recursive or foreign-platform helper placements at load time."""
+        validate_application_installation_dependencies(self.applications)
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -1066,8 +1180,10 @@ class SystemdScheduleEntry(BaseModel, extra="forbid", frozen=True):
     product_id: str | None = None
     variant: str | None = None
     type: Literal["systemd_timer", "cron"]
-    frequency: Literal["daily", "weekly", "30min"]
+    execution_scope: Literal["system", "user"] = "system"
+    frequency: Literal["daily", "weekly", "30min", "10min"]
     typical_hour: int
+    typical_minute: int | None = Field(default=None, ge=0, le=59)
     jitter_minutes: int
     distro: str
     # Optional fields for systemd_timer type
@@ -1134,7 +1250,16 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
     max_per_host_window: int | None = Field(default=None, gt=0)
+    window_occurrence_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    window_arrival_mode: float = Field(default=0.5, gt=0.0, lt=1.0)
     episode_pair_budgets: list[int] | None = None
+
+    @model_validator(mode="after")
+    def scheduled_noise_has_a_ceiling(self) -> Self:
+        """Require an explicit finite cap for stochastic-window arrivals."""
+        if self.window_occurrence_probability is not None and self.max_per_host_window is None:
+            raise ValueError("window_occurrence_probability requires max_per_host_window")
+        return self
 
     @field_validator("episode_pair_budgets")
     @classmethod
@@ -1164,6 +1289,7 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     """A single issuer entry in tls_issuers.yaml."""
 
     name: str
+    publicly_trusted: bool = False
     weight: int
     validity_days_min: int
     validity_days_max: int
@@ -1628,9 +1754,71 @@ class TlsDestinationsConfig(BaseModel, extra="forbid"):
         return v
 
 
+class TlsWireBudgetConfig(BaseModel, extra="forbid", frozen=True):
+    """Optional TLS server wire material, beyond mandatory protocol framing."""
+
+    extension_bytes_min: int = Field(default=32, ge=0, le=65535)
+    extension_bytes_max: int = Field(default=192, ge=0, le=65535)
+    ticket_bytes_min: int = Field(default=0, ge=0, le=65535)
+    ticket_bytes_max: int = Field(default=512, ge=0, le=65535)
+    starttls_dialogue_bytes_min: int = Field(default=120, ge=0, le=65535)
+    starttls_dialogue_bytes_max: int = Field(default=400, ge=0, le=65535)
+    inspected_client_handshake_bytes_min: int = Field(default=400, ge=256, le=65535)
+    inspected_client_handshake_bytes_max: int = Field(default=1800, ge=256, le=65535)
+    inspected_server_handshake_bytes_min: int = Field(default=1800, ge=512, le=65535)
+    inspected_server_handshake_bytes_max: int = Field(default=6500, ge=512, le=65535)
+
+    @model_validator(mode="after")
+    def ordered_ranges(self) -> Self:
+        """Reject inverted optional wire ranges before planning."""
+        for name in (
+            "extension_bytes",
+            "ticket_bytes",
+            "starttls_dialogue_bytes",
+            "inspected_client_handshake_bytes",
+            "inspected_server_handshake_bytes",
+        ):
+            if getattr(self, f"{name}_min") > getattr(self, f"{name}_max"):
+                raise ValueError(f"{name}_min must not exceed {name}_max")
+        return self
+
+
+class PublicLeafValidityPeriod(BaseModel, extra="forbid", frozen=True):
+    """Subscriber validity policy selected by modeled certificate issuance date."""
+
+    effective_date: date
+    recommended_days: int = Field(gt=0, le=398)
+    maximum_days: int = Field(gt=0, le=398)
+
+    @model_validator(mode="after")
+    def recommendation_within_limit(self) -> Self:
+        """Keep the operational recommendation inside the mandatory limit."""
+        if self.recommended_days > self.maximum_days:
+            raise ValueError("recommended_days must not exceed maximum_days")
+        return self
+
+
+class PublicLeafValidityConfig(BaseModel, extra="forbid", frozen=True):
+    """Ordered public subscriber issuance eras; private and CA rules are separate."""
+
+    periods: tuple[PublicLeafValidityPeriod, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def chronological_periods(self) -> Self:
+        """Reject duplicate or unordered policy boundaries."""
+        dates = [period.effective_date for period in self.periods]
+        if dates != sorted(set(dates)):
+            raise ValueError("public leaf validity effective dates must strictly increase")
+        if dates[0] > date(1970, 1, 1):
+            raise ValueError("public leaf validity must cover dates from 1970-01-01")
+        return self
+
+
 class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
+    wire_budget: TlsWireBudgetConfig = Field(default_factory=TlsWireBudgetConfig)
+    public_leaf_validity: PublicLeafValidityConfig
     san: TlsSanConfig
     serial_numbers: TlsSerialNumberConfig
     ocsp: TlsOcspConfig
@@ -1965,6 +2153,15 @@ class HttpFileProfilesConfig(BaseModel, extra="forbid"):
     extension_mime_types: dict[str, str]
     request_profiles: HttpRequestProfilesConfig
     multipart: HttpMultipartProfilesConfig
+    shared_resources: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("shared_resources")
+    @classmethod
+    def shared_resource_identity_is_explicit(cls, values: dict[str, str]) -> dict[str, str]:
+        for path, identity in values.items():
+            if not path.startswith("/") or "?" in path or "#" in path or not identity.strip():
+                raise ValueError("shared_resources requires origin paths and non-empty identities")
+        return values
 
     @field_validator("extension_mime_types")
     @classmethod
@@ -2168,6 +2365,29 @@ class OuiEntry(BaseModel, extra="forbid"):
     weight: int
 
 
+class TransportHistoryEntry(BaseModel, extra="forbid", frozen=True):
+    """One weighted native transport observation history."""
+
+    state: Literal["SF", "S0", "S1", "REJ", "RSTO", "RSTR", "S2", "S3", "OTH"]
+    weight: int = Field(strict=True, gt=0)
+    history: str = Field(min_length=1, max_length=100, pattern=r"^[ShADadTtFfRrIiQqCcGgWw^]+$")
+
+    @field_validator("history")
+    @classmethod
+    def once_only_markers(cls, value: str) -> str:
+        """Reject duplicate once-only markers independently in each direction."""
+        if any(value.count(marker) > 1 for marker in "aAdDiIqQ"):
+            raise ValueError("native history repeats a once-only directional marker")
+        return value
+
+
+class SslHistoryEntry(BaseModel, extra="forbid", frozen=True):
+    """Weighted passive TLS history without decrypted or post-detection content."""
+
+    weight: int = Field(strict=True, gt=0)
+    history: str = Field(min_length=1, max_length=100, pattern=r"^[CsxknGtIiIl]+$")
+
+
 class PublicNtpServerEntry(BaseModel, extra="forbid"):
     """A public NTP server profile in network_params.yaml."""
 
@@ -2186,6 +2406,38 @@ class PublicDnsResolverEntry(BaseModel, extra="forbid"):
     ip: IPvAnyAddress
     operator: str
     weight: int = Field(gt=0)
+
+
+class HttpRequestPhaseConfig(BaseModel, extra="forbid", frozen=True):
+    """Modeled first-request delay after transport open, in milliseconds."""
+
+    minimum_ms: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    median_ms: float = Field(default=28.0, gt=0, allow_inf_nan=False)
+    maximum_ms: float = Field(default=180.0, gt=0, le=30_000, allow_inf_nan=False)
+    sigma: float = Field(default=0.65, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        """Keep a nondegenerate finite request-phase interval."""
+        if not self.minimum_ms < self.median_ms < self.maximum_ms:
+            raise ValueError("HTTP phase requires minimum_ms < median_ms < maximum_ms")
+        return self
+
+
+class HttpTransportFloorSlackConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded close-time variation above the short HTTP admission floor."""
+
+    median_ms: float = Field(default=3.6, gt=0, allow_inf_nan=False)
+    sigma: float = Field(default=0.88, gt=0, allow_inf_nan=False)
+    minimum_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    maximum_ms: float = Field(default=25.001, gt=0, le=30_000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        """Keep the median inside the finite modeled resource bound."""
+        if not self.minimum_ms <= self.median_ms <= self.maximum_ms:
+            raise ValueError("HTTP floor slack requires minimum_ms <= median_ms <= maximum_ms")
+        return self
 
 
 class DnsTunnelRttConfig(BaseModel, extra="forbid"):
@@ -2232,8 +2484,45 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
         return v
 
 
+class ProtocolConfirmationConfig(BaseModel, extra="forbid", frozen=True):
+    """Required payload directions for confirmed fresh TCP application protocols."""
+
+    payload_directions: dict[str, list[Literal["orig", "resp"]]] = Field(default_factory=dict)
+
+    @field_validator("payload_directions")
+    @classmethod
+    def service_requirements_are_explicit(
+        cls, values: dict[str, list[Literal["orig", "resp"]]]
+    ) -> dict[str, list[Literal["orig", "resp"]]]:
+        for service, directions in values.items():
+            if (
+                not service
+                or service != service.strip().lower()
+                or not service.replace("_", "").isalnum()
+                or not directions
+                or len(directions) != len(set(directions))
+            ):
+                raise ValueError(
+                    "protocol confirmation requires normalized services and unique directions"
+                )
+        return values
+
+
 class NmapCommandProbeConfig(BaseModel, extra="forbid", frozen=True):
     """Bounded address-space planning for process-owned nmap commands."""
+
+    server_first_services: list[str] = Field(default_factory=list)
+
+    @field_validator("server_first_services")
+    @classmethod
+    def server_first_names_are_unique(cls, values: list[str]) -> list[str]:
+        """Require normalized explicit passive service identifiers."""
+        if len(values) != len(set(values)) or any(
+            not value or value != value.strip().lower() or not value.replace("_", "").isalnum()
+            for value in values
+        ):
+            raise ValueError("server_first_services requires unique normalized service names")
+        return values
 
     full_cidr_max_hosts: int = Field(ge=1, le=1024)
     max_expanded_targets: int = Field(ge=1, le=1024)
@@ -2561,7 +2850,7 @@ class SmbProcessProfile(BaseModel, extra="forbid", frozen=True):
 class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
     """Platform-native client presentation and process ownership profile."""
 
-    os_category: Literal["windows", "linux"]
+    os_category: Literal["windows", "linux", "macos"]
     access_mode: Literal["explorer", "desktop", "direct", "mounted"]
     path_style: Literal["unc", "mapped", "smb_uri", "mounted"]
     transport_attribution: Literal["process", "kernel", "none"]
@@ -2627,8 +2916,10 @@ class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
 
         if self.access_mode == "explorer" and self.os_category != "windows":
             raise ValueError("explorer access_mode requires os_category=windows")
-        if self.access_mode != "explorer" and self.os_category != "linux":
+        if self.access_mode != "explorer" and self.os_category not in {"linux", "macos"}:
             raise ValueError(f"{self.access_mode} access_mode requires os_category=linux")
+        if self.os_category == "macos" and self.access_mode != "mounted":
+            raise ValueError("macOS SMB clients currently require mounted access_mode")
         if self.os_category == "windows" and self.path_style not in {"unc", "mapped"}:
             raise ValueError("Windows SMB clients require unc or mapped path_style")
         if self.access_mode in {"desktop", "direct"} and self.path_style != "smb_uri":
@@ -2637,7 +2928,13 @@ class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
             raise ValueError("mounted access_mode requires path_style=mounted")
         if self.access_mode == "direct" and self.transport_attribution != "process":
             raise ValueError("direct access_mode requires transport_attribution=process")
-        if self.access_mode == "mounted" and self.transport_attribution != "kernel":
+        if self.os_category == "macos" and self.transport_attribution != "none":
+            raise ValueError("macOS mounted SMB transport requires unattributed transport")
+        if (
+            self.access_mode == "mounted"
+            and self.os_category != "macos"
+            and self.transport_attribution != "kernel"
+        ):
             raise ValueError("mounted access_mode requires transport_attribution=kernel")
 
         missing_operations = sorted(_SMB_OPERATIONS - set(self.operation_processes))
@@ -2849,7 +3146,7 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     transfer_timing: SmbTransferTimingConfig
     file_evolution: SmbFileEvolutionConfig
     samba_audit: SmbSambaAuditConfig
-    client_defaults: dict[Literal["windows", "linux"], str]
+    client_defaults: dict[Literal["windows", "linux", "macos"], str]
     client_profiles: dict[str, SmbClientProfile]
     server_defaults: dict[Literal["windows", "linux"], str]
     server_profiles: dict[str, SmbServerProfile]
@@ -2895,7 +3192,7 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     @staticmethod
     def _validate_default_references(
         *,
-        defaults: dict[Literal["windows", "linux"], str],
+        defaults: dict[str, str],
         profiles: dict[str, SmbClientProfile] | dict[str, SmbServerProfile],
         field_name: str,
     ) -> None:
@@ -2914,12 +3211,12 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
 
     @staticmethod
     def _validate_native_images(
-        os_category: Literal["windows", "linux"],
+        os_category: Literal["windows", "linux", "macos"],
         processes: list[SmbProcessProfile],
     ) -> None:
         for process in processes:
-            if os_category == "linux" and not process.image.startswith("/"):
-                raise ValueError(f"Linux SMB process image must be absolute: {process.image!r}")
+            if os_category in {"linux", "macos"} and not process.image.startswith("/"):
+                raise ValueError(f"POSIX SMB process image must be absolute: {process.image!r}")
             if os_category == "windows" and not re.fullmatch(
                 r"[A-Za-z]:\\.+|\\\\.+",
                 process.image,
@@ -3111,7 +3408,7 @@ class WindowsAnonymousSmbBaselineConfig(BaseModel, extra="forbid", frozen=True):
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
-    privileges: list[str] = Field(min_length=1)
+    privileges: list[str] = Field(default_factory=list)
     weight: int = Field(gt=0)
 
     @field_validator("privileges")
@@ -3128,6 +3425,26 @@ class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
 
     emission_probabilities: dict[str, float] = Field(default_factory=dict)
     profiles: dict[str, WindowsSpecialPrivilegesProfile]
+    sensitive_privileges: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def profiles_contain_only_sensitive_privileges(self) -> Self:
+        """Reject full token inventories in event-specific sensitive profiles."""
+        allowed = set(self.sensitive_privileges)
+        if len(allowed) != len(self.sensitive_privileges) or any(
+            not name.startswith("Se") or not name.endswith("Privilege") for name in allowed
+        ):
+            raise ValueError("sensitive_privileges requires unique Windows privilege names")
+        for name, profile in self.profiles.items():
+            if len(set(profile.privileges)) != len(profile.privileges):
+                raise ValueError(f"special_privileges.profiles.{name} has duplicate privileges")
+            unexpected = set(profile.privileges) - allowed
+            if unexpected:
+                raise ValueError(
+                    f"special_privileges.profiles.{name} contains nonsensitive privileges: "
+                    f"{sorted(unexpected)}"
+                )
+        return self
 
     @field_validator("emission_probabilities")
     @classmethod
@@ -3164,6 +3481,30 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     anonymous_smb_baseline: WindowsAnonymousSmbBaselineConfig
     failed_logon: WindowsFailedLogonConfig
     special_privileges: WindowsSpecialPrivilegesConfig
+
+
+class BrowserProfileRoots(BaseModel, extra="forbid", frozen=True):
+    """Modeled default browser data directories, independent of the generating host."""
+
+    windows: str | None = Field(default=None, min_length=1)
+    linux: str | None = Field(default=None, min_length=1)
+    macos: str | None = Field(default=None, min_length=1)
+
+    @field_validator("windows", "linux", "macos")
+    @classmethod
+    def absolute_modeled_path(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        absolute = (
+            bool(re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", value))
+            if info.field_name == "windows"
+            else value.startswith("/")
+        )
+        if not absolute or set(re.findall(r"\{([^}]+)\}", value)) - {"username"}:
+            raise ValueError(
+                "Browser profile root must be absolute and may substitute only {username}"
+            )
+        return value
 
 
 class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
@@ -3288,6 +3629,11 @@ class ProcessNetworkEntry(BaseModel, extra="forbid"):
     port: int
     external: bool
     dns_tags: list[str] | None = None
+    ambient: bool = Field(
+        default=True,
+        strict=True,
+        description="Allow ambient connections and generic process ownership without an endpoint",
+    )
 
 
 # --- ProcessAccess Patterns ---
@@ -3880,14 +4226,774 @@ class ConnectionEntry(BaseModel, extra="forbid"):
 # --- Spawn Rules ---
 
 
+class ShortCommandTiming(BaseModel, extra="forbid", frozen=True):
+    """Modeled command runtime in seconds, independently of native result qualification."""
+
+    minimum: float = Field(gt=0, allow_inf_nan=False)
+    median: float = Field(gt=0, allow_inf_nan=False)
+    maximum: float = Field(gt=0, allow_inf_nan=False)
+    sigma: float = Field(gt=0, le=3, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def ordered(self) -> ShortCommandTiming:
+        """Require a median inside finite command bounds."""
+        if not self.minimum <= self.median <= self.maximum:
+            raise ValueError("short command timing requires minimum <= median <= maximum")
+        return self
+
+
 class SpawnRuleEntry(BaseModel, extra="forbid"):
     """A single parent process entry within spawn_rules.yaml."""
 
     command_templates: list[str]
     lifetime: Literal["long", "short"]
+    short_timing: ShortCommandTiming | None = Field(default=None)
     children: list[str]
     spawn_delay: list[float] | None = None
     max_children: int | None = None
+    launch_kind: Literal["shell", "gui"] | None = Field(
+        default=None,
+        description="Explicit Mac launch ownership; absent preserves legacy path classification",
+    )
+
+
+class MacosMachTimebaseConfig(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled native clock ratio; never inferred from architecture."""
+
+    numerator: int = Field(strict=True, gt=0, lt=2**32)
+    denominator: int = Field(strict=True, gt=0, lt=2**32)
+
+
+class MacosWorkspaceLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Data-owned vocabulary and modeled offsets for workspace-entry observation."""
+
+    message_type: Literal["Default", "Info", "Debug", "Error", "Fault"]
+    subsystem: str
+    category: str
+    format_string: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+    has_rules: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def validate_native_text(self) -> MacosWorkspaceLogProfile:
+        """Reject strings that cannot describe the selected native profile."""
+        if any(
+            "\x00" in value
+            for value in (self.subsystem, self.category, self.format_string, self.message)
+        ):
+            raise ValueError("Native log profile text cannot contain NUL")
+        if self.category and not self.subsystem:
+            raise ValueError("Native log profile category requires its subsystem")
+        return self
+
+
+class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded source profile; no collector or management configuration duplicates."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["macos26-workspace-entry-v1", "macos27-workspace-entry-v1"]
+    mach_timebase: MacosMachTimebaseConfig
+    workspace_request: MacosWorkspaceLogProfile
+    policy_refusal: MacosPolicyRefusalLogProfile | None = None
+    ssh_authentication: MacosSshAuthenticationLogProfile | None = None
+
+
+class MacosSshAuthenticationLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Qualified native logging envelope and public-source authentication vocabulary."""
+
+    profile: Literal["macos27-ssh-pam-accepted-v1", "macos27-ssh-accepted-v1"]
+    writer_path: Literal["/usr/libexec/sshd-session"]
+    message_type: Literal["Info"]
+    format_string: Literal["%.500s"]
+    message: Literal[
+        "Accepted keyboard-interactive/pam for {username} from {source_ip} port {source_port} ssh2"
+    ]
+    public_key_message: (
+        Literal[
+            "Accepted publickey for {username} from {source_ip} port {source_port} ssh2: {key_type} {key_hash}"
+        ]
+        | None
+    ) = None
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+    has_private_data: Literal[True]
+    # Build-owned frames in this modeled main image, not a captured call stack.
+    backtrace_offsets: tuple[
+        Annotated[int, Field(strict=True, gt=0, lt=2**32, multiple_of=4)], ...
+    ] = Field(min_length=1, max_length=16)
+
+    @field_validator("has_private_data", mode="before")
+    @classmethod
+    def strict_private_flag(cls, value: object) -> object:
+        """Keep the native Boolean profile field distinct from integer one."""
+        if type(value) is not bool:
+            raise ValueError("SSH private-data profile flag requires a Boolean")
+        return value
+
+    @model_validator(mode="after")
+    def modeled_frames(self) -> Self:
+        """Tie the first modeled main-image frame to the explicit callsite."""
+        if self.backtrace_offsets[0] != self.program_counter:
+            raise ValueError("SSH logging backtrace must start at its modeled callsite")
+        return self
+
+
+class MacosPolicyRefusalLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded ASP template and explicit modeled kernel/sender build callsite."""
+
+    profile: Literal["macos27-asp-refusal-v1"]
+    kernel_path: str
+    kernel_export_path: Literal["/kernel"] = "/kernel"
+    sender_path: str
+    format_string: Literal["ASP: Security policy would not allow process: %d, %s\n"]
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+
+    @model_validator(mode="after")
+    def exact_images(self) -> Self:
+        """Require explicit independent native artifact paths."""
+        if (
+            any(
+                not path.startswith("/") or "\0" in path or "/../" in path
+                for path in (self.kernel_path, self.sender_path)
+            )
+            or self.kernel_path == self.sender_path
+        ):
+            raise ValueError("Policy logging requires distinct absolute kernel and sender images")
+        return self
+
+
+class MacosProvisioningRange(BaseModel, extra="forbid", frozen=True):
+    """Positive bounded integer draws in the synthetic installed-file profile."""
+
+    min: int = Field(strict=True, gt=0, lt=2**31)
+    max: int = Field(strict=True, gt=0, lt=2**31)
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        """Reject inverted provisioning ranges before any file allocation."""
+        if self.min > self.max:
+            raise ValueError("Mac provisioning range min must not exceed max")
+        return self
+
+
+class MacosTerminalDeviceProfile(BaseModel, extra="forbid", frozen=True):
+    """Synthetic devfs allocation policy; never a discovered host device map."""
+
+    volume_id: str = Field(min_length=1, max_length=96, pattern=r"^[a-z0-9-]+$")
+    device: int = Field(strict=True, ge=1, lt=2**31)
+    special_device_base: int = Field(strict=True, ge=1, lt=2**31)
+    first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    max_devices: int = Field(strict=True, ge=1, le=4096)
+    permissions: int = Field(strict=True, ge=0, le=0o777)
+    preferred_block_size: int = Field(strict=True, gt=0, lt=2**31)
+
+    @model_validator(mode="after")
+    def bounded_devices(self) -> Self:
+        """Keep the complete synthetic device range representable."""
+        if self.special_device_base + self.max_devices >= 2**31:
+            raise ValueError("Mac terminal device range exceeds signed native device IDs")
+        return self
+
+
+class MacosExecutionMetadataRange(BaseModel, extra="forbid", frozen=True):
+    """Bounded deterministic draws for host- and path-scoped Mac directory facts."""
+
+    min: int = Field(strict=True, ge=1, lt=2**63)
+    max: int = Field(strict=True, ge=1, lt=2**63)
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        """Reject inverted ranges before metadata allocation."""
+        if self.min > self.max:
+            raise ValueError("Mac execution metadata range min must not exceed max")
+        return self
+
+
+class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled execution outcomes for a bounded installed artifact set."""
+
+    product_id: str = Field(min_length=1)
+    artifact_names: tuple[str, ...] = Field(min_length=1, max_length=256)
+    codesigning_flags: int = Field(strict=True, ge=0, lt=2**32)
+    is_platform_binary: bool = Field(strict=True)
+    validation_category: int = Field(strict=True, ge=0, le=10)
+    cpu_subtype: int | None = Field(default=None, strict=True, ge=-(2**31), lt=2**31)
+
+    @model_validator(mode="after")
+    def coherent_outcome(self) -> Self:
+        """Reject contradictory native outcomes and ambiguous artifact selectors."""
+        if (
+            len(set(self.artifact_names)) != len(self.artifact_names)
+            or any(not name or "/" in name or "\0" in name for name in self.artifact_names)
+            or self.is_platform_binary != bool(self.codesigning_flags & 0x04000000)
+            or self.is_platform_binary != (self.validation_category == 1)
+            or not self.codesigning_flags & 1
+        ):
+            raise ValueError("Mac launch validation requires coherent explicit valid-code outcomes")
+        return self
+
+
+class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
+    """One explicitly qualified generation target, independent of wire decoding."""
+
+    schema_version: Literal["1.0"]
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,127}$")
+    os_major: Literal[27]
+    architecture: Literal["arm64"]
+    collector_arguments: tuple[str, ...]
+    message_version: Literal[11]
+    event_types: tuple[int, ...]
+    action_type: Literal[1]
+    result_type: Literal[0]
+    auth_result: Literal[0]
+    clock_profile: Literal["macos27-workspace-entry-v1"]
+    exec_entitlements: Literal[
+        "absent_only",
+        "absent_or_boolean_object",
+        "absent_boolean_or_string_array_object",
+        "absent_or_bounded_object",
+        "absent_or_bounded_integer_object",
+        "absent_or_bounded_property_object",
+        "absent_or_bounded_property_object_v2",
+    ]
+    boot_parent_token: Literal["all_zero", "default_unattributed_kernel"] | None = None
+    file_operations: Literal["bounded_regular_files_v1"] | None = None
+
+    @field_validator(
+        "os_major",
+        "message_version",
+        "action_type",
+        "result_type",
+        "auth_result",
+        mode="before",
+    )
+    @classmethod
+    def exact_discriminants(cls, value: object) -> object:
+        """Reject booleans and coerced numbers at the profile boundary."""
+        if type(value) is not int:
+            raise ValueError("ES generation profile discriminants require exact integers")
+        return value
+
+    @field_validator("collector_arguments")
+    @classmethod
+    def process_subscription(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Require the subscription actually covered by the bounded experiment."""
+        if values not in {
+            ("/usr/bin/eslogger", "fork", "exec", "exit"),
+            ("/usr/bin/eslogger", "fork", "exec", "exit", "create", "close", "rename", "unlink"),
+        }:
+            raise ValueError("ES profile requires a qualified process or process/file subscription")
+        return values
+
+    @field_validator("event_types", mode="before")
+    @classmethod
+    def supported_families(cls, values: object) -> object:
+        """Counter order is canonical, distinct from collector argument order."""
+        if (
+            type(values) not in {tuple, list}
+            or any(type(value) is not int for value in values)
+            or tuple(values) not in {(9, 11, 15), (9, 11, 12, 13, 15, 25, 32)}
+        ):
+            raise ValueError(
+                "ES event types must match the qualified process or process/file families"
+            )
+        return values
+
+    @model_validator(mode="after")
+    def coherent_file_subscription(self) -> Self:
+        """Keep historical process profiles frozen and file admission explicit."""
+        enabled = self.file_operations is not None
+        if enabled != (len(self.collector_arguments) == 8) or enabled != (
+            len(self.event_types) == 7
+        ):
+            raise ValueError("File admission, subscription and counter families must agree")
+        return self
+
+
+class MacosEndpointSecurityProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Selectable generation catalog; retiring a target does not remove its decoder."""
+
+    schema_version: Literal["2.0"]
+    profiles: tuple[MacosEndpointSecurityProfile, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def unambiguous_targets(self) -> Self:
+        """Require unique IDs and a single profile per current OS/architecture target."""
+        ids = [profile.profile for profile in self.profiles]
+        targets = [(profile.os_major, profile.architecture) for profile in self.profiles]
+        if len(set(ids)) != len(ids) or len(set(targets)) != len(targets):
+            raise ValueError(
+                "Mac generation profile IDs and OS/architecture targets must be unique"
+            )
+        return self
+
+
+class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit nominal result for one bounded modeled query invocation."""
+
+    arguments: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
+    argument_template: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
+    exit_code: int = Field(strict=True, ge=0, le=255)
+    connection_failure_exit_code: int | None = Field(default=None, strict=True, ge=1, le=255)
+
+    @field_validator("arguments", "argument_template")
+    @classmethod
+    def literal_invocation(cls, values: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Require an absolute executable and NUL-free literal argument vector."""
+        if values is None:
+            return None
+        if not values[0].startswith("/") or values[0] == "/" or any("\0" in v for v in values):
+            raise ValueError("Mac command completion requires an absolute NUL-free invocation")
+        return values
+
+    @model_validator(mode="after")
+    def bounded_selector(self) -> Self:
+        """Keep template parameters explicit and outside the executable selector."""
+        from string import Formatter
+
+        if (self.arguments is None) == (self.argument_template is None):
+            raise ValueError("Mac completion requires exactly one literal or template selector")
+        if self.argument_template is not None:
+            if "{" in self.argument_template[0] or "}" in self.argument_template[0]:
+                raise ValueError("Mac completion templates require a literal executable")
+            fields: list[str] = []
+            for argument in self.argument_template:
+                for _literal, name, spec, conversion in Formatter().parse(argument):
+                    if name is not None:
+                        if name not in {"home", "db_server", "internal_url"} or spec or conversion:
+                            raise ValueError("Unsupported Mac completion template parameter")
+                        fields.append(name)
+            if not fields:
+                raise ValueError("Mac completion templates require explicit parameters")
+        return self
+
+
+class MacosCommandEnvironmentPolicy(BaseModel, extra="forbid", frozen=True):
+    """Installed command defaults applied to its canonical exec environment."""
+
+    image: str = Field(min_length=1, max_length=4096)
+    environment: tuple[str, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def literal_defaults(self) -> Self:
+        """Require literal image paths and unique bounded environment assignments."""
+        if (
+            not self.image.startswith("/")
+            or "\0" in self.image
+            or ".." in PurePosixPath(self.image).parts
+            or any(
+                len(value.encode("utf-8")) > 4096
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^\x00]*", value) is None
+                for value in self.environment
+            )
+            or len({value.partition("=")[0] for value in self.environment}) != len(self.environment)
+        ):
+            raise ValueError(
+                "Mac command environment requires a literal path and unique assignments"
+            )
+        return self
+
+
+class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
+    """A literal nested shell invocation admitted as a modeled command parent."""
+
+    image: Literal["/bin/zsh", "/bin/bash", "/bin/sh"]
+    arguments: tuple[str, ...] = Field(min_length=1, max_length=1)
+
+    @model_validator(mode="after")
+    def plain_interactive_shell(self) -> Self:
+        """Keep shell command strings, scripts and flags outside this bounded policy."""
+        if self.arguments != (self.image,):
+            raise ValueError("Nested Mac command shells require the exact plain executable vector")
+        return self
+
+
+class MacosFinderApplicationPolicy(BaseModel, extra="forbid", frozen=True):
+    """Declared GUI bundle identity, independent of the executable's signing identity."""
+
+    image: str = Field(min_length=1, max_length=4096)
+    bundle_identifier: str = Field(
+        min_length=3, max_length=255, pattern=r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+    )
+
+
+class MacosBrowserHelperPolicy(BaseModel, extra="forbid", frozen=True):
+    """One bounded native helper invocation and its modeled sandbox pipe slot."""
+
+    parent_image: str = Field(min_length=1, max_length=4096)
+    image: str = Field(min_length=1, max_length=4096)
+    arguments: tuple[str, ...] = Field(min_length=1, max_length=16)
+    io_layout: Literal["browser_sandbox", "utility_pipes"] = "browser_sandbox"
+    seatbelt_fd: int | None = Field(default=None, strict=True, ge=3, lt=2**15)
+    environment: tuple[str, ...] = Field(default=(), max_length=16)
+
+    @model_validator(mode="after")
+    def literal_scope(self) -> Self:
+        """Keep helper admission exact; runtime arguments cannot override file actions."""
+        if (self.io_layout == "browser_sandbox") != (self.seatbelt_fd is not None):
+            raise ValueError("Helper descriptor layout and sandbox pipe slot must agree")
+        if any(
+            not path.startswith("/") or "\0" in path or ".." in PurePosixPath(path).parts
+            for path in (self.parent_image, self.image)
+        ) or any(
+            not argument.startswith("--")
+            or "\0" in argument
+            or argument.split("=", 1)[0] == "--seatbelt-client"
+            for argument in self.arguments
+        ):
+            raise ValueError(
+                "Browser helpers require literal paths, switches and a separate pipe slot"
+            )
+        if len({argument.split("=", 1)[0] for argument in self.arguments}) != len(self.arguments):
+            raise ValueError("Browser helper switches must be unique")
+        if any(
+            "=" not in entry or not entry.split("=", 1)[0] or "\0" in entry
+            for entry in self.environment
+        ) or len({entry.split("=", 1)[0] for entry in self.environment}) != len(self.environment):
+            raise ValueError("Browser helper environment requires distinct literal assignments")
+        return self
+
+
+class MacosTerminalStartupPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit fresh terminal topology and public launch inputs, separate from app identity."""
+
+    application_id: str = Field(min_length=1, max_length=256)
+    kind: Literal["apple", "iterm2"]
+    bundle_identifier: str = Field(
+        min_length=3, max_length=255, pattern=r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+    )
+    shell_environment: tuple[str, ...] = Field(default=(), max_length=32)
+    server_application_id: str | None = Field(default=None, min_length=1, max_length=256)
+    shell_launcher_application_id: str | None = Field(default=None, min_length=1, max_length=256)
+    server_socket_path: str | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="after")
+    def exact_helper_scope(self) -> Self:
+        """Require all iTerm2 dependencies and keep Apple startup free of helper defaults."""
+        helpers = (
+            self.server_application_id,
+            self.shell_launcher_application_id,
+            self.server_socket_path,
+        )
+        if (self.kind == "iterm2" and not all(helpers)) or (
+            self.kind == "apple" and any(v is not None for v in helpers)
+        ):
+            raise ValueError("Terminal startup helper policy must match its declared topology")
+        for value in self.shell_environment:
+            if "=" not in value or "\0" in value or not value.split("=", 1)[0]:
+                raise ValueError("Terminal startup environment requires literal assignments")
+        if self.server_socket_path is not None:
+            if (
+                "\0" in self.server_socket_path
+                or not self.server_socket_path.startswith("{home}/")
+                or self.server_socket_path.count("{home}") != 1
+                or "{" in self.server_socket_path.replace("{home}", "")
+                or "}" in self.server_socket_path.replace("{home}", "")
+                or ".." in PurePosixPath(self.server_socket_path).parts
+            ):
+                raise ValueError("Terminal server socket requires a canonical home-scoped template")
+        return self
+
+
+class MacosOrdinaryClosePolicy(BaseModel, extra="forbid", frozen=True):
+    """Selected completed outcomes for an explicitly modeled ordinary shutdown."""
+
+    model: Literal["orderly_logout_and_ssh_normal_return_v1"]
+    application_quit: PosixProcessExit
+    terminal_server_return: PosixProcessExit
+    shell_logout: PosixProcessExit
+    login_return: PosixProcessExit
+    ssh_client_return: PosixProcessExit
+    ssh_worker_return: PosixProcessExit
+    ssh_receiver_return: PosixProcessExit
+    cancelled_command: PosixProcessExit
+    shell_images: tuple[str, ...] = Field(min_length=1, max_length=16)
+    login_image: str = Field(min_length=1, max_length=4096)
+    ssh_client_images: tuple[str, ...] = Field(min_length=1, max_length=16)
+    ssh_receiver_image: str = Field(min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def completed_outcomes(self) -> Self:
+        """Keep orderly returns distinct from completed cancellation signals."""
+        for result in (
+            self.application_quit,
+            self.terminal_server_return,
+            self.shell_logout,
+            self.login_return,
+            self.ssh_client_return,
+            self.ssh_worker_return,
+            self.ssh_receiver_return,
+        ):
+            if result.exit_code is None:
+                raise ValueError("Ordinary returns require a completed normal exit status")
+        if self.cancelled_command.signal is None:
+            raise ValueError("Command cancellation requires its completed termination signal")
+        for path in (
+            *self.shell_images,
+            self.login_image,
+            *self.ssh_client_images,
+            self.ssh_receiver_image,
+        ):
+            if not path.startswith("/") or "\0" in path or ".." in PurePosixPath(path).parts:
+                raise ValueError("Ordinary close selectors require canonical absolute images")
+        return self
+
+
+class MacosFilesystemWorkloadProfile(BaseModel, extra="forbid", frozen=True):
+    """Nominal bounded application document activity, independent of native rendering."""
+
+    applications: tuple[str, ...] = Field(min_length=1, max_length=16)
+    directory_name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+    filenames: tuple[str, ...] = Field(min_length=1, max_length=16)
+    first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    count_min: int = Field(strict=True, ge=0, le=4)
+    count_max: int = Field(strict=True, ge=0, le=4)
+    size_min: int = Field(strict=True, ge=1, le=4096)
+    size_max: int = Field(strict=True, ge=1, le=4096)
+    file_permissions: int = Field(strict=True, ge=0, le=0o777)
+    allocated_blocks: int = Field(strict=True, ge=0, le=128)
+    close_delay_min: float = Field(gt=0, le=10)
+    close_delay_max: float = Field(gt=0, le=10)
+    idle_probability: float = Field(ge=0, le=1)
+    atomic_replace_probability: float = Field(ge=0, le=1)
+    cleanup_probability: float = Field(ge=0, le=1)
+    parent_stat_phase: Literal["before"]
+    directory_entry_bytes: int = Field(strict=True, ge=0, le=4096)
+
+    @model_validator(mode="after")
+    def bounded_workload(self) -> Self:
+        if (
+            self.count_min > self.count_max
+            or self.size_min > self.size_max
+            or self.close_delay_min > self.close_delay_max
+            or any(
+                not name or name in {".", ".."} or "/" in name or "\\" in name or "\0" in name
+                for name in self.filenames
+            )
+            or len(set(self.applications)) != len(self.applications)
+            or len(set(self.filenames)) != len(self.filenames)
+        ):
+            raise ValueError("Mac filesystem workload requires bounded distinct names and ranges")
+        return self
+
+
+class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
+    """Explicit deterministic launch policy for admitted Mac execution producers."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["modeled-macos-execution-v1"]
+    terminal: MacosTerminalDeviceProfile
+    cpu_subtype: int = Field(strict=True, ge=-(2**31), lt=2**31)
+    user_environment: tuple[str, ...]
+    root_environment: tuple[str, ...]
+    directory_inode_range: MacosExecutionMetadataRange
+    directory_permissions: int = Field(strict=True, ge=0, le=0o777)
+    directory_size_bytes: int = Field(strict=True, ge=0, lt=2**31)
+    directory_allocated_blocks: int = Field(strict=True, ge=0, lt=2**31)
+    directory_age_range: MacosExecutionMetadataRange
+    first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
+    code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
+    system_audit_origin: Literal["default_unattributed"] | None = None
+    boot_audit_origin: Literal["assigned_unattributed"] | None = None
+    system_responsibility: Literal["none"] | None = None
+    gui_audit_origin: Literal["authenticated_local_account"] | None = None
+    terminal_responsibility: Literal["terminal_application"] | None = Field(
+        default=None,
+        description="Explicit modeled terminal-app ownership of its login/shell/command chain",
+    )
+    login_setuid_execution: Literal["installed_owner"] | None = None
+    terminal_startups: tuple[MacosTerminalStartupPolicy, ...] = Field(default=(), max_length=32)
+    finder_launch_relationships: Literal["launchd_self"] | None = None
+    finder_launch_execution: Literal["xpcproxy_app_exec"] | None = None
+    finder_launch_images: tuple[str, ...] = Field(default=(), max_length=64)
+    finder_applications: tuple[MacosFinderApplicationPolicy, ...] = Field(default=(), max_length=64)
+    finder_launcher_xpc_flags: str | None = Field(
+        default=None, max_length=32, pattern=r"^(?:0x[0-9a-fA-F]+|[0-9]+)$"
+    )
+    browser_helpers: tuple[MacosBrowserHelperPolicy, ...] = Field(default=(), max_length=32)
+    ssh_command_descriptors: Literal["standard_pipes"] | None = None
+    ssh_receiver_startup: Literal["launchd_non_pty_v11"] | None = None
+    ssh_receiver_service_label: Literal["com.openssh.sshd"] | None = None
+    ssh_pty_execution: Literal["zsh_foreground_v11"] | None = None
+    system_job_startup: Literal["root_xpcproxy_v11"] | None = None
+    system_job_images: tuple[str, ...] = Field(
+        default=(),
+        max_length=64,
+        description="Historical reference-target inventory, not a canonical launch allowlist",
+    )
+    system_job_environment: tuple[str, ...] = ()
+    system_job_phase_timing: ShortCommandTiming | None = None
+    nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
+    command_environments: tuple[MacosCommandEnvironmentPolicy, ...] = Field(
+        default=(), max_length=64
+    )
+    preexisting_root_shell: MacosCommandShellPolicy | None = None
+    command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
+        default=(), max_length=256
+    )
+    ordinary_close: MacosOrdinaryClosePolicy | None = None
+    filesystem_workload: MacosFilesystemWorkloadProfile | None = None
+
+    @field_validator("finder_launch_images")
+    @classmethod
+    def literal_finder_images(cls, images: tuple[str, ...]) -> tuple[str, ...]:
+        """Require explicit distinct regular-app paths rather than wildcard classification."""
+        from pathlib import PurePosixPath
+
+        if len(set(images)) != len(images) or any(
+            not image.startswith("/")
+            or "\0" in image
+            or ".." in PurePosixPath(image).parts
+            or ".app/Contents/MacOS/" not in image
+            or not image.rsplit(".app/Contents/MacOS/", 1)[-1]
+            or "/" in image.rsplit(".app/Contents/MacOS/", 1)[-1]
+            for image in images
+        ):
+            raise ValueError("Finder launch images require distinct literal app executables")
+        return images
+
+    @model_validator(mode="after")
+    def unique_validation_selectors(self) -> Self:
+        """Preserve unknown policy in older inputs and reject overlapping rules."""
+        if (
+            self.filesystem_workload is not None
+            and self.filesystem_workload.first_inode <= self.directory_inode_range.max
+        ):
+            raise ValueError(
+                "Runtime file inodes must be disjoint from provisioned directory inodes"
+            )
+        if self.directory_age_range.max >= 2**31:
+            raise ValueError("Mac directory age range must fit bounded timedelta seconds")
+        selectors = [
+            (rule.product_id, name) for rule in self.code_validation for name in rule.artifact_names
+        ]
+        if self.system_job_startup is None and (
+            self.system_job_images or self.system_job_environment
+        ):
+            raise ValueError("System-job inputs require the qualified native startup policy")
+        if len(set(self.system_job_images)) != len(self.system_job_images) or any(
+            not image.startswith("/") or "\0" in image for image in self.system_job_images
+        ):
+            raise ValueError("System-job images must be distinct literal absolute paths")
+        if (self.ssh_receiver_startup is None) != (self.ssh_receiver_service_label is None):
+            raise ValueError(
+                "Native SSH startup and service-label policy must be selected together"
+            )
+        if self.ssh_pty_execution is not None and self.ssh_receiver_startup is None:
+            raise ValueError("SSH PTY execution requires the qualified native receiver startup")
+        terminals = [entry.application_id for entry in self.terminal_startups]
+        command_images = [entry.image for entry in self.command_environments]
+        if len(command_images) != len(set(command_images)):
+            raise ValueError("Mac command environments require distinct image selectors")
+        if len(terminals) != len(set(terminals)):
+            raise ValueError("Terminal startup policies must have distinct application IDs")
+        if len(selectors) != len(set(selectors)):
+            raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
+        finder_images = [entry.image for entry in self.finder_applications]
+        if len(set(finder_images)) != len(finder_images) or any(
+            image not in self.finder_launch_images for image in finder_images
+        ):
+            raise ValueError("Finder bundle policies require distinct admitted app images")
+        helpers = [
+            (entry.parent_image, entry.image, entry.arguments) for entry in self.browser_helpers
+        ]
+        if len(helpers) != len(set(helpers)) or any(
+            entry.parent_image not in finder_images for entry in self.browser_helpers
+        ):
+            raise ValueError(
+                "Browser helper policies require distinct invocations and admitted GUI parents"
+            )
+        shell_invocations = [(rule.image, rule.arguments) for rule in self.nested_command_shells]
+        if len(shell_invocations) != len(set(shell_invocations)):
+            raise ValueError("Nested Mac command shell policies must have distinct invocations")
+        invocations = [
+            (rule.arguments, rule.argument_template) for rule in self.command_completions
+        ]
+        if len(invocations) != len(set(invocations)):
+            raise ValueError("Mac command completion policies must have distinct argument vectors")
+        return self
+
+    @field_validator("user_environment", "root_environment", "system_job_environment")
+    @classmethod
+    def explicit_environment(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject malformed assignments and unknown interpolation fields."""
+        from string import Formatter
+
+        allowed = {"username", "home", "shell"}
+        for value in values:
+            if "\0" in value or "=" not in value or not value.split("=", 1)[0]:
+                raise ValueError("Mac launch environment requires NUL-free assignments")
+            for _, name, spec, conversion in Formatter().parse(value):
+                if name is not None and (name not in allowed or spec or conversion):
+                    raise ValueError("Mac launch environment contains an unsupported template")
+        return values
+
+
+class MacosInstalledPermissionRule(BaseModel, extra="forbid", frozen=True):
+    """Explicit permissions for one exact machine-installed Mac image."""
+
+    product_id: str = Field(strict=True, min_length=1, max_length=256)
+    artifact_name: str = Field(strict=True, min_length=1, max_length=256)
+    native_path: str = Field(strict=True, min_length=1, max_length=4096)
+    permissions: int = Field(strict=True, ge=0, le=0o7777)
+
+    @model_validator(mode="after")
+    def exact_image(self) -> Self:
+        """Reject aliases and ambiguous selectors before any file is provisioned."""
+        path = PurePosixPath(self.native_path)
+        if (
+            any(
+                value != value.strip() or "\0" in value
+                for value in (self.product_id, self.artifact_name, self.native_path)
+            )
+            or not self.native_path.startswith("/")
+            or self.native_path.startswith("//")
+            or path.as_posix() != self.native_path
+            or ".." in path.parts
+            or path.name != self.artifact_name
+        ):
+            raise ValueError(
+                "Mac installed permissions require an exact product, artifact and absolute image path"
+            )
+        return self
+
+
+class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled provisioning policy, not native filesystem calibration."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["modeled-macos-installed-v1"]
+    volume_id: str = Field(min_length=1, max_length=96, pattern=r"^[a-z0-9-]+$")
+    volume_device: MacosProvisioningRange
+    first_inode: MacosProvisioningRange
+    logical_size_bytes: MacosProvisioningRange
+    size_median_bytes: int = Field(strict=True, gt=0, lt=2**31)
+    size_log_sigma: float = Field(strict=True, gt=0, le=3)
+    installation_age_seconds: MacosProvisioningRange
+    build_lead_seconds: MacosProvisioningRange
+    package_whole_second_probability: float = Field(default=0.5, ge=0, le=1)
+    allocation_policy: Literal["dense-rounded"]
+    allocation_unit_bytes: int = Field(strict=True, gt=0, lt=2**31, multiple_of=512)
+    permissions: int = Field(strict=True, ge=0, le=0o7777)
+    permission_rules: tuple[MacosInstalledPermissionRule, ...] = Field(default=(), max_length=128)
+    flags: int = Field(strict=True, ge=0, lt=2**32)
+    generation: int = Field(strict=True, ge=0, lt=2**32)
+
+    @model_validator(mode="after")
+    def size_distribution(self) -> Self:
+        """Keep the modeled log-normal median inside its bounded support."""
+        if not self.logical_size_bytes.min <= self.size_median_bytes <= self.logical_size_bytes.max:
+            raise ValueError("Mac installed size median must lie inside logical_size_bytes")
+        keys = [
+            (rule.product_id, rule.artifact_name, rule.native_path)
+            for rule in self.permission_rules
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Mac installed permission rules must select distinct exact images")
+        return self
 
 
 # --- System Processes ---
@@ -4006,6 +5112,7 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
     roles_any: tuple[str, ...] = ()
     services_any: tuple[str, ...] = ()
     native_release: NativeSystemBinaryReleaseEntry | None = None
+    executable_format: Literal["mach_o"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -4203,10 +5310,20 @@ class HostActivityFirewallDenyConfig(BaseModel, extra="forbid"):
         return v
 
 
+class SmbArrivalProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded self-exciting baseline SMB arrival policy."""
+
+    branching_ratio: float = Field(default=0.35, ge=0, lt=0.85, allow_inf_nan=False)
+    excitation_decay_seconds: float = Field(default=45.0, gt=0, le=600, allow_inf_nan=False)
+    candidate_ceiling_multiplier: int = Field(default=12, ge=4, le=100)
+    minimum_candidate_ceiling: int = Field(default=16, ge=4, le=1000)
+
+
 class HostActivityProfilesConfig(BaseModel, extra="forbid"):
     """Root schema for host_activity_profiles.yaml."""
 
     rate_families: HostActivityRateFamiliesConfig
+    smb_arrivals: SmbArrivalProfile = Field(default_factory=SmbArrivalProfile)
     host_types: dict[str, HostActivityProfileEntry]
     role_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)
     persona_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)

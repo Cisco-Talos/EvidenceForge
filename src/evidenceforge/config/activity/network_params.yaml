@@ -1,3 +1,10 @@
+# Modeled application readiness after TCP open; not measured calibration.
+http_request_phase:
+  minimum_ms: 3
+  median_ms: 28
+  maximum_ms: 180
+  sigma: 0.65
+
 # network_params.yaml — Network parameters for realistic DHCP and MAC address generation.
 #
 # Purpose: Defines OUI prefixes and public infrastructure defaults for realistic
@@ -7,6 +14,14 @@
 # Depends on: nothing — standalone
 #
 # Authoring reference: commands/eforge/references/config-dns-network.md
+
+# Modeled right-skew TCP/HTTP close variation after short source-admission floors.
+# These bounds are synthetic policy, not measured network calibration.
+http_transport_floor_slack:
+  median_ms: 180
+  sigma: 1.1
+  minimum_ms: 2
+  maximum_ms: 1500
 
 oui_prefixes:
   - prefix: "D4:BE:D9"
@@ -76,7 +91,12 @@ linux_smb_connection_owners:
 
 # Process-owned nmap commands fully expand bounded small CIDRs and use
 # stratified silent-address sampling for larger ranges.
+protocol_confirmation:
+  payload_directions:
+    mysql: [orig, resp]
+
 nmap_command_probe:
+  server_first_services: [ssh, mysql, smtp, ftp]
   full_cidr_max_hosts: 256
   max_expanded_targets: 256
   large_cidr_connect_targets: 20
@@ -211,3 +231,127 @@ proxy_connect_status_messages:
     - "Gateway Timeout"
     - "Upstream Timeout"
     - "Connection Timed Out"
+
+# Passive Zeek vocabulary. Counts do not repeat once-only history markers.
+# No decrypted Finished or post-detection application content is inferred.
+transport_histories:
+  tcp:
+  - state: SF
+    weight: 21
+    history: ShADadfF
+  - state: SF
+    weight: 11
+    history: ShADadfF
+  - state: SF
+    weight: 6
+    history: ShADadTtFf
+  - state: SF
+    weight: 5
+    history: ShADadfF
+  - state: SF
+    weight: 5
+    history: ShADadfF
+  - state: SF
+    weight: 4
+    history: ShADadFf
+  - state: SF
+    weight: 4
+    history: ShADadfF
+  - state: SF
+    weight: 3
+    history: ShADadTFf
+  - state: SF
+    weight: 2
+    history: ShADadFf
+  - state: SF
+    weight: 1
+    history: ShADaTtdfF
+  - state: S0
+    weight: 9
+    history: S
+  - state: S0
+    weight: 5
+    history: S
+  - state: S1
+    weight: 2
+    history: Sh
+  - state: S1
+    weight: 1
+    history: Sh
+  - state: REJ
+    weight: 3
+    history: Sr
+  - state: REJ
+    weight: 2
+    history: Srr
+  - state: RSTO
+    weight: 4
+    history: ShADaR
+  - state: RSTO
+    weight: 2
+    history: ShADadTR
+  - state: RSTO
+    weight: 2
+    history: ShAR
+  - state: RSTR
+    weight: 3
+    history: ShADadr
+  - state: RSTR
+    weight: 2
+    history: ShAdr
+  - state: S2
+    weight: 1
+    history: ShADadF
+  - state: S3
+    weight: 1
+    history: ShADadf
+  - state: OTH
+    weight: 1
+    history: DAd
+  udp:
+  - state: SF
+    weight: 55
+    history: Dd
+  - state: SF
+    weight: 8
+    history: Dd
+  - state: SF
+    weight: 5
+    history: Dd
+  - state: SF
+    weight: 4
+    history: Dd
+  - state: S0
+    weight: 12
+    history: D
+  - state: S0
+    weight: 6
+    history: D
+  - state: OTH
+    weight: 6
+    history: Dd
+  - state: OTH
+    weight: 4
+    history: Dd
+ssl_histories:
+  tls12_full:
+  - history: CsxknGIi
+    weight: 80
+  - history: CsxknGIti
+    weight: 20
+  tls12_resumed:
+  - history: CsiI
+    weight: 100
+  tls13_full:
+  - history: Cs
+    weight: 100
+  tls13_resumed:
+  - history: Cs
+    weight: 100
+  failure:
+  - history: C
+    weight: 45
+  - history: Cs
+    weight: 30
+  - history: Cs
+    weight: 25

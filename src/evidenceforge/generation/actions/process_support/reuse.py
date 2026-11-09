@@ -29,7 +29,6 @@ from evidenceforge.models.state import RunningProcess
 from . import policy
 from .policy import (
     _PERSISTENT_USER_APP_EXES,
-    _WINDOWS_BROWSER_EXES,
     _WINDOWS_ELECTRON_CHILD_MARKERS,
     _WINDOWS_SINGLETON_SERVICE_PATHS,
     _WINDOWS_SINGLETON_SYSTEM_PROCESSES,
@@ -119,62 +118,70 @@ class ProcessReusePolicy:
         command_line: str,
         time: datetime,
         source_visible_by: datetime | None = None,
+        allow_deferred_start: bool = False,
     ) -> int | None:
         """Reuse an open browser instead of emitting repeated top-level launches."""
-        if _get_os_category(system.os) != "windows":
+        from evidenceforge.generation.activity.browser_instances import browser_instance_key
+
+        os_category = _get_os_category(system.os)
+        requested = browser_instance_key(process_name, command_line, os_category, username)
+        if requested is None:
             return None
-        if not policy._is_top_level_browser_launch(process_name, command_line):
-            return None
-
-        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        preferred_key = (system.hostname, username, "")
-        preferred_exe = self._preferred_browser_by_session.get(preferred_key)
-        candidates: list[RunningProcess] = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            if proc.username != username:
-                continue
-            if not self.queries._is_pid_active_at(system, proc.pid, time):
-                continue
-            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if proc_exe not in _WINDOWS_BROWSER_EXES:
-                continue
-            if not policy._is_top_level_browser_launch(proc.image, proc.command_line):
-                continue
-            candidates.append(proc)
-
-        if not candidates:
-            self._preferred_browser_by_session[preferred_key] = requested_exe
-            return None
-
-        if preferred_exe:
-            preferred = [proc for proc in candidates if proc.image.lower().endswith(preferred_exe)]
-            if preferred:
-                proc = max(preferred, key=lambda candidate: candidate.start_time)
-                if not self.sources._process_source_visible_by(
-                    system=system,
-                    pid=proc.pid,
-                    deadline=source_visible_by,
-                ):
-                    return None
-                self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
-                return proc.pid
-
-        same_exe = [
-            proc
-            for proc in candidates
-            if proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == requested_exe
-        ]
-        chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
-        if not self.sources._process_source_visible_by(
-            system=system,
-            pid=chosen.pid,
-            deadline=source_visible_by,
+        candidates = []
+        future_candidates = []
+        for process in self.state_manager.get_processes_on_system(
+            system.hostname, include_retained=True
         ):
+            identity = self.state_manager.get_process_identity_at(
+                system.hostname, process.pid, time
+            )
+            if (
+                identity is not None
+                and identity.object_id == process.ecar_object_id
+                and identity.principal == username
+                and browser_instance_key(
+                    identity.image, identity.command_line, os_category, username
+                )
+                == requested
+            ):
+                candidates.append(identity)
+            elif process.username == username:
+                ready_at = process.executed_at or process.start_time
+                if ready_at > time:
+                    future = self.state_manager.get_process_identity_at(
+                        system.hostname, process.pid, ready_at
+                    )
+                    if (
+                        future is not None
+                        and future.object_id == process.ecar_object_id
+                        and browser_instance_key(
+                            future.image, future.command_line, os_category, username
+                        )
+                        == requested
+                    ):
+                        future_candidates.append(future)
+        if candidates:
+            chosen = min(candidates, key=lambda process: (process.started_at, process.object_id))
+        elif future_candidates:
+            # A committed future root already owns this profile. Flexible baseline
+            # work may wait for it; bounded callers must not create a duplicate.
+            if not allow_deferred_start:
+                return 0
+            chosen = min(
+                future_candidates,
+                key=lambda process: (process.execution_started_at, process.object_id),
+            )
+        else:
             return None
-        self._preferred_browser_by_session[preferred_key] = (
-            chosen.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        )
-        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
+        if not self.sources._process_source_visible_by(
+            system=system, pid=chosen.pid, deadline=source_visible_by
+        ):
+            return 0
+        current = self.state_manager.get_process(system.hostname, chosen.pid)
+        if current is not None and current.ecar_object_id == chosen.object_id:
+            self.state_manager.update_process_activity_time(
+                system.hostname, chosen.pid, max(time, chosen.execution_started_at)
+            )
         return chosen.pid
 
     def _existing_windows_singleton_pid(

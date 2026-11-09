@@ -298,3 +298,35 @@ source-code development task with matching tests—not a per-project tuning work
 For Scenario 2.0, effective precedence is packaged defaults, selected industry packs, organization
 pack, project overlay, then scenario-local fields. Peer pack collisions fail deterministically; a
 project overlay cannot change engine-owned safety, evaluation, resource, runtime, or OOB policy.
+
+
+## Experimental Mac source and workload configuration
+
+The current source tree's Mac target is macOS 27 arm64 workstations; see the
+[Mac guide](../macos.md) for admitted process/file families and remaining limits.
+Application catalog presence is separate from native startup qualification. Adding a catalog
+entry does not establish its helper graph, launch method, runtime security or descriptors.
+
+Existing activity overlays include `macos_endpoint_security_profiles.yaml`,
+`macos_unified_log_profiles.yaml`, `macos_installed_files.yaml` and
+`macos_execution_metadata.yaml`. They are frozen into resolved inputs and resumes retain
+that captured configuration. Older snapshots do not acquire new file subscriptions or launch
+capabilities just because the installed defaults changed.
+
+The execution profile's `filesystem_workload` controls nominal Code-owned document activity.
+For example, `.eforge/config/activity/macos_execution_metadata.yaml` can reduce its frequency:
+
+```yaml
+filesystem_workload:
+  count_min: 0
+  count_max: 1
+  idle_probability: 0.5
+```
+
+This deep-merges with the packaged profile. The workload still needs an eligible live app and
+session and retains qualified source stat semantics. Count/size/delay bounds and save/cleanup
+probabilities model activity; they do not claim an empirical Code save strategy or APFS
+allocation. No new scenario field or generic native-file conversion is implied. Source/native
+metadata and operation admission are contracts to preserve, not knobs for bypassing unsupported
+facts. Run `uv run eforge validate-config` after overlay edits and validate affected scenarios
+from the same project root.

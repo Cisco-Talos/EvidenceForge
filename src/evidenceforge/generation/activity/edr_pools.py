@@ -314,6 +314,10 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
 
 def get_file_paths(os_category: str) -> list[str]:
     """Return file path pool for the given OS category."""
+    if os_category == "macos":
+        # The existing ambient pool describes Windows/Linux storage. Mac file
+        # effects currently come from canonical commands, downloads and SMB.
+        return []
     pools = load_edr_pools()
     key = "file_paths_windows" if os_category == "windows" else "file_paths_linux"
     return pools.get(key, [])
@@ -813,10 +817,13 @@ def materialize_edr_template(
     host_key: str = "",
     host_os: str = "",
     process_name: str = "",
+    machine_id: str = "",
     occurrence_time: datetime | None = None,
     deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
+    if "{machine_id}" in template and re.fullmatch(r"[0-9a-f]{32}", machine_id) is None:
+        raise ValueError("Journal path materialization requires a canonical 32-digit machine ID")
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
     installed_product = _installed_software_product(
         rng,
@@ -844,6 +851,7 @@ def materialize_edr_template(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "machine_id": machine_id,
         "process_prefetch_name": _process_prefetch_name(process_name),
         "os_build": _windows_component_build(host_os, host_key),
         "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
@@ -1069,6 +1077,8 @@ def select_file_side_effect(
     os_category: str,
     rng: random.Random,
     user: str = "SYSTEM",
+    *,
+    machine_id: str = "",
 ) -> tuple[str, str] | None:
     """Return a process-aware file side effect from data-driven EDR profiles."""
     exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
@@ -1076,6 +1086,10 @@ def select_file_side_effect(
     semantic_effect = _select_command_semantic_file_effect(exe, command_line)
     if semantic_effect is not None:
         return semantic_effect
+    if os_category == "macos":
+        # Matching an executable shared with Linux does not establish a native
+        # cache/history path or persistence policy on macOS.
+        return None
 
     profiles = load_edr_pools().get("file_side_effect_profiles", [])
     for profile in profiles:
@@ -1096,8 +1110,18 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        raw_path_templates = [str(path) for path in paths]
+        raw_path_templates = [
+            str(path) for path in paths if "{machine_id}" not in str(path) or machine_id
+        ]
         path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
+        if (
+            os_category == "windows"
+            and exe in {"powershell.exe", "pwsh.exe", "powershell", "pwsh"}
+            and not _powershell_command_has_file_output(command_line)
+        ):
+            path_templates = [
+                path for path in path_templates if "\\appdata\\local\\temp\\tmp" not in path.lower()
+            ]
         if not path_templates:
             return None
         if (
@@ -1114,6 +1138,7 @@ def select_file_side_effect(
             rng,
             user=user,
             process_name=process_name,
+            machine_id=machine_id,
         )
         if (
             exe in {"bash", "sh"}
@@ -1128,6 +1153,7 @@ def select_file_side_effect(
                 rng,
                 user=user,
                 process_name=process_name,
+                machine_id=machine_id,
             )
         if os_category == "windows" and _is_windows_powershell_history_path(path):
             if not _allows_psreadline_history(exe, command_line, user):
@@ -1142,6 +1168,7 @@ def select_file_side_effect(
                     rng,
                     user=user,
                     process_name=process_name,
+                    machine_id=machine_id,
                 )
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
@@ -1162,14 +1189,25 @@ def select_ambient_file_churn_effect(
     host_ip: str = "",
     host_key: str = "",
     host_os: str = "",
+    machine_id: str = "",
 ) -> tuple[str, str] | None:
     """Return an account-compatible ambient FILE churn action and path."""
     if os_category == "linux" and is_service_account(os_category, user):
-        return select_file_side_effect(process_name, command_line, os_category, rng, user=user)
+        return select_file_side_effect(
+            process_name, command_line, os_category, rng, user=user, machine_id=machine_id
+        )
 
     candidates = file_path_templates_for_user(path_templates, os_category, user)
+    candidates = [path for path in candidates if "{machine_id}" not in path or machine_id]
     if os_category == "windows":
         candidates = file_path_templates_for_process(candidates, process_name)
+        executable = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if executable in {"powershell.exe", "pwsh.exe", "powershell", "pwsh"} and not (
+            _powershell_command_has_file_output(command_line)
+        ):
+            candidates = [
+                path for path in candidates if "\\appdata\\local\\temp\\tmp" not in path.lower()
+            ]
         candidates = [
             candidate
             for candidate in candidates
@@ -1187,6 +1225,7 @@ def select_ambient_file_churn_effect(
         host_ip=host_ip,
         host_key=host_key,
         host_os=host_os,
+        machine_id=machine_id,
     )
     if os_category == "linux" and user == "root":
         path = path.replace("/home/root/", "/root/")
@@ -1264,6 +1303,26 @@ def _exclude_paths(paths: list[Any], suffixes: tuple[str, ...]) -> list[Any]:
 def _is_windows_powershell_history_path(path: str) -> bool:
     normalized = path.replace("/", "\\").lower()
     return normalized.endswith("\\powershell\\psreadline\\consolehost_history.txt")
+
+
+def _powershell_command_has_file_output(command_line: str) -> bool:
+    """Return whether a PowerShell command has visible file-output semantics."""
+    command = command_line.lower()
+    markers = (
+        "out-file",
+        "set-content",
+        "add-content",
+        "export-csv",
+        "export-clixml",
+        "compress-archive",
+        "new-item",
+        "copy-item",
+        "move-item",
+        "invoke-webrequest",
+        "-outfile",
+        " >",
+    )
+    return any(marker in command for marker in markers)
 
 
 def _allows_psreadline_history(exe: str, command_line: str, user: str) -> bool:

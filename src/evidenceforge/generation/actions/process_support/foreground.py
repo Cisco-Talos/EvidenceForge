@@ -18,9 +18,15 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
+from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+    _process_termination_delay_after_activity_seconds,
+)
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TemporalConstraintGraph, TimingScope
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
@@ -32,6 +38,7 @@ from .capabilities import (
     GenerateProcessTerminationCapability,
     GenericLogoffOwnsProcessCloseCapability,
     IsWithinScenarioWindowCapability,
+    ProcessActivityTiming,
     ProcessIdentityCapabilities,
 )
 from .policy import _FOREGROUND_SHELL_INITIAL_READY_MIN_MS, _FOREGROUND_SHELL_INITIAL_READY_SPAN_MS
@@ -62,6 +69,7 @@ class ProcessForegroundLifecycle:
     state_manager: StateManager
     queries: ProcessStateQueries
     identity: ProcessIdentityCapabilities
+    activity_timing: ProcessActivityTiming
 
     def _held_process_termination_time(
         self,
@@ -134,6 +142,11 @@ class ProcessForegroundLifecycle:
                     process_name=running.image or intent.process_name,
                     logon_id=running.logon_id or intent.logon_id,
                     session_end_plan=session.end_plan if session is not None else None,
+                    **(
+                        {"macos_command_completed": True}
+                        if _get_os_category(system.os) == "macos"
+                        else {}
+                    ),
                 )
             if not exhaust:
                 if self._lifecycle_authority.has_due_process_closes(normalized_cutoff):
@@ -151,7 +164,7 @@ class ProcessForegroundLifecycle:
         logon_id: str,
         parent_pid: int,
     ) -> tuple[str, str, str, int] | None:
-        """Return the interactive shell key that serializes foreground Linux children."""
+        """Return the interactive shell key that serializes foreground POSIX children."""
         proc = self.state_manager.get_process(system.hostname, parent_pid)
         if proc is None:
             return None
@@ -188,8 +201,9 @@ class ProcessForegroundLifecycle:
         running = self.state_manager.get_process(system.hostname, pid)
         if (
             running is not None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(
+            and _get_os_category(system.os) in {"linux", "macos"}
+            and _posix_shell_process_reserves_foreground(
+                _get_os_category(system.os),
                 running.image,
                 running.command_line,
             )
@@ -266,6 +280,7 @@ class ProcessForegroundLifecycle:
         requested_time: datetime,
         seed_text: str,
         concurrency_group_id: str = "",
+        use_cached_reservation: bool = True,
     ) -> datetime | None:
         """Delay a new foreground command until the same interactive shell is free."""
         key = self._foreground_shell_key(
@@ -305,7 +320,7 @@ class ProcessForegroundLifecycle:
                     )
                 ),
             )
-        next_time = self._foreground_shell_next_time.get(key)
+        next_time = self._foreground_shell_next_time.get(key) if use_cached_reservation else None
         if next_time is None or requested_time >= next_time:
             return requested_time
         if (
@@ -320,6 +335,103 @@ class ProcessForegroundLifecycle:
             )
         )
         return next_time + timedelta(milliseconds=rng.randint(120, 900))
+
+    def foreground_child_resume_at(
+        self,
+        *,
+        hostname: str,
+        logon_id: str,
+        parent_pid: int,
+        child_object_id: str,
+        closed_at: datetime,
+    ) -> datetime:
+        """Model one canonical shell wake/dispatch after a foreground child releases."""
+        closed_at = ensure_utc(closed_at)
+        gap = self.activity_timing.sample_profile_gap(
+            "posix.foreground_shell_resume",
+            stable_id=f"shell-resume:{logon_id}:{parent_pid}:{child_object_id}:{closed_at.isoformat()}",
+            host=hostname,
+            source="process-execution",
+            lifecycle_id=child_object_id,
+            mode_fraction=0.10,
+        )
+        if gap <= timedelta(0):
+            raise StateError("Foreground shell resume timing requires a positive configured gap")
+        return closed_at + gap
+
+    def reserve_authored_macos_shell_time(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        command_line: str,
+    ) -> datetime | None:
+        """Find a free authored interval without jumping to later baseline work.
+
+        Live and retained children own occupancy. The monotonic baseline cache
+        cannot represent out-of-order authored visits. No new scheduling state
+        or inferred termination is introduced here.
+        """
+        candidate = self._reserve_foreground_shell_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=requested_time,
+            seed_text=command_line,
+            use_cached_reservation=False,
+        )
+        if (
+            candidate is None
+            or self._foreground_shell_key(
+                system=system, username=username, logon_id=logon_id, parent_pid=parent_pid
+            )
+            is None
+        ):
+            return candidate
+        shell = self.state_manager.get_process(system.hostname, parent_pid)
+        assert shell is not None
+        children = sorted(
+            (
+                process
+                for process in self.state_manager.get_processes_for_session(
+                    logon_id, system.hostname, include_retained=True
+                )
+                if process.parent_pid == parent_pid
+                and process.parentage is not None
+                and process.parentage.original is not None
+                and process.parentage.original.object_id == shell.ecar_object_id
+                and _posix_shell_process_reserves_foreground(
+                    "macos", process.image, process.command_line
+                )
+            ),
+            key=lambda process: process.start_time,
+        )
+        bounds = _posix_foreground_lifetime(
+            "macos", command_line.split(maxsplit=1)[0], command_line
+        )
+        budget = timedelta(seconds=bounds[1]) if bounds is not None else timedelta(0)
+        for process in children:
+            end = process.end_time or self.foreground_process_termination_time(
+                system.hostname, process.pid
+            )
+            if end is not None and ensure_utc(end) <= candidate:
+                continue
+            if ensure_utc(process.start_time) > candidate + budget:
+                break
+            if end is None:
+                return None
+            candidate = self.foreground_child_resume_at(
+                hostname=system.hostname,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                child_object_id=process.ecar_object_id,
+                closed_at=end,
+            )
+        return candidate
 
     def _unbounded_foreground_shell_ready_at(
         self,
@@ -350,8 +462,13 @@ class ProcessForegroundLifecycle:
                 or process.start_time > requested_time
                 or (process.end_time is not None and process.end_time <= requested_time)
                 or (concurrency_group_id and process.concurrency_group_id == concurrency_group_id)
-                or not _linux_shell_process_reserves_foreground(process.image, process.command_line)
-                or _linux_foreground_lifetime(process.image, process.command_line) is not None
+                or not _posix_shell_process_reserves_foreground(
+                    _get_os_category(system.os), process.image, process.command_line
+                )
+                or _posix_foreground_lifetime(
+                    _get_os_category(system.os), process.image, process.command_line
+                )
+                is not None
             ):
                 continue
             session = self.state_manager.get_session(process.logon_id)
@@ -370,7 +487,16 @@ class ProcessForegroundLifecycle:
             deadline = min(ensure_utc(value) for value in deadlines)
             if deadline > requested_time:
                 # This is a scheduling fence, not a fabricated process close.
-                ready_at = max(ready_at, deadline + timedelta(milliseconds=1))
+                ready_at = max(
+                    ready_at,
+                    self.foreground_child_resume_at(
+                        hostname=system.hostname,
+                        logon_id=logon_id,
+                        parent_pid=parent_pid,
+                        child_object_id=process.ecar_object_id,
+                        closed_at=deadline,
+                    ),
+                )
         return ready_at
 
     def _discard_superseded_foreground_reservation(
@@ -396,7 +522,12 @@ class ProcessForegroundLifecycle:
         reserved = self._foreground_shell_next_time.get(key)
         session = self.state_manager.get_session(process.logon_id)
         deadlines = [self.foreground_process_termination_time(system.hostname, process.pid)]
-        if _linux_foreground_lifetime(process.image, process.command_line) is None:
+        if (
+            _posix_foreground_lifetime(
+                _get_os_category(system.os), process.image, process.command_line
+            )
+            is None
+        ):
             deadlines.extend(
                 (
                     self.state_manager.get_session_end_time(process.logon_id),
@@ -436,8 +567,8 @@ class ProcessForegroundLifecycle:
                 if (
                     sibling.pid == process.pid
                     or sibling.parent_pid != process.parent_pid
-                    or not _linux_shell_process_reserves_foreground(
-                        sibling.image, sibling.command_line
+                    or not _posix_shell_process_reserves_foreground(
+                        _get_os_category(system.os), sibling.image, sibling.command_line
                     )
                 ):
                     continue
@@ -586,7 +717,9 @@ class ProcessForegroundLifecycle:
             or lifecycle_process.identity.hostname != running.system
             or lifecycle_process.identity.pid != running.pid
             or lifecycle_process.identity.started_at != running.start_time
-            or lifecycle_process.identity.image != running.image
+            or lifecycle_process.identity.image != (running.lifetime_image or running.image)
+            or lifecycle_process.current_view.image != running.image
+            or lifecycle_process.current_view.execution_ordinal != running.execution_ordinal
         ):
             raise StateError(
                 "Process close admission has no matching live lifecycle identity: "
@@ -610,7 +743,9 @@ class ProcessForegroundLifecycle:
                     or child_lifecycle.identity.hostname != child.system
                     or child_lifecycle.identity.pid != child.pid
                     or child_lifecycle.identity.started_at != child.start_time
-                    or child_lifecycle.identity.image != child.image
+                    or child_lifecycle.identity.image != (child.lifetime_image or child.image)
+                    or child_lifecycle.current_view.image != child.image
+                    or child_lifecycle.current_view.execution_ordinal != child.execution_ordinal
                     or child_lifecycle.identity.parent_object_id != running.ecar_object_id
                 ):
                     raise StateError(
@@ -637,6 +772,53 @@ class ProcessForegroundLifecycle:
                 ensure_utc(latest_closed_child) + timedelta(microseconds=1),
             )
         return candidate
+
+    def plan_macos_command_completion(
+        self,
+        *,
+        system: System,
+        pid: int,
+        preferred_at: datetime,
+        latest_at: datetime | None = None,
+    ) -> datetime | None:
+        """Plan a natural command completion after its owned activity/transport work."""
+        if _get_os_category(system.os) != "macos":
+            raise StateError("Mac natural completion requires a modeled Mac host")
+        candidate = self.resolve_process_lifecycle_close_candidate(
+            system.hostname, pid, preferred_at
+        )
+        if candidate is None:
+            return None
+        process = self.state_manager.get_process_identity(system.hostname, pid)
+        running = self.state_manager.get_process(system.hostname, pid)
+        if process is None or running is None:
+            raise StateError("Mac natural completion lost its exact live process")
+        minimum = process.execution_started_at
+        if running.last_activity_time is not None and candidate <= running.last_activity_time:
+            minimum = max(
+                minimum,
+                running.last_activity_time
+                + timedelta(
+                    seconds=_process_termination_delay_after_activity_seconds(
+                        hostname=system.hostname,
+                        pid=pid,
+                        last_activity_time=running.last_activity_time,
+                    )
+                ),
+            )
+        held = self._held_process_termination_time(system=system, pid=pid, requested_time=candidate)
+        if held > candidate:
+            minimum = max(minimum, held)
+        if latest_at is not None and (candidate >= latest_at or minimum >= latest_at):
+            return None
+        graph = TemporalConstraintGraph(
+            scope=TimingScope(stable_id=process.execution_id, host=system.hostname),
+            relationship_key="macos.command.natural_completion",
+        )
+        graph.add_node("work", minimum, within=(minimum, minimum))
+        graph.add_node("exit", candidate, not_after=latest_at)
+        graph.constrain_after("exit", "work")
+        return graph.resolved_time("exit")
 
     def record_termination(
         self, hostname: str, pid: int, start_time: datetime | None, timestamp: datetime

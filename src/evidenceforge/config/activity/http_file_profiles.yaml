@@ -1,4 +1,7 @@
 # HTTP entity profiles shared by request and response file analysis.
+shared_resources:
+  /assets/fonts/inter-var.woff2: modeled-inter-variable-font-v1
+
 extension_mime_types:
   .cab: application/vnd.ms-cab-compressed
   .css: text/css
