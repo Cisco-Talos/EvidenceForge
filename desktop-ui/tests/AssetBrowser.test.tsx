@@ -39,7 +39,8 @@ afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 test("large lists are bounded and reuse numbered pagination; details load only on expansion", async () => {
   const { request } = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "alice" });
+  // Initial category resolution includes two debounced loads on a cold render.
+  await screen.findByRole("button", { name: "alice" }, { timeout: 5000 });
   expect(screen.getAllByRole("row")).toHaveLength(51);
   expect(request.mock.calls.some(([path]) => path.includes("/detail?"))).toBe(false);
   await user.click(screen.getByRole("button", { name: "alice" }));
@@ -53,7 +54,7 @@ test("large lists are bounded and reuse numbered pagination; details load only o
   await user.type(screen.getByRole("textbox", { name: "Search assets" }), "user1004");
   await screen.findByText("1–1 of 1 assets");
   expect(screen.getByText("1 matching · 1,005 total")).toBeVisible();
-});
+}, 10000);
 
 test("origin badges are graphical and explain their color on keyboard focus", async () => {
   setup(); const user = userEvent.setup();

@@ -98,3 +98,17 @@ Next: require PR CI and the full Linux slow/portability gate, merge into `dev`,
 prepare the synchronized a6 version/changelog commit, then tag that immutable
 snapshot. Monitor all release gates and the three installer builds through verified
 publication; retain every required check and all six installer/checksum assets.
+
+## Integration and recurring Studio timing failure
+
+PR #469 merged into `dev` as `e9df6a30` after routine/native CI run
+`42747375110` and full slow/portability run `42747376175` passed. The initial
+ARM64 Studio frontend run hit the recurring first AssetBrowser test's one-second
+query deadline while the component still reported loading. Rerunning failed jobs
+passed on unchanged source; all four slow shards and portability passed directly.
+
+Harden that initial readiness wait to five seconds and the enclosing test to ten
+seconds. Cold category resolution includes two 200ms debounced loads; keep every
+pagination, lazy-detail and search assertion unchanged. All sixteen AssetBrowser
+tests pass locally. Carry this bounded test-only adjustment in the final a6 source
+before its version commit so no additional intermediate full-suite cycle is needed.
