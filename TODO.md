@@ -72,6 +72,13 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P2 — Streamline CI and reuse verified test results:** Avoid repeated
+  PR/dev/release checks for equivalent tested inputs; retain release-only coverage,
+  slow and packaged gates. Use retained timings to balance routine/coverage/slow
+  shards, assign duplicate tests one owner and overlap read-only installer builds.
+  Collect timing data during required runs rather than rerunning slow tests for
+  profiling. See the [CI investigation](docs/worklog/2026-11-09-ci-streamlining.md).
+
 - [x] **P1 — Alpha-5 source-launched Studio acceptance:** On November 9 the user
   reported Studio testing is fine after chat-engine alignment, request feedback,
   Environment inspection retention and the IOS XE/XR classification correction.

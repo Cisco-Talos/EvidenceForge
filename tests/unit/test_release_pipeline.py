@@ -309,9 +309,7 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     assert jobs["publish-release"]["needs"] == [
         "release-scope",
         "validate-release-version",
-        "release-ci",
-        "release-slow",
-        "build-installers",
+        "release-gates",
     ]
     assert jobs["release-ci"]["with"]["release-coverage"] is True
     source = "${{ needs.validate-release-version.outputs.sha }}"
@@ -319,11 +317,12 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
         assert jobs[job]["with"]["source-ref"] == source
         assert jobs[job]["if"] == (
             "github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'"
+            " && needs.validate-release-version.outputs.ci-modern == 'true'"
         )
     assert jobs["validate-release-version"]["steps"][0]["with"]["ref"] == (
         "${{ inputs.tag || github.sha }}"
     )
-    for path in ("ci.yml", "release-slow.yml"):
+    for path in ("ci.yml", "release-slow.yml", "ci-recovery.yml"):
         called = yaml.safe_load((root / ".github/workflows" / path).read_text())
         for job in called["jobs"].values():
             for step in job.get("steps", []):
@@ -338,22 +337,22 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     assert jobs["build-installers"]["needs"] == [
         "release-scope",
         "validate-release-version",
-        "release-ci",
-        "release-slow",
     ]
     installers = yaml.safe_load((root / ".github/workflows/installers.yml").read_text())
     build = "\n".join(step.get("run", "") for step in installers["jobs"]["build"]["steps"])
     assert "--build-app" in build and "--release" in build and "--skip-dmg" not in build
     assert "hdiutil verify" in build and "verify_studio_macos.py" in build
     assert "verify_studio_linux.py" in build and "verify-installer" in build
-    assert installers["permissions"] == {"contents": "read"}
+    assert installers["permissions"] == {"contents": "read", "actions": "read"}
     assert installers["jobs"]["build"]["steps"][0]["with"]["ref"] == (
         "${{ inputs.source-ref || github.sha }}"
     )
     assert "publish" not in build and "git push" not in build
     assert installers[True]["workflow_call"]["inputs"]["release"]["default"] is False
     assert "release" not in installers[True]["workflow_dispatch"]["inputs"]
-    matrix = installers["jobs"]["plan"]["steps"][0]["run"]
+    matrix = next(
+        step["run"] for step in installers["jobs"]["plan"]["steps"] if step.get("id") == "matrix"
+    )
     assert "ubuntu-24.04-arm" in matrix and "ubuntu-24.04" in matrix
     ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
     for name in ("studio", "studio-state-recovery"):
