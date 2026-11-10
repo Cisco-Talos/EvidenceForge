@@ -9,6 +9,11 @@ Automated release and packaged-installer checks remain required. See the
 [release worklog](worklog/2026-10-12-release-2.2.0a2.md).
 See [Studio installation](studio.md#macos-installation).
 
+The current development target is **3.0.0rc1**. The user selected 3.0 as a product
+milestone for Studio and mixed Windows/Linux/macOS simulation, carrying forward
+the 2.2 alpha series. Traditional CLI and legacy-scenario workflows remain
+supported; product numbering is independent of scenario and storage schema versions.
+
 ## Source capabilities and release scope
 
 Installer host support is separate from simulated OS/log-source support. The current

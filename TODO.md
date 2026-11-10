@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a6 published with experimental macOS 27 simulation and verified CI reuse; a5's failed source tag retained unchanged; stable target 2.2.0
+**Status:** 2.2.0a6 published; 3.0.0rc1 prepared on dev for the approved Studio and mixed-OS product milestone; published alpha history retained; stable target 3.0.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 

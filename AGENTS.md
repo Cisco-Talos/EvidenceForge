@@ -166,6 +166,11 @@ identities remain independent of the product release version.
 | Any non-breaking `feat:` commit | MINOR (`x.y+1.0`) |
 | Only `fix:` / `docs:` / `test:` / `refactor:` / `chore:` | PATCH (`x.y.z+1`) |
 
+A user-approved product-generation milestone may deliberately advance the major
+version while preserving compatibility. Record the rationale and compatibility
+scope in `CHANGELOG.md`; agents must not infer this exception from feature size.
+The user selected 3.0 on November 10 for Studio and mixed-OS simulation support.
+
 **When to bump:** For a stable release, once per PR from `dev` to `main`, on the `dev` branch,
 as the last commit before opening that PR. Prereleases are an explicit exception: alpha, beta,
 and RC versions may be prepared and published from `dev` without merging into `main`.

@@ -4,6 +4,37 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v3.0.0rc1 (2026-11-10)
+
+First release candidate for EvidenceForge 3.0. The user selected a new major
+version to mark the Studio desktop workflow and mixed Windows, Linux and macOS
+simulation capabilities developed through the 2.2 alpha series. Traditional CLI
+and legacy-scenario workflows remain supported. Product numbering is independent
+of scenario and storage schema versions.
+
+**Product milestone**
+
+- Carry forward Studio's scenario/pack authoring, validation, generation,
+  evaluation, immutable artifact publication and recovery workflows.
+- Include experimental macOS 27 workstation simulation alongside Windows and
+  Linux, with native process evidence, selected Unified Log messages and bounded
+  filesystem operations. Full capability notes are in
+  [alpha 6](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v2.2.0a6).
+- Retain Apple Silicon macOS and Ubuntu 24.04 ARM64/x86_64 installer targets.
+  Codex remains separately installed for authoring; the macOS installer has no
+  Developer ID signature or notarization. Documented macOS simulation limits
+  continue to apply.
+
+**Changes since 2.2.0a6**
+
+- Allow the release publisher to run after the unused modern/legacy policy
+  branch is skipped, while explicitly requiring successful version validation
+  and publication gates and excluding cancelled runs (`3944d47a`).
+- Retain verified alpha-6 publication, installer/checksum and failed-job recovery
+  evidence; track bounded Ubuntu package setup and mirror fallback as follow-up
+  work (`d008bb2c`).
+- Synchronize Python and Studio release-candidate metadata for the 3.0 milestone.
+
 ## v2.2.0a6 (2026-11-09)
 
 Sixth alpha of the planned 2.2.0 release and the first published snapshot with
