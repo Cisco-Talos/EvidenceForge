@@ -179,7 +179,13 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    # Ignore skipped ancestors in the unused modern/legacy branch, while still
+    # requiring the selected policy's complete validation and installer gates.
+    if: >-
+      always() && !cancelled() && github.event_name != 'pull_request' &&
+      needs.release-scope.outputs.cleanup != 'true' &&
+      needs.validate-release-version.result == 'success' &&
+      needs.release-gates.result == 'success'
     needs: [release-scope, validate-release-version, release-gates]
     runs-on: ubuntu-latest
     timeout-minutes: 15

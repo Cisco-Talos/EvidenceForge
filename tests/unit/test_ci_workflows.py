@@ -133,6 +133,22 @@ def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -
         assert "ci-modern == 'false'" in old["if"]
 
 
+def test_release_publisher_ignores_unused_branch_skips_but_requires_successful_gates() -> None:
+    publisher = workflow("release.yml")["jobs"]["publish-release"]
+    # The unused modern/legacy branch is skipped even on a successful release.
+    # A status function must override GitHub's implicit ancestor success() check.
+    terms = {term.strip() for term in publisher["if"].split("&&")}
+    assert {
+        "always()",
+        "!cancelled()",
+        "github.event_name != 'pull_request'",
+        "needs.release-scope.outputs.cleanup != 'true'",
+        "needs.validate-release-version.result == 'success'",
+        "needs.release-gates.result == 'success'",
+    } <= terms
+    assert {"validate-release-version", "release-gates"} <= set(publisher["needs"])
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Release gates execute on native Ubuntu bash")
 @pytest.mark.parametrize("modern", [True, False])
 @pytest.mark.parametrize(
