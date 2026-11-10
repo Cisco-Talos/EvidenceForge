@@ -312,7 +312,7 @@ wheels = [
 
 [[package]]
 name = "evidence-forge"
-version = "2.2.0a5"
+version = "2.2.0a6"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1127,6 +1127,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/b2/24/20282bc8e69ff8dee
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/23/cdab19d3a9da42ca0938081e163e25f81e610141800ead743ba1ee881f0e/virtualenv-21.15.1-py3-none-any.whl", hash = "sha256:0d14a991689c67600316880eadc0a37b7690cb632e3b4ac67e2bc05b2b2e24a4", size = 5558848, upload-time = "2026-10-28T01:12:48.605Z" },
 ]
+
 [[package]]
 name = "websockets"
 version = "17.2"

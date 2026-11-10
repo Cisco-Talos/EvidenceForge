@@ -2,6 +2,12 @@
 
 ## Latest handoff — November 9
 
+Superseded by the [a6 release handoff](2026-11-09-release-2.2.0a6.md): a5 was tagged
+at `4302afd5`, but run `42699295865` failed slow determinism checks before builds
+or publication. PR #469 repairs the owning-layer defect and incomplete test
+restore. Preserve the a5 tag; publish the next immutable snapshot as a6. The
+following preparation notes remain historical.
+
 The user requested the alpha-5 release after all PR #467 CI checks passed, and
 merged that final test repair into dev as `c196d057`. All implementation,
 Dependabot and CI timeout/trigger changes are integrated. Alpha 5 remains unused;

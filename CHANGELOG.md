@@ -4,7 +4,145 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v2.2.0a6 (2026-11-09)
+
+Sixth alpha of the planned 2.2.0 release and the first published snapshot with
+experimental **macOS 27 workstation simulation**, alongside existing Windows and
+Linux support. Scenarios can model mixed environments containing all three
+operating systems. Simulated-host support is independent of the computer running
+EvidenceForge. This release includes the capabilities prepared for a5, which was
+not published, plus the determinism corrections and CI improvements below.
+Source-launched Studio testing has been accepted; installer checks remain enforced
+by the release workflow.
+
+**Release determinism corrections**
+
+- Preserve seeded ambient file actions across publication and import by sampling
+  action/weight pairs in canonical order. Equivalent configuration mappings now
+  produce identical canonical file activity and source-local metadata (`a70ca8c5`).
+- Restore the complete checkpoint, including incremental allocator segments, in SSH
+  compatibility resume tests. Retain exact output comparisons and explicitly verify
+  the used-session-ID ledger (`a70ca8c5`).
+
+**CI execution and release checks**
+
+- Balance eight routine shards per OS and four Linux slow shards using retained
+  timings. Verify complete, disjoint selections and combine all Linux coverage
+  shards before enforcing the unchanged 70% threshold (`7b1e5421`).
+- Reuse recent successful results across equivalent PR, dev and release inputs only
+  after verifying source, job/artifact provenance, runtime/toolchain, runner image
+  and coverage mode. Queue matching consumers and retain fresh-run controls
+  (`7b1e5421`, `0470fc13`).
+- Share native recovery gates, overlap read-only installer builds with release tests,
+  and preserve older-tag recovery and every publication gate (`7b1e5421`).
+- Verify workflow contracts through parsed YAML and command arguments (`144b4ec8`).
+- Allow cold AssetBrowser category resolution time to complete in CI while retaining
+  pagination, lazy-detail and search assertions (`0c4f7168`).
+
+**Introducing simulated macOS hosts**
+
+- Add Mac application catalogs, persona defaults, deployment rules, SSH receivers
+  and network visibility (`d76c7e77`, `43d52356`, `af6a355d`, `e07bbe4a`).
+- Model supported Terminal, iTerm2, Finder, browser/helper, SSH and selected system-job
+  process lifecycles (`f529e12a`, `bf03e53e`, `b32fb552`, `bec1e3c9`, `28e66791`,
+  `84c9864a`, `dda966ac`, `e928bf5d`, `23705907`, `56452271`).
+- Preserve process ancestry, arguments, environment, credentials, terminal ownership,
+  executable metadata, signing facts and known exit results across correlated evidence
+  (`5f2d4c16`, `01800dd8`, `120a0231`, `913c1932`, `a3f5781f`, `9f8c619c`).
+- Add native Endpoint Security observations for process fork, execution, known exit
+  and selected file operations (`33372a78`, `239b0041`, `74e87fdb`, `4586fcb2`,
+  `74907aa9`, `09acf964`, `1d4a0351`, `4cf5ac22`, `acbaf51f`).
+- Add selected Unified Log messages for workspace entry, application-policy refusal
+  and accepted SSH authentication (`a592c0cf`, `d28f1f8c`, `87f677aa`, `352bc159`).
+- Add interactive zsh history and explicitly modeled interactive Bash history
+  (`acbaf51f` and preceding Mac implementation commits).
+- Support bounded file creation, modified-close, rename/replacement and deletion,
+  including a VS Code document-save workload (`acbaf51f`).
+- Add native process-coverage accounting, output filtering and checkpoint recovery.
+  Distinguish complete process starts, known exits and unknown outcomes (`acbaf51f`
+  and preceding Mac implementation commits).
+
+**Generation realism and correctness**
+
+- Improve interactive developer activity pacing and browser-instance ownership
+  (`cc97f09f`, `acbaf51f`).
+- Bind generated Windows browser User-Agent versions to modeled application versions
+  while preserving explicitly authored headers (`cc97f09f`).
+- Give Windows interactive sessions their own session-specific SMSS process ancestry
+  and corresponding lifecycle handling (`cc97f09f`).
+- Replace clock-derived Linux logind session numbering with modeled allocation
+  ownership (`cc97f09f`).
+- Correct Debian sysstat collection to its ten-minute schedule (`cc97f09f`).
+- Expand typed Linux shell pipelines into their constituent processes and retain
+  parent lifetimes through dependent child activity (`cc97f09f`).
+- Model UDP firewall-state expiration separately from application completion
+  (`cc97f09f`).
+- Improve mixed-fleet identity and protocol consistency, network attribution, command
+  completion and interactive-only shell-history eligibility (`42d6440a`, `e30c1875`,
+  `54e5a8ab`, `7e4396e0`, `00809d33`, `cc0247f5`).
+
+**Studio workflow improvements**
+
+- Make authoring chat use the same selected engine and configuration as GUI
+  validation, including source-launched Studio sessions (`d256ad6f`).
+- Add spinners, updated check times and persistent inline failure messages across
+  validation, environment inspection, library refresh, resource forecasts, import
+  checks and log previews (`d256ad6f`).
+- Temporarily hide superseded validation findings during a check; retain previous
+  forecasts and log previews with clear labels during refreshes and failures (`d256ad6f`).
+- Show **Ready to import** or **Needs attention** for import reviews. Prevent
+  confirmation of an expired review after refresh failure (`d256ad6f`).
+- Retain Environment inspection when its section is collapsed and reopened. Changed
+  inputs and explicit refresh still trigger inspection (`d256ad6f`).
+- Put Environment progress and check time in its header (`d256ad6f`).
+- Expose Mac assets, native previews and process coverage in Studio; correct
+  platform-specific application editing and scorecard presentation (`6b543989`, `acbaf51f`).
+
+**Validation and recovery fixes**
+
+- Prevent Cisco IOS XE/XR labels from being misclassified as macOS (`d256ad6f`).
+- Preserve native entitlement object and array types during serialization (`acbaf51f`).
+- Correct historical process/network attribution without modifying already-ended
+  process state (`acbaf51f`).
+- Preserve SSH lifecycle construction and publication when endpoint output is
+  omitted; reject checkpoint capture when retained process authority is invalid (`acbaf51f`).
+- Correct bounded command lifetimes, environment-carrier quoting and Snare calendar
+  timestamp validation (`acbaf51f`).
+- Improve test portability and packaged Mac generation/evaluation checks (`acbaf51f`).
+- Revise platform/log-format mappings, Mac capability/limitations documentation,
+  configuration references, parser quickstarts and release guidance. Preserve
+  bounded acceptance evidence and private-reference collection/review workflows
+  (`d0e97a8a`, `1bf7be99`, `acbaf51f`, `d256ad6f`).
+
+**CI and dependency maintenance**
+
+- Give Linux and Windows full test suites a 120-minute budget, including release
+  coverage checks (`7186f6e9`). Run CI on dev pushes and support manual CI runs
+  (`9a5f7df6`).
+- Update the proxy population and Linux daemon test fixtures to reflect the supported
+  User-Agent catalog and canonical pipeline timing/process ownership (`fb101f9c`).
+- Integrate dependency updates, including Pydantic 2.14.1, FastAPI 0.143.0,
+  Typer 0.27.3, Ruff 0.17.0, filelock 4.2.1 and the reviewed GitHub Actions pins
+  (`c922fffb`, `af14962d`).
+
+**Scope and limitations**
+
+- Mac simulation currently targets macOS 27 workstations and the documented supported
+  launch families.
+- Unified Log coverage includes selected messages; general launchd logging remains
+  unavailable.
+- Filesystem coverage is limited to qualified operations. Complete application helper
+  graphs, including Docker Desktop's full helper population, remain outside scope.
+- Some desktop-application metadata remains provisional pending the broader
+  installation audit.
+- Mac source parsing does not establish external SIEM normalization compatibility.
+- Studio installers remain available for Apple Silicon macOS and supported Ubuntu
+  24.04 architectures. The macOS installer has no Developer ID signature or notarization.
+
 ## v2.2.0a5 (2026-11-09)
+
+Prepared but not published: slow determinism checks failed before installer builds.
+Its immutable source tag is retained; the fixes are included in a6.
 
 Fifth alpha of the planned 2.2.0 release. This alpha introduces experimental
 **macOS 27 workstation simulation**, alongside existing Windows and Linux support.

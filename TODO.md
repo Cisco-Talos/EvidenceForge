@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 published; 2.2.0a5 integrated on dev with source-launched Studio accepted; alpha-5 release pipeline preparation; stable target 2.2.0
+**Status:** 2.2.0a4 published; a5 publication blocked by now-repaired determinism failures; preparing 2.2.0a6 with accepted source-launched Studio and CI improvements; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 
@@ -72,12 +72,12 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P2 — Streamline CI and reuse verified test results:** Avoid repeated
-  PR/dev/release checks for equivalent tested inputs; retain release-only coverage,
-  slow and packaged gates. Use retained timings to balance routine/coverage/slow
-  shards, assign duplicate tests one owner and overlap read-only installer builds.
-  Collect timing data during required runs rather than rerunning slow tests for
-  profiling. See the [CI investigation](docs/worklog/2026-11-09-ci-streamlining.md).
+- [x] **P2 — Streamline CI and reuse verified test results:** Integrated eight
+  routine shards per OS, four balanced slow shards, verified equivalent-input
+  reuse, shared native recovery and overlapping installer builds. Required PR and
+  full slow/portability checks pass; release coverage and packaged gates remain
+  enforced. See the [CI investigation](docs/worklog/2026-11-09-ci-streamlining.md)
+  and [a6 release handoff](docs/worklog/2026-11-09-release-2.2.0a6.md).
 
 - [x] **P1 — Alpha-5 source-launched Studio acceptance:** On November 9 the user
   reported Studio testing is fine after chat-engine alignment, request feedback,
