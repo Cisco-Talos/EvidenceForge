@@ -19,9 +19,10 @@ snapshot's admitted source profile and limits. Use the [platform/log matrix](../
 and [Mac guide](macos.md) when preparing those notes.
 
 Source-launched Mac/Studio acceptance was completed on November 9 for alpha 5.
-The a5 tag was prepared but publication failed its slow determinism checks. The
-corrections and CI improvements are integrated for a6; preserve the immutable a5
-tag. See the [a6 release handoff](worklog/2026-11-09-release-2.2.0a6.md).
+The a5 tag was prepared but publication failed its slow determinism checks.
+[A6 was published on November 10](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v2.2.0a6)
+with the corrections and CI improvements; preserve the immutable a5 tag. See the
+[a6 release handoff](worklog/2026-11-09-release-2.2.0a6.md).
 Retain the final-snapshot automated release and packaged-installer checks. Launchd ULF,
 Docker Desktop's complete helper graph, broader native filesystem behavior and external
 Mac SIEM normalization remain explicit limits, rather than implied release capabilities.

@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 published; a5 publication blocked by now-repaired determinism failures; preparing 2.2.0a6 with accepted source-launched Studio and CI improvements; stable target 2.2.0
+**Status:** 2.2.0a6 published with experimental macOS 27 simulation and verified CI reuse; a5's failed source tag retained unchanged; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 
@@ -71,6 +71,13 @@ Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
+
+- [ ] **P2 — Bound Linux CI package setup and mirror failover:** Avoid spending a
+  full job budget on stalled Ubuntu package-index downloads. Use bounded network
+  timeouts/retries and verified mirror fallback while retaining native dependencies,
+  environment fingerprints and every test gate. A6 recovered through a failed-job
+  retry without rebuilding successful installers. See the
+  [release handoff](docs/worklog/2026-11-09-release-2.2.0a6.md).
 
 - [x] **P2 — Streamline CI and reuse verified test results:** Integrated eight
   routine shards per OS, four balanced slow shards, verified equivalent-input
