@@ -30,11 +30,13 @@ import inspect
 import random
 import re
 from datetime import UTC, datetime, timedelta
+from itertools import permutations
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
@@ -42,7 +44,7 @@ from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseReq
 from evidenceforge.generation.actions import (
     network_transaction_planner as network_planner_module,
 )
-from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity import ActivityGenerator, edr_pools, endpoint_noise
 from evidenceforge.generation.activity.dll_load_profiles import (
     module_is_compatible_with_process,
 )
@@ -108,6 +110,66 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+@pytest.mark.parametrize("platform", ["windows", "linux"])
+@pytest.mark.parametrize("seed", [31, 137])
+def test_file_churn_is_invariant_to_weight_mapping_order(
+    state_manager: StateManager,
+    activity_gen: ActivityGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    seed: int,
+) -> None:
+    started = state_manager.get_current_time()
+    assert started is not None
+    system = System(
+        hostname="CLIENT",
+        ip="192.0.2.10",
+        os="Windows 11" if platform == "windows" else "Ubuntu 24.04",
+        type="workstation",
+    )
+    image = r"C:\Tools\example.exe" if platform == "windows" else "/usr/bin/example"
+    state_manager.register_process(
+        system.hostname,
+        4000,
+        0,
+        image,
+        image,
+        "analyst",
+        "Medium",
+        os_category=platform,
+        start_time=started - timedelta(seconds=1),
+    )
+    template = (
+        r"C:\Users\{username}\Documents\notes.txt"
+        if platform == "windows"
+        else "/home/{username}/Documents/notes.txt"
+    )
+    monkeypatch.setattr(edr_pools, "get_file_paths", lambda _: [template])
+    baseline = SimpleNamespace(
+        state_manager=state_manager,
+        activity_generator=activity_gen,
+        _machine_ids={system.hostname: "a" * 32},
+        _scaled_randint=lambda *_: 8,
+        _baseline_pass_admits=lambda *_args, **_kwargs: True,
+    )
+    sequences: list[list[OccurrenceBuilder]] = []
+    rng_states: list[object] = []
+    for pairs in permutations((("read", 58), ("modify", 30), ("create", 12))):
+        config = {platform: {"count_min": 8, "count_max": 8, "action_weights": dict(pairs)}}
+        monkeypatch.setattr(endpoint_noise, "ecar_file_churn_config", lambda config=config: config)
+        events: list[OccurrenceBuilder] = []
+        monkeypatch.setattr(activity_gen.dispatcher, "dispatch_builder", events.append)
+        rng = random.Random(seed)
+        BaselineMixin._emit_ecar_file_churn(
+            baseline, system, started, rng, platform, {"example": 4000}
+        )
+        assert len(events) == 8
+        sequences.append(events)
+        rng_states.append(rng.getstate())
+    assert all(events == sequences[0] for events in sequences)
+    assert all(state == rng_states[0] for state in rng_states)
 
 
 def test_lock_duration_sampler_avoids_exact_minute_fingerprints():

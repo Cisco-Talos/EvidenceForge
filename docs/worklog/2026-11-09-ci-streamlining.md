@@ -116,6 +116,11 @@ per-suite input scopes require the separate dependency audit described below.
 
 ## Separate a5 release blocker
 
+The subsequent owning-layer diagnosis is recorded in
+[prerelease determinism blockers](2026-11-09-prerelease-determinism-blockers.md).
+It distinguishes the incomplete SSH test restore from the artifact round trip's
+mapping-order-dependent weighted sampling.
+
 The unchanged a5 release run `42699295865` failed slow checks: eight variants of
 `test_legacy_ssh_checkpoint_resume_is_byte_identical` and
 `test_cli_only_publication_round_trip_generation_and_evaluation`. These assertions

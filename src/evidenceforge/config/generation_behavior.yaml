@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 499
+current_revision: 500
 history_start_revision: 1
-behavior_surface_sha256: d92c296f8e1fdb12c2d75a88bc6db9160e342408fb9047eec3e18737fc5b31ac
+behavior_surface_sha256: a022fb56f95e1aee13f0a80745cbf3f863fc1d80095c213a50b7d6c6190fdb4b
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5765,3 +5765,14 @@ changes:
   formats: []
   summary: Recognizes legacy OS X only at word boundaries, preventing Cisco IOS XE
     and IOS XR from receiving Mac platform, deployment and validation semantics.
+- revision: 500
+  id: stabilize-file-churn-weighted-action-order
+  impact: localized
+  domains:
+  - baseline-file-activity
+  - deterministic-generation
+  formats:
+  - ecar
+  - windows_event_sysmon
+  summary: Samples ambient file actions in canonical mapping order so publication
+    and import preserve seeded file activity and subsequent source-local writer metadata.
