@@ -544,6 +544,9 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
 
     state_seal = StateManagerParticipant(original.state).prepare_checkpoint(0)
     timing_seal = TimingRuntimeParticipant(original.generator.timing_runtime).prepare_checkpoint(0)
+    checkpoint_logind_ids = {
+        host: used.copy() for host, used in original.state._linux_logind_session_used_ids.items()
+    }
     source_timing_seal = SourceTimingPlannerParticipant(
         original.generator._source_timing_planner
     ).prepare_checkpoint(0)
@@ -595,7 +598,12 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
     )
     for emitter in fresh.generator.dispatcher.emitters.values():
         emitter.enable_incremental_checkpointing()
-    StateManagerParticipant(fresh.state).restore_checkpoint(state_seal.head.payload, ())
+    StateManagerParticipant(fresh.state).restore_checkpoint(
+        state_seal.head.payload,
+        tuple(segment.payload for segment in state_seal.segments),
+    )
+    assert checkpoint_logind_ids
+    assert fresh.state._linux_logind_session_used_ids == checkpoint_logind_ids
     TimingRuntimeParticipant(fresh.generator.timing_runtime).restore_checkpoint(
         timing_seal.head.payload,
         (),

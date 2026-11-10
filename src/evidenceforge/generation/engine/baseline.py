@@ -10034,7 +10034,10 @@ class BaselineMixin:
             return
 
         action_weights = os_cfg.get("action_weights", {"read": 60, "modify": 30, "create": 10})
-        actions = [str(action) for action, weight in action_weights.items() if int(weight) > 0]
+        # Published configuration can reorder mappings without changing their meaning.
+        actions = [
+            str(action) for action, weight in sorted(action_weights.items()) if int(weight) > 0
+        ]
         weights = [int(action_weights[action]) for action in actions]
         path_templates = get_file_paths(os_cat)
         if not actions or not path_templates:
