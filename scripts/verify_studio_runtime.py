@@ -70,6 +70,13 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
                 },
             )
             runtime = Path(json.loads(installed.stdout))
+            for relative in (
+                "LICENSE.txt",
+                "THIRD_PARTY_NOTICES.txt",
+                "installer-licenses/NSIS-LICENSE.txt",
+                "installer-licenses/TAURI-LICENSE-MIT.txt",
+            ):
+                assert (runtime / relative).is_file(), f"Missing distribution notice: {relative}"
         else:
             runtime = root / "runtime"
             runtime.mkdir()

@@ -177,3 +177,27 @@ discovery, explicitly selects UTF-8 for isolated Windows Python (which ignores
 PYTHONUTF8), and exercises non-ANSI Chinese/Unicode install/runtime paths with user
 Python IO overrides disabled. Twenty-nine focused regressions pass locally; POSIX
 isolated interpreter flags are unchanged.
+
+Run `43108145532` passes 75 native runtime/process cases, 372 frontend tests/build
+and eleven Rust tests, then builds NSIS successfully. Directory verification now
+identifies a second issue: MultiUser initialization resets an already-parsed
+explicit `/D=` to its scope default. The custom template captures and restores
+that explicit directory, including scope-selection callbacks; normal defaults
+remain unchanged. First-installer download also matches its recorded SHA256 and
+has no PE certificate table, consistent with unsigned delivery.
+
+Read-only authoring commands must not write runtime installation locks. Packaged
+CLI entry now acquires the pre-published lease through a read-only descriptor,
+then validates the immutable receipt while pruning is excluded by that shared
+lock. Helper/default locking behavior stays unchanged. The new real read-only
+cache test passes locally; the focused retention suite passes 44 cases with four
+Windows-only skips after rerunning its one process-census case with inspection
+access. The native Codex gate additionally runs the actual packaged CLI in both
+discussion and draft policies, without a model or ACL relaxation.
+
+For faster installer feedback, frontend unit tests, Rust test harnesses and the
+general service/controller/recovery suites now run after installed verification;
+all remain mandatory before qualified artifact upload. Rust tests use the same
+custom-protocol feature as packaging. Failed package builds still save compiled
+dependencies. Windows packaged verification also requires the CPython, project,
+NSIS and Tauri notices; CPython's Windows license location is `LICENSE.txt`.

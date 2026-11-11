@@ -96,12 +96,13 @@ def _read(path: Path) -> bytes:
     return value
 
 
-def _lease(root: Path, *, exclusive: bool) -> int:
+def _lease(root: Path, *, exclusive: bool, create: bool = True) -> int:
     path = root.parent / "leases" / f"{root.name}.lock"
     from evidenceforge.studio.state_io import private_directory
 
-    private_directory(path.parent)
-    descriptor = open_regular(path, os.O_RDWR | os.O_CREAT)
+    if create:
+        private_directory(path.parent)
+    descriptor = open_regular(path, os.O_RDWR | os.O_CREAT if create else os.O_RDONLY)
     try:
         if os.name == "nt":
             from evidenceforge.studio.windows_leases import lock_runtime
@@ -118,8 +119,8 @@ def _lease(root: Path, *, exclusive: bool) -> int:
 
 
 @contextmanager
-def runtime_lease() -> Iterator[None]:
-    """Protect the helper and let detached CLI workers inherit its kernel-held lease."""
+def runtime_lease(*, read_only: bool = False) -> Iterator[None]:
+    """Protect private runtimes, allowing sandboxed CLI calls without cache writes."""
     global _lease_descriptor
     root = runtime_root()
     if root is None:
@@ -127,21 +128,30 @@ def runtime_lease() -> Iterator[None]:
         return
     if not _NAME.fullmatch(root.name):
         raise StudioStateError("Studio's selected runtime has an invalid cache identity")
-    lock = StateLock(root.parent / "install.lock")
-    deadline = time.monotonic() + 8
-    while True:
-        try:
-            lock.acquire()
-            break
-        except StudioStateError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.05)
-    with lock:
-        descriptor = _lease(root, exclusive=False)
+    if read_only:
+        # The installer already publishes this lease file. Acquire it first,
+        # then verify the immutable root while pruning is excluded by the lock.
+        descriptor = _lease(root, exclusive=False, create=False)
+    else:
+        lock = StateLock(root.parent / "install.lock")
+        deadline = time.monotonic() + 8
+        while True:
+            try:
+                lock.acquire()
+                break
+            except StudioStateError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        with lock:
+            descriptor = _lease(root, exclusive=False)
     previous = _lease_descriptor
     _lease_descriptor = descriptor
     try:
+        if read_only:
+            release = RuntimeRelease.model_validate_json(_read(root / "release.json"))
+            if root.name != f"{release.runtime_id}-{release.architecture}":
+                raise StudioStateError("Studio's selected runtime receipt does not match its cache")
         yield
     finally:
         _lease_descriptor = previous

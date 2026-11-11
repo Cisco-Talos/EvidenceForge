@@ -1,7 +1,8 @@
 ; Derived from Tauri CLI 2.12.0 installer.nsi (MIT OR Apache-2.0).
 ; Upstream SHA256: dabed59013b1d78b879a1a85bc7f2eed2993b33a9a90cdabe5946de3d3950597
 ; EvidenceForge changes: preserve all user data, prohibit installer-launched app,
-; and refuse cross-scope installation before upgrade/uninstall actions.
+; refuse cross-scope installation before upgrade/uninstall actions, and retain
+; explicit installation directories through MultiUser initialization.
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -80,6 +81,7 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var EForgeRequestedInstallDir
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -443,6 +445,12 @@ FunctionEnd
 {{/each}}
 
 Function .onInit
+  ; NSIS has already parsed an explicit final /D= argument. MultiUser resets
+  ; $INSTDIR while choosing the scope, so preserve the caller's directory.
+  StrCpy $EForgeRequestedInstallDir ""
+  ${If} $INSTDIR != "${PLACEHOLDER_INSTALL_DIR}"
+    StrCpy $EForgeRequestedInstallDir $INSTDIR
+  ${EndIf}
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
@@ -489,6 +497,9 @@ Function .onInit
   !if "${INSTALLMODE}" == "both"
     !insertmacro MULTIUSER_INIT
   !endif
+  ${If} $EForgeRequestedInstallDir != ""
+    StrCpy $INSTDIR $EForgeRequestedInstallDir
+  ${EndIf}
 FunctionEnd
 
 
@@ -847,6 +858,10 @@ Section Uninstall
 SectionEnd
 
 Function RestorePreviousInstallLocation
+  ${If} $EForgeRequestedInstallDir != ""
+    StrCpy $INSTDIR $EForgeRequestedInstallDir
+    Return
+  ${EndIf}
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
   StrCmp $4 "" +2 0
     StrCpy $INSTDIR $4

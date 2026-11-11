@@ -33,7 +33,7 @@ if __name__ == "__main__":
     if os.environ.get("EFORGE_STUDIO_RUNTIME_ROOT"):
         from evidenceforge.studio.runtime_cleanup import runtime_lease
 
-        with runtime_lease():
+        with runtime_lease(read_only=True):
             main()
     else:
         main()

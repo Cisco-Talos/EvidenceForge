@@ -16,6 +16,40 @@ from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
 
 
+def test_cli_lease_preserves_a_read_only_runtime_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio.runtime import RuntimeRelease
+    from evidenceforge.studio.runtime_cleanup import _lease, runtime_lease
+    from evidenceforge.studio.state_io import atomic_write, private_directory
+
+    root = tmp_path / "runtimes" / f"{'a' * 64}-x86_64"
+    private_directory(root)
+    release = RuntimeRelease(
+        runtime_id="a" * 64,
+        architecture="x86_64",
+        evidenceforge_version="3.0.0rc1",
+        python_version="3.12.12",
+    )
+    atomic_write(root / "release.json", release.model_dump_json().encode())
+    os.close(_lease(root, exclusive=False))
+    lease = root.parent / "leases" / f"{root.name}.lock"
+    install = root.parent / "install.lock"
+    atomic_write(install, b"unchanged")
+    monkeypatch.setenv("EFORGE_STUDIO_RUNTIME_ROOT", str(root))
+    lease.chmod(0o400)
+    install.chmod(0o400)
+    try:
+        with runtime_lease(read_only=True):
+            with pytest.raises(BlockingIOError):
+                _lease(root, exclusive=True, create=False)
+        os.close(_lease(root, exclusive=True, create=False))
+        assert install.read_bytes() == b"unchanged"
+    finally:
+        lease.chmod(0o600)
+        install.chmod(0o600)
+
+
 def test_isolated_windows_python_uses_utf8_independently_of_user_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

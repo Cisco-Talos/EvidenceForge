@@ -122,6 +122,10 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         )
         verify_chat_permissions(resumed, discussion)
         assert resumed["thread"]["id"] == initial["thread"]["id"]
+        packaged_cli = os.environ.get("EFORGE_NATIVE_STUDIO_CLI")
+        if packaged_cli:
+            result = await execute(discussion, [packaged_cli, "version"])
+            assert result["exitCode"] == 0, result
         for target in (source, completed):
             commands = [
                 protect_command(target),
@@ -165,6 +169,9 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             },
         )
         verify_chat_permissions(created, access)
+        if packaged_cli:
+            result = await execute(access, [packaged_cli, "version"])
+            assert result["exitCode"] == 0, result
         result = await execute(
             access,
             [

@@ -269,10 +269,11 @@ def assemble(
             )
             command.chmod(0o755)
         notices = payload / "THIRD_PARTY_NOTICES.txt"
+        runtime_licenses = "LICENSE.txt" if platform == "windows" else "share/"
         notices.write_text(
             "EvidenceForge Studio test package\n\n"
             "CPython is distributed by python-build-standalone. Runtime license files are "
-            "included under share/. Package licenses and metadata are retained in the "
+            f"included under {runtime_licenses}. Package licenses and metadata are retained in the "
             "site-packages *.dist-info directories.\n\n"
             f"Python archive: {source.url}\nSHA256: {source.sha256}\n\n"
             + (root / "LICENSE").read_text(),
