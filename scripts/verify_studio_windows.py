@@ -68,10 +68,7 @@ $links = foreach ($folder in $folders) {
     $found = @(Get-ChildItem -LiteralPath $root -Filter 'EvidenceForge Studio.lnk' -Recurse)
     if ($found.Count -ne 1) { throw "Expected one Studio shortcut in $root; found $($found.Count)" }
     $shortcut = $shell.CreateShortcut($found[0].FullName)
-    if ($shortcut.TargetPath -ne $env:EFORGE_VERIFY_APP) {
-        throw "Shortcut target '$($shortcut.TargetPath)' differs from '$env:EFORGE_VERIFY_APP'"
-    }
-    $found[0].FullName
+    @{ path = $found[0].FullName; target = $shortcut.TargetPath }
 }
 ConvertTo-Json -InputObject @($links) -Compress
 """
@@ -80,12 +77,18 @@ ConvertTo-Json -InputObject @($links) -Compress
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         env={**os.environ, "EFORGE_VERIFY_SCOPE": scope, "EFORGE_VERIFY_APP": str(app)},
     )
     if result.returncode != 0:
         raise RuntimeError(f"{scope} shortcut verification failed: {result.stderr.strip()}")
-    return [Path(value) for value in json.loads(result.stdout)]
+    links = json.loads(result.stdout)
+    expected = app.resolve()
+    for link in links:
+        actual = Path(link["target"]).resolve()
+        assert actual == expected, f"Shortcut {link['path']!r}: {actual!s} != {expected!s}"
+    return [Path(link["path"]) for link in links]
 
 
 def uninstall_app(destination: Path, scope: str) -> None:
