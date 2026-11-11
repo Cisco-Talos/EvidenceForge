@@ -65,14 +65,15 @@ jobs:
           uv --version
       - name: Cache Windows Rust dependencies and build artifacts
         id: rust-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             build/studio-windows/target
-          key: windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}
+          key: windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
+            windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-
             windows-studio-static-${{ steps.tools.outputs.rust-version }}-
       - name: Test Windows runtime and process contracts
         run: >-
@@ -88,6 +89,7 @@ jobs:
           uv run --no-sync ruff format --check .
           npm --prefix desktop-ui run types:check
           npm --prefix desktop-ui test
+          npm --prefix desktop-ui run build
       - name: Test native Studio service and authoring transport
         run: >-
           uv run --no-sync pytest --no-cov
@@ -99,6 +101,7 @@ jobs:
       - name: Verify native authoring permissions without a model
         run: uv run --no-sync python scripts/check_studio_sandbox.py
       - name: Test Windows native shell contracts
+        id: shell-tests
         working-directory: desktop-ui/src-tauri
         run: cargo +stable test --locked --target x86_64-pc-windows-msvc --release
       - name: Build unsigned dual-scope NSIS preview
@@ -115,6 +118,17 @@ jobs:
           path: dist/windows/*
           if-no-files-found: error
           retention-days: 14
+      - name: Preserve compiled dependencies after packaging failures
+        if: >-
+          ${{ always() && !cancelled() && steps.shell-tests.outcome != '' &&
+              steps.shell-tests.outcome != 'skipped' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/studio-windows/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Upload Windows failure diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

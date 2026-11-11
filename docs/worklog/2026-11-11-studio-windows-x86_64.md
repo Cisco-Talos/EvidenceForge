@@ -118,3 +118,8 @@ while a different payload is installed, and retry after an injected interruption
 after the first archive member. The installed-shell probe uses a deliberately
 hostile current directory/Python environment; uninstall must preserve an authored
 scenario in its actual configured workspace, the private database and runtimes.
+
+The Windows iteration cache restores by toolchain/lockfile and saves a new
+commit-specific Rust cache even when later packaging/verification fails. Release
+shell tests and NSIS builds share one static-CRT target/profile; frontend assets
+must be built before those release-profile shell tests.
