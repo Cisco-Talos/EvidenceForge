@@ -24,7 +24,9 @@ from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.generation.checkpoints.control import read_suspension_record
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
-from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
+from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.runtime import command_environment
+from evidenceforge.studio.runtime_cleanup import runtime_lease
 
 logger = logging.getLogger(__name__)
 _controller_processes: list[subprocess.Popen[bytes]] = []
@@ -145,8 +147,8 @@ def _start_evaluation(job: EvaluationJob) -> None:
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=errors,
-            start_new_session=True,
-            pass_fds=runtime_worker_fds(),
+            env=command_environment(),
+            **launch_options(detached=True),
         )
     _evaluation_processes[:] = [
         running for running in _evaluation_processes if running.poll() is None
@@ -365,7 +367,8 @@ def ensure_controller(directory: Path) -> None:
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            env=command_environment(),
+            **launch_options(detached=True),
         )
     _controller_processes[:] = [
         running for running in _controller_processes if running.poll() is None
@@ -422,7 +425,8 @@ def run_controller(directory: Path) -> None:
 def main() -> None:
     """Run the local controller from a detached Python process."""
     logging.basicConfig(level=logging.INFO)
-    run_controller(Path(sys.argv[1]))
+    with runtime_lease():
+        run_controller(Path(sys.argv[1]))
 
 
 if __name__ == "__main__":

@@ -72,6 +72,13 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1 — Windows x86_64 Studio preview:** Build an unsigned dual-scope NSIS
+  installer from `dev`, with native Windows Studio/recovery CI and installed-payload
+  verification. Preserve Mac/Linux behavior and published-release requirements.
+  Windows 11 interactive and genuine separate-account acceptance remain separate;
+  no ARM support, signing or automatic runtime pruning. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
 Source-aware ground truth, deterministic agreement scoring and action-specific visibility
 validation are implemented on `codex/ground-truth-reconciliation`; source exclusions now retain
 exact instances and independent restrictions. Validation and comparison evidence are in the

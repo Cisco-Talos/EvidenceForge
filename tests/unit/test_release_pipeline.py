@@ -360,6 +360,7 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
             "macos-latest",
             "ubuntu-24.04",
             "ubuntu-24.04-arm",
+            "windows-2025",
         ]
 
 

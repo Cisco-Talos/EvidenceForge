@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -51,7 +52,9 @@ def test_private_runtime_is_relocation_safe_and_isolates_python_environment(
     monkeypatch.setattr(sys, "executable", str(executable))
     assert runtime.runtime_id() == "a" * 64
     environment = runtime.command_environment()
-    assert environment["PATH"].split(":")[0] == str(root / "bin")
+    assert environment["PATH"].split(os.pathsep)[0] == str(
+        root / ("Scripts" if sys.platform == "win32" else "bin")
+    )
     assert "PYTHONHOME" not in environment and "PYTHONPATH" not in environment
     assert _eforge_command() == [str(executable), "-I", "-B", "-m", "evidenceforge"]
     monkeypatch.setattr(sys, "executable", "/unrelated/python")

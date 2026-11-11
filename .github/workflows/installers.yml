@@ -24,6 +24,7 @@ on:
           - macos-aarch64
           - linux-aarch64
           - linux-x86_64
+          - windows-x86_64
         default: linux-x86_64
       force-tests:
         type: boolean
@@ -50,6 +51,7 @@ jobs:
       digest: ${{ steps.identity.outputs.digest }}
       linux: ${{ steps.matrix.outputs.linux }}
       has-linux: ${{ steps.matrix.outputs.has_linux }}
+      has-posix: ${{ steps.matrix.outputs.has_posix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -82,9 +84,12 @@ jobs:
           ]
           selected = os.environ["SELECTED_PLATFORM"]
           matrix = [target for target in targets if selected in ("all", target["platform"])]
-          if not matrix:
+          if not matrix and selected != "windows-x86_64":
               raise SystemExit("Unknown installer platform")
+          has_posix = bool(matrix)
+          matrix = matrix or [targets[0]]
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("has_posix=" + str(has_posix).lower(), file=output)
               print("matrix=" + json.dumps({"include": matrix}), file=output)
               linux = [row for row in matrix if row["os"] == "linux"]
               print("linux=" + json.dumps({"include": linux or [targets[1]]}), file=output)
@@ -194,7 +199,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
-    if: always() && needs.plan.result == 'success' && (needs.native-recovery.result == 'success' || needs.native-recovery.result == 'skipped')
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has-posix == 'true' && (needs.native-recovery.result == 'success' || needs.native-recovery.result == 'skipped')
   native-recovery:
     name: Installer source recovery (${{ matrix.platform }})
     needs:
@@ -208,3 +213,76 @@ jobs:
       runner: ${{ matrix.runner }}
       source-ref: ${{ inputs.source-ref || github.sha }}
       force-tests: ${{ inputs.force-tests || false }}
+
+  windows-recovery:
+    name: Windows preview source recovery
+    if: ${{ !inputs.release && (inputs.platform == 'windows-x86_64' || inputs.platform == 'all' || inputs.platform == '') }}
+    uses: ./.github/workflows/ci-recovery.yml
+    with:
+      runner: windows-2025
+      source-ref: ${{ inputs.source-ref || github.sha }}
+      force-tests: ${{ inputs.force-tests || false }}
+  windows-preview:
+    name: Installer (windows-x86_64 preview)
+    needs: windows-recovery
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Preserve repository bytes
+        run: git config --global core.autocrlf false
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+      - name: Install locked tools and record host
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Native Windows x86_64 is required' }
+          uv sync --locked --extra studio --extra dev
+          npm --prefix desktop-ui ci
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc --toolchain stable
+          uv run --no-sync python scripts/sync_studio_version.py --check
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
+          rustc +stable --version
+          node --version
+          uv --version
+      - name: Test Windows native shell contracts
+        working-directory: desktop-ui/src-tauri
+        run: cargo +stable test --locked
+      - name: Build unsigned dual-scope NSIS preview
+        run: uv run --no-sync python scripts/package_studio_windows.py
+      - name: Verify installed scopes, runtime and recovery
+        run: |
+          $installer = Get-ChildItem dist/windows/*-setup.exe
+          if ($installer.Count -ne 1) { throw 'Expected exactly one preview installer' }
+          uv run --no-sync python scripts/verify_studio_windows.py $installer.FullName
+      - name: Upload verified Windows preview
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: preview-installer-windows-x86_64
+          path: dist/windows/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-preview-failure
+          path: |
+            dist/windows/
+            build/studio-windows/tauri-standalone.json
+          if-no-files-found: warn
+          retention-days: 14

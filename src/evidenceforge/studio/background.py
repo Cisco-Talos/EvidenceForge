@@ -12,6 +12,7 @@ import sys
 import psutil
 
 from evidenceforge.studio.paths import StudioPaths
+from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 from evidenceforge.studio.state_io import atomic_write, open_regular
 
@@ -104,6 +105,6 @@ def start_background_service(paths: StudioPaths) -> None:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **launch_options(detached=True),
             env={**os.environ, "EFORGE_STUDIO_DAEMON": "1"},
         )

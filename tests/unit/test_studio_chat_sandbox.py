@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,9 @@ from evidenceforge.studio.codex import CodexClient
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.skipif(
-        not os.environ.get("EFORGE_NATIVE_CODEX_BIN") or sys.platform not in {"darwin", "linux"},
-        reason="Native Codex sandbox probe requires EFORGE_NATIVE_CODEX_BIN on macOS/Linux",
+        not os.environ.get("EFORGE_NATIVE_CODEX_BIN")
+        or sys.platform not in {"darwin", "linux", "win32"},
+        reason="Native Codex sandbox probe requires EFORGE_NATIVE_CODEX_BIN on macOS/Linux/Windows",
     ),
 ]
 
@@ -46,6 +48,38 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     replacement = root / "replacement.yaml"
     replacement.write_text("replacement bytes")
     original_mode = source.stat().st_mode
+    if sys.platform == "win32":
+        from evidenceforge.studio.runtime import discover_codex
+
+        binary = discover_codex(Path(os.environ["EFORGE_NATIVE_CODEX_BIN"]))
+        assert binary is not None
+        subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "setup",
+                "--elevated",
+                "--codex-home",
+                str(root / "codex-home"),
+            ],
+            check=True,
+            timeout=180,
+        )
+
+    def protect_command(target: Path) -> list[str]:
+        return (
+            ["icacls", str(target), "/grant", "*S-1-1-0:F"]
+            if sys.platform == "win32"
+            else ["chmod", "777", str(target)]
+        )
+
+    def remove_command(target: Path) -> list[str]:
+        return [
+            sys.executable,
+            "-c",
+            "import pathlib,sys;pathlib.Path(sys.argv[1]).unlink()",
+            str(target),
+        ]
 
     async def event(method: str, params: dict[str, Any]) -> None:
         return None
@@ -90,20 +124,34 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         assert resumed["thread"]["id"] == initial["thread"]["id"]
         for target in (source, completed):
             commands = [
-                ["chmod", "777", str(target)],
+                protect_command(target),
                 [
                     sys.executable,
                     "-c",
                     "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('changed')",
                     str(target),
                 ],
-                ["rm", str(target)],
-                ["mv", str(replacement), str(target)],
+                remove_command(target),
+                [
+                    sys.executable,
+                    "-c",
+                    "import os,sys;os.replace(sys.argv[1],sys.argv[2])",
+                    str(replacement),
+                    str(target),
+                ],
             ]
             for command in commands:
                 result = await execute(discussion, command)
                 assert result["exitCode"] != 0, (command, result)
-        read = await execute(discussion, ["cat", str(source)])
+        read = await execute(
+            discussion,
+            [
+                sys.executable,
+                "-c",
+                "import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text(),end='')",
+                str(source),
+            ],
+        )
         assert read["exitCode"] == 0 and read["stdout"] == "published bytes", read
         access = ChatAccess(mode="draft", source=revision / "scenario.yaml", directory=revision)
         effective = await client.call("config/read", {"cwd": str(revision), "includeLayers": True})
@@ -129,8 +177,8 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         assert result["exitCode"] == 0 and access.source.read_text() == "new draft bytes"
         for target in (source, completed):
             for command in (
-                ["chmod", "777", str(target)],
-                ["rm", str(target)],
+                protect_command(target),
+                remove_command(target),
                 [
                     sys.executable,
                     "-c",

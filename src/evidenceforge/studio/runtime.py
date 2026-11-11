@@ -74,7 +74,8 @@ def command_environment() -> dict[str, str]:
             environment["PATH"] = user_bin + os.pathsep + path
     root = runtime_root()
     if root is not None:
-        environment["PATH"] = str(root / "bin") + os.pathsep + environment.get("PATH", "")
+        scripts = root / ("Scripts" if sys.platform == "win32" else "bin")
+        environment["PATH"] = str(scripts) + os.pathsep + environment.get("PATH", "")
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
         environment["PYTHONNOUSERSITE"] = "1"
@@ -82,16 +83,32 @@ def command_environment() -> dict[str, str]:
     return environment
 
 
+def _windows_codex(command: str | None) -> str | None:
+    """Resolve npm's script shim to its native app-server binary without a shell."""
+    if command is None or sys.platform != "win32":
+        return command
+    path = Path(command)
+    if path.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
+        return command
+    vendor = Path("vendor/x86_64-pc-windows-msvc/codex/codex.exe")
+    candidates = [
+        path.parent / "node_modules/@openai/codex" / vendor,
+        path.parent / "node_modules/@openai/codex-win32-x64" / vendor,
+        path.parent / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64" / vendor,
+    ]
+    return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
+
+
 def discover_codex(explicit: Path | None = None) -> str | None:
     """Locate separately installed Codex without requiring a login shell."""
     configured = os.environ.get("EFORGE_DESKTOP_CODEX_BIN")
     if configured:
-        return configured
+        return _windows_codex(configured)
     if explicit is not None:
-        return str(explicit.expanduser().resolve())
+        return _windows_codex(str(explicit.expanduser().resolve()))
     found = shutil.which("codex", path=command_environment().get("PATH"))
     if found or sys.platform != "darwin":
-        return found
+        return _windows_codex(found)
     # Finder has a minimal PATH. Prefer the standalone CLI there too so a
     # separate Codex.app installation does not hide the CLI's model catalog.
     candidates = [

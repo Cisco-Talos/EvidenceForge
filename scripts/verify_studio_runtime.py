@@ -45,15 +45,43 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
             raise ValueError("Packaged runtime checksum does not match its manifest")
     with tempfile.TemporaryDirectory(prefix="eforge standalone ü ") as temporary:
         root = Path(temporary).resolve()
-        runtime = root / "runtime"
-        runtime.mkdir()
-        with tarfile.open(archive) as source:
-            source.extractall(runtime, filter="data")
+        if os.name == "nt":
+            installed = subprocess.run(
+                [
+                    str(resources / "bootstrap/python.exe"),
+                    "-I",
+                    "-B",
+                    "-m",
+                    "evidenceforge.studio.windows_runtime",
+                    "--resources",
+                    str(resources),
+                    "--data",
+                    str(root / "data"),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=180,
+                env={
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"PYTHONHOME", "PYTHONPATH", "EFORGE_STUDIO_RUNTIME_ROOT"}
+                },
+            )
+            runtime = Path(json.loads(installed.stdout))
+        else:
+            runtime = root / "runtime"
+            runtime.mkdir()
+            with tarfile.open(archive) as source:
+                source.extractall(runtime, filter="data")
         workspace = root / "workspace"
         workspace.mkdir()
         environment = {
             **os.environ,
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": str(Path(os.environ["SystemRoot"]) / "System32")
+            if os.name == "nt"
+            else "/usr/bin:/bin:/usr/sbin:/sbin",
             "PYTHONHOME": "/deliberately/unavailable/python",
             "PYTHONPATH": "/deliberately/unavailable/packages",
         }
@@ -73,9 +101,18 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
                 "XDG_CACHE_HOME": str(home / "cache"),
             }
         )
-        cli = runtime / "bin/eforge"
+        if os.name == "nt":
+            environment.update(
+                {
+                    "USERPROFILE": str(home),
+                    "LOCALAPPDATA": str(home / "local"),
+                    "APPDATA": str(home / "roaming"),
+                    "PYTHONUTF8": "1",
+                }
+            )
+        cli = runtime / ("Scripts/eforge.exe" if os.name == "nt" else "bin/eforge")
         run_cli(
-            runtime / "bin/python3.12",
+            runtime / ("python.exe" if os.name == "nt" else "bin/python3.12"),
             [
                 "-I",
                 "-B",

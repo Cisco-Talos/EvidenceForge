@@ -214,6 +214,9 @@ jobs:
       group: eforge-${{ needs.inputs.outputs.digest }}-routine-${{ matrix.os }}-${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 'cov' || 'plain' }}-${{ matrix.index }}
       queue: max
   studio:
+    defaults:
+      run:
+        shell: bash
     name: Studio (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -224,7 +227,11 @@ jobs:
           - macos-latest
           - ubuntu-24.04
           - ubuntu-24.04-arm
+          - windows-2025
     steps:
+      - name: Preserve Windows source bytes
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -275,10 +282,10 @@ jobs:
           --ignore=tests/unit/test_studio_sessions.py --ignore=tests/unit/test_studio_ownership.py --ignore=tests/unit/test_studio_state_contracts.py
         if: steps.evidence.outputs.reused != 'true'
       - name: Install Codex for model-free native permission checks
-        run: npm install --global @openai/codex@0.162.1
+        run: npm install --global @openai/codex@${{ runner.os == 'Windows' && '0.167.0' || '0.162.1' }}
         if: steps.evidence.outputs.reused != 'true'
       - name: Verify native chat sandbox restrictions
-        run: EFORGE_NATIVE_CODEX_BIN="$(command -v codex)" uv run pytest --no-cov tests/unit/test_studio_chat_sandbox.py
+        run: uv run --no-sync python scripts/check_studio_sandbox.py
         if: steps.evidence.outputs.reused != 'true'
       - name: Check generated API types
         working-directory: desktop-ui
@@ -351,6 +358,7 @@ jobs:
           - macos-latest
           - ubuntu-24.04
           - ubuntu-24.04-arm
+          - windows-2025
     uses: ./.github/workflows/ci-recovery.yml
     with:
       runner: ${{ matrix.os }}

@@ -23,6 +23,11 @@ from evidenceforge.studio.runtime import RuntimeRelease
 from evidenceforge.studio.service import StudioService, create_app
 from evidenceforge.studio.state_io import StateLock, atomic_write
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX runtime pruning; Windows preview retention and leases have native Windows contracts",
+)
+
 
 def _runtime(data: Path, digit: str, *, legacy: bool = False) -> Path:
     root = data / "runtimes" / f"{digit * 64}-aarch64"

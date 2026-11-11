@@ -197,6 +197,8 @@ def fingerprint(check_id: str, kind: KINDS) -> str:
             "npm": ["npm", "--version"],
             "rust": ["rustc", "+stable", "--version"],
         }.items():
+            if os.name == "nt" and name == "npm":
+                command = ["cmd.exe", "/d", "/c", "npm --version"]
             versions[name] = subprocess.check_output(command, text=True, timeout=30).strip()
     payload = {
         "schema": 1,

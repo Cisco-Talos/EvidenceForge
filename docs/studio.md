@@ -5,7 +5,8 @@ generating logs, and reviewing evaluations. Existing CLI and native chat-skill w
 supported. Studio is a supplement, not a replacement.
 
 Studio installers are available for **Apple Silicon macOS** and **Ubuntu 24.04 Linux
-ARM64/x86_64**. Windows and Intel macOS installers are not enabled; other Linux distributions
+ARM64/x86_64**. Windows has an unsigned x86_64 preview build path described below;
+it is not part of published releases. Intel macOS installers are not enabled; other Linux distributions
 and desktop environments remain outside the accepted baseline. macOS field testing covers
 macOS 26 and 27.0.1; the configured macOS 13 deployment floor is not acceptance of older hosts.
 See [release platforms and validation](releases.md).
@@ -21,6 +22,51 @@ and authoring skills. You do not need a source checkout, a separate Python insta
 Node.js, or Rust to use it. Codex-assisted authoring requires you to install and sign in to Codex
 yourself; Codex is not included with EvidenceForge. Validation, generation, evaluation, and bundle
 viewing work without Codex.
+
+## Windows x86_64 preview
+
+The feature-branch preview targets Windows 11 x86_64 on local NTFS. Windows ARM,
+32-bit Windows, Windows 10 and Windows Server desktop qualification are outside its
+scope. Hosted Windows Server CI is engineering evidence, not Windows 11 acceptance.
+
+The single NSIS setup EXE offers **Just me** and **Everyone**. Both choices require
+administrator approval. Everyone shares the installed application files; settings,
+credentials, helpers, job records, runtime caches and workspace selection remain
+private to each account. Launch Studio normally after setup exits; the installer
+does not launch it. If changing installation scope, uninstall the existing copy
+first. Uninstall preserves private state, retained runtimes and authored work.
+Automatic runtime cleanup is unavailable in this preview.
+
+WebView2 is downloaded during setup only when needed. No development tools or
+separately installed Python are required. Native Windows Codex is separately
+installed and signed in; configure its native sandbox before reconnecting Studio.
+WSL integration is not included. Windows npm shims are resolved to Codex's native
+executable rather than executed through a shell.
+
+The app and installer are unsigned. Browser downloads may show SmartScreen's
+unrecognized-app warning; enterprise policy can prevent bypass. Smart App Control
+can block unknown unsigned executables without a per-app exception. A checksum
+verifies the downloaded bytes but does not grant Windows trust. Use the preview
+only where local policy permits it; do not disable organization security controls.
+
+Build on native Windows x86_64 after installing the development prerequisites:
+
+```powershell
+uv sync --locked --extra studio --extra dev
+npm --prefix desktop-ui ci
+uv run python scripts/package_studio_windows.py
+```
+
+The output is `dist/windows/EvidenceForge-Studio-<version>-windows-x86_64-test-setup.exe`
+with a SHA256 file. Installer Builds accepts `windows-x86_64` on the feature ref;
+its disposable Windows runner exercises both installation scopes and writes a
+verification report alongside the artifact. The verifier refuses to run on an
+ordinary workstation or one with an existing Studio installation.
+
+Windows 11 interactive testing must still cover downloaded-file trust controls,
+both scopes, cancelled UAC, separate administrator credentials and intended-user
+ownership, normal-user launch, authoring/sign-in, dialogs, scaling and imports/
+exports. Genuine separate-account isolation remains a separate acceptance gate.
 
 ## Install and open Studio
 

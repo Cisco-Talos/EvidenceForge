@@ -8,6 +8,9 @@ mod native_dialog;
 mod native_export;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod standalone;
+#[cfg(target_os = "windows")]
+#[path = "standalone_windows.rs"]
+mod standalone;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -48,15 +51,23 @@ async fn studio_connection(app: tauri::AppHandle) -> Result<serde_json::Value, S
 fn connect_helper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let lifecycle = app.state::<helper_lifecycle::HelperConnection>();
     let _startup = lifecycle.startup()?;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let runtime = standalone::selected(&app)?;
     // Runtime installation may take time. Closing during that work should not
     // start a helper afterward; an already-started bootstrap is handed off below.
     lifecycle.ensure_open()?;
     let mut command = std::process::Command::new(studio_python());
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     if let Some(runtime) = runtime.as_ref() {
         command = std::process::Command::new(&runtime.python);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
         command.args(["-I", "-B"]);
         command.env("EFORGE_STUDIO_RUNTIME_ROOT", &runtime.root);
         command.env_remove("PYTHONHOME");

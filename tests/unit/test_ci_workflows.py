@@ -94,6 +94,7 @@ def test_native_recovery_has_one_shared_owner_and_retains_platform_variants() ->
         "macos-latest",
         "ubuntu-24.04",
         "ubuntu-24.04-arm",
+        "windows-2025",
     ]
     assert workflow("installers.yml")["jobs"]["native-recovery"]["uses"] == native["uses"]
     commands = "\n".join(step.get("run", "") for step in ci["studio"]["steps"])

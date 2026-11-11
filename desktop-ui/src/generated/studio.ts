@@ -4479,6 +4479,8 @@ export interface components {
              * @default false
              */
             available: boolean;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
             settings?: components["schemas"]["RuntimeCleanupSettings"];
             /** Checked At */
             checked_at?: number | null;

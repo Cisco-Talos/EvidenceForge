@@ -22,7 +22,14 @@ from tests.support.output_equivalence import deterministic_bundle_files
 
 def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
     result = subprocess.run(
-        [sys.executable, "-m", "evidenceforge", *arguments],
+        [
+            os.environ.get("EFORGE_CHECKPOINT_TEST_PYTHON", sys.executable),
+            "-I",
+            "-B",
+            "-m",
+            "evidenceforge",
+            *arguments,
+        ],
         env=environment,
         capture_output=True,
         text=True,
@@ -496,7 +503,9 @@ def test_short_generation_checkpoint_suspension_and_resume(
     with (tmp_path / "generation-output.txt").open("w+b") as log:
         process = subprocess.Popen(
             [
-                sys.executable,
+                os.environ.get("EFORGE_CHECKPOINT_TEST_PYTHON", sys.executable),
+                "-I",
+                "-B",
                 "-m",
                 "evidenceforge",
                 "generate",

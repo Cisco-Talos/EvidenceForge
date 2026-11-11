@@ -137,7 +137,10 @@ def test_linux_helper_keeps_detached_process_contract(
     run = Mock()
     monkeypatch.setattr(background.subprocess, "run", run)
     background.start_background_service(paths)
-    assert popen.call_args.kwargs["start_new_session"] is True
+    if sys.platform == "win32":
+        assert popen.call_args.kwargs["creationflags"] & 0x08000000
+    else:
+        assert popen.call_args.kwargs["start_new_session"] is True
     assert popen.call_args.kwargs["env"]["EFORGE_STUDIO_DAEMON"] == "1"
     assert popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
     run.assert_not_called()

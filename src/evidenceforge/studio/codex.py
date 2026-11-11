@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.studio.linux_sandbox import linux_sandbox_notice
+from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.runtime import command_environment, discover_codex
-from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class CodexClient:
                     stderr=asyncio.subprocess.PIPE,
                     limit=MAX_PROTOCOL_LINE_BYTES,
                     env=command_environment(),
-                    pass_fds=runtime_worker_fds(),
+                    **launch_options(),
                 )
             except OSError as error:
                 raise CodexDisconnectedError(f"Could not start Codex: {error}") from error
@@ -119,6 +119,13 @@ class CodexClient:
                     timeout=15,
                 )
                 await self._write({"method": "initialized", "params": {}})
+                if sys.platform == "win32":
+                    readiness = await self._request("windowsSandbox/readiness", {}, timeout=15)
+                    if readiness.get("status") != "ready":
+                        raise CodexUnavailableError(
+                            "Codex's Windows sandbox is not ready. Configure the native sandbox "
+                            "in Codex CLI, then reconnect Studio. No authoring message was sent."
+                        )
                 await self.on_event("codex/connected", {})
             except (CodexUnavailableError, OSError) as error:
                 await self._stop_transport()
