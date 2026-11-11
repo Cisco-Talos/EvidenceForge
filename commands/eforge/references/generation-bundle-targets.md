@@ -4,14 +4,15 @@ description: "Generated bundle, sidecar, and output-target reference"
 
 # Generated Bundle And Output Targets
 
+**Contents:** [Layout](#bundle-layout) · [Collection](#compiled-collection-identity) · [Targets](#output-targets) · [Recovery and replacement](#checkpoint-workspace-replacement-and-verification)
+
 Read this reference when the question is about generated paths, authoritative artifacts, target
 rendering, replacement scope, or bundle integrity. Read a family-specific evidence reference for
 record fields and source behavior.
 
 ## Bundle Layout
 
-One successful current run writes one matched bundle. Some source files only exist when their
-format, topology, or feature is active.
+Successful runs write one matched bundle; source files depend on formats, topology and activity.
 
 ```text
 <bundle-root>/
@@ -57,10 +58,9 @@ marker, resolved scenario, and generation manifest are core current outputs. The
 artifact manifest, and `artifacts/` appear only when applicable. `ENVIRONMENT.md` is optional
 authored collateral; generation does not create it.
 
-`GROUND_TRUTH.json` is canonical and `GROUND_TRUTH.md` is its human-readable projection.
-`RESOLVED_SCENARIO.yaml` is the self-contained authoritative generation input. It no longer needs
-the authored include graph, packs, project configuration, or discovery directory. It remains
-generated/non-editable and cannot authorize live callbacks.
+`GROUND_TRUTH.json` is canonical; `GROUND_TRUTH.md` projects it for readers.
+`RESOLVED_SCENARIO.yaml` is self-contained; includes, packs, config and discovery are unnecessary.
+It remains generated/non-editable and cannot authorize live callbacks.
 
 `GENERATION_MANIFEST.json` is the run identity and is committed last. It records the effective
 target, seed, formats, runtime/build identity, selected pack identities and digests, resolved-file
