@@ -89,3 +89,10 @@ mock in a Mac launch test and unsupported append access for Windows helper logs.
 The next iteration supplies the mock and native FILE_APPEND_DATA access, with an
 EOF-preservation test included in Windows CI. This failure occurred before the
 installer build; no verified installer is available yet.
+
+At `48d5c989`, the native Windows runtime/process gate passes and the job advances
+to state/helper recovery. Subsequent workflow improvements retain lint, generated
+types, frontend and real service/transport tests on Windows, align shell tests
+with the installer's release target for build reuse, and add scope-specific
+Start-menu/Desktop target and uninstall checks. Verification reports include the
+exact Python/Rust/Node/uv versions as well as the runner image and source SHA.

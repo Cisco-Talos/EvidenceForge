@@ -47,6 +47,35 @@ def installer_command(command: list[str], *, expected: int = 0) -> None:
         raise RuntimeError(f"NSIS exited {result.returncode}, expected {expected}: {command}")
 
 
+def verify_shortcuts(scope: str, app: Path) -> list[Path]:
+    """Require Start-menu/Desktop links to target this scope's installed binary."""
+    script = """
+$ErrorActionPreference = 'Stop'
+$shell = New-Object -ComObject WScript.Shell
+$folders = if ($env:EFORGE_VERIFY_SCOPE -eq 'AllUsers') {
+    @('CommonPrograms', 'CommonDesktopDirectory')
+} else { @('Programs', 'DesktopDirectory') }
+$links = foreach ($folder in $folders) {
+    $root = [Environment]::GetFolderPath($folder)
+    $found = @(Get-ChildItem -LiteralPath $root -Filter 'EvidenceForge Studio.lnk' -Recurse)
+    if ($found.Count -ne 1) { throw "Expected one Studio shortcut in $root" }
+    $shortcut = $shell.CreateShortcut($found[0].FullName)
+    if ($shortcut.TargetPath -ne $env:EFORGE_VERIFY_APP) { throw 'Incorrect shortcut target' }
+    $found[0].FullName
+}
+ConvertTo-Json -InputObject @($links) -Compress
+"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "EFORGE_VERIFY_SCOPE": scope, "EFORGE_VERIFY_APP": str(app)},
+    )
+    return [Path(value) for value in json.loads(result.stdout)]
+
+
 def helper_smoke(app: Path, directory: Path) -> None:
     """Launch the installed shell and authenticate to its retained-runtime helper."""
     environment = {
@@ -112,6 +141,12 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "runner_image": os.environ.get("ImageVersion"),
+        "toolchain": {
+            "python": sys.version,
+            "rust": subprocess.check_output(["rustc", "--version"], text=True).strip(),
+            "node": subprocess.check_output(["node", "--version"], text=True).strip(),
+            "uv": subprocess.check_output(["uv", "--version"], text=True).strip(),
+        },
         "installer": installer.name,
         "sha256": checksum,
         "signed": False,
@@ -129,6 +164,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
             installed = False
             retained_database: Path | None = None
             retained_bytes: bytes | None = None
+            shortcuts: list[Path] = []
             try:
                 installer_command(command)
                 installed = True
@@ -136,6 +172,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 assert (destination / "evidenceforge-studio.exe").is_file()
                 assert (destination / "runtime/manifest.json").is_file()
                 installer_command(command)  # Same-version reinstall/upgrade path.
+                shortcuts = verify_shortcuts(scope, destination / "evidenceforge-studio.exe")
                 opposite = "AllUsers" if scope == "CurrentUser" else "CurrentUser"
                 installer_command(
                     [str(installer), "/S", f"/{opposite}", f"/D={root / opposite}"], expected=2
@@ -177,6 +214,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 )
                 report["scopes"][scope] = {
                     "install_reinstall_scope_refusal": "passed",
+                    "scope_shortcuts": "passed",
                     "runtime": runtime,
                     "native_shell_helper": "passed",
                     "packaged_checkpoint_resume_equivalence": "passed",
@@ -187,6 +225,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                         [str(destination / "uninstall.exe"), "/S", f"/{scope}", f"_?={destination}"]
                     )
                 assert registry_location(scope) is None
+                assert all(not shortcut.exists() for shortcut in shortcuts)
                 assert (
                     sentinel.read_text(encoding="utf-8")
                     == "preserve authored work and private data"
