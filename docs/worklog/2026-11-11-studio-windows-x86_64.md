@@ -73,3 +73,11 @@ portable transport/job checks pass (36 cases), as do all sixteen chat cases and
 the five Settings UI cases. The pinned Windows Python archive verifies against
 upstream SHA256, has 3,325 regular/directory entries with no links, and includes
 both vcruntime DLLs.
+
+The self-contained workflow is now registered by push and runs on the feature
+branch (`e2a986c0`). Full CI on that draft is intentionally deferred. The first
+direct Windows run is [43098834307](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43098834307).
+Earlier full runs had no assigned jobs; cancellation attempts reported that the
+runs were already completed. Do not treat those unexecuted/skipped checks as
+platform validation. Before integration, remove the temporary draft-branch guard
+and require the full existing platform matrix.

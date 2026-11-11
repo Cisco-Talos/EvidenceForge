@@ -49,6 +49,7 @@ jobs:
       - name: Install locked tools and record host
         id: tools
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Native Windows x86_64 is required' }
           uv sync --locked --extra studio --extra dev
           npm --prefix desktop-ui ci

@@ -119,7 +119,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         "desktop_acceptance": "pending Windows 11 interactive and separate-account testing",
     }
     with tempfile.TemporaryDirectory(prefix="eforge installed ü ") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         sentinel = root / "private/user-data.txt"
         sentinel.parent.mkdir()
         sentinel.write_text("preserve authored work and private data", encoding="utf-8")
