@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,13 @@ def registry_location(scope: str) -> str | None:
 
 def installer_command(command: list[str], *, expected: int = 0) -> None:
     """Bound NSIS execution and require the expected installer result."""
-    result = subprocess.run(command, timeout=240, check=False)
+    arguments: list[str] | str = command
+    if command[-1].startswith(("/D=", "_?=")):
+        # NSIS consumes the entire unquoted tail for these special options.
+        # Standard Windows argv quoting would silently discard the override.
+        # This is a direct CreateProcess invocation, never a shell command.
+        arguments = subprocess.list2cmdline(command[:-1]) + " " + command[-1]
+    result = subprocess.run(arguments, executable=command[0], timeout=240, check=False)
     if result.returncode != expected:
         raise RuntimeError(f"NSIS exited {result.returncode}, expected {expected}: {command}")
 
@@ -51,6 +58,7 @@ def verify_shortcuts(scope: str, app: Path) -> list[Path]:
     """Require Start-menu/Desktop links to target this scope's installed binary."""
     script = """
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $shell = New-Object -ComObject WScript.Shell
 $folders = if ($env:EFORGE_VERIFY_SCOPE -eq 'AllUsers') {
     @('CommonPrograms', 'CommonDesktopDirectory')
@@ -95,11 +103,13 @@ def helper_smoke(app: Path, directory: Path) -> None:
     )
     environment["PYTHONPATH"] = str(working)
     environment["PYTHONHOME"] = str(working / "unavailable-python")
+    environment["PYTHONUTF8"] = "0"
+    environment["PYTHONIOENCODING"] = "ascii"
     process = subprocess.Popen([str(app)], env=environment, cwd=working)
     helper: psutil.Process | None = None
     try:
         discovery = directory / "private/state/service.json"
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + 180
         descriptor: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -120,8 +130,21 @@ def helper_smoke(app: Path, directory: Path) -> None:
             f"http://127.0.0.1:{descriptor['port']}/v1/health",
             headers={"X-EForge-Token": descriptor["token"]},
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            assert response.status == 200
+        # Discovery is published before Uvicorn has finished starting. Retain
+        # the exact process identity while waiting for its authenticated health.
+        while time.monotonic() < deadline:
+            if process.poll() is not None or not helper.is_running():
+                raise RuntimeError("Installed Studio exited before authenticated readiness")
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    assert response.status == 200
+                break
+            except urllib.error.HTTPError:
+                raise  # Authentication failures must never become readiness retries.
+            except (urllib.error.URLError, TimeoutError):
+                time.sleep(0.1)
+        else:
+            raise RuntimeError("Installed Studio helper did not reach authenticated readiness")
     finally:
         # Clean only this harness's unreaped window and verified helper child.
         if process.poll() is None:
@@ -162,7 +185,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         "scopes": {},
         "desktop_acceptance": "pending Windows 11 interactive and separate-account testing",
     }
-    with tempfile.TemporaryDirectory(prefix="eforge installed ü ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="eforge installed 汉 ü ") as temporary:
         root = Path(temporary).resolve()
         sentinel = root / "private/user-data.txt"
         sentinel.parent.mkdir()
@@ -171,6 +194,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
             destination = root / scope
             command = [str(installer), "/S", f"/{scope}", f"/D={destination}"]
             installed = False
+            uninstalled = False
             retained_database: Path | None = None
             retained_bytes: bytes | None = None
             shortcuts: list[Path] = []
@@ -178,7 +202,10 @@ def verify_installer(installer: Path) -> dict[str, Any]:
             try:
                 installer_command(command)
                 installed = True
-                assert Path(registry_location(scope) or "") == destination
+                registered = registry_location(scope)
+                assert Path(registered or "") == destination, (
+                    f"{scope}: registered {registered!r}, expected {str(destination)!r}"
+                )
                 assert (destination / "evidenceforge-studio.exe").is_file()
                 assert (destination / "runtime/manifest.json").is_file()
                 installer_command(command)  # Same-version reinstall/upgrade path.
@@ -236,8 +263,9 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     installer_command(
                         [str(destination / "uninstall.exe"), "/S", f"/{scope}", f"_?={destination}"]
                     )
-                assert registry_location(scope) is None
-                assert all(not shortcut.exists() for shortcut in shortcuts)
+                    uninstalled = True
+                    assert registry_location(scope) is None
+                    assert all(not shortcut.exists() for shortcut in shortcuts)
                 assert (
                     sentinel.read_text(encoding="utf-8")
                     == "preserve authored work and private data"
@@ -246,6 +274,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     assert retained_database.read_bytes() == retained_bytes
                     assert (retained_database.parent / "runtimes").is_dir()
                     assert authored.read_bytes() == b"name: preserved authored work\n"
+            assert uninstalled, "The installed preview did not provide an uninstaller"
+            report["scopes"][scope]["uninstall_preservation"] = "passed"
     return report
 
 

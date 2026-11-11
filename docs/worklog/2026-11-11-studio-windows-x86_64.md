@@ -159,3 +159,21 @@ file. Job-record writes now explicitly opt into FileRenameInformationEx with
 FILE_RENAME_POSIX_SEMANTICS; existing readers retain their old snapshot and new
 opens observe the replacement. All other native storage callers keep their
 previous rename behavior. The same native concurrency probe remains required.
+
+Run [43105446307](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43105446307)
+passes all 74 runtime/process cases, all 372 frontend tests/build and eleven native
+Windows Rust tests (including Python/Rust lease interop). It builds the first NSIS
+installer: 68.26 MiB, SHA256
+`0e1afd0d0b27950bb916b350968064c8e4052019c37abd772b38ac9eb2ef0c32`.
+Installed verification stops at directory registration: standard subprocess argv
+quoting is incompatible with NSIS's special unquoted final `/D=` and `_?=` tails.
+The harness now constructs that native command line directly, with no shell, and
+reports the actual registered location without masking the first failure.
+The installer is a failed-run diagnostic, not a qualified preview. Rust release
+dependencies were successfully cached for the next iteration (rustc 1.99.1).
+
+Prepared follow-up validation also waits for authenticated helper readiness after
+discovery, explicitly selects UTF-8 for isolated Windows Python (which ignores
+PYTHONUTF8), and exercises non-ANSI Chinese/Unicode install/runtime paths with user
+Python IO overrides disabled. Twenty-nine focused regressions pass locally; POSIX
+isolated interpreter flags are unchanged.

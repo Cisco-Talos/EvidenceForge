@@ -33,6 +33,8 @@ pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
         .args([
             "-I",
             "-B",
+            "-X",
+            "utf8",
             "-m",
             "evidenceforge.studio.windows_runtime",
             "--resources",

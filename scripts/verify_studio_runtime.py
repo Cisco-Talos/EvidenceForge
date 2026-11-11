@@ -43,7 +43,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
     with archive.open("rb") as source:
         if hashlib.file_digest(source, "sha256").hexdigest() != selected["sha256"]:
             raise ValueError("Packaged runtime checksum does not match its manifest")
-    with tempfile.TemporaryDirectory(prefix="eforge standalone ü ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="eforge standalone 汉 ü ") as temporary:
         root = Path(temporary).resolve()
         if os.name == "nt":
             installed = subprocess.run(
@@ -107,7 +107,8 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
                     "USERPROFILE": str(home),
                     "LOCALAPPDATA": str(home / "local"),
                     "APPDATA": str(home / "roaming"),
-                    "PYTHONUTF8": "1",
+                    "PYTHONUTF8": "0",
+                    "PYTHONIOENCODING": "ascii",
                 }
             )
         cli = runtime / ("Scripts/eforge.exe" if os.name == "nt" else "bin/eforge")

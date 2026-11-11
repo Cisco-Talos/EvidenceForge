@@ -56,7 +56,15 @@ def test_private_runtime_is_relocation_safe_and_isolates_python_environment(
         root / ("Scripts" if sys.platform == "win32" else "bin")
     )
     assert "PYTHONHOME" not in environment and "PYTHONPATH" not in environment
-    assert _eforge_command() == [str(executable), "-I", "-B", "-m", "evidenceforge"]
+    windows_options = ["-X", "utf8"] if sys.platform == "win32" else []
+    assert _eforge_command() == [
+        str(executable),
+        "-I",
+        "-B",
+        *windows_options,
+        "-m",
+        "evidenceforge",
+    ]
     monkeypatch.setattr(sys, "executable", "/unrelated/python")
     with pytest.raises(RuntimeError, match="outside its selected private runtime"):
         runtime.runtime_id()

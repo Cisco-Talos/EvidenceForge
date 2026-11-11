@@ -24,7 +24,7 @@ from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.generation.checkpoints.control import read_suspension_record
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
-from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.processes import isolated_python_options, launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 from evidenceforge.studio.runtime_cleanup import runtime_lease
 
@@ -365,7 +365,7 @@ def ensure_controller(directory: Path) -> None:
         process = subprocess.Popen(
             [
                 sys.executable,
-                *(["-I", "-B"] if runtime_root() is not None else []),
+                *(isolated_python_options() if runtime_root() is not None else []),
                 "-m",
                 "evidenceforge.desktop.controller",
                 str(directory),

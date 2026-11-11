@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 
+def isolated_python_options() -> list[str]:
+    """Keep private Python isolated, with explicit UTF-8 IO on Windows."""
+    return ["-I", "-B", *(["-X", "utf8"] if os.name == "nt" else [])]
+
+
 def shell_argument(value: str) -> str:
     """Quote one argument for native PowerShell on Windows or the POSIX shell."""
     if os.name == "nt":

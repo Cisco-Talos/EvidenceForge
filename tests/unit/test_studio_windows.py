@@ -16,6 +16,27 @@ from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
 
 
+def test_isolated_windows_python_uses_utf8_independently_of_user_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "os", SimpleNamespace(name="nt"))
+    result = subprocess.run(
+        [
+            sys.executable,
+            *processes.isolated_python_options(),
+            "-c",
+            "import sys; assert sys.flags.utf8_mode == 1; print('漢')",
+        ],
+        env={**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "ascii"},
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+    )
+    assert result.stdout == "漢\n"
+
+
 def test_ordinary_cli_does_not_import_optional_studio_dependencies() -> None:
     script = """
 import importlib.abc, runpy, sys

@@ -12,7 +12,7 @@ import sys
 import psutil
 
 from evidenceforge.studio.paths import StudioPaths
-from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.processes import isolated_python_options, launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 from evidenceforge.studio.state_io import atomic_write, open_regular
 
@@ -45,7 +45,7 @@ def _start_macos(paths: StudioPaths) -> None:
         "Label": label,
         "ProgramArguments": [
             sys.executable,
-            *(["-I", "-B"] if runtime_root() is not None else []),
+            *(isolated_python_options() if runtime_root() is not None else []),
             "-m",
             "evidenceforge.studio.bootstrap",
             "--serve",
@@ -103,7 +103,7 @@ def start_background_service(paths: StudioPaths) -> None:
         subprocess.Popen(
             [
                 sys.executable,
-                *(["-I", "-B"] if runtime_root() is not None else []),
+                *(isolated_python_options() if runtime_root() is not None else []),
                 "-m",
                 "evidenceforge.studio.bootstrap",
                 "--serve",

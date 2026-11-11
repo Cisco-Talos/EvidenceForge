@@ -14,7 +14,11 @@ from uuid import uuid4
 import psutil
 
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
-from evidenceforge.studio.processes import executable_command, launch_options
+from evidenceforge.studio.processes import (
+    executable_command,
+    isolated_python_options,
+    launch_options,
+)
 from evidenceforge.studio.runtime import command_environment, runtime_root
 
 _detached_processes: list[subprocess.Popen[bytes]] = []
@@ -32,7 +36,7 @@ def _eforge_command(settings: AppSettings | None = None) -> list[str]:
         if executable is None:
             raise FileNotFoundError("Set EFORGE_DESKTOP_EFORGE_BIN to a packaged eforge CLI")
         return [executable]
-    options = ["-I", "-B"] if runtime_root() is not None else []
+    options = isolated_python_options() if runtime_root() is not None else []
     return [sys.executable, *options, "-m", "evidenceforge"]
 
 

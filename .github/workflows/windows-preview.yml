@@ -22,6 +22,7 @@ jobs:
       PYTHONUTF8: '1'
       CARGO_TARGET_DIR: ${{ github.workspace }}/build/studio-windows/target
       CARGO_BUILD_JOBS: '2'
+      RUSTUP_TOOLCHAIN: stable
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     runs-on: windows-2025
     timeout-minutes: 120

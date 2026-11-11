@@ -4,12 +4,17 @@ use std::process::{Command, ExitCode};
 fn main() -> ExitCode {
     let result = (|| -> Result<i32, Box<dyn std::error::Error>> {
         let executable = std::env::current_exe()?;
-        let root = executable.parent().ok_or("No Scripts directory")?
-            .parent().ok_or("No runtime directory")?;
+        let root = executable
+            .parent()
+            .ok_or("No Scripts directory")?
+            .parent()
+            .ok_or("No runtime directory")?;
         let mut command = Command::new(root.join("python.exe"));
-        command.args(["-I", "-B", "-m", "evidenceforge"])
+        command
+            .args(["-I", "-B", "-X", "utf8", "-m", "evidenceforge"])
             .args(std::env::args_os().skip(1))
-            .env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+            .env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH");
         if root.join("release.json").is_file() {
             command.env("EFORGE_STUDIO_RUNTIME_ROOT", root);
         }

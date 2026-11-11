@@ -60,6 +60,7 @@ fn connect_helper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
+        command.env("PYTHONUTF8", "1");
     }
     if let Some(runtime) = runtime.as_ref() {
         command = std::process::Command::new(&runtime.python);
@@ -67,6 +68,7 @@ fn connect_helper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
+            command.args(["-X", "utf8"]);
         }
         command.args(["-I", "-B"]);
         command.env("EFORGE_STUDIO_RUNTIME_ROOT", &runtime.root);
