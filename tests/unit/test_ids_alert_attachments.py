@@ -86,6 +86,8 @@ def _planned_transaction(
     phases = [("transport_start", T0)]
     if close is not None:
         phases.append(("transport_close", close))
+    packet_overhead = 28 if proto == "udp" else 40
+    orig_packets = 2 if orig_payload else 1
     return NetworkTransactionPlan(
         stable_id="ids-transaction",
         hostname="web.example.test",
@@ -106,12 +108,12 @@ def _planned_transaction(
         history="ShADadfF" if conn_state == "SF" else "S",
         traffic=NetworkTrafficLedger(
             orig=DirectionalTrafficLedger(
-                orig_payload, 2 if orig_payload else 1, orig_payload + 80
+                orig_payload, orig_packets, orig_payload + packet_overhead * orig_packets
             ),
             resp=DirectionalTrafficLedger(
                 resp_payload,
                 resp_packets,
-                resp_payload + (resp_packets * 40 if resp_packets else 0),
+                resp_payload + resp_packets * packet_overhead,
             ),
         ),
     )

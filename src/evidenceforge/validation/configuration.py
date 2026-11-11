@@ -3426,7 +3426,12 @@ def _validate_evaluation_rules(
         if err or not eval_data:
             continue
 
-        if eval_file.stem in {"thresholds", "timing_bounds", "cross_source_pairs"}:
+        if eval_file.stem in {
+            "thresholds",
+            "timing_bounds",
+            "cross_source_pairs",
+            "ground_truth_contracts",
+        }:
             # These files use non-format-keyed schemas; skip format-key validation
             continue
 

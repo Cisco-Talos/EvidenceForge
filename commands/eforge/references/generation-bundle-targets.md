@@ -4,13 +4,6 @@ description: "Generated bundle, sidecar, and output-target reference"
 
 # Generated Bundle And Output Targets
 
-## Contents
-
-- [Bundle Layout](#bundle-layout)
-- [Compiled Collection Identity](#compiled-collection-identity)
-- [Output Targets](#output-targets)
-- [Replacement And Verification](#replacement-and-verification)
-
 Read this reference when the question is about generated paths, authoritative artifacts, target
 rendering, replacement scope, or bundle integrity. Read a family-specific evidence reference for
 record fields and source behavior.
@@ -83,8 +76,8 @@ topology visibility, coherent missingness, source timing/batching, and only then
 `OBSERVATION_MANIFEST.json` records aggregate source-observation outcomes. When exact source
 overrides are part of the effective scenario, `source_deployment_digest` binds those diagnostics to
 the immutable compiled deployment. `COLLECTION_PROFILE.json` records the primary collection window,
-observation profile, family tail policy, and export ordering. Projection envelopes themselves are
-ephemeral; the bundle does not retain one decision object per candidate record.
+observation profile, family tail policy, and export ordering. Background projection envelopes are
+ephemeral; authored source expectations persist in `GROUND_TRUTH_EVENTS.jsonl`.
 
 When diagnosing absence, distinguish an undeployed source, missing capability, invisible topology,
 coherent drop/filter, and an out-of-window record. Do not change scenario collection policy to hide
@@ -134,7 +127,8 @@ Unregistered authored collateral is preserved.
 After exit code 0, report effective manifest values. Use `eforge eval <bundle-root>` for independent
 containment/hash verification. Timestamped run manifests need not be byte-identical across replays.
 
-Schema-v4 ground truth binds the canonical occurrence stream by count and SHA-256.
+Schema-v4/v5 ground truth binds the canonical occurrence stream by count and SHA-256.
 It separates authored descriptions, actual outcomes, and source-instance observation reasons.
+Schema 5 records expected presence/absence per source; evaluation matches actual evidence.
 Keep all returned DNS answers distinct from selected/attempted addresses. Missing collection
 does not remove an occurrence; prevention does not invent an unobserved downstream transfer.

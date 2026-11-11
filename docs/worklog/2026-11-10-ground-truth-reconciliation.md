@@ -600,3 +600,12 @@ Integration repairs preserve the production checks:
   required marker. Lint/format and behavior/version declarations remain required.
 
 No product version, release tag, publication or scoring threshold change is included.
+
+The broader routine run exposed a config-validator integration defect: it interpreted the
+semantic `ground_truth_contracts.yaml` document as format-keyed correlation rules. Registered
+the file alongside the existing non-format evaluation documents, retaining format/field checks
+for files that use those schemas. Corrected the firewall test's optional-coverage severity,
+the IDS UDP fixture's transport overhead, and condensed the canonical bundle reference to its
+existing focused-document budget. Regenerated the ignored local skills through the installer.
+The affected config/identity/IDS/firewall/skill controls pass **105 tests**, 93 slow cases
+deselected (16.67 seconds); checks and rule thresholds were not relaxed.

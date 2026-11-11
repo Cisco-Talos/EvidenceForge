@@ -104,8 +104,8 @@ class TestFirewallValidation:
         ]
         assert len(fw_issues) == 0
 
-    def test_firewall_without_cisco_asa_warns_and_errors_when_asa_requested(self):
-        """Firewall sensor without cisco_asa should warn and fail requested ASA output."""
+    def test_firewall_without_cisco_asa_informs_and_errors_when_asa_requested(self):
+        """Optional coverage is informational; impossible requested ASA output is an error."""
         scenario = _make_scenario(
             sensors=[
                 NetworkSensor(
@@ -120,7 +120,7 @@ class TestFirewallValidation:
         issues = validator.validate()
         fw_issues = [issue for issue in issues if "cisco_asa" in issue.message]
         assert len(fw_issues) == 2
-        assert {issue.severity for issue in fw_issues} == {"warning", "error"}
+        assert {issue.severity for issue in fw_issues} == {"info", "error"}
 
     def test_non_firewall_with_policy_warns(self):
         """Non-firewall sensor with policy rules should warn."""
