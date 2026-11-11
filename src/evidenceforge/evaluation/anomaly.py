@@ -28,10 +28,18 @@ Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 
 from collections import Counter
 from datetime import UTC
+from itertools import chain
 from zoneinfo import ZoneInfo
 
 from evidenceforge.evaluation._shared import _extract_username
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
+from evidenceforge.evaluation.storage import (
+    bounded_counter,
+    bounded_list,
+    bounded_nsmallest,
+    bounded_set,
+    current_workspace,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.rng import _stable_seed
 
@@ -83,13 +91,18 @@ _COMMON_APP_PORTS = {
 
 
 def _build_failed_logon_bursts(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> set[tuple[str, int]]:
     """Identify (user, 10min_bucket) pairs with 3+ failed logons.
 
     Isolated failed logons are normal; bursts suggest brute-force and are anomalous.
     """
-    bucket_counts: Counter[tuple[str, int]] = Counter()
+    workspace = current_workspace()
+    if workspace is not None and "statistics" in workspace.shared:
+        return bounded_set(
+            key for key, count in workspace.shared["statistics"].failed_logons.items() if count >= 3
+        )
+    bucket_counts = bounded_counter()
     win_records = records.get("windows_event_security", [])
     for rec in win_records:
         if rec.fields.get("EventID") != 4625 or rec.timestamp is None:
@@ -100,11 +113,11 @@ def _build_failed_logon_bursts(
         bucket = int(rec.timestamp.timestamp()) // 600  # 10-minute buckets
         bucket_counts[(user.lower(), bucket)] += 1
 
-    return {key for key, count in bucket_counts.items() if count >= 3}
+    return bounded_set(key for key, count in bucket_counts.items() if count >= 3)
 
 
 def detect_anomalies(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
     scenario: Scenario,
 ) -> tuple[int, int]:
     """Detect organic anomalous events in background noise.
@@ -131,19 +144,17 @@ def detect_anomalies(
     except (KeyError, ValueError):
         scenario_tz = UTC
 
-    # Collect all valid records, then sample for efficiency
-    all_valid: list[tuple[str, ParsedRecord]] = []
-    for format_name, record_list in records.items():
-        for record in record_list:
-            if not record.parse_errors:
-                all_valid.append((format_name, record))
+    # Preserve the existing statistical sample, without materializing/sorting the corpus.
+    all_valid = (
+        (format_name, record)
+        for format_name, record_list in records.items()
+        for record in record_list
+        if not record.parse_errors
+    )
+    from itertools import islice
 
-    # Sample up to 5,000 records (statistically sufficient for rate estimation)
-    max_sample = 5000
-    if len(all_valid) > max_sample:
-        sample = _stable_record_sample(all_valid, max_sample)
-    else:
-        sample = all_valid
+    first = bounded_list(islice(all_valid, 5001))
+    sample = _stable_record_sample(chain(first, all_valid), 5000) if len(first) > 5000 else first
 
     total = len(sample)
     anomalous = 0
@@ -179,7 +190,7 @@ def _stable_record_sample(
         )
         return (seed, format_name, timestamp, line_number, record.raw)
 
-    return sorted(records, key=_sample_key)[:max_sample]
+    return bounded_nsmallest(max_sample, records, key=_sample_key)
 
 
 def _build_persona_hours(scenario: Scenario) -> dict[str, list[int]]:
@@ -226,14 +237,20 @@ def _build_service_ports(scenario: Scenario) -> set[int]:
     return service_ports
 
 
-def _build_process_frequency(records: dict[str, list[ParsedRecord]]) -> Counter:
+def _build_process_frequency(records: RecordCorpus) -> Counter:
     """Count process/command frequencies across all records."""
-    freq: Counter = Counter()
+    workspace = current_workspace()
+    if workspace is not None and "statistics" in workspace.shared:
+        statistics = workspace.shared["statistics"]
+        statistics.process_frequency.evaluation_total = statistics.process_total
+        return statistics.process_frequency
+    freq = bounded_counter()
     for fmt, record_list in records.items():
         for rec in record_list:
             proc = _extract_process_key(rec, fmt)
             if proc:
                 freq[proc] += 1
+    freq.evaluation_total = sum(freq.values())
     return freq
 
 
@@ -317,7 +334,9 @@ def _is_rare_process(
         return False
 
     # Bottom 3% by frequency = rare
-    total_procs = sum(process_freq.values())
+    total_procs = getattr(process_freq, "evaluation_total", None)
+    if total_procs is None:
+        total_procs = sum(process_freq.values())
     if total_procs == 0:
         return False
 

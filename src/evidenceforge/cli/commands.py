@@ -36,7 +36,7 @@ import tempfile
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import uuid4
 
 import click
@@ -79,12 +79,12 @@ from evidenceforge.composition.artifacts import (
     RESOLVED_SCENARIO_FILENAME,
     build_resolved_document,
     serialize_resolved_document,
-    verify_generation_bundle,
     write_generation_manifest,
     write_resolved_scenario,
 )
 from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
 from evidenceforge.config.context import ConfigurationContextError, select_context
+from evidenceforge.evaluation.bundle import verify_evaluation_bundle as verify_generation_bundle
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.errors import CheckpointError
@@ -103,6 +103,7 @@ from evidenceforge.generation.resource_forecast import ResourceForecast, build_r
 from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.workload import estimate_workload
 from evidenceforge.models.exceptions import (
+    EvaluationError,
     EvidenceForgeError,
     PackError,
     ScenarioIncludeError,
@@ -2838,8 +2839,26 @@ def eval_cmd(
     allow_large_evaluation: bool = typer.Option(
         False,
         "--allow-large-evaluation",
-        help="Trusted override for evaluator corpus byte/file/record-count limits.",
+        help="Deprecated compatibility option; evaluation now spills automatically without corpus-size limits.",
     ),
+    memory_budget_mib: Annotated[
+        int,
+        typer.Option(
+            "--memory-budget-mib",
+            min=1,
+            help="Evaluation working-state spill threshold in MiB; total process memory also includes runtime and individual records.",
+        ),
+    ] = 256,
+    scratch_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--scratch-dir",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+            help="Directory for private temporary evaluation spill storage (default: OS temporary directory).",
+        ),
+    ] = None,
     allow_scenario_mismatch: bool = typer.Option(
         False,
         "--allow-scenario-mismatch",
@@ -2897,6 +2916,10 @@ def eval_cmd(
     if scenario_file is not None:
         status_console.print(f"Scenario comparison: {scenario_file}")
 
+    if allow_large_evaluation:
+        status_console.print(
+            "[yellow]--allow-large-evaluation is deprecated; full evaluation now spills automatically.[/yellow]"
+        )
     evaluation_output_dir = output_dir
     try:
         if (output_dir / GENERATION_MANIFEST_FILENAME).is_file():
@@ -2910,7 +2933,12 @@ def eval_cmd(
             bundle_root = None
 
         if bundle_root is not None:
-            manifest = verify_generation_bundle(bundle_root)
+            status_console.print("Verifying authoritative bundle integrity...")
+            manifest = verify_generation_bundle(
+                bundle_root,
+                memory_budget_bytes=memory_budget_mib * 1024 * 1024,
+                scratch_dir=scratch_dir,
+            )
             bundle_compiled = compile_scenario(bundle_root / RESOLVED_SCENARIO_FILENAME)
             if manifest.get("compiled_sha256") != bundle_compiled.digests.get("compiled_sha256"):
                 raise SchemaValidationError(
@@ -2968,6 +2996,9 @@ def eval_cmd(
             field = " -> ".join(str(loc) for loc in error["loc"])
             status_console.print(f"  • {field}: {error['msg']}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    except EvaluationError as e:
+        status_console.print(f"[bold red]Error:[/bold red] Evaluation failed: {e}", style="red")
+        raise typer.Exit(EXIT_EVAL_ERROR)
     except EvidenceForgeError as e:
         status_console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
@@ -3012,6 +3043,12 @@ def eval_cmd(
                         detail_task,
                         completed=step,
                         description=f"Parsing {fmt} ({step}/{total})",
+                    )
+
+                elif event_type == "parsing_progress" and detail_task is not None:
+                    progress.update(
+                        detail_task,
+                        description=f"Reading {data['format']}: {data['records']:,} records",
                     )
 
                 elif event_type == "phase_done" and data["phase"] == "parsing":
@@ -3075,6 +3112,8 @@ def eval_cmd(
                 progress_callback=eval_progress,
                 allow_large_evaluation=allow_large_evaluation,
                 effective_config=effective_config,
+                memory_budget_bytes=memory_budget_mib * 1024 * 1024,
+                scratch_dir=scratch_dir,
             )
             report = engine.run()
 

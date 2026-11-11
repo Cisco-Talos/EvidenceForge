@@ -37,7 +37,7 @@ class JsonChange(BaseModel):
     """Explicit field operations with frozen literal defaults; no current-model factories."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    action: Literal["rename", "default", "wrap", "set"]
+    action: Literal["rename", "default", "wrap", "set", "remove"]
     field: str
     target: str = ""
     literal: str = "null"
@@ -45,7 +45,18 @@ class JsonChange(BaseModel):
     def apply(self, record: dict[str, object]) -> dict[str, object]:
         """Transform one object without regenerating IDs, timestamps or unspecified fields."""
         result = dict(record)
-        if self.action in {"default", "set"} and "." in self.field:
+        if self.action == "remove":
+            if "." in self.field:
+                parent, field = self.field.split(".", 1)
+                nested = result.get(parent)
+                if not isinstance(nested, dict):
+                    raise StudioStateError("Historical JSON field parent is not an object")
+                copied = dict(nested)
+                copied.pop(field, None)
+                result[parent] = copied
+            else:
+                result.pop(self.field, None)
+        elif self.action in {"default", "set"} and "." in self.field:
             parent, field = self.field.split(".", 1)
             nested = result.get(parent)
             if not isinstance(nested, dict):
@@ -121,6 +132,17 @@ SETTINGS_MIGRATIONS = (
         changes=(
             JsonChange(action="default", field="settings.allow_large_evaluation", literal="true"),
             JsonChange(action="set", field="schema_version", literal="3"),
+        ),
+    ),
+    SettingsMigration(
+        id="studio-settings-0004",
+        source=3,
+        target=4,
+        description="Retire the corpus-size override after bounded-memory evaluation",
+        affected=("settings",),
+        changes=(
+            JsonChange(action="remove", field="settings.allow_large_evaluation"),
+            JsonChange(action="set", field="schema_version", literal="4"),
         ),
     ),
 )

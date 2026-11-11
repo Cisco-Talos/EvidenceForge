@@ -104,11 +104,10 @@ test("previous runtime retention defaults to 30 days, saves zero, and preserves 
   expect(screen.getByRole("button", { name: "Save settings" }).hasAttribute("disabled")).toBe(true);
 });
 
-test("large evaluations default on, explain memory use and save an opt-out", async () => {
+test("jobs explain automatic evaluation storage without a size override", async () => {
   const settings = {
     workspace: "/tmp/EvidenceForge", recent_workspaces: [], output_parents: {},
     max_concurrent_generations: 2, checkpoint_hours: 24, search_match_limit: 5,
-    allow_large_evaluation: true,
     quit: { action: "continue", continue_queued_generations: true, continue_evaluations: "continue", pause_close_timing: "handoff", pause_evaluations: "finish", kill_incomplete_bundles: "preserve", authoring_turns: "stop" },
     skill_install_scope: "global", skill_install_agent: "all", codex_path: null, eforge_path: null,
   } as StudioSettings;
@@ -116,12 +115,6 @@ test("large evaluations default on, explain memory use and save an opt-out", asy
   render(<Tooltip.Provider><SettingsView settings={settings} paths={{ data: "/tmp/data", logs: "/tmp/logs" }} api={{ request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi} onSaved={async () => undefined} onError={vi.fn()} /></Tooltip.Provider>);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Jobs" }));
-  const checkbox = screen.getByRole("checkbox", { name: "Allow large evaluations" });
-  expect((checkbox as HTMLInputElement).checked).toBe(true);
-  expect(screen.getByText("Large evaluations may use substantial memory.")).toBeTruthy();
-  await user.click(checkbox);
-  await user.click(screen.getByRole("button", { name: "Save settings" }));
-  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/settings", "PUT", expect.objectContaining({ allow_large_evaluation: false })));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save settings" }).hasAttribute("disabled")).toBe(true));
-  expect((checkbox as HTMLInputElement).checked).toBe(false);
+  expect(screen.queryByRole("checkbox", { name: "Allow large evaluations" })).toBeNull();
+  expect(screen.getByText(/Evaluations automatically use temporary disk storage when needed/)).toBeTruthy();
 });

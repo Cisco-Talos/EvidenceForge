@@ -35,8 +35,9 @@ import hashlib
 import itertools
 import logging
 import math
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import UTC, datetime
+from heapq import nsmallest
 from typing import Any
 
 from evidenceforge.evaluation._shared import (
@@ -53,8 +54,18 @@ from evidenceforge.evaluation.dimensions import (
     aggregate_sub_scores,
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
 from evidenceforge.evaluation.rules import load_rules_file
+from evidenceforge.evaluation.storage import (
+    bounded_counter,
+    bounded_counter_groups,
+    bounded_groups,
+    bounded_list,
+    bounded_map,
+    bounded_set,
+    bounded_sorted,
+    current_workspace,
+)
 from evidenceforge.evaluation.visibility import VisibilityModel
 from evidenceforge.events.ids_evaluation import new_ids_digest, update_ids_digest
 from evidenceforge.models.scenario import Scenario
@@ -81,7 +92,7 @@ class PlausibilityScorer(DimensionScorer):
 
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
@@ -133,7 +144,7 @@ class PlausibilityScorer(DimensionScorer):
 
     def _score_value_plausibility(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         vis: VisibilityModel,
     ) -> SubScore:
         """Merged source_correctness + activity_plausibility.
@@ -142,163 +153,30 @@ class PlausibilityScorer(DimensionScorer):
         1. OS-bound formats appear on correct OS hosts (container check).
         2. Record content is OS-appropriate (content check).
         """
-        total = 0
-        plausible = 0
-        failures: list[str] = []
-
-        for format_name, record_list in records.items():
-            expected_os = _OS_BOUND_FORMATS.get(format_name)
-
-            for record in record_list:
-                hostname = _extract_hostname(record)
-
-                # Determine whether record is checkable
-                if not hostname and not expected_os:
-                    content_check = _check_os_plausibility(record, format_name)
-                    if content_check is None:
-                        continue
-                    # No hostname → can't do container check, only content
-                    total += 1
-                    if content_check:
-                        plausible += 1
-                    continue
-
-                if not hostname:
-                    continue  # OS-bound but no hostname → unverifiable, skip
-
-                # Container check: OS-bound formats on wrong OS
-                if expected_os:
-                    host_os = vis.get_os_category(hostname)
-                    if vis.resolve_hostname(hostname) is None:
-                        total += 1
-                        if len(failures) < 10:
-                            failures.append(f"[{format_name}] Host '{hostname}' not in scenario")
-                        continue
-                    if host_os != expected_os and host_os != "unknown":
-                        total += 1
-                        if len(failures) < 10:
-                            failures.append(
-                                f"[{format_name}] Host '{hostname}' is {host_os}, "
-                                f"expected {expected_os}"
-                            )
-                        continue
-
-                # Content check: OS-implausible field values
-                content_check = _check_os_plausibility(record, format_name)
-                if content_check is None:
-                    if expected_os:
-                        # OS-bound format passed container check → count as pass
-                        total += 1
-                        plausible += 1
-                    continue
-
-                total += 1
-                if content_check:
-                    plausible += 1
-                elif len(failures) < 10:
-                    failures.append(
-                        f"[{format_name}] Implausible content on {hostname} "
-                        f"({vis.get_os_category(hostname)})"
-                    )
-
-        if total == 0:
-            return SubScore(
-                name="Value & OS Plausibility",
-                key="value_plausibility",
-                weight=0.25,
-                score=None,
-                skipped=True,
-                details="No records expose a checkable host or OS/value contract",
-            )
-        score = 100.0 * plausible / total
-        return SubScore(
-            name="Value & OS Plausibility",
-            key="value_plausibility",
-            weight=0.25,
-            score=score,
-            details=f"{plausible}/{total} records pass OS/value plausibility checks",
-            sample_failures=failures,
-        )
+        workspace = current_workspace()
+        if workspace is not None and "statistics" in workspace.shared:
+            return workspace.shared["statistics"].plausibility.value_score()
+        accumulator = PlausibilityAccumulator(vis)
+        for format_name, items in records.items():
+            for record in items:
+                accumulator.consume_value(format_name, record)
+        return accumulator.value_score()
 
     # --- Sub-score 2: Co-occurrence Rules ---
 
-    def _score_co_occurrence(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        from evidenceforge.evaluation.pillars.parseability import (
-            _get_variant,
-            _normalize_for_validation,
-        )
-        from evidenceforge.evaluation.validation_routes import (
-            get_validation_route,
-            require_evaluated,
-        )
-        from evidenceforge.formats.loader import load_format
-        from evidenceforge.formats.rules import evaluate_rule, rule_fields
-        from evidenceforge.formats.validator import validate_field
-
-        total_applicable = 0
-        passing = 0
-        failures: list[str] = []
-        for format_name, record_list in records.items():
-            route = get_validation_route(format_name)
-            if route.kind != "native":
-                # Nested codecs own structural validation in parseability. They
-                # have no flat-schema diagnostic rules; email joins run below.
-                continue
-            definition = load_format(route.validator)
-            diagnostic_rules = [r for r in definition.validators or [] if r.severity == "warning"]
-            if not diagnostic_rules:
-                continue
-            diagnostic_fields = {name for rule in diagnostic_rules for name in rule_fields(rule)}
-            for record in record_list:
-                if record.parse_errors:
-                    continue
-                normalized = _normalize_for_validation(format_name, record.fields, record.timestamp)
-                variant = _get_variant(format_name, record)
-                fields = definition.validation_fields(variant) or {}
-                invalid_fields = {
-                    name
-                    for name, field in fields.items()
-                    if name in diagnostic_fields
-                    and (
-                        (field.required and name not in normalized)
-                        or (
-                            name in normalized and not validate_field(field, normalized[name]).valid
-                        )
-                    )
-                }
-                for rule in diagnostic_rules:
-                    finding = evaluate_rule(rule, normalized, format_name, variant, invalid_fields)
-                    require_evaluated(finding)
-                    if finding.severity != "warning" or finding.outcome == "not_applicable":
-                        continue
-                    total_applicable += 1
-                    if finding.outcome == "pass":
-                        passing += 1
-                    elif len(failures) < 10:
-                        failures.append(f"[{format_name}] {finding.rule_id}: {finding.message}")
-
-        if total_applicable == 0:
-            return SubScore(
-                name="Co-occurrence Rules",
-                key="co_occurrence",
-                weight=0.20,
-                score=None,
-                skipped=True,
-                details="No configured co-occurrence rule applies to this dataset",
-            )
-        score = 100.0 * passing / total_applicable
-        return SubScore(
-            name="Co-occurrence Rules",
-            key="co_occurrence",
-            weight=0.20,
-            score=score,
-            details=f"{passing}/{total_applicable} co-occurrence checks pass",
-            sample_failures=failures,
-        )
+    def _score_co_occurrence(self, records: RecordCorpus) -> SubScore:
+        workspace = current_workspace()
+        if workspace is not None and "statistics" in workspace.shared:
+            return workspace.shared["statistics"].plausibility.cooccurrence_score()
+        accumulator = PlausibilityAccumulator(None)
+        for format_name, items in records.items():
+            for record in items:
+                accumulator.consume_cooccurrence(format_name, record)
+        return accumulator.cooccurrence_score()
 
     # --- Sub-score 3: Distribution Fit ---
 
-    def _score_distribution_fit(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_distribution_fit(self, records: RecordCorpus) -> SubScore:
         dist_profiles = load_rules_file("distributions.yaml")
         divergence_scores: list[float] = []
         details_parts: list[str] = []
@@ -307,18 +185,26 @@ class PlausibilityScorer(DimensionScorer):
             profiles = dist_profiles.get(format_name, [])
             if not profiles:
                 continue
-            valid = [r for r in record_list if not r.parse_errors]
+            workspace = current_workspace()
+            facts = workspace.shared.get("statistics") if workspace else None
+            valid = (
+                record_list if facts else bounded_list(r for r in record_list if not r.parse_errors)
+            )
             if not valid:
                 continue
 
-            for profile in profiles:
+            for profile_index, profile in enumerate(profiles):
                 field_name = profile["field"]
                 reference = profile["reference"]
                 tolerance = profile.get("tolerance", 0.25)
 
-                observed_counts: Counter = Counter()
-                total = 0
-                for record in valid:
+                observed_counts = (
+                    facts.distributions[(format_name, profile_index)]
+                    if facts
+                    else bounded_counter()
+                )
+                total = sum(observed_counts.values()) if facts else 0
+                for record in () if facts else valid:
                     val = record.fields.get(field_name)
                     if val is not None:
                         key = _coerce_key(val, reference)
@@ -328,7 +214,7 @@ class PlausibilityScorer(DimensionScorer):
                 if total == 0:
                     continue
 
-                observed = {k: v / total for k, v in observed_counts.items()}
+                observed = bounded_map((k, v / total) for k, v in observed_counts.items())
                 jsd = _jensen_shannon_divergence(reference, observed)
 
                 if jsd <= 0:
@@ -353,7 +239,7 @@ class PlausibilityScorer(DimensionScorer):
 
     # --- Sub-score 4: Cross-Source Field Agreement ---
 
-    def _score_field_agreement(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_field_agreement(self, records: RecordCorpus) -> SubScore:
         pairs_config = load_rules_file("cross_source_pairs.yaml").get("pairs", [])
         if not pairs_config:
             return SubScore(
@@ -369,7 +255,7 @@ class PlausibilityScorer(DimensionScorer):
         total_agreeing = 0
         failures: list[str] = []
 
-        for pair_def in pairs_config:
+        for pair_index, pair_def in enumerate(pairs_config):
             fmt_a = pair_def.get("format_a", "")
             fmt_b = pair_def.get("format_b", "")
             recs_a = records.get(fmt_a, [])
@@ -382,12 +268,17 @@ class PlausibilityScorer(DimensionScorer):
             pivot = pair_def.get("pivot_key", {})
             agree_on = pair_def.get("agree_on", [])
 
-            filtered_a = [r for r in recs_a if _matches_condition(r, cond_a)]
-            filtered_b = [r for r in recs_b if _matches_condition(r, cond_b)]
-            if not filtered_a or not filtered_b:
+            workspace = current_workspace()
+            facts = workspace.shared.get("statistics") if workspace else None
+            if facts:
+                filtered_a = facts.pair_a[pair_index]
+                b_index = facts.pair_b[pair_index]
+            else:
+                filtered_a = bounded_list(r for r in recs_a if _matches_condition(r, cond_a))
+                filtered_b = bounded_list(r for r in recs_b if _matches_condition(r, cond_b))
+                b_index = _build_pivot_index(filtered_b, pivot)
+            if not filtered_a or not b_index:
                 continue
-
-            b_index = _build_pivot_index(filtered_b, pivot)
             m, ag, fails = _score_pair(pair_def["name"], filtered_a, b_index, pivot, agree_on)
             total_matched += m
             total_agreeing += ag
@@ -435,16 +326,18 @@ class PlausibilityScorer(DimensionScorer):
 
     # --- Sub-score 5: User Behavioral Diversity ---
 
-    def _score_user_diversity(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        user_types: dict[str, Counter] = defaultdict(Counter)
-        for _fmt, record_list in records.items():
+    def _score_user_diversity(self, records: RecordCorpus) -> SubScore:
+        workspace = current_workspace()
+        facts = workspace.shared.get("statistics") if workspace else None
+        user_types = facts.user_types if facts else bounded_counter_groups()
+        for _fmt, record_list in () if facts else records.items():
             for record in record_list:
                 user = _extract_username(record)
                 if not user:
                     continue
                 user_types[user][_extract_event_type(record)] += 1
 
-        users_with_data = {u: c for u, c in user_types.items() if sum(c.values()) >= 5}
+        users_with_data = bounded_list(u for u, c in user_types.items() if sum(c.values()) >= 5)
         if len(users_with_data) < 2:
             return SubScore(
                 name="User Behavioral Diversity",
@@ -454,23 +347,24 @@ class PlausibilityScorer(DimensionScorer):
                 details="Fewer than 2 users with sufficient data — skipped",
             )
 
-        user_list = sorted(users_with_data)
+        user_list = bounded_sorted(users_with_data)
         total_pairs = len(user_list) * (len(user_list) - 1) // 2
         max_pairs = 200
 
         if total_pairs <= max_pairs:
             pairs = list(itertools.combinations(range(len(user_list)), 2))
         else:
-            pairs = sorted(
+            pairs = nsmallest(
+                max_pairs,
                 itertools.combinations(range(len(user_list)), 2),
                 key=lambda pair: hashlib.sha256(
                     f"{user_list[pair[0]]}\0{user_list[pair[1]]}".encode()
                 ).digest(),
-            )[:max_pairs]
+            )
 
         similarities: list[float] = []
         for i, j in pairs:
-            sim = _cosine_similarity(users_with_data[user_list[i]], users_with_data[user_list[j]])
+            sim = _cosine_similarity(user_types[user_list[i]], user_types[user_list[j]])
             similarities.append(sim)
 
         avg_sim = sum(similarities) / len(similarities) if similarities else 0.0
@@ -494,7 +388,7 @@ class PlausibilityScorer(DimensionScorer):
 
     def _score_anomaly_rate(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
     ) -> SubScore:
         anomalous, total = detect_anomalies(records, scenario)
@@ -529,7 +423,7 @@ class PlausibilityScorer(DimensionScorer):
 
     def _score_ids_integrity(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext,
     ) -> SubScore:
@@ -865,8 +759,7 @@ def _extract_event_type(record: ParsedRecord) -> str:
 
 
 def _cosine_similarity(a: Counter, b: Counter) -> float:
-    all_keys = set(a.keys()) | set(b.keys())
-    dot = sum(a.get(k, 0) * b.get(k, 0) for k in all_keys)
+    dot = sum(value * b.get(key, 0) for key, value in a.items())
     mag_a = math.sqrt(sum(v**2 for v in a.values()))
     mag_b = math.sqrt(sum(v**2 for v in b.values()))
     if mag_a == 0 or mag_b == 0:
@@ -878,17 +771,17 @@ def _cosine_similarity(a: Counter, b: Counter) -> float:
 
 
 def _score_email_evidence_consistency(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> tuple[int, int, list[str]]:
     """Return basic email cross-source consistency counts."""
     smtp_records = records.get("zeek_smtp", [])
-    conn_uids = {record.fields.get("uid") for record in records.get("zeek_conn", [])}
-    file_fuids = {record.fields.get("fuid") for record in records.get("zeek_files", [])}
-    artifacts_by_msg_id = {
-        record.fields.get("message_id"): record
+    conn_uids = bounded_set(record.fields.get("uid") for record in records.get("zeek_conn", []))
+    file_fuids = bounded_set(record.fields.get("fuid") for record in records.get("zeek_files", []))
+    artifacts_by_msg_id = bounded_map(
+        (record.fields.get("message_id"), record)
         for record in records.get("email_artifacts", [])
         if record.fields.get("message_id")
-    }
+    )
 
     matched = 0
     agreeing = 0
@@ -925,15 +818,15 @@ def _score_email_evidence_consistency(
 
 
 def _score_http_file_consistency(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> tuple[int, int, list[str]]:
     """Return HTTP-to-files FUID, direction, MIME, size, and UID agreement."""
 
-    file_index = {
-        (record.source_instance, str(record.fields.get("fuid"))): record
+    file_index = bounded_map(
+        ((record.source_instance, str(record.fields.get("fuid"))), record)
         for record in records.get("zeek_files", [])
         if record.fields.get("fuid")
-    }
+    )
     matched = 0
     agreeing = 0
     failures: list[str] = []
@@ -1019,7 +912,7 @@ def _score_http_file_consistency(
 
 
 def _score_cryptographic_protocol_consistency(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> tuple[int, int, list[str]]:
     """Probe rendered DKIM, OCSP, and TLS-chain payload contracts."""
 
@@ -1069,11 +962,11 @@ def _score_cryptographic_protocol_consistency(
             elif len(failures) < 10:
                 failures.append(f"DKIM TXT key for {query} is not valid RSA SPKI")
 
-    ocsp_by_id = {
-        str(record.fields.get("id")): record
+    ocsp_by_id = bounded_map(
+        (str(record.fields.get("id")), record)
         for record in records.get("zeek_ocsp", [])
         if record.fields.get("id")
-    }
+    )
     for record in records.get("zeek_http", []):
         mime_types = record.fields.get("resp_mime_types") or []
         if "application/ocsp-response" not in mime_types:
@@ -1113,12 +1006,12 @@ def _score_cryptographic_protocol_consistency(
         elif len(failures) < 10:
             failures.append("OCSP HTTP request does not match its ocsp.log response identity")
 
-    x509_by_id = {
-        str(record.fields.get("id")): record.fields
+    x509_by_id = bounded_map(
+        (str(record.fields.get("id")), record.fields)
         for record in records.get("zeek_x509", [])
         if record.fields.get("id")
-    }
-    presentations: dict[tuple[str, str], tuple[str, ...]] = {}
+    )
+    presentations = bounded_map()
     for record in records.get("zeek_ssl", []):
         fuids = record.fields.get("cert_chain_fuids") or []
         if not isinstance(fuids, list) or not fuids:
@@ -1231,52 +1124,48 @@ def _get_pivot_key_a(record: ParsedRecord, pivot: dict) -> Any:
         return raw_key
 
 
+def _get_pivot_key_b(record: ParsedRecord, pivot: dict) -> object | None:
+    coerce = pivot.get("coerce")
+    require_hn = pivot.get("require_hostname_match", False)
+    if pivot.get("b_fields"):
+        parts = []
+        for field in pivot["b_fields"]:
+            if field == "ts_bucket_10s":
+                if record.timestamp is None:
+                    return None
+                parts.append(int(record.timestamp.timestamp()) // 10)
+            else:
+                value = record.fields.get(field)
+                if value is None:
+                    return None
+                parts.append(value)
+        return tuple(parts)
+    field = pivot.get("b_field")
+    if not field:
+        return None
+    value = record.fields.get(field)
+    if value is None:
+        return None
+    value = _coerce_value(value, coerce)
+    if require_hn:
+        hostname = _get_hostname_for_record(record)
+        return (hostname.lower() if hostname else None, value)
+    return value
+
+
 def _build_pivot_index(
     records: list[ParsedRecord],
     pivot: dict,
     max_bucket_records: int = _MAX_PIVOT_BUCKET_RECORDS,
 ) -> dict:
-    index: dict = defaultdict(list)
-    coerce = pivot.get("coerce")
-    require_hn = pivot.get("require_hostname_match", False)
-
+    index = bounded_groups()
     for rec in records:
-        key: object | None = None
-        if pivot.get("b_fields"):
-            parts = []
-            for f in pivot["b_fields"]:
-                if f == "ts_bucket_10s":
-                    ts = rec.timestamp
-                    if ts is None:
-                        break
-                    parts.append(int(ts.timestamp()) // 10)
-                else:
-                    v = rec.fields.get(f)
-                    if v is None:
-                        break
-                    parts.append(v)
-            else:
-                key = tuple(parts)
-        else:
-            b_field = pivot.get("b_field")
-            if not b_field:
-                continue
-            val = rec.fields.get(b_field)
-            if val is None:
-                continue
-            raw_key = _coerce_value(val, coerce)
-            if require_hn:
-                hn = _get_hostname_for_record(rec)
-                key = (hn.lower() if hn else None, raw_key)
-            else:
-                key = raw_key
-
-        if key is None:
-            continue
-        bucket = index[key]
-        if len(bucket) < max_bucket_records:
-            bucket.append(rec)
-    return dict(index)
+        key = _get_pivot_key_b(rec, pivot)
+        if key is not None:
+            bucket = index[key]
+            if len(bucket) < max_bucket_records:
+                bucket.append(rec)
+    return index
 
 
 def _normalize_value(val: Any, normalize: str | None) -> Any:
@@ -1357,7 +1246,7 @@ def _score_pair(
             continue
 
         if isinstance(key_a, tuple) and key_a and key_a[0] == "__list__":
-            matching_b: list = []
+            matching_b = bounded_list()
             for sub_key in key_a[1]:
                 matching_b.extend(b_index.get(sub_key, []))
         else:
@@ -1368,12 +1257,12 @@ def _score_pair(
 
         if time_window is not None and rec_a.timestamp is not None:
             ts_a = _normalize_ts(rec_a.timestamp)
-            matching_b = [
+            matching_b = bounded_list(
                 r
                 for r in matching_b
                 if r.timestamp is not None
                 and abs((_normalize_ts(r.timestamp) - ts_a).total_seconds()) <= time_window
-            ]
+            )
             if not matching_b:
                 continue
 
@@ -1401,3 +1290,137 @@ def _score_pair(
                 agreeing += 1
 
     return total_matched, agreeing, failures
+
+
+class PlausibilityAccumulator:
+    """Accumulate source-local checks while records are already resident for validation."""
+
+    def __init__(self, visibility: VisibilityModel | None) -> None:
+        self.visibility = visibility
+        self.value_total = self.value_passing = 0
+        self.cooccurrence_total = self.cooccurrence_passing = 0
+        self.value_failures: list[str] = []
+        self.cooccurrence_failures: list[str] = []
+        self._diagnostics: dict = {}
+
+    def consume_value(self, format_name: str, record: ParsedRecord) -> None:
+        expected_os = _OS_BOUND_FORMATS.get(format_name)
+        hostname = _extract_hostname(record)
+        if not hostname and not expected_os:
+            content = _check_os_plausibility(record, format_name)
+            if content is not None:
+                self.value_total += 1
+                self.value_passing += bool(content)
+            return
+        if not hostname:
+            return
+        vis = self.visibility
+        assert vis is not None
+        if expected_os:
+            host_os = vis.get_os_category(hostname)
+            if vis.resolve_hostname(hostname) is None:
+                self.value_total += 1
+                if len(self.value_failures) < 10:
+                    self.value_failures.append(f"[{format_name}] Host '{hostname}' not in scenario")
+                return
+            if host_os != expected_os and host_os != "unknown":
+                self.value_total += 1
+                if len(self.value_failures) < 10:
+                    self.value_failures.append(
+                        f"[{format_name}] Host '{hostname}' is {host_os}, expected {expected_os}"
+                    )
+                return
+        content = _check_os_plausibility(record, format_name)
+        if content is None:
+            if expected_os:
+                self.value_total += 1
+                self.value_passing += 1
+            return
+        self.value_total += 1
+        if content:
+            self.value_passing += 1
+        elif len(self.value_failures) < 10:
+            self.value_failures.append(
+                f"[{format_name}] Implausible content on {hostname} ({vis.get_os_category(hostname)})"
+            )
+
+    def consume_cooccurrence(self, format_name: str, record: ParsedRecord) -> None:
+        from evidenceforge.evaluation.pillars.parseability import (
+            _get_variant,
+            _normalize_for_validation,
+        )
+        from evidenceforge.evaluation.validation_routes import (
+            get_validation_route,
+            require_evaluated,
+        )
+        from evidenceforge.formats.loader import load_format
+        from evidenceforge.formats.rules import evaluate_rule, rule_fields
+        from evidenceforge.formats.validator import validate_field
+
+        if format_name not in self._diagnostics:
+            route = get_validation_route(format_name)
+            if route.kind != "native":
+                self._diagnostics[format_name] = None
+            else:
+                definition = load_format(route.validator)
+                rules = [rule for rule in definition.validators or [] if rule.severity == "warning"]
+                fields = {name for rule in rules for name in rule_fields(rule)}
+                self._diagnostics[format_name] = (definition, rules, fields) if rules else None
+        diagnostic = self._diagnostics[format_name]
+        if diagnostic is None or record.parse_errors:
+            return
+        definition, rules, diagnostic_fields = diagnostic
+        normalized = _normalize_for_validation(format_name, record.fields, record.timestamp)
+        variant = _get_variant(format_name, record)
+        fields = definition.validation_fields(variant) or {}
+        invalid_fields = {
+            name
+            for name, field in fields.items()
+            if name in diagnostic_fields
+            and (
+                field.required
+                and name not in normalized
+                or name in normalized
+                and not validate_field(field, normalized[name]).valid
+            )
+        }
+        for rule in rules:
+            finding = evaluate_rule(rule, normalized, format_name, variant, invalid_fields)
+            require_evaluated(finding)
+            if finding.severity != "warning" or finding.outcome == "not_applicable":
+                continue
+            self.cooccurrence_total += 1
+            if finding.outcome == "pass":
+                self.cooccurrence_passing += 1
+            elif len(self.cooccurrence_failures) < 10:
+                self.cooccurrence_failures.append(
+                    f"[{format_name}] {finding.rule_id}: {finding.message}"
+                )
+
+    def value_score(self) -> SubScore:
+        return SubScore(
+            name="Value & OS Plausibility",
+            key="value_plausibility",
+            weight=0.25,
+            score=100.0 * self.value_passing / self.value_total if self.value_total else None,
+            skipped=not self.value_total,
+            details=f"{self.value_passing}/{self.value_total} records pass OS/value plausibility checks"
+            if self.value_total
+            else "No records expose a checkable host or OS/value contract",
+            sample_failures=self.value_failures,
+        )
+
+    def cooccurrence_score(self) -> SubScore:
+        return SubScore(
+            name="Co-occurrence Rules",
+            key="co_occurrence",
+            weight=0.20,
+            score=100.0 * self.cooccurrence_passing / self.cooccurrence_total
+            if self.cooccurrence_total
+            else None,
+            skipped=not self.cooccurrence_total,
+            details=f"{self.cooccurrence_passing}/{self.cooccurrence_total} co-occurrence checks pass"
+            if self.cooccurrence_total
+            else "No configured co-occurrence rule applies to this dataset",
+            sample_failures=self.cooccurrence_failures,
+        )

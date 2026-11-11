@@ -35,6 +35,7 @@ import logging
 import statistics
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -51,8 +52,15 @@ from evidenceforge.evaluation.dimensions import (
     aggregate_sub_scores,
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
 from evidenceforge.evaluation.rules import load_rules_file
+from evidenceforge.evaluation.storage import (
+    append_group,
+    bounded_groups,
+    bounded_list,
+    bounded_sorted,
+    current_workspace,
+)
 from evidenceforge.evaluation.storyline import resolve_storyline
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
@@ -90,7 +98,7 @@ class TimingScorer(DimensionScorer):
 
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
@@ -199,7 +207,7 @@ class TimingScorer(DimensionScorer):
 
     def _score_burstiness(self, user_events: dict[str, list[datetime]]) -> SubScore:
         system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
-        cv_scores: list[float] = []
+        cv_scores = bounded_list()
 
         for username, timestamps in user_events.items():
             if username in system_accounts_lower:
@@ -207,8 +215,8 @@ class TimingScorer(DimensionScorer):
             if len(timestamps) < 30:
                 continue
 
-            sorted_ts = sorted(timestamps)
-            deduped = [sorted_ts[0]]
+            sorted_ts = bounded_sorted(timestamps)
+            deduped = bounded_list((sorted_ts[0],))
             for ts in sorted_ts[1:]:
                 if (ts - deduped[-1]).total_seconds() > 5.0:
                     deduped.append(ts)
@@ -216,7 +224,7 @@ class TimingScorer(DimensionScorer):
             if len(deduped) < 20:
                 continue
 
-            gaps = [(deduped[i + 1] - deduped[i]).total_seconds() for i in range(len(deduped) - 1)]
+            gaps = bounded_list((right - left).total_seconds() for left, right in pairwise(deduped))
             if len(gaps) < 5:
                 continue
 
@@ -245,12 +253,14 @@ class TimingScorer(DimensionScorer):
 
     # --- Sub-score 3: System Process Regularity ---
 
-    def _score_system_regularity(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_system_regularity(self, records: RecordCorpus) -> SubScore:
         system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
-        service_timestamps: dict[tuple[str, str], list[datetime]] = defaultdict(list)
-        total_system_events = 0
+        workspace = current_workspace()
+        facts = workspace.shared.get("statistics") if workspace else None
+        service_timestamps = facts.services if facts else bounded_groups(ordered=True)
+        total_system_events = facts.system_events if facts else 0
 
-        for _fmt, record_list in records.items():
+        for _fmt, record_list in () if facts else records.items():
             for record in record_list:
                 if record.timestamp is None:
                     continue
@@ -265,7 +275,7 @@ class TimingScorer(DimensionScorer):
                     ts = record.timestamp
                     if ts.tzinfo is None:
                         ts = ts.replace(tzinfo=UTC)
-                    service_timestamps[(hostname, service)].append(ts)
+                    append_group(service_timestamps, (hostname, service), ts, sort=ts)
                     total_system_events += 1
 
         if total_system_events < 20:
@@ -277,13 +287,14 @@ class TimingScorer(DimensionScorer):
                 details=f"Only {total_system_events} system events — insufficient",
             )
 
-        cv_scores: list[float] = []
+        cv_scores = bounded_list()
         for _key, timestamps in service_timestamps.items():
-            sorted_ts = sorted(timestamps)
-            intervals = [
-                (sorted_ts[i + 1] - sorted_ts[i]).total_seconds() for i in range(len(sorted_ts) - 1)
-            ]
-            intervals = [iv for iv in intervals if iv > 0]
+            sorted_ts = bounded_sorted(timestamps)
+            intervals = bounded_list(
+                (right - left).total_seconds()
+                for left, right in pairwise(sorted_ts)
+                if right > left
+            )
             if len(intervals) >= 10:
                 mean_iv = statistics.mean(intervals)
                 if mean_iv > 0:
@@ -346,12 +357,17 @@ class TimingScorer(DimensionScorer):
         # Short-scenario guard: the reference distribution spans Mon-Fri × work hours,
         # so observed data covering <2 weekdays or <24h cannot produce a meaningful
         # JSD. Mark skipped and let the aggregator renormalize remaining sub-scores.
-        all_ts = [ts for events in user_events.values() for ts in events]
-        if all_ts:
-            min_ts = min(all_ts).astimezone(scenario_tz)
-            max_ts = max(all_ts).astimezone(scenario_tz)
+        minimum = maximum = None
+        distinct_weekdays: set[int] = set()
+        for events in user_events.values():
+            for ts in events:
+                minimum = ts if minimum is None else min(minimum, ts)
+                maximum = ts if maximum is None else max(maximum, ts)
+                distinct_weekdays.add(ts.astimezone(scenario_tz).weekday())
+        if minimum is not None:
+            min_ts = minimum.astimezone(scenario_tz)
+            max_ts = maximum.astimezone(scenario_tz)
             span_hours = (max_ts - min_ts).total_seconds() / 3600.0
-            distinct_weekdays = {ts.astimezone(scenario_tz).weekday() for ts in all_ts}
             if span_hours < 24.0 or len(distinct_weekdays) < 2:
                 return SubScore(
                     name="Diurnal Pattern",
@@ -366,7 +382,7 @@ class TimingScorer(DimensionScorer):
                     ),
                 )
 
-        user_scores: list[float] = []
+        user_scores = bounded_list()
         for username, persona in user_to_persona.items():
             events = user_events.get(username, [])
             if len(events) < 30:
@@ -427,7 +443,7 @@ class TimingScorer(DimensionScorer):
 
     def _score_volume_adequacy(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
     ) -> SubScore:
         storyline = scenario.storyline or []
@@ -468,7 +484,7 @@ class TimingScorer(DimensionScorer):
     def _score_rate_plausibility(
         self,
         user_events: dict[str, list[datetime]],
-        records: dict[str, list[ParsedRecord]] | None = None,
+        records: RecordCorpus | None = None,
     ) -> SubScore:
         if records is not None:
             user_events = _group_rate_plausibility_user_events(records)
@@ -484,24 +500,37 @@ class TimingScorer(DimensionScorer):
             if len(timestamps) < 2:
                 continue
 
-            sorted_ts = sorted(timestamps)
+            sorted_ts = bounded_sorted(timestamps)
             window_sec = 5.0
             max_per_window = 20
-            i = 0
-            while i < len(sorted_ts):
-                window_end = sorted_ts[i] + timedelta(seconds=window_sec)
-                j = i
-                while j < len(sorted_ts) and sorted_ts[j] <= window_end:
-                    j += 1
-                count = j - i
+            window_start = None
+            count = 0
+
+            def finish_window(
+                count: int,
+                window_start: datetime,
+                username: str = username,
+                max_per_window: int = max_per_window,
+            ) -> None:
+                nonlocal total_checks, plausible
                 total_checks += 1
                 if count <= max_per_window:
                     plausible += 1
                 elif len(failures) < 10:
                     failures.append(
-                        f"User '{username}': {count} events in 5s window at {sorted_ts[i]}"
+                        f"User '{username}': {count} events in 5s window at {window_start}"
                     )
-                i = j if j > i else i + 1
+
+            for timestamp in sorted_ts:
+                if window_start is None:
+                    window_start = timestamp
+                elif timestamp > window_start + timedelta(seconds=window_sec):
+                    finish_window(count, window_start)
+                    window_start = timestamp
+                    count = 0
+                count += 1
+            if count:
+                finish_window(count, window_start)
 
         zeek_records = records.get("zeek_conn", []) if records else []
         for record in zeek_records:
@@ -534,8 +563,11 @@ class TimingScorer(DimensionScorer):
 # --- Module-level helpers ---
 
 
-def _group_by_user(records: dict[str, list[ParsedRecord]]) -> dict[str, list[datetime]]:
-    user_events: dict[str, list[datetime]] = defaultdict(list)
+def _group_by_user(records: RecordCorpus) -> dict[str, list[datetime]]:
+    workspace = current_workspace()
+    if workspace is not None and "statistics" in workspace.shared:
+        return workspace.shared["statistics"].users
+    user_events = bounded_groups(ordered=True)
     for _fmt, record_list in records.items():
         for record in record_list:
             if record.timestamp is None:
@@ -545,14 +577,17 @@ def _group_by_user(records: dict[str, list[ParsedRecord]]) -> dict[str, list[dat
                 ts = record.timestamp
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=UTC)
-                user_events[user].append(ts)
-    return dict(user_events)
+                append_group(user_events, user, ts, sort=ts)
+    return user_events
 
 
 def _group_rate_plausibility_user_events(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> dict[str, list[datetime]]:
-    user_events: dict[str, list[datetime]] = defaultdict(list)
+    workspace = current_workspace()
+    if workspace is not None and "statistics" in workspace.shared:
+        return workspace.shared["statistics"].rate_users
+    user_events = bounded_groups(ordered=True)
     for _fmt, record_list in records.items():
         for record in record_list:
             if record.timestamp is None or not _is_rate_plausibility_user_event(record):
@@ -562,8 +597,8 @@ def _group_rate_plausibility_user_events(
                 ts = record.timestamp
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=UTC)
-                user_events[user].append(ts)
-    return dict(user_events)
+                append_group(user_events, user, ts, sort=ts)
+    return user_events
 
 
 def _is_rate_plausibility_user_event(record: ParsedRecord) -> bool:

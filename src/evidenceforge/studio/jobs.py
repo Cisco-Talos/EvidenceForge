@@ -125,7 +125,6 @@ def queue_studio_evaluation(
         generation,
         job_store.directory,
         settings=controller_settings(settings),
-        allow_large_evaluation=settings.allow_large_evaluation,
     )
     job_store.save_evaluation(job)
     return job

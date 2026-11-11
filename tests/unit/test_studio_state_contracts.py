@@ -11,7 +11,7 @@ from evidenceforge.desktop import job_store, state
 from evidenceforge.studio import settings, store
 from evidenceforge.studio import state_records_v1 as frozen
 from evidenceforge.studio import state_records_v2 as frozen_v2
-from evidenceforge.studio import state_settings_v3 as frozen_settings_v3
+from evidenceforge.studio import state_settings_v4 as frozen_settings_v4
 
 MODELS = (
     (store.CatalogItem, frozen_v2.CatalogItem),
@@ -26,7 +26,7 @@ MODELS = (
     (state.AppSettings, frozen.AppSettings),
     (job_store.ControlIntent, frozen.ControlIntent),
     (settings.QuitSettings, frozen.QuitSettings),
-    (settings.StudioSettings, frozen_settings_v3.StudioSettings),
+    (settings.StudioSettings, frozen_settings_v4.StudioSettings),
 )
 IDENTITY_FACTORIES = {"id", "updated_at", "workspace"}
 
@@ -90,15 +90,42 @@ def test_released_migration_fingerprints_remain_unchanged() -> None:
 
 
 def test_large_evaluation_settings_migration_preserves_existing_preferences() -> None:
-    from evidenceforge.studio.settings import SETTINGS_VERSION, StudioSettings
     from evidenceforge.studio.state_migrations import SETTINGS_MIGRATIONS
     from evidenceforge.studio.state_records_v3 import StudioSettings as HistoricalSettings
 
     old = HistoricalSettings(max_concurrent_generations=4, chat_followup_mode="steer")
     document = {"schema_version": 2, "settings": old.model_dump(mode="json")}
-    upgraded = SETTINGS_MIGRATIONS[-1].apply(document)
-    assert upgraded["schema_version"] == SETTINGS_VERSION == 3
+    upgraded = SETTINGS_MIGRATIONS[-2].apply(document)
+    assert upgraded["schema_version"] == 3
     assert upgraded["settings"]["allow_large_evaluation"] is True
-    assert StudioSettings.model_validate(upgraded["settings"]).max_concurrent_generations == 4
+    assert (
+        HistoricalSettings.model_validate(
+            {
+                key: value
+                for key, value in upgraded["settings"].items()
+                if key != "allow_large_evaluation"
+            }
+        ).max_concurrent_generations
+        == 4
+    )
     assert upgraded["settings"]["chat_followup_mode"] == "steer"
     assert "allow_large_evaluation" not in document["settings"]
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_retired_evaluation_override_migration_preserves_preferences(allowed: bool) -> None:
+    from evidenceforge.studio.settings import SETTINGS_VERSION, StudioSettings
+    from evidenceforge.studio.state_migrations import SETTINGS_MIGRATIONS
+    from evidenceforge.studio.state_settings_v3 import StudioSettings as HistoricalSettings
+
+    old = HistoricalSettings(
+        max_concurrent_generations=4, chat_followup_mode="steer", allow_large_evaluation=allowed
+    )
+    document = {"schema_version": 3, "settings": old.model_dump(mode="json")}
+    upgraded = SETTINGS_MIGRATIONS[-1].apply(document)
+    assert upgraded["schema_version"] == SETTINGS_VERSION == 4
+    assert "allow_large_evaluation" not in upgraded["settings"]
+    current = StudioSettings.model_validate(upgraded["settings"])
+    assert current.max_concurrent_generations == 4
+    assert current.chat_followup_mode == "steer"
+    assert document["settings"]["allow_large_evaluation"] is allowed

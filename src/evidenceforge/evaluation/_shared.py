@@ -24,9 +24,11 @@
 
 import math
 from datetime import UTC, datetime
+from itertools import chain
 from typing import Any
 
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.storage import bounded_set
 
 # Formats that carry user attribution
 _USER_FIELD_MAP: dict[str, list[str]] = {
@@ -136,7 +138,7 @@ def _jensen_shannon_divergence(p: dict, q: dict) -> float:
 
     Returns a value in [0, ln(2)] ≈ [0, 0.693].
     """
-    all_keys = set(p.keys()) | set(q.keys())
+    all_keys = bounded_set(chain(p.keys(), q.keys()))
     jsd = 0.0
     for key in all_keys:
         p_val = p.get(key, 0.0)
@@ -151,7 +153,7 @@ def _jensen_shannon_divergence(p: dict, q: dict) -> float:
 
 def _jensen_shannon_2d(p: dict, q: dict) -> float:
     """Jensen-Shannon divergence (in bits, range 0–1) between two 2D distributions."""
-    all_keys = set(p.keys()) | set(q.keys())
+    all_keys = bounded_set(chain(p.keys(), q.keys()))
     jsd = 0.0
     for key in all_keys:
         p_val = p.get(key, 0.0)

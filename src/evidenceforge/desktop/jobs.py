@@ -168,7 +168,7 @@ def queue_evaluation(
     settings: AppSettings | None = None,
     allow_large_evaluation: bool = False,
 ) -> EvaluationJob:
-    """Record an evaluation of a completed app-owned run."""
+    """Record a full evaluation; the legacy size-override argument is a compatible no-op."""
     job_id = uuid4().hex
     workspace = generation.workspace or generation.scenario.parent
     return EvaluationJob(
@@ -184,7 +184,6 @@ def queue_evaluation(
             str(generation.output_root),
             "--format",
             "json",
-            *(["--allow-large-evaluation"] if allow_large_evaluation else []),
         ],
         created_at=time.time(),
     )

@@ -3246,10 +3246,10 @@ def test_large_evaluation_setting_defaults_on_and_persists_opt_out(
     headers = {"X-EForge-Token": "secret"}
     with TestClient(app) as client:
         settings = client.get("/v1/settings", headers=headers).json()
-        assert settings["allow_large_evaluation"] is True
-        settings["allow_large_evaluation"] = False
+        assert "allow_large_evaluation" not in settings
+        settings["max_concurrent_generations"] = 4
         response = client.put("/v1/settings", headers=headers, json=settings)
         assert response.status_code == 200
-        assert response.json()["allow_large_evaluation"] is False
-        assert SettingsStore(paths).load().allow_large_evaluation is False
-        assert client.get("/v1/settings", headers=headers).json()["allow_large_evaluation"] is False
+        assert "allow_large_evaluation" not in response.json()
+        assert SettingsStore(paths).load().max_concurrent_generations == 4
+        assert "allow_large_evaluation" not in client.get("/v1/settings", headers=headers).json()

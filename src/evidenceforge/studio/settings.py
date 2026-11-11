@@ -12,7 +12,7 @@ from evidenceforge.desktop.state import AppSettings
 from evidenceforge.studio.paths import StudioPaths, default_workspace
 from evidenceforge.studio.state_io import StudioStateError, atomic_write
 
-SETTINGS_VERSION = 3
+SETTINGS_VERSION = 4
 
 
 class QuitSettings(BaseModel):
@@ -40,7 +40,6 @@ class StudioSettings(BaseModel):
     max_concurrent_generations: int = Field(default=2, ge=1, le=16)
     search_match_limit: int = Field(default=5, ge=1, le=50)
     checkpoint_hours: int = Field(default=24, ge=0)
-    allow_large_evaluation: bool = True
     quit: QuitSettings = Field(default_factory=QuitSettings)
     skill_install_scope: Literal["global", "workspace"] = "global"
     skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"

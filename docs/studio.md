@@ -353,15 +353,18 @@ when offered, or **Regenerate** for a new run after correcting the reported prob
 
 ### Large evaluations
 
-**Settings → Jobs → Allow large evaluations** is enabled by default. Newly queued Studio
-evaluations pass `--allow-large-evaluation` to the CLI, allowing datasets above the default
-512 MiB, 10,000-file and 500,000-record limits. Large evaluations may use substantial memory
-because the evaluator currently retains parsed records in RAM. Turn the setting off to enforce
-the CLI's default limits. Already queued or running evaluations retain their captured command.
+Studio and the CLI evaluate full datasets without fixed corpus byte, file, or record-count
+ceilings. The evaluator keeps small working sets in memory and automatically spills growing state
+to private temporary SQLite storage. Generation and evaluation remain separate operations.
 
-Existing Studio preferences receive this default through the normal backed-up settings upgrade.
-The CLI's own defaults and record-level input protections are unchanged. Streaming/bounded-memory
-evaluation without fixed corpus-size caps remains P1 roadmap work.
+The default working-state spill threshold is 256 MiB. This is not a total process RSS limit:
+Python, scenario metadata, individual records, and SQLite also need memory. Large inputs need
+additional scratch disk space and processing time. CLI users can select `--memory-budget-mib`
+and `--scratch-dir`; Studio uses the same engine defaults. See [evaluation resources](evaluation.md).
+
+The old **Allow large evaluations** setting is removed through the normal backed-up settings
+upgrade. Already captured commands using `--allow-large-evaluation` remain accepted; the flag is
+a deprecated compatibility option. Per-record, path-safety and bundle-integrity checks remain.
 
 ### macOS generation completeness
 

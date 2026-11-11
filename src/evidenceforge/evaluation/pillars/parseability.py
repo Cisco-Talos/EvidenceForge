@@ -28,6 +28,7 @@ Sub-scores:
 """
 
 import logging
+from collections.abc import MutableSet
 from typing import Any
 
 from evidenceforge.evaluation.context import EvaluationContext
@@ -38,7 +39,8 @@ from evidenceforge.evaluation.dimensions import (
     aggregate_sub_scores,
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
+from evidenceforge.evaluation.storage import current_workspace, record_identity
 from evidenceforge.evaluation.validation_routes import (
     ARTIFACT_VALIDATORS,
     NATIVE_CODEC_VALIDATORS,
@@ -74,7 +76,7 @@ class ParseabilityScorer(DimensionScorer):
 
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
@@ -99,136 +101,150 @@ class ParseabilityScorer(DimensionScorer):
             sub_scores=sub_scores,
         )
 
-    def _score_spec_conformance(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_spec_conformance(self, records: RecordCorpus) -> SubScore:
         return self._score_both(records)[0]
 
-    def _score_format_constraints(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_format_constraints(self, records: RecordCorpus) -> SubScore:
         return self._score_both(records)[1]
 
     def _score_both(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         *,
-        malformed_record_ids: set[int] | None = None,
+        malformed_record_ids: MutableSet[int] | None = None,
     ) -> tuple[SubScore, SubScore]:
         """Validate each record once and aggregate bounded diagnostics by category."""
-        totals = {"schema": 0, "constraint": 0}
-        unavailable_count = 0
-        unavailable_findings: list[Finding] = []
-        passing = {"schema": 0, "constraint": 0}
-        failures: dict[str, list[str]] = {"schema": [], "constraint": []}
-        counts: dict[str, dict[str, dict[str, int]]] = {"schema": {}, "constraint": {}}
-        findings: dict[str, list[Finding]] = {"schema": [], "constraint": []}
+        workspace = current_workspace()
+        if workspace is not None and "parseability_scores" in workspace.shared:
+            return workspace.shared["parseability_scores"]
+        accumulator = RecordValidationAccumulator(malformed_record_ids)
         for name, items in records.items():
+            for record in items:
+                accumulator.consume(name, record)
+        return accumulator.scores()
+
+
+class RecordValidationAccumulator:
+    """Validate during ingestion and retain complete counts with bounded examples."""
+
+    def __init__(self, malformed_record_ids: MutableSet[int] | None = None) -> None:
+        self.malformed_record_ids = malformed_record_ids
+        self._routes: dict = {}
+        self.totals = {"schema": 0, "constraint": 0}
+        self.unavailable_count = 0
+        self.unavailable_findings: list[Finding] = []
+        self.passing = {"schema": 0, "constraint": 0}
+        self.failures: dict[str, list[str]] = {"schema": [], "constraint": []}
+        self.counts: dict[str, dict[str, dict[str, int]]] = {"schema": {}, "constraint": {}}
+        self.findings: dict[str, list[Finding]] = {"schema": [], "constraint": []}
+
+    def consume(self, name: str, record: ParsedRecord) -> bool:
+        if name not in self._routes:
             route = get_validation_route(name)
             definition = _load_format_def(route.validator) if route.kind == "native" else None
-            for record in items:
-                selected: dict[str, list[Finding]] = {"schema": [], "constraint": []}
-                if record.parse_errors:
-                    selected["schema"] = [
-                        Finding(
-                            rule_id="parser.record",
-                            format=name,
-                            category="parse",
-                            message=message,
-                        )
-                        for message in record.parse_errors
-                    ]
-                elif route.kind == "native_codec":
-                    selected["schema"] = NATIVE_CODEC_VALIDATORS[route.validator](record)
-                elif route.kind == "artifact":
-                    selected["schema"] = ARTIFACT_VALIDATORS[route.validator](record)
-                else:
-                    assert definition is not None
-                    variant = _get_variant(name, record)
-                    normalized = _normalize_for_validation(name, record.fields, record.timestamp)
-                    unavailable = frozenset()
-                    if record.representation == "windows_snare":
-                        from evidenceforge.formats.snare import LEGACY_UNAVAILABLE_FIELDS
+            self._routes[name] = (route, definition)
+        route, definition = self._routes[name]
+        selected: dict[str, list[Finding]] = {"schema": [], "constraint": []}
+        if record.parse_errors:
+            selected["schema"] = [
+                Finding(
+                    rule_id="parser.record",
+                    format=name,
+                    category="parse",
+                    message=message,
+                )
+                for message in record.parse_errors
+            ]
+        elif route.kind == "native_codec":
+            selected["schema"] = NATIVE_CODEC_VALIDATORS[route.validator](record)
+        elif route.kind == "artifact":
+            selected["schema"] = ARTIFACT_VALIDATORS[route.validator](record)
+        else:
+            assert definition is not None
+            variant = _get_variant(name, record)
+            normalized = _normalize_for_validation(name, record.fields, record.timestamp)
+            unavailable = frozenset()
+            if record.representation == "windows_snare":
+                from evidenceforge.formats.snare import LEGACY_UNAVAILABLE_FIELDS
 
-                        if record.fields.get("ProjectionVersion") != "1":
-                            unavailable = LEGACY_UNAVAILABLE_FIELDS
-                        normalized = {
-                            key: value
-                            for key, value in normalized.items()
-                            if key in definition.validation_fields(variant)
-                        }
-                    result = validate_event(
-                        definition,
-                        normalized,
-                        variant,
-                        include_diagnostics=False,
-                        unavailable_fields=unavailable,
+                if record.fields.get("ProjectionVersion") != "1":
+                    unavailable = LEGACY_UNAVAILABLE_FIELDS
+                normalized = {
+                    key: value
+                    for key, value in normalized.items()
+                    if key in definition.validation_fields(variant)
+                }
+            result = validate_event(
+                definition,
+                normalized,
+                variant,
+                include_diagnostics=False,
+                unavailable_fields=unavailable,
+            )
+            for finding in result.findings:
+                require_evaluated(finding)
+                if finding.outcome == "not_applicable" and set(finding.fields) & unavailable:
+                    self.unavailable_count += 1
+                    if len(self.unavailable_findings) < 20:
+                        self.unavailable_findings.append(finding)
+                if finding.severity != "error" or finding.outcome not in {
+                    "fail",
+                    "evaluation_error",
+                }:
+                    continue
+                category = "schema" if finding.category in {"schema", "parse"} else "constraint"
+                selected[category].append(finding)
+            if name in STRICT_FORMATS and record.raw and record.representation != "windows_snare":
+                selected["schema"].extend(
+                    Finding(
+                        rule_id="parser.structure",
+                        format=name,
+                        variant=variant,
+                        category="parse",
+                        message=message,
                     )
-                    for finding in result.findings:
-                        require_evaluated(finding)
-                        if (
-                            finding.outcome == "not_applicable"
-                            and set(finding.fields) & unavailable
-                        ):
-                            unavailable_count += 1
-                            if len(unavailable_findings) < 20:
-                                unavailable_findings.append(finding)
-                        if finding.severity != "error" or finding.outcome not in {
-                            "fail",
-                            "evaluation_error",
-                        }:
-                            continue
-                        category = (
-                            "schema" if finding.category in {"schema", "parse"} else "constraint"
-                        )
-                        selected[category].append(finding)
-                    if (
-                        name in STRICT_FORMATS
-                        and record.raw
-                        and record.representation != "windows_snare"
-                    ):
-                        selected["schema"].extend(
-                            Finding(
-                                rule_id="parser.structure",
-                                format=name,
-                                variant=variant,
-                                category="parse",
-                                message=message,
-                            )
-                            for message in validate_strict(name, record.raw, record.fields).errors
-                        )
-                for group in selected.values():
-                    for finding in group:
-                        require_evaluated(finding)
-                if selected["schema"] and malformed_record_ids is not None:
-                    malformed_record_ids.add(id(record))
-                for category in totals:
-                    if record.parse_errors and category == "constraint":
-                        continue
-                    totals[category] += 1
-                    errors = selected[category]
-                    if not errors:
-                        passing[category] += 1
-                        continue
-                    counts[category].setdefault(name, {}).setdefault(category, 0)
-                    counts[category][name][category] += 1
-                    for finding in errors:
-                        if len(failures[category]) < 20:
-                            failures[category].append(
-                                f"[{name}] line {record.line_number}: {finding.message}"
-                            )
-                            findings[category].append(finding)
+                    for message in validate_strict(name, record.raw, record.fields).errors
+                )
+        for group in selected.values():
+            for finding in group:
+                require_evaluated(finding)
+        if selected["schema"] and self.malformed_record_ids is not None:
+            self.malformed_record_ids.add(record_identity(record))
+        for category in self.totals:
+            if record.parse_errors and category == "constraint":
+                continue
+            self.totals[category] += 1
+            errors = selected[category]
+            if not errors:
+                self.passing[category] += 1
+                continue
+            self.counts[category].setdefault(name, {}).setdefault(category, 0)
+            self.counts[category][name][category] += 1
+            for finding in errors:
+                if len(self.failures[category]) < 20:
+                    self.failures[category].append(
+                        f"[{name}] line {record.line_number}: {finding.message}"
+                    )
+                    self.findings[category].append(finding)
+
+        return not selected["schema"]
+
+    def scores(self) -> tuple[SubScore, SubScore]:
 
         def subscore(category: str) -> SubScore:
             schema = category == "schema"
-            total = totals[category]
+            total = self.totals[category]
             return SubScore(
                 name="Spec Conformance" if schema else "Format Constraints",
                 key="spec_conformance" if schema else "format_constraints",
                 weight=0.55 if schema else 0.45,
-                score=100.0 * passing[category] / total if total else 0.0,
-                details=f"{passing[category]}/{total} records pass {category} validation",
-                sample_failures=failures[category],
-                failure_summary=counts[category],
-                sample_findings=findings[category],
-                unavailable_check_count=unavailable_count if schema else 0,
-                sample_unavailable_findings=unavailable_findings if schema else [],
+                score=100.0 * self.passing[category] / total if total else 0.0,
+                details=f"{self.passing[category]}/{total} records pass {category} validation",
+                sample_failures=self.failures[category],
+                failure_summary=self.counts[category],
+                sample_findings=self.findings[category],
+                unavailable_check_count=self.unavailable_count if schema else 0,
+                sample_unavailable_findings=self.unavailable_findings if schema else [],
             )
 
         return subscore("schema"), subscore("constraint")

@@ -1,0 +1,745 @@
+{
+  "scenario_name": "retail-store-ftp-attack",
+  "generated_at": null,
+  "total_records": 20,
+  "source_counts": {
+    "bash_history": 3,
+    "ecar": 3,
+    "snort_alert": 2,
+    "syslog": 3,
+    "web_access": 3,
+    "windows_event_security": 3,
+    "zeek_conn": 3
+  },
+  "overall_score": 60.08038624633483,
+  "pillars": [
+    {
+      "number": 1,
+      "name": "Parseability",
+      "weight": 0.3,
+      "score": 91.75,
+      "sub_scores": [
+        {
+          "name": "Spec Conformance",
+          "key": "spec_conformance",
+          "weight": 0.55,
+          "score": 85.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "17/20 records pass schema validation",
+          "sample_findings": [
+            {
+              "rule_id": "parser.record",
+              "format": "web_access",
+              "variant": null,
+              "fields": [],
+              "category": "parse",
+              "severity": "error",
+              "outcome": "fail",
+              "message": "Source host contradicts the bundle file owner"
+            },
+            {
+              "rule_id": "parser.record",
+              "format": "web_access",
+              "variant": null,
+              "fields": [],
+              "category": "parse",
+              "severity": "error",
+              "outcome": "fail",
+              "message": "Source host contradicts the bundle file owner"
+            },
+            {
+              "rule_id": "parser.record",
+              "format": "web_access",
+              "variant": null,
+              "fields": [],
+              "category": "parse",
+              "severity": "error",
+              "outcome": "fail",
+              "message": "Source host contradicts the bundle file owner"
+            }
+          ],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "[web_access] line 1: Source host contradicts the bundle file owner",
+            "[web_access] line 2: Source host contradicts the bundle file owner",
+            "[web_access] line 3: Source host contradicts the bundle file owner"
+          ],
+          "failure_summary": {
+            "web_access": {
+              "schema": 3
+            }
+          },
+          "skipped": false
+        },
+        {
+          "name": "Format Constraints",
+          "key": "format_constraints",
+          "weight": 0.45,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "17/17 records pass constraint validation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 2,
+      "name": "Plausibility",
+      "weight": 0.25,
+      "score": 54.4568391029864,
+      "sub_scores": [
+        {
+          "name": "Value & OS Plausibility",
+          "key": "value_plausibility",
+          "weight": 0.25,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "0/9 records pass OS/value plausibility checks",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "[bash_history] Host 'SRV-WEB-01' not in scenario",
+            "[bash_history] Host 'SRV-WEB-01' not in scenario",
+            "[bash_history] Host 'SRV-WEB-01' not in scenario",
+            "[syslog] Host 'SRV-WEB-01' not in scenario",
+            "[syslog] Host 'SRV-WEB-01' not in scenario",
+            "[syslog] Host 'SRV-WEB-01' not in scenario",
+            "[windows_event_security] Host 'WS-ANALYST-01' not in scenario",
+            "[windows_event_security] Host 'WS-ANALYST-01' not in scenario",
+            "[windows_event_security] Host 'WS-ANALYST-01' not in scenario"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Co-occurrence Rules",
+          "key": "co_occurrence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "10/10 co-occurrence checks pass",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Distribution Fit",
+          "key": "distribution_fit",
+          "weight": 0.15,
+          "score": 75.2554215835896,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "ecar.object: 81; ecar.action: 65; windows_event_security.EventID: 66; zeek_conn.proto: 96; zeek_conn.conn_state: 68",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Cross-Source Field Agreement",
+          "key": "field_agreement",
+          "weight": 0.15,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "No configured cross-source pivots were jointly observable",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "User Behavioral Diversity",
+          "key": "user_diversity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Fewer than 2 users with sufficient data \u2014 skipped",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Anomaly Rate",
+          "key": "anomaly_rate",
+          "weight": 0.1,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "3/17 events anomalous (17.6%), target 1-5%",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "IDS Correlation Integrity",
+          "key": "ids_integrity",
+          "weight": 0.0,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Legacy dataset has no IDS evaluation summary; check skipped",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 3,
+      "name": "Causality",
+      "weight": 0.25,
+      "score": 11.764705882352942,
+      "sub_scores": [
+        {
+          "name": "Causal Ordering",
+          "key": "causal_ordering",
+          "weight": 0.25,
+          "score": 40.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "2/5 causal pairs correctly ordered",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Rule 'SSH accept before bash commands': after event at line 1 precedes all matching before events",
+            "Rule 'SSH accept before bash commands': after event at line 2 precedes all matching before events",
+            "Rule 'SSH accept before bash commands': after event at line 3 precedes all matching before events"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Event Presence",
+          "key": "event_presence",
+          "weight": 0.2,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "0/22 expected-visible storyline events have traces in logs",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Event 0: attacker@MUSIC-SRV-01 'Exploit FTP server RCE vulnerability (CVE-2023-XXXXX) to gai' \u2014 no traces",
+            "Event 1: attacker@MUSIC-SRV-01 'Execute 'whoami' to identify current user context' \u2014 no traces",
+            "Event 2: attacker@MUSIC-SRV-01 'Execute 'id' to enumerate user groups and privileges' \u2014 no traces",
+            "Event 3: attacker@MUSIC-SRV-01 'Execute 'uname -a' to identify OS version and kernel' \u2014 no traces",
+            "Event 4: attacker@MUSIC-SRV-01 'Execute 'cat /etc/passwd' to enumerate local user accounts' \u2014 no traces",
+            "Event 5: attacker@MUSIC-SRV-01 'Execute 'cat /etc/group' to enumerate local groups' \u2014 no traces",
+            "Event 6: attacker@MUSIC-SRV-01 'Execute 'ps aux' to list running processes' \u2014 no traces",
+            "Event 7: attacker@MUSIC-SRV-01 'Execute 'netstat -tulpn' to enumerate network connections an' \u2014 no traces",
+            "Event 8: attacker@MUSIC-SRV-01 'Execute 'ip addr' to identify network interfaces and IP conf' \u2014 no traces",
+            "Event 9: attacker@MUSIC-SRV-01 'Execute 'ip route' to enumerate routing table' \u2014 no traces"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Indicator Accuracy",
+          "key": "indicator_accuracy",
+          "weight": 0.15,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "No checkable authored indicators were present in matched traces",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "Pivot Linkability",
+          "key": "pivot_linkability",
+          "weight": 0.15,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "0/24 inferred expected-visible narrative edges retain a shared rendered pivot; 0 isolated events, 0 contract-exempt",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Events 0\u21921: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 1\u21922: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 2\u21923: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 3\u21924: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 4\u21925: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 5\u21926: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 5\u219210: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 6\u21927: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 7\u21928: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)",
+            "Events 8\u21929: expected pivot not present in both rendered traces (attacker@MUSIC-SRV-01 \u2192 attacker@MUSIC-SRV-01)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Temporal Integrity",
+          "key": "temporal_integrity",
+          "weight": 0.15,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "0/22 expected-visible events correctly timed and ordered",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "Event 0: no traces to verify timing",
+            "Event 1: no traces to verify timing",
+            "Event 2: no traces to verify timing",
+            "Event 3: no traces to verify timing",
+            "Event 4: no traces to verify timing",
+            "Event 5: no traces to verify timing",
+            "Event 6: no traces to verify timing",
+            "Event 7: no traces to verify timing",
+            "Event 8: no traces to verify timing",
+            "Event 9: no traces to verify timing"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Storyline Trace Coverage",
+          "key": "storyline_trace_coverage",
+          "weight": 0.1,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "0/0 format traces: 22 authored storyline events have no enabled expected source group",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "No enabled output source can prove the authored storyline evidence"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Intent Reconciliation",
+          "key": "intent_reconciliation",
+          "weight": 0.0,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Canonical ground truth has no authored-intent reconciliation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "GROUND_TRUTH.json is missing the intent_reconciliation contract"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Effect Reconciliation",
+          "key": "effect_reconciliation",
+          "weight": 0.0,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Legacy ground truth has no execution-effect reconciliation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        }
+      ],
+      "supplementary": {
+        "host_log_profile": {}
+      }
+    },
+    {
+      "number": 4,
+      "name": "Timing",
+      "weight": 0.2,
+      "score": 80.0,
+      "sub_scores": [
+        {
+          "name": "Attack Chain Timing",
+          "key": "attack_chain_timing",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "21/21 storyline transitions within bounds",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Human Burstiness",
+          "key": "burstiness",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "CV scores for 0 users (target CV 1.0-3.0)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "System Process Regularity",
+          "key": "system_regularity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Only 0 system events \u2014 insufficient",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Diurnal Pattern",
+          "key": "diurnal_pattern",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Scored 0 users (hour\u00d7weekday 2D JSD)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Volume Adequacy",
+          "key": "volume_adequacy",
+          "weight": 0.2,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Noise:signal 0:1 (target 5000:1 for high)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Rate Plausibility",
+          "key": "rate_plausibility",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "11/11 timing checks plausible",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    }
+  ],
+  "categories": [
+    {
+      "key": "source_schema",
+      "name": "Parseability & Source Schema",
+      "score": 92.5,
+      "sub_score_keys": [
+        "spec_conformance",
+        "format_constraints"
+      ],
+      "details": "2/2 configured measures scored"
+    },
+    {
+      "key": "canonical_invariants",
+      "name": "Canonical Cross-Source Invariants",
+      "score": 60.0,
+      "sub_score_keys": [
+        "value_plausibility",
+        "co_occurrence",
+        "causal_ordering",
+        "rate_plausibility"
+      ],
+      "details": "4/6 configured measures scored"
+    },
+    {
+      "key": "scenario_completeness",
+      "name": "Declared Scenario Completeness",
+      "score": 0.0,
+      "sub_score_keys": [
+        "intent_reconciliation",
+        "event_presence",
+        "pivot_linkability",
+        "temporal_integrity",
+        "storyline_trace_coverage"
+      ],
+      "details": "5/8 configured measures scored"
+    },
+    {
+      "key": "distribution_realism",
+      "name": "Distribution & Realism Diagnostics",
+      "score": 71.9069276979487,
+      "sub_score_keys": [
+        "distribution_fit",
+        "user_diversity",
+        "anomaly_rate",
+        "attack_chain_timing",
+        "burstiness",
+        "system_regularity",
+        "diurnal_pattern",
+        "volume_adequacy"
+      ],
+      "details": "8/8 configured measures scored"
+    },
+    {
+      "key": "expert_comparison",
+      "name": "Optional Expert Comparison",
+      "score": null,
+      "sub_score_keys": [],
+      "details": "No expert assessment was supplied to this deterministic evaluation run"
+    }
+  ],
+  "acceptance_passed": false,
+  "acceptance_criteria": [
+    {
+      "name": "parseability.spec_conformance",
+      "pillar": "parseability",
+      "sub_score_key": "spec_conformance",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 85.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "parseability.format_constraints",
+      "pillar": "parseability",
+      "sub_score_key": "format_constraints",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.value_plausibility",
+      "pillar": "plausibility",
+      "sub_score_key": "value_plausibility",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.field_agreement",
+      "pillar": "plausibility",
+      "sub_score_key": "field_agreement",
+      "threshold": 85.0,
+      "aspirational": 97.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.ids_integrity",
+      "pillar": "plausibility",
+      "sub_score_key": "ids_integrity",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.causal_ordering",
+      "pillar": "causality",
+      "sub_score_key": "causal_ordering",
+      "threshold": 90.0,
+      "aspirational": 99.0,
+      "actual": 40.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.event_presence",
+      "pillar": "causality",
+      "sub_score_key": "event_presence",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.intent_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "intent_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.effect_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "effect_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.indicator_accuracy",
+      "pillar": "causality",
+      "sub_score_key": "indicator_accuracy",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.temporal_integrity",
+      "pillar": "causality",
+      "sub_score_key": "temporal_integrity",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.storyline_trace_coverage",
+      "pillar": "causality",
+      "sub_score_key": "storyline_trace_coverage",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 0.0,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    }
+  ],
+  "aspirational_met": 8,
+  "aspirational_total": 19,
+  "flags": [
+    "Value & OS Plausibility: 0/100 (0/9 records pass OS/value plausibility checks)",
+    "Anomaly Rate: 0/100 (3/17 events anomalous (17.6%), target 1-5%)",
+    "Causal Ordering: 40/100 (2/5 causal pairs correctly ordered)",
+    "Event Presence: 0/100 (0/22 expected-visible storyline events have traces in logs)",
+    "Pivot Linkability: 0/100 (0/24 inferred expected-visible narrative edges retain a shared rendered pivot; 0 isolated events, 0 contract-exempt)",
+    "Temporal Integrity: 0/100 (0/22 expected-visible events correctly timed and ordered)",
+    "Storyline Trace Coverage: 0/100 (0/0 format traces: 22 authored storyline events have no enabled expected source group)",
+    "Intent Reconciliation: 0/100 (Canonical ground truth has no authored-intent reconciliation)",
+    "Volume Adequacy: 0/100 (Noise:signal 0:1 (target 5000:1 for high))",
+    "[HARD] parseability.spec_conformance: 85.0 < 100.0 threshold",
+    "[HARD] plausibility.value_plausibility: 0.0 < 95.0 threshold",
+    "[HARD] causality.causal_ordering: 40.0 < 90.0 threshold",
+    "[HARD] causality.event_presence: 0.0 < 85.0 threshold",
+    "[HARD] causality.intent_reconciliation: 0.0 < 100.0 threshold",
+    "[HARD] causality.pivot_linkability: 0.0 < 80.0 threshold",
+    "[HARD] causality.temporal_integrity: 0.0 < 85.0 threshold",
+    "[HARD] causality.storyline_trace_coverage: 0.0 < 80.0 threshold"
+  ],
+  "supplementary": {
+    "output_target": "default",
+    "evaluation_capacity": {
+      "files": 7,
+      "corpus_bytes": 6547,
+      "parsed_records": 20,
+      "limits_overridden": false
+    },
+    "ground_truth_coverage": {
+      "mode": "legacy",
+      "limitation": "No complete per-source expectation contract; original four-pillar evaluation retained."
+    },
+    "host_log_profile": {}
+  },
+  "llm_spot_checks": null
+}

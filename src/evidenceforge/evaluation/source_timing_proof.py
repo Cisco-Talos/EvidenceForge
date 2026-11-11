@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from evidenceforge.evaluation.storage import bounded_map
 from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthOccurrence,
     GroundTruthSourceExpectation,
@@ -64,11 +67,41 @@ class ProcessTimingReceipt(BaseModel):
         return value
 
 
+class TimingPoints:
+    """Exact existence proofs retaining at most two distinct owners per clock/key."""
+
+    def __init__(self) -> None:
+        self.values = bounded_map()
+
+    def add(self, key: tuple[str, str], at: datetime, occurrence_id: str) -> None:
+        identity = (*key, at)
+        previous = self.values.get(identity, ())
+        if occurrence_id not in previous and len(previous) < 2:
+            self.values[identity] = (*previous, occurrence_id)
+
+    def has_other(self, key: tuple[str, str], at: datetime, occurrence_id: str) -> bool:
+        return any(owner != occurrence_id for owner in self.values.get((*key, at), ()))
+
+
+type CanonicalTimingPoints = TimingPoints | Mapping[tuple[str, str], Sequence[tuple[datetime, str]]]
+
+
+def _canonical_anchor_exists(
+    points: CanonicalTimingPoints,
+    key: tuple[str, str],
+    at: datetime,
+    occurrence_id: str,
+) -> bool:
+    if isinstance(points, TimingPoints):
+        return points.has_other(key, at, occurrence_id)
+    return any(owner != occurrence_id and point == at for point, owner in points.get(key, ()))
+
+
 def verify_process_timing(
     row: GroundTruthOccurrence,
     expectation: GroundTruthSourceExpectation,
     index: _RecordIndex,
-    points: dict[tuple[str, str], list[tuple[datetime, str]]],
+    points: CanonicalTimingPoints,
 ) -> list[str]:
     """Verify identity, predecessor existence, acyclic ordering and policy bounds."""
     payload = expectation.provenance.get("timing")
@@ -142,43 +175,44 @@ def verify_process_timing(
             if anchor.kind == "process_frontier"
             else "create"
         )
-        canonical = any(
-            oid != row.occurrence_id and at == anchor.time
-            for at, oid in points.get(
-                (expectation.source_instance, point_kind + ":" + str(native_key)), []
-            )
+        canonical = _canonical_anchor_exists(
+            points,
+            (expectation.source_instance, point_kind + ":" + str(native_key)),
+            anchor.time,
+            row.occurrence_id,
         )
-        records = index.ids.get(
-            ("ecar", index.host(expectation.source_host), field, str(native_key)), []
+        records = index.identity_at(
+            "ecar", index.host(expectation.source_host), field, str(native_key), anchor.time
         )
         if anchor.kind == "process_frontier":
-            canonical |= any(
-                oid != row.occurrence_id and at == anchor.time
-                for at, oid in points.get(
-                    (expectation.source_instance, "children:" + anchor.identity), []
-                )
+            canonical |= _canonical_anchor_exists(
+                points,
+                (expectation.source_instance, "children:" + anchor.identity),
+                anchor.time,
+                row.occurrence_id,
             )
-            records = [
-                *records,
-                *index.ids.get(
-                    ("ecar", index.host(expectation.source_host), "pid", str(process.get("pid"))),
-                    [],
+            records = chain(
+                records,
+                index.identity_at(
+                    "ecar",
+                    index.host(expectation.source_host),
+                    "pid",
+                    str(process.get("pid")),
+                    anchor.time,
                 ),
-                *[
+                (
                     record
-                    for record in index.ids.get(
-                        (
-                            "ecar",
-                            index.host(expectation.source_host),
-                            "ppid",
-                            str(process.get("pid")),
-                        ),
-                        [],
+                    for record in index.identity_at(
+                        "ecar",
+                        index.host(expectation.source_host),
+                        "ppid",
+                        str(process.get("pid")),
+                        anchor.time,
                     )
                     if record.fields.get("object") == "PROCESS"
                     and record.fields.get("action") == "CREATE"
-                ],
-            ]
+                ),
+            )
         preferred = anchor.kind == "preferred_create" or (
             anchor.kind == "process_create"
             and row.kind in {"process_create", "process_fork", "system_process_create"}

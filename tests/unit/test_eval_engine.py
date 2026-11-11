@@ -10,7 +10,6 @@ import pytest
 from evidenceforge.evaluation.engine import EvaluationEngine
 from evidenceforge.evaluation.limits import EvaluationLimits
 from evidenceforge.evaluation.models import QualityReport
-from evidenceforge.models.exceptions import EvaluationLimitError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
 
@@ -136,8 +135,8 @@ class TestEvaluationEngine:
             exclude={"evaluated_at"}
         )
 
-    def test_rejects_corpus_byte_budget_before_parsing(self, retail_scenario, tmp_path):
-        """Corpus bytes are bounded before records are retained in memory."""
+    def test_legacy_corpus_byte_limit_does_not_reject_evaluation(self, retail_scenario, tmp_path):
+        """Legacy constructor limits cannot reintroduce whole-corpus ceilings."""
         (tmp_path / "ecar.json").write_text("{}\n", encoding="utf-8")
         engine = EvaluationEngine(
             output_dir=tmp_path,
@@ -145,11 +144,11 @@ class TestEvaluationEngine:
             limits=EvaluationLimits(max_corpus_bytes=1),
         )
 
-        with pytest.raises(EvaluationLimitError, match="corpus bytes"):
-            engine._parse_all_logs()
+        records, counts = engine._parse_all_logs()
+        assert len(records["ecar"]) == counts["ecar"] == 1
 
-    def test_rejects_record_budget_during_streaming_parse(self, retail_scenario, tmp_path):
-        """The parser stops as soon as the retained-record budget is exceeded."""
+    def test_legacy_record_limit_does_not_reject_evaluation(self, retail_scenario, tmp_path):
+        """Every parsed record is retained or spilled regardless of legacy count limits."""
         (tmp_path / "ecar.json").write_text("{}\n{}\n", encoding="utf-8")
         engine = EvaluationEngine(
             output_dir=tmp_path,
@@ -157,8 +156,24 @@ class TestEvaluationEngine:
             limits=EvaluationLimits(max_records=1),
         )
 
-        with pytest.raises(EvaluationLimitError, match="record count"):
-            engine._parse_all_logs()
+        records, counts = engine._parse_all_logs()
+        assert len(records["ecar"]) == counts["ecar"] == 2
+
+    def test_legacy_file_limit_does_not_reject_evaluation(
+        self, retail_scenario: Scenario, tmp_path: Path
+    ) -> None:
+        for name in ("one", "two"):
+            directory = tmp_path / name
+            directory.mkdir()
+            (directory / "ecar.json").write_text("{}\n", encoding="utf-8")
+        engine = EvaluationEngine(
+            output_dir=tmp_path,
+            scenario=retail_scenario,
+            limits=EvaluationLimits(max_files=1),
+        )
+        records, counts = engine._parse_all_logs()
+        assert len(records["ecar"]) == counts["ecar"] == 2
+        assert engine.capacity.files == 2
 
     def test_explicit_evaluation_override_records_capacity_decision(
         self, retail_scenario, tmp_path
