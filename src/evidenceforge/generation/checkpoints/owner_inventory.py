@@ -347,6 +347,7 @@ INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS = _fields(
         "_watermark_us",
     ),
     rebuilt=(
+        "ground_truth",
         "_authored",
         "_authored_ids",
         "_batch_ledger_id",

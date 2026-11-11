@@ -1,4 +1,4 @@
-# Synthetic recovery companion. The thirty-minute acceptance source is unchanged.
+# Synthetic recovery companion to the thirty-minute acceptance workload.
 name: macos-workstation-recovery
 description: Three-hour companion to the fixed two-Mac acceptance workload; live Chrome
   and SSH work across exact recovery, with an app-policy refusal negative control
@@ -136,18 +136,34 @@ storyline:
     caller_ref: preexisting-provisioner
     operation: bootstrap
     path: /Library/LaunchDaemons/org.example.os-inventory.plist
-- id: close-warmup-mac-apple
-  time: +5s
+- id: setup-gui-session-mac-apple
+  time: '2026-10-19T13:50:00Z'
   actor: alex
   system: MAC-APPLE
-  activity: End any warmup GUI session before the measured fresh start
+  activity: Establish the explicit pre-window GUI session that cleanup will close
+  events:
+  - type: logon
+    logon_type: 2
+- id: setup-gui-session-mac-iterm
+  time: '2026-10-19T13:50:10Z'
+  actor: alex
+  system: MAC-ITERM
+  activity: Establish the explicit pre-window GUI session that cleanup will close
+  events:
+  - type: logon
+    logon_type: 2
+- id: close-warmup-mac-apple
+  time: +30s
+  actor: alex
+  system: MAC-APPLE
+  activity: End the explicit setup GUI session before the measured fresh start
   events:
   - type: logoff
 - id: close-warmup-mac-iterm
-  time: +10s
+  time: +40s
   actor: alex
   system: MAC-ITERM
-  activity: End any warmup GUI session before the measured fresh start
+  activity: End the explicit setup GUI session before the measured fresh start
   events:
   - type: logoff
 - id: login-mac-apple

@@ -367,6 +367,9 @@ def test_mismatched_observation_manifest_does_not_discard_ground_truth(
         collection_window={"start": None, "end": None},
     )
 
+    # This fixture exercises the legacy manifest/reconciliation boundary without a v5 sidecar.
+    ground_truth = ground_truth.model_copy(update={"schema_version": 3})
+
     pillar = CausalityScorer().score(
         {},
         authored_scenario,

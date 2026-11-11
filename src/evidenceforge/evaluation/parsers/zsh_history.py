@@ -59,6 +59,7 @@ class ZshHistoryParser(LogParser):
                 raw=line,
                 fields=fields,
                 timestamp=timestamp,
+                source_host=str(fields["hostname"]),
                 parse_errors=errors,
                 line_number=line_number,
             )

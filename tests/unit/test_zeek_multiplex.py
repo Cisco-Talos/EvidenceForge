@@ -466,8 +466,8 @@ class TestPerSensorDirectoryRouting:
             assert core_dns["query"] == dmz_dns["query"] == "updates.example.com"
             assert core_dns["answers"] == dmz_dns["answers"] == ["10.0.0.20"]
 
-    def test_udp_dns_ip_bytes_use_valid_header_accounting(self):
-        """UDP DNS rows should not render impossible IP-header deltas."""
+    def test_raw_udp_dns_ip_bytes_are_not_silently_corrected(self):
+        """Raw rendering preserves supplied accounting; canonical validation owns consistency."""
         fmt = load_format("zeek_conn")
         with tempfile.TemporaryDirectory() as tmpdir:
             output_file = Path(tmpdir) / "conn.json"
@@ -497,8 +497,8 @@ class TestPerSensorDirectoryRouting:
             emitter.close()
 
             row = json.loads(output_file.read_text().splitlines()[0])
-            assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
-            assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+            assert row["orig_ip_bytes"] == 113
+            assert row["resp_ip_bytes"] == 211
 
     def test_non_finite_numeric_timestamp_does_not_crash_multi_sensor_emit(self):
         """Raw Zeek timestamps may be NaN or infinity; multi-sensor drift must not crash."""

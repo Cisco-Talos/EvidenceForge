@@ -860,6 +860,12 @@ storyline:
     logon_type: 3
     technique: 'T1110.003 - Brute Force: Password Spraying'
     description: Password spray against domain users
+- id: evt-012-rdp
+  time: +3h01m
+  actor: aisha.johnson
+  system: WS-AJOHNSON-01
+  activity: Open the compromised help desk user's RDP session after the successful spray
+  events:
   - type: rdp_session
     source_ip: 10.10.1.99
     technique: 'T1021.001 - Remote Services: Remote Desktop Protocol'
@@ -907,11 +913,6 @@ storyline:
   system: WS-AJOHNSON-01
   activity: Active Directory enumeration from compromised workstation
   events:
-  - type: logon
-    logon_type: 10
-    source_ip: 10.10.1.99
-    technique: 'T1021.001 - Remote Services: Remote Desktop Protocol'
-    description: Established RDP session context for follow-on commands
   - type: process
     process_name: C:\Windows\System32\whoami.exe
     command_line: whoami /all
@@ -1627,8 +1628,16 @@ storyline:
   - type: logoff
     technique: 'T1021.004 - Remote Services: SSH'
     description: Logoff from app server
+- id: mac-1-setup-session
+  time: '2026-11-02T12:50:00Z'
+  actor: maya.ross
+  system: MAC-MROSS-01
+  activity: Establish the explicit pre-window GUI session that cleanup closes
+  events:
+  - type: logon
+    logon_type: 2
 - id: mac-1-warmup-close
-  time: +10s
+  time: +30s
   actor: maya.ross
   system: MAC-MROSS-01
   activity: End the prior local engineering session before a fresh login
@@ -1759,8 +1768,16 @@ storyline:
     label: com.meridianhcs.endpoint-inventory
     caller_ref: mac-1-admin
     path: /Library/LaunchDaemons/com.meridianhcs.endpoint-inventory.plist
+- id: mac-2-setup-session
+  time: '2026-11-02T12:50:10Z'
+  actor: maya.ross
+  system: MAC-MROSS-02
+  activity: Establish the explicit pre-window GUI session that cleanup closes
+  events:
+  - type: logon
+    logon_type: 2
 - id: mac-2-warmup-close
-  time: +20s
+  time: +40s
   actor: maya.ross
   system: MAC-MROSS-02
   activity: End the prior local engineering session before a fresh login

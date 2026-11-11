@@ -61,7 +61,7 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, t
     assert evaluated.returncode == 0, evaluated.stderr
     report = json.loads(evaluated.stdout)
     assert report["source_counts"]["email_artifacts"] > 0
-    assert len(report["pillars"]) == 4
+    assert len(report["pillars"]) == 5
     assert all(pillar["score"] is not None for pillar in report["pillars"])
     parseability = next(p for p in report["pillars"] if p["name"] == "Parseability")
     assert all(s["score"] == 100 for s in parseability["sub_scores"]), parseability

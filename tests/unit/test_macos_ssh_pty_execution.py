@@ -19,7 +19,7 @@ from evidenceforge.generation.checkpoints.activity_head import _assert_transient
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import SshSessionEventSpec
+from evidenceforge.models.scenario import ProcessEventSpec, SshSessionEventSpec
 from tests.unit.test_macos_installed_provisioning import _scenario
 
 
@@ -170,6 +170,34 @@ def test_pty_canonical_terminal_and_foreground_group_do_not_require_native_outpu
     finally:
         engine._close_emitters()
     assert not list(tmp_path.rglob("macos_endpoint_security.ndjson"))
+
+
+def test_authored_pty_commands_release_the_shell_after_known_completion(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    try:
+        target = engine.scenario.environment.systems[0]
+        user = engine.scenario.environment.users[0]
+        session = next(
+            item
+            for item in engine.state_manager.get_sessions_for_user(user.username)
+            if item.session_kind == "ssh"
+        )
+        engine._record_storyline_logon(user, target, session.logon_id)
+        for offset, command in ((30, "/usr/bin/id"), (50, "/usr/bin/uname -a")):
+            result = engine._execute_typed_event(
+                ProcessEventSpec(process_name=command.split()[0], command_line=command),
+                user,
+                target,
+                engine.start_time + timedelta(minutes=10, seconds=offset),
+                "Explicit remote query",
+                {"process"},
+            )
+            assert result.get("pid", 0) > 0, result
+            assert engine.state_manager.get_process(target.hostname, result["pid"]) is None
+        engine.activity_generator.finalize_ssh_session_lifecycles(engine.end_time)
+        engine._finalize_macos_process_coverage()
+    finally:
+        engine._close_emitters()
 
 
 @pytest.mark.slow

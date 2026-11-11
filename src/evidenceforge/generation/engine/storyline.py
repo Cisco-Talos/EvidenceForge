@@ -44,6 +44,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import SignaturePredicate
@@ -612,6 +614,17 @@ def _sample_network_hosts(
     return [str(ipaddress.ip_address(first_address + offset)) for offset in offsets]
 
 
+class ScanTransportOutcome(BaseModel):
+    """A target transport result, independent of any enforcing policy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    conn_state: str
+    service: str
+    duration: float
+    orig_bytes: int
+    resp_bytes: int
+
+
 def _port_scan_connection_profile(
     rng,
     *,
@@ -619,27 +632,25 @@ def _port_scan_connection_profile(
     target_system: System | None,
     external: bool,
     default_deny_state: str,
-) -> tuple[bool, str | None, str, float, int, int]:
-    """Return firewall/action and conn fields for one storyline port-scan probe."""
+) -> ScanTransportOutcome:
+    """Return target response/no-response facts without claiming enforcement."""
     if _scan_target_exposes_port(target_system, port, external=external) and rng.random() > 0.14:
         conn_state = rng.choices(["SF", "RSTO", "RSTR"], weights=[78, 12, 10], k=1)[0]
         service = _SCAN_PORT_SERVICES.get(port, "")
         if conn_state == "SF":
-            return (
-                False,
-                conn_state,
-                service,
-                rng.uniform(0.04, 0.95),
-                rng.randint(0, 160),
-                rng.randint(0, 900),
+            return ScanTransportOutcome(
+                conn_state=conn_state,
+                service=service,
+                duration=rng.uniform(0.04, 0.95),
+                orig_bytes=rng.randint(0, 160),
+                resp_bytes=rng.randint(0, 900),
             )
-        return (
-            False,
-            conn_state,
-            service,
-            rng.uniform(0.01, 0.35),
-            rng.randint(0, 120),
-            rng.randint(0, 240),
+        return ScanTransportOutcome(
+            conn_state=conn_state,
+            service=service,
+            duration=rng.uniform(0.01, 0.35),
+            orig_bytes=rng.randint(0, 120),
+            resp_bytes=rng.randint(0, 240),
         )
 
     if default_deny_state == "REJ":
@@ -647,8 +658,20 @@ def _port_scan_connection_profile(
     else:
         conn_state = rng.choices(["S0", "REJ"], weights=[72, 28], k=1)[0]
     if conn_state == "S0":
-        return True, conn_state, "", rng.uniform(1.2, 7.0), rng.randint(0, 64), 0
-    return True, conn_state, "", rng.uniform(0.003, 0.2), rng.randint(0, 96), rng.randint(0, 80)
+        return ScanTransportOutcome(
+            conn_state=conn_state,
+            service="",
+            duration=rng.uniform(1.2, 7.0),
+            orig_bytes=rng.randint(0, 64),
+            resp_bytes=0,
+        )
+    return ScanTransportOutcome(
+        conn_state=conn_state,
+        service="",
+        duration=rng.uniform(0.003, 0.2),
+        orig_bytes=rng.randint(0, 96),
+        resp_bytes=rng.randint(0, 80),
+    )
 
 
 def _observed_web_scan_status(path_entry: dict[str, Any], rng) -> int:
@@ -3888,6 +3911,10 @@ class StorylineMixin:
                             + timedelta(seconds=cadence_offsets[i])
                             + cumulative_rdp_shift,
                         )
+                        if self.intent_execution_ledger.ground_truth is not None:
+                            self.intent_execution_ledger.ground_truth.finish_intent(
+                                intent.intent_id, malicious_event, spec.type
+                            )
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
@@ -4010,6 +4037,10 @@ class StorylineMixin:
                         + timedelta(seconds=cadence_offsets[i])
                         + cumulative_rdp_shift,
                     )
+                    if self.intent_execution_ledger.ground_truth is not None:
+                        self.intent_execution_ledger.ground_truth.finish_intent(
+                            intent.intent_id, malicious_event, spec.type
+                        )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
                         self.malicious_events.append(malicious_event)
@@ -4124,6 +4155,10 @@ class StorylineMixin:
                         + timedelta(seconds=cadence_offsets[i])
                         + cumulative_rdp_shift,
                     )
+                    if self.intent_execution_ledger.ground_truth is not None:
+                        self.intent_execution_ledger.ground_truth.finish_intent(
+                            intent.intent_id, result, spec.type
+                        )
                     if result:
                         # Track as red herring, not malicious
                         result["intent_id"] = intent.intent_id
@@ -4345,11 +4380,19 @@ class StorylineMixin:
             from evidenceforge.events.contexts import FirewallContext
 
             policy_denied = False
-            if (
-                is_external_scan
-                and fw_sensor is not None
-                and hasattr(self, "_evaluate_firewall_policy")
-            ):
+            path_firewalls = (
+                [
+                    sensor
+                    for sensor in self.dispatcher.visibility_engine.get_observing_sensors(
+                        scan_src_ip, real_target_ip
+                    )
+                    if sensor.type == "firewall"
+                ]
+                if self.dispatcher.visibility_engine
+                else []
+            )
+            fw_sensor = next(iter(path_firewalls), None)
+            if fw_sensor is not None and hasattr(self, "_evaluate_firewall_policy"):
                 policy_denied = (
                     self._evaluate_firewall_policy(
                         scan_src_ip,
@@ -4361,8 +4404,7 @@ class StorylineMixin:
                     == "deny"
                 )
             if policy_denied:
-                denied = True
-                scan_conn_state = conn_state
+                scan_conn_state = "REJ" if fw_sensor.drop_mode == "reject" else "S0"
                 service = ""
                 if scan_conn_state == "REJ":
                     duration = scan_profile_rng.uniform(0.003, 0.18)
@@ -4373,14 +4415,19 @@ class StorylineMixin:
                     orig_bytes = scan_profile_rng.randint(40, 96)
                     resp_bytes = 0
             else:
-                denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
-                    _port_scan_connection_profile(
-                        scan_profile_rng,
-                        port=port,
-                        target_system=target_system,
-                        external=is_external_scan,
-                        default_deny_state=conn_state,
-                    )
+                transport = _port_scan_connection_profile(
+                    scan_profile_rng,
+                    port=port,
+                    target_system=target_system,
+                    external=is_external_scan,
+                    default_deny_state=conn_state,
+                )
+                scan_conn_state, service, duration, orig_bytes, resp_bytes = (
+                    transport.conn_state,
+                    transport.service,
+                    transport.duration,
+                    transport.orig_bytes,
+                    transport.resp_bytes,
                 )
             firewall = (
                 FirewallContext(
@@ -4390,8 +4437,9 @@ class StorylineMixin:
                     src_interface=src_iface,
                     dst_interface=dst_iface,
                     access_group=f"{src_iface}_access_in",
+                    enforcing_entities=(str(fw_sensor.hostname or fw_sensor.name),),
                 )
-                if denied
+                if policy_denied
                 else None
             )
 

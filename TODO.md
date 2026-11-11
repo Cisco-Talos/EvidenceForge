@@ -72,6 +72,23 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+Source-aware ground truth, deterministic agreement scoring and action-specific visibility
+validation are implemented on `codex/ground-truth-reconciliation`; source exclusions now retain
+exact instances and independent restrictions. Validation and comparison evidence are in the
+[ground-truth worklog](docs/worklog/2026-11-10-ground-truth-reconciliation.md#source-aware-evaluation-and-visibility).
+
+- [ ] **P1 — Evaluate full datasets without fixed corpus-size caps:** Replace
+  whole-corpus byte/file/record ceilings with streaming evaluation and bounded or
+  disk-backed indexes across CLI and Studio. Preserve full scoring coverage and
+  per-record input protections; verify score equivalence and memory use on large
+  datasets. See the [Studio evaluation diagnosis](docs/worklog/2026-11-10-ground-truth-reconciliation.md#live-studio-evaluation-failure-diagnosis).
+
+- [ ] **P2 — Explicit story-role labels:** Add reviewed typed labels such as
+  `EXFILTRATION` and `TOOL_DOWNLOAD` to authored actions and preserve them
+  deterministically in ground truth. Keep role authoring separate from factual
+  occurrence and observation reconciliation. See the
+  [ground-truth worklog](docs/worklog/2026-11-10-ground-truth-reconciliation.md).
+
 - [ ] **P2 — Bound Linux CI package setup and mirror failover:** Avoid spending a
   full job budget on stalled Ubuntu package-index downloads. Use bounded network
   timeouts/retries and verified mirror fallback while retaining native dependencies,

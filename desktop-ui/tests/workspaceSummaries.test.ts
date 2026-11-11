@@ -137,3 +137,11 @@ test("a known input change keeps generation and evaluation outcomes independent"
   expect(latestRunState("Evaluation", { ...changed, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: true } }, false).state).toBe("success");
   expect(latestRunState("Evaluation", { ...changed, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: null } }, false).state).toBe("warning");
 });
+
+test("an evaluation process failure shows the failure cause instead of a missing score headline", () => {
+  const reason = "Evaluation corpus exceeds the supported envelope: 864106704 corpus bytes exceeds 536870912";
+  const evaluation: StudioJob = { ...run, id: "failed-score", kind: "evaluation", generation_id: run.id, status: "failed", status_message: reason, scorecard: { error: reason } };
+  const summary = scoringSummary(run, evaluation, item, snapshot);
+  expect(summary.headline).toBe("Evaluation failed");
+  expect(summary.detail).toContain(reason);
+});

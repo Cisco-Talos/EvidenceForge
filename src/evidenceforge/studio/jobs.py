@@ -14,6 +14,7 @@ from evidenceforge.artifacts.run_source import captured_scenario
 from evidenceforge.composition.artifacts import write_resolved_scenario
 from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.desktop.controller import _running, _terminate_owned, _worker_tick
+from evidenceforge.desktop.evaluation_errors import evaluation_failure_message
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import queue_evaluation, queue_generation, request_suspension
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
@@ -120,7 +121,12 @@ def queue_studio_evaluation(
         for job in job_store.load_evaluations()
     ):
         raise ValueError("An evaluation for this run is already queued, running, or paused")
-    job = queue_evaluation(generation, job_store.directory, settings=controller_settings(settings))
+    job = queue_evaluation(
+        generation,
+        job_store.directory,
+        settings=controller_settings(settings),
+        allow_large_evaluation=settings.allow_large_evaluation,
+    )
     job_store.save_evaluation(job)
     return job
 
@@ -328,11 +334,17 @@ def job_summary(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         summary["kind"] = "evaluation"
         result_file = Path(payload["result_file"])
-        if result_file.is_file():
+        if payload["status"] in {"completed", "failed"} and result_file.is_file():
             try:
                 report = QualityReport.model_validate_json(result_file.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, ValueError):
-                summary["scorecard"] = {"error": "Saved evaluation could not be read"}
+                message = evaluation_failure_message(
+                    Path(payload["log_file"]),
+                    "Saved evaluation could not be read. Open the evaluation log for details.",
+                )
+                summary["scorecard"] = {"error": message}
+                if payload["status"] == "failed":
+                    summary["status_message"] = message
             else:
                 summary["scorecard"] = {
                     "overall_score": report.overall_score,

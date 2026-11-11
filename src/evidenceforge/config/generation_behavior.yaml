@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 500
+current_revision: 505
 history_start_revision: 1
-behavior_surface_sha256: a022fb56f95e1aee13f0a80745cbf3f863fc1d80095c213a50b7d6c6190fdb4b
+behavior_surface_sha256: ff13f30722211954b84575a3f152d034766c4f48028f90ddddc611f3338bc548
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5776,3 +5776,57 @@ changes:
   - windows_event_sysmon
   summary: Samples ambient file actions in canonical mapping order so publication
     and import preserve seeded file activity and subsequent source-local writer metadata.
+- revision: 501
+  id: deterministic-canonical-ground-truth
+  impact: material
+  domains:
+  - ground-truth-reconciliation
+  - source-observation
+  - authored-http-outcomes
+  formats:
+  - zeek_http
+  - proxy_access
+  - web_access
+  summary: Captures authored canonical consequences and observation reasons in schema-v4 ground truth and preserves explicitly authored HTTP outcomes over automatic redirects.
+- revision: 502
+  id: source-aware-ground-truth-contracts
+  impact: material
+  domains:
+  - ground-truth-reconciliation
+  - source-expectations
+  - visibility-validation
+  formats: []
+  summary: Captures schema-v5 source presence and justified absence contracts with exact identities, native facts, source rules and deterministic loss provenance without changing unchanged emitted evidence.
+- revision: 503
+  id: ground-truth-reconciliation-repairs
+  impact: material
+  domains:
+  - canonical-udp-accounting
+  - scan-prevention
+  - ground-truth-source-contracts
+  - source-timing-provenance
+  formats: []
+  summary: Retains process transition and timing witnesses, distinguishes target failures from firewall prevention, and finalizes UDP budgets before source projection.
+- revision: 504
+  id: authored-authentication-completion-and-finalization-retry
+  impact: localized
+  domains:
+  - authentication-cadence
+  - authored-intent-reconciliation
+  - process-lifecycle
+  - source-finalization-recovery
+  formats:
+  - windows_event_security
+  - ecar
+  - syslog
+  summary: Preserve explicit authentication occurrences, finalize bounded Mac SSH commands before
+    subsequent queries, and retain the ground-truth journal across retryable terminal publication.
+- revision: 505
+  id: recognize-syslog-spillage-consequences
+  impact: none
+  domains:
+  - ground-truth-source-contracts
+  formats:
+  - syslog
+  summary: Recognize existing syslog credential-spillage occurrences as valid authored
+    consequences without changing their canonical facts or emitted evidence.

@@ -4,7 +4,9 @@
  * No arbitrary paths/programs/plists; only a 32-character lowercase hex nonce.
  * No enable/disable, persistent installation, domain-wide bootout or job queries.
  */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 #define _DARWIN_C_SOURCE 1
 #include <errno.h>
 #include <fcntl.h>

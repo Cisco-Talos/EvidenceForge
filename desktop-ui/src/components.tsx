@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, Check, ChevronDown, CircleHelp, TriangleAlert, X } from "lucide-react";
-import { Dialog, Tooltip } from "radix-ui";
+import { Activity, Check, ChevronDown, TriangleAlert, X } from "lucide-react";
+import { Dialog } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import { StudioApi, StudioJob, ValidationResult, type ExportProgress } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
@@ -38,9 +38,7 @@ export function formatBundleSize(bytes: number): string {
   return `${(bytes / divisor).toFixed(1)} ${unit}`;
 }
 
-export function Help({ text }: { text: string }) {
-  return <Tooltip.Root delayDuration={200}><Tooltip.Trigger asChild><button className="help-icon" aria-label={text} type="button"><CircleHelp size={14} /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tooltip" sideOffset={7}>{text}</Tooltip.Content></Tooltip.Portal></Tooltip.Root>;
-}
+export { Help } from "./Help";
 
 export function StatusBadge({ status }: { status: string }) {
   return <span className={`status status-${status.toLowerCase().replace(/ /g, "-")}`}><span className="status-dot" />{status}</span>;

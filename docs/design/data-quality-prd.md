@@ -389,3 +389,12 @@ Investigation of the apt-healthcare-breach baseline dataset (42 storyline events
 ### Threshold decision
 
 The 85% minimum hard gate (6 events missing = 14%) appropriately flags the generator gaps listed above. No threshold change from the provisional value.
+
+## Source-aware ground truth update (November 10, 2026)
+
+The four-pillar table above documents the legacy schema-3/4 policy. Schema-5 bundles add
+Ground Truth Agreement and assign all five pillars equal 20% overall weight. The new pillar
+has a numeric 95% minimum and 100% aspirational target, averaged equally per authored intent.
+Valid absences are neutral; legitimate zero-check actions and runs score 100% with explicit
+scope and counts. See [the authoritative contract](../reference/ground-truth.md) for source
+expectation verification, independent intent checks, scoring and visibility preflight.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -65,6 +66,12 @@ def network_plan(
             orig_pkts = 1
         if resp_ip_total and resp_pkts == 0:
             resp_pkts = 1
+    if protocol.lower() == "udp":
+        overhead = 48 if ip_address(src_ip).version == 6 else 28
+        if orig_ip_bytes is None:
+            orig_ip_total = orig_payload + overhead * orig_pkts
+        if resp_ip_bytes is None:
+            resp_ip_total = resp_payload + overhead * resp_pkts
     traffic = NetworkTrafficLedger(
         orig=DirectionalTrafficLedger(orig_payload, max(0, orig_pkts), orig_ip_total),
         resp=DirectionalTrafficLedger(resp_payload, max(0, resp_pkts), resp_ip_total),

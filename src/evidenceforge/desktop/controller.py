@@ -16,6 +16,7 @@ from typing import Protocol
 
 import psutil
 
+from evidenceforge.desktop.evaluation_errors import evaluation_failure_message
 from evidenceforge.desktop.job_store import ControlIntent, JobStore
 from evidenceforge.desktop.jobs import _start_process, request_suspension, resume_generation
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
@@ -172,7 +173,12 @@ def _finish_evaluation(job: EvaluationJob, store: JobStore) -> None:
         job.status_message = ""
     except (OSError, UnicodeError, ValueError) as error:
         job.status = "failed"
-        job.status_message = str(error)[:500]
+        fallback = (
+            str(error)[:500]
+            if isinstance(error, OSError)
+            else "Evaluation did not produce a readable score report. Open the evaluation log for details."
+        )
+        job.status_message = evaluation_failure_message(job.log_file, fallback)
 
 
 def _worker_tick(store: JobStore, intent: ControlIntent) -> bool:

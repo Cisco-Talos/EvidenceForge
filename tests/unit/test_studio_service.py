@@ -1208,6 +1208,9 @@ def test_scorecard_detail_reads_only_saved_workspace_evaluation(
                         "name": "Parseability",
                         "weight": 0.2,
                         "score": 92,
+                        "supplementary": {
+                            "macos_native_coverage": {"hosts": [{"hostname": "OLD-MAC"}]}
+                        },
                         "sub_scores": [
                             {"name": "Schema", "key": "schema", "weight": 1, "score": 92}
                         ],
@@ -1247,6 +1250,7 @@ def test_scorecard_detail_reads_only_saved_workspace_evaluation(
         response = client.get("/v1/jobs/evaluation-1/scorecard", headers=headers)
         assert response.status_code == 200
         detail = response.json()
+        assert "macos_hosts" not in detail
         assert detail["overall_score"] == 87.6
         assert detail["pillars"][0]["sub_scores"][0]["score"] == 92
         assert detail["pillars"][0]["sub_scores"][0]["rating"] == "passed"
@@ -1255,6 +1259,9 @@ def test_scorecard_detail_reads_only_saved_workspace_evaluation(
         raw = client.get("/v1/jobs/evaluation-1/report", headers=headers)
         assert raw.status_code == 200
         assert raw.content == result_file.read_bytes()
+        assert raw.json()["pillars"][0]["supplementary"]["macos_native_coverage"] == {
+            "hosts": [{"hostname": "OLD-MAC"}]
+        }
         assert raw.headers["content-type"] == "application/json"
         partial = client.get(
             "/v1/jobs/evaluation-1/report", headers={**headers, "Range": "bytes=0-30"}
@@ -1273,6 +1280,27 @@ def test_scorecard_detail_reads_only_saved_workspace_evaluation(
         assert detail["acceptance_passed"] is False
         assert detail["acceptance_criteria"][0]["applicable"] is True
         assert detail["pillars"][0]["sub_scores"][0]["rating"] == "failed"
+        failed_report["supplementary"] = {
+            "ground_truth_agreement": {
+                "score": 94.7,
+                "correct": 10,
+                "incorrect": 1,
+                "expected_absences": 3,
+                "coverage_gaps": 2,
+                "actions": [{"correct": 10, "incorrect": 1}, {"correct": 0, "incorrect": 0}],
+                "findings": [
+                    {"intent_id": f"action-{index}", "rule": "missing_evidence"}
+                    for index in range(25)
+                ],
+            }
+        }
+        result_file.write_text(json.dumps(failed_report), encoding="utf-8")
+        agreement = client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).json()[
+            "ground_truth_agreement"
+        ]
+        assert agreement["score"] == 94.7 and agreement["actions_count"] == 2
+        assert agreement["zero_check_actions"] == 1 and agreement["expected_absences"] == 3
+        assert len(agreement["findings"]) == 25
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other_workspace)})
         assert client.get("/v1/jobs/evaluation-1/report", headers=headers).status_code == 404
         assert client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).status_code == 404
@@ -3205,3 +3233,23 @@ def test_library_search_returns_a_bounded_yaml_excerpt_without_persisting_it(
         assert len(result[0]["search_excerpt"]) <= 162
         stored = client.get("/v1/bootstrap", headers=headers).json()["items"][0]
         assert stored["search_excerpt"] == ""
+
+
+def test_large_evaluation_setting_defaults_on_and_persists_opt_out(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    paths = _paths(tmp_path / "private")
+    app = create_app(paths, "secret")
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        settings = client.get("/v1/settings", headers=headers).json()
+        assert settings["allow_large_evaluation"] is True
+        settings["allow_large_evaluation"] = False
+        response = client.put("/v1/settings", headers=headers, json=settings)
+        assert response.status_code == 200
+        assert response.json()["allow_large_evaluation"] is False
+        assert SettingsStore(paths).load().allow_large_evaluation is False
+        assert client.get("/v1/settings", headers=headers).json()["allow_large_evaluation"] is False

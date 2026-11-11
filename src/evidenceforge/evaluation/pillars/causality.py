@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 class CausalityScorer(DimensionScorer):
     number = 3
     name = "Causality"
-    weight = 0.25
+    weight = 0.20
 
     _NETWORK_ONLY_PIVOT_TYPES: ClassVar[frozenset[str]] = frozenset(
         {
@@ -237,6 +237,19 @@ class CausalityScorer(DimensionScorer):
             host_time_index = self._build_host_time_index(records)
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
+        self._canonical_agreement = None
+        if context.ground_truth is not None and context.ground_truth.schema_version == 5:
+            from evidenceforge.evaluation.pillars.ground_truth import prepare_ground_truth_agreement
+
+            self._canonical_agreement = prepare_ground_truth_agreement(context, records, scenario)
+            bindings = context.ground_truth_agreement["bindings"]
+            by_step: dict[str, list[ParsedRecord]] = defaultdict(list)
+            for action in self._canonical_agreement.actions:
+                by_step[action.storyline_id].extend(bindings.get(action.intent_id, []))
+            for event in resolved:
+                event.traces = list(
+                    {id(record): record for record in by_step.get(event.storyline_id, [])}.values()
+                )
         vis = VisibilityModel(scenario, enabled)
 
         progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 8})
@@ -264,7 +277,7 @@ class CausalityScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
         progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 8})
-        s7 = self._score_intent_reconciliation(scenario, context)
+        s7 = self._score_intent_reconciliation(scenario, context, records)
         progress("sub_score_done", {"name": "Intent Reconciliation", "score": s7.score})
 
         progress("sub_score_start", {"name": "Effect Reconciliation", "step": 8, "total": 8})
@@ -277,13 +290,6 @@ class CausalityScorer(DimensionScorer):
         host_log_profile = _build_host_log_profile(records, vis, scenario)
 
         supplementary = {"host_log_profile": host_log_profile}
-        if (
-            context.ground_truth is not None
-            and context.ground_truth.macos_native_coverage is not None
-        ):
-            supplementary["macos_native_coverage"] = (
-                context.ground_truth.macos_native_coverage.model_dump(mode="json")
-            )
         return PillarScore(
             number=self.number,
             name=self.name,
@@ -297,6 +303,7 @@ class CausalityScorer(DimensionScorer):
     def _score_intent_reconciliation(
         scenario: Scenario,
         context: EvaluationContext,
+        records: dict[str, list[ParsedRecord]] | None = None,
     ) -> SubScore:
         """Require every authored typed intent to survive planning reconciliation."""
 
@@ -401,8 +408,22 @@ class CausalityScorer(DimensionScorer):
         unlinked_invalid_processes = sum(
             event.intent_id not in expected_ids for event in invalid_processes
         )
+        canonical_invalid: set[str] = set()
+        if ground_truth.schema_version == 4 and context.ground_truth_root is not None:
+            from evidenceforge.evaluation.ground_truth import reconcile_canonical_ground_truth
+
+            canonical_invalid, canonical_failures = reconcile_canonical_ground_truth(
+                context.ground_truth_root,
+                ground_truth,
+                records or {},
+            )
+            failures.extend(canonical_failures)
         invalid_ids = (
-            expected_missing | mismatched_metadata | missing_summary_drift | invalid_process_ids
+            expected_missing
+            | mismatched_metadata
+            | missing_summary_drift
+            | invalid_process_ids
+            | canonical_invalid
         )
         total_assertions = len(expected_ids) + len(unexpected_ids) + unlinked_invalid_processes
         correct = max(0, len(expected_ids) - len(invalid_ids))
@@ -650,6 +671,14 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
         context: EvaluationContext,
     ) -> bool:
+        audit = context.ground_truth_agreement.get("result")
+        if audit is not None:
+            matching = [
+                action for action in audit.actions if action.storyline_id == event.storyline_id
+            ]
+            return bool(matching) and all(
+                action.correct + action.incorrect == 0 for action in matching
+            )
         if cls._event_generation_exempt(event, context):
             return True
         manifest_event = cls._manifest_event(event, context)
@@ -2710,6 +2739,17 @@ class CausalityScorer(DimensionScorer):
     # --- Sub-score 3: Indicator Accuracy ---
 
     def _score_indicator_accuracy(self, resolved: list[ResolvedEvent]) -> SubScore:
+        if getattr(self, "_canonical_agreement", None) is not None:
+            actions = self._canonical_agreement.actions
+            total = sum(action.fact_checks for action in actions)
+            wrong = sum(action.fact_errors for action in actions)
+            return SubScore(
+                name="Indicator Accuracy",
+                key="indicator_accuracy",
+                weight=0.15,
+                score=100 * (total - wrong) / total if total else 100,
+                details=f"{total - wrong}/{total} canonical source projections agree on required facts; expected gaps excluded",
+            )
         if not resolved:
             return SubScore(
                 name="Indicator Accuracy",
@@ -3311,6 +3351,17 @@ class CausalityScorer(DimensionScorer):
         resolved: list[ResolvedEvent],
         context: EvaluationContext,
     ) -> SubScore:
+        if getattr(self, "_canonical_agreement", None) is not None:
+            actions = self._canonical_agreement.actions
+            total = sum(action.timing_checks for action in actions)
+            wrong = sum(action.timing_errors for action in actions)
+            return SubScore(
+                name="Temporal Integrity",
+                key="temporal_integrity",
+                weight=0.15,
+                score=100 * (total - wrong) / total if total else 100,
+                details=f"{total - wrong}/{total} source projections respect canonical source timing; expected gaps excluded",
+            )
         if not resolved:
             return SubScore(
                 name="Temporal Integrity",
@@ -3416,6 +3467,17 @@ class CausalityScorer(DimensionScorer):
         host_time_index: dict[str, dict[str, list[ParsedRecord]]],
         context: EvaluationContext,
     ) -> SubScore:
+        if getattr(self, "_canonical_agreement", None) is not None:
+            actions = self._canonical_agreement.actions
+            total = sum(action.fact_checks for action in actions)
+            found = sum(action.found for action in actions)
+            return SubScore(
+                name="Storyline Trace Coverage",
+                key="storyline_trace_coverage",
+                weight=0.10,
+                score=100 * found / total if total else 100,
+                details=f"{found}/{total} canonical source projections have evidence; expected gaps excluded",
+            )
         if not resolved:
             return SubScore(
                 name="Storyline Trace Coverage",
@@ -3546,7 +3608,6 @@ def _build_host_log_profile(
 ) -> dict[str, dict]:
     present: dict[str, set[str]] = defaultdict(set)
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    processes: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for format_name, record_list in records.items():
         for rec in record_list:
@@ -3563,19 +3624,6 @@ def _build_host_log_profile(
                 h = (vis.resolve_hostname(hostname) or hostname).lower()
                 present[h].add(format_name)
                 counts[h][format_name] += 1
-                if format_name == "ecar" and rec.fields.get("object") == "PROCESS":
-                    action = rec.fields.get("action")
-                    operation = rec.fields.get("operation")
-                    if action == "CREATE":
-                        processes[h]["ecar_process_creates"] += 1
-                        key = "ecar_forks" if operation == "fork" else "ecar_aggregate_creates"
-                        processes[h][key] += 1
-                    elif action == "MODIFY" and operation == "exec":
-                        processes[h]["ecar_execs"] += 1
-                elif format_name == "macos_endpoint_security":
-                    event_type = rec.fields.get("event_type")
-                    if isinstance(event_type, int):
-                        processes[h][f"native_es_event_{event_type}"] += 1
 
     profile: dict[str, dict] = {}
     all_hosts = set(present.keys())
@@ -3608,14 +3656,5 @@ def _build_host_log_profile(
             "deployment_verified": vis.deployment_verified,
             "volume_by_format": dict(counts.get(hostname, {})),
         }
-        if vis.get_os_category(hostname) == "macos":
-            profile[hostname]["process_coverage"] = dict(processes.get(hostname, {}))
-            profile[hostname]["coverage_notes"] = [
-                "Shell history requires an explicit interactive submission to its live shell.",
-                "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
-                "Endpoint Security covers qualified v11 fork/exec/known-exit observations; "
-                "aggregate process CREATE is not a fork. App-policy refusal establishes "
-                "neither a target execution stage nor a specific refusal cause.",
-            ]
 
     return profile

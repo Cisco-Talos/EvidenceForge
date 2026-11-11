@@ -74,6 +74,7 @@ from evidenceforge.events.contracts import (
     OccurrenceRole,
     OwnedEffectOccurrencePlan,
     SemanticOccurrenceKey,
+    contract_for,
     shadow_seal,
 )
 from evidenceforge.events.es_collector import (
@@ -3316,6 +3317,8 @@ class EventDispatcher:
             result = record.result
         assert result is not None
         try:
+            for projection in record.projections:
+                self._capture_ground_truth_projection(projection, _CURRENT_AUTHORED_INTENT)
             record.exact_publication_batch.commit()
             with self._persistent_smb_source_publication_lock:
                 if self._active_persistent_smb_source_publication_locked(carrier) is not record:
@@ -10367,6 +10370,7 @@ class EventDispatcher:
                                     self._state_neutral_projection_committed_receipts -= 1
                             self._state_neutral_projection_committed_receipts += 1
 
+            self._capture_ground_truth_projection(record.projection, record.authored_intent_id)
             return cast(
                 StateNeutralProjectionPublicationResult,
                 self._resume_exact_projection_recovery(
@@ -13120,6 +13124,12 @@ class EventDispatcher:
                                 self._action_cohort_committed_receipts -= 1
                         self._action_cohort_committed_receipts += 1
 
+        if record.exact_recovery is None:
+            for projection, intent_id in zip(
+                record.trusted_projections, record.member_authored_intent_ids, strict=True
+            ):
+                self._capture_ground_truth_projection(projection, intent_id)
+
         if record.canonical_interrupts:
             interruption = record.canonical_interrupts[0]
             interruption.action_cohort_receipt = receipt
@@ -13622,6 +13632,19 @@ class EventDispatcher:
                         owner_tail_complete = True
                     raise
                 owner_tail_complete = True
+            canonical_owner = record.owner_record
+            if type(canonical_owner) is _PreparedActionCohortBatchRecord:
+                for projection, intent_id in zip(
+                    canonical_owner.trusted_projections,
+                    canonical_owner.member_authored_intent_ids,
+                    strict=True,
+                ):
+                    self._capture_ground_truth_projection(projection, intent_id)
+            elif type(canonical_owner) is _PreparedDeferredSessionPublicationRecord:
+                for prepared in canonical_owner.dispatches:
+                    self._capture_ground_truth_projection(
+                        prepared._projection, prepared._authored_intent_id
+                    )
             if record.batch.released:
                 if not self._released_exact_projection_result_authenticates(record):
                     raise EventContractError(
@@ -17575,6 +17598,172 @@ class EventDispatcher:
             legacy_targets=tuple(targets),
         )
 
+    def _capture_ground_truth_projection(
+        self,
+        projection: _PreparedProjection,
+        authored_intent_id: object,
+    ) -> None:
+        """Fail closed after metadata failure without canceling committed owner receipts."""
+        ledger = self.intent_execution_ledger
+        if ledger is None or ledger.ground_truth is None:
+            return
+        try:
+            self._capture_ground_truth_projection_facts(projection, authored_intent_id)
+        except BaseException:
+            # Source recovery may catch a post-commit error. It must never turn
+            # incomplete canonical metadata into a successful run/checkpoint.
+            ledger.ground_truth.mark_failed()
+            raise
+
+    def _capture_ground_truth_projection_facts(
+        self,
+        projection: _PreparedProjection,
+        authored_intent_id: object,
+    ) -> None:
+        """Journal committed truth and exact source decisions, including absent evidence."""
+        ledger = self.intent_execution_ledger
+        if ledger is None or ledger.ground_truth is None:
+            return
+        from evidenceforge.events.ground_truth_occurrence import GroundTruthObservation
+
+        journal = ledger.ground_truth
+        event = projection.occurrence
+        journal.record(
+            event,
+            self._freeze_authored_intent_id(authored_intent_id),
+        )
+        if journal.capture_expectations(event, projection, self):
+            return
+        if not (
+            projection.compiled_targets or projection.legacy_targets or projection.initial_statuses
+        ):
+            journal.observe(
+                event,
+                GroundTruthObservation(
+                    source_instance="unavailable:canonical",
+                    format="canonical",
+                    status="not_observed",
+                    reason="no_applicable_source",
+                ),
+            )
+        expected_formats: set[str] = set()
+        contract = contract_for(event.event_type)
+        if contract is not None:
+            for consumer in contract.emitter_consumers:
+                descriptor = DEFAULT_SOURCE_CATALOG.descriptor(consumer.value)
+                if descriptor.owner is SourceOwnerKind.HOST and any(
+                    host is not None and descriptor.applies_to_host(host.os_category, host.roles)
+                    for host in (event.src_host, event.dst_host)
+                ):
+                    expected_formats.add(consumer.value)
+        if event.network is not None:
+            if not event.network.application_layer_only:
+                expected_formats.add("zeek_conn")
+            if event.dns is not None:
+                expected_formats.add("zeek_dns")
+            if event.protocol.http is not None:
+                expected_formats.add("zeek_http")
+            if event.protocol.ssl is not None:
+                expected_formats.add("zeek_ssl")
+        for format_name in sorted(expected_formats):
+            reason = None
+            if format_name not in self.emitters:
+                reason = "output_filtering"
+            elif not self.emitters[format_name].can_handle(event):
+                reason = (
+                    "encrypted_application"
+                    if format_name == "zeek_http" and event.network.service == "ssl"
+                    else "missing_capability"
+                )
+            if reason:
+                journal.observe(
+                    event,
+                    GroundTruthObservation(
+                        source_instance="unavailable:" + format_name,
+                        format=format_name,
+                        status="not_observed",
+                        reason=reason,
+                    ),
+                )
+        for format_name, status in projection.initial_statuses:
+            absence_reason = "no_applicable_source"
+            if (
+                event.network is not None
+                and self.collection_deployment is not None
+                and self.collection_deployment.count_format(format_name) > 0
+            ):
+                absence_reason = "topology_exclusion"
+            journal.observe(
+                event,
+                GroundTruthObservation(
+                    source_instance="unavailable:" + format_name,
+                    format=format_name,
+                    status="not_observed",
+                    reason="collection_window_exclusion"
+                    if status == "out_of_window"
+                    else absence_reason,
+                ),
+            )
+        for target in projection.compiled_targets:
+            envelope = target.envelope
+            assert envelope is not None
+            reason = None
+            if not envelope.admitted:
+                reason = str(envelope.admission)
+            elif not target.topology_visible:
+                reason = "topology_exclusion"
+            elif target.decision is None or target.decision.status == "dropped":
+                reason = "modeled_collection_loss"
+            elif target.projected_timestamp is not None and not self._admit_projection_target(
+                replace(
+                    event,
+                    timestamp=target.projected_timestamp,
+                    source_timing=target.source_timing,
+                    network_observations=target.network_observations or event.network_observations,
+                ),
+                target,
+            ):
+                reason = "collection_window_exclusion"
+            identifiers = {}
+            if event.network is not None:
+                identifiers["zeek_uid"] = event.network.zeek_uid
+                for view in target.network_observations or event.network_observations:
+                    if view.sensor_identity.casefold() == envelope.source.hostname.casefold():
+                        identifiers["zeek_uid"] = view.connection_uid
+                        identifiers["src_ip"] = view.tuple_view.src_ip
+                        identifiers["dst_ip"] = view.tuple_view.dst_ip
+                        break
+            journal.observe(
+                event,
+                GroundTruthObservation(
+                    source_instance=envelope.source.source_instance,
+                    source_host=envelope.source.hostname,
+                    format=target.format_name,
+                    status="not_observed" if reason else "observed",
+                    reason=reason,
+                    observed_time=None if reason else envelope.observed_time,
+                    identifiers=identifiers,
+                ),
+            )
+        for target in projection.legacy_targets:
+            journal.observe(
+                event,
+                GroundTruthObservation(
+                    source_instance="legacy:" + target.format_name,
+                    format=target.format_name,
+                    status="observed" if target.occurrence is not None else "not_observed",
+                    reason=None
+                    if target.occurrence is not None
+                    else {
+                        "dropped": "modeled_collection_loss",
+                        "out_of_window": "collection_window_exclusion",
+                    }.get(target.status, "missing_capability"),
+                    observed_time=target.occurrence.timestamp
+                    if target.occurrence is not None
+                    else None,
+                ),
+            )
+
     def _publish_prepared_projection(
         self,
         projection: _PreparedProjection,
@@ -17583,6 +17772,7 @@ class EventDispatcher:
     ) -> dict[str, str]:
         """Render an exact frozen projection and record only accepted publication truth."""
 
+        self._capture_ground_truth_projection(projection, authored_intent_id)
         event = projection.occurrence
         identifiers_by_format: dict[str, str] = {}
         if event.network is not None and self._publishes_network_sensor_observations(event):
@@ -19159,6 +19349,13 @@ class EventDispatcher:
     ) -> None:
         """Record raw visibility without claiming a canonical occurrence."""
 
+        ledger = self.intent_execution_ledger
+        if ledger is not None and ledger.ground_truth is not None and self.authored_intent_id:
+            try:
+                ledger.ground_truth.record_raw(self.authored_intent_id, request, status)
+            except BaseException:
+                ledger.ground_truth.mark_failed()
+                raise
         if request.storyline_cluster_id:
             self._record_cluster_observation(
                 request.target_format,

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Authored Mac logins own an occurrence; implicit bootstrap may reuse a GUI."""
+"""Authored local logins own an occurrence; implicit bootstrap may reuse a session."""
 
 import random
 from datetime import timedelta
@@ -112,10 +112,7 @@ def test_authored_origin_defaults_are_mac_local_only(
         spec = LogonEventSpec(type="logon", logon_type=logon_type, source_ip=source_ip)
         handle_logon(owner, spec, context)
         call = generator.generate_logon.call_args
-        if os_name in {"macOS 26", "Darwin 25"} and logon_type == 2:
-            assert call.kwargs["allow_local_session_reuse"] is False
-        else:
-            assert "allow_local_session_reuse" not in call.kwargs
+        assert call.kwargs["allow_local_session_reuse"] is False
     assert call.kwargs["source_ip"] == expected
     assert context.malicious_event["source_ip"] == expected
     assert registry.bind.call_count == int(expected == "198.51.100.44")
@@ -126,3 +123,28 @@ def test_authored_occurrence_and_reusable_intent_have_distinct_ids() -> None:
     implicit = LogonRequest(**kwargs)
     assert implicit.stable_id == LogonRequest(**kwargs, allow_local_session_reuse=True).stable_id
     assert implicit.stable_id != LogonRequest(**kwargs, allow_local_session_reuse=False).stable_id
+
+
+@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu 24.04"])
+def test_authored_local_login_does_not_reuse_an_implicit_session(os_name: str) -> None:
+    state = StateManager()
+    generator = ActivityGenerator(state, {}, dispatcher=EventDispatcher(state, {}))
+    user, system = _user(), _system(os_name)
+    implicit = generator.generate_logon(user, system, _TIME, source_ip="-")
+    assert (
+        generator.generate_logon(user, system, _TIME + timedelta(seconds=30), source_ip="-")
+        == implicit
+    )
+    owner = SimpleNamespace(
+        activity_generator=generator,
+        state_manager=state,
+        public_identity_registry=Mock(),
+        _session_end_plan_for_current_start=lambda: None,
+        _record_storyline_logon=Mock(),
+    )
+    context = _context(system)
+    handle_logon(owner, LogonEventSpec(type="logon", logon_type=2, source_ip="-"), context)
+    authored = context.malicious_event["logon_id"]
+    assert authored != implicit
+    assert state.get_session_identity(authored).started_at == context.time
+    assert state.get_session(authored).storyline_protected

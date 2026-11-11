@@ -162,7 +162,11 @@ def queue_generation(
 
 
 def queue_evaluation(
-    generation: GenerationJob, state_directory: Path, *, settings: AppSettings | None = None
+    generation: GenerationJob,
+    state_directory: Path,
+    *,
+    settings: AppSettings | None = None,
+    allow_large_evaluation: bool = False,
 ) -> EvaluationJob:
     """Record an evaluation of a completed app-owned run."""
     job_id = uuid4().hex
@@ -180,6 +184,7 @@ def queue_evaluation(
             str(generation.output_root),
             "--format",
             "json",
+            *(["--allow-large-evaluation"] if allow_large_evaluation else []),
         ],
         created_at=time.time(),
     )

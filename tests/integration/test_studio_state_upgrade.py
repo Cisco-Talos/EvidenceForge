@@ -79,6 +79,7 @@ def test_historical_upgrade_preserves_independent_inventory(tmp_path: Path, shap
         assert json.loads(selected.settings_file.read_bytes())["settings"] == {
             **old_settings,
             "chat_followup_mode": "queue",
+            "allow_large_evaluation": True,
         }
         assert all(path.read_bytes() == content for path, content in engine.items())
         manifest = coordinator.verify_backup()

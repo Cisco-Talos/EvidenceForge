@@ -141,3 +141,42 @@ def test_job_summary_retains_output_ownership_and_treats_legacy_unknown_as_unown
     assert job_summary(payload)["owned_output"] is False
     payload["owned_output"] = True
     assert job_summary(payload)["owned_output"] is True
+
+
+def test_running_evaluation_does_not_treat_pending_json_as_an_unreadable_report(
+    jobs: StudioJobStore,
+) -> None:
+    job = _job(jobs, "evaluation", "running")
+    job.result_file.write_text("")
+    assert "scorecard" not in job_summary(job.model_dump(mode="json"))
+
+
+def test_historical_failed_evaluation_exposes_cli_error_without_rewriting_state(
+    jobs: StudioJobStore,
+) -> None:
+    job = _job(jobs, "evaluation", "failed")
+    job.result_file.write_text("")
+    job.log_file.write_text(
+        "Error: Evaluation failed: Evaluation corpus exceeds the supported envelope:\n864106704 corpus bytes exceeds 536870912\n"
+    )
+    job.status_message = "Invalid JSON: EOF while parsing a value"
+    summary = job_summary(job.model_dump(mode="json"))
+    assert "864106704 corpus bytes exceeds 536870912" in summary["scorecard"]["error"]
+    assert summary["status_message"] == summary["scorecard"]["error"]
+    assert job.status_message == "Invalid JSON: EOF while parsing a value"
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_studio_evaluation_captures_large_dataset_preference(
+    jobs: StudioJobStore, allowed: bool
+) -> None:
+    from evidenceforge.studio.jobs import queue_studio_evaluation
+    from evidenceforge.studio.settings import StudioSettings
+
+    generation = _job(jobs, "generation", "completed")
+    settings = StudioSettings() if allowed else StudioSettings(allow_large_evaluation=False)
+    job = queue_studio_evaluation(jobs, generation, settings)
+    assert ("--allow-large-evaluation" in job.command) == allowed
+    assert jobs.load_evaluations()[0].command == job.command
+    settings.allow_large_evaluation = not allowed
+    assert ("--allow-large-evaluation" in jobs.load_evaluations()[0].command) == allowed

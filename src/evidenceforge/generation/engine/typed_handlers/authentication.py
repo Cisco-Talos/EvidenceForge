@@ -118,7 +118,7 @@ def handle_logon(
             logon_type=spec.logon_type,
             source_ip=source_ip,
             session_end_plan=session_end_plan,
-            **({"allow_local_session_reuse": False} if macos_local else {}),
+            allow_local_session_reuse=False,
         )
     # Protect storyline-created sessions from baseline logoff
     session = self.state_manager.get_session(logon_id)

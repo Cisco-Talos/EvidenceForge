@@ -137,9 +137,13 @@ reconcile with independently retained canonical State and native output. Missing
 qualification or required observations fail generation. Use `partial` explicitly
 for intentionally incomplete diagnostic workloads.
 
-`GROUND_TRUTH.json.macos_native_coverage` and Studio's saved evaluation coverage
-panel distinguish complete starts, known exits, unknown results and historical
-unmeasured results. A process already running before collection has no retrospective
+The generation receipt in `GROUND_TRUTH.json.macos_native_coverage` and its Markdown
+summary distinguish complete starts, known exits, unknown results and historical
+unmeasured results. This all-process census supports the generation completeness
+guard. New evaluation reports and Studio omit its duplicate, macOS-only host process
+counters and implementation coverage notes; evaluation uses the shared source inventory
+and authored-action agreement checks. Historical report files remain readable unchanged.
+A process already running before collection has no retrospective
 start; one surviving collection has no in-window exit obligation. An unknown
 terminal result stays unknown and omits a native exit. Selected ordinary-close
 outcomes are explicit model policy, not universal measured shutdown behavior.

@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import sqlite3
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -268,6 +269,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         # source data remains unchanged; canonical ground truth receives the additive projection.
         self.authored_intent_ledger = AuthoredIntentLedger.from_scenario(scenario)
         self.intent_execution_ledger = IntentExecutionLedger(self.authored_intent_ledger)
+        from evidenceforge.generation.ground_truth_ledger import GroundTruthLedger
+
+        self.intent_execution_ledger.ground_truth = GroundTruthLedger(self.authored_intent_ledger)
         self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
         self._source_finalization_authority: ExactPublicationAuthority | None = None
         self._source_finalization_coordinator: SourceFinalizationCoordinator | None = None
@@ -582,11 +586,26 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             if profiler is not None:
                 profiler.finish("suspended")
             raise
-        except BaseException:
+        except BaseException as error:
             if profiler is not None:
                 profiler.finish("failed")
+            journal = self.intent_execution_ledger.ground_truth
+            if journal is not None and not self._generation_complete:
+                try:
+                    journal.write_failure_diagnostics(self.ground_truth_dir)
+                except (OSError, sqlite3.Error, ValueError, TypeError) as diagnostic_error:
+                    error.add_note(
+                        f"Ground-truth diagnostics could not be retained: {diagnostic_error}"
+                    )
             raise
         finally:
+            journal = self.intent_execution_ledger.ground_truth
+            retryable_completion = not self._generation_complete and (
+                self._generation_body_completed
+                or (self._finalization_aborted and not self._finalization_complete)
+            )
+            if journal is not None and not retryable_completion:
+                journal.close()
             self._generate_owner.release()
 
     # behavior-surface: checkpoint-control-start
@@ -928,6 +947,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             {"phase": "ground_truth", "description": "Generating ground truth documentation"},
         )
         self._generate_ground_truth()
+        (self.ground_truth_dir / "GROUND_TRUTH_DIAGNOSTICS.json").unlink(missing_ok=True)
         from evidenceforge.composition.artifacts import (
             write_generation_manifest,
             write_resolved_scenario,
@@ -1077,6 +1097,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.scenario,
             emitter_formats=deployment_formats,
         )
+        journal = self.intent_execution_ledger.ground_truth
+        if journal is not None:
+            from evidenceforge.events.observation import ObservationPolicy
+
+            journal.configure_expectations(
+                self.scenario,
+                self.source_deployment_compilation.deployment,
+                ObservationPolicy(self.scenario.observation_profile),
+            )
         from evidenceforge.generation.macos_process_coverage import validate_complete_collection
 
         validate_complete_collection(
@@ -2207,7 +2236,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
         source_evidence_status = self.dispatcher.source_evidence_status
 
+        journal = self.intent_execution_ledger.ground_truth
+        if journal is not None:
+            journal.assert_complete()
+        event_stream = journal.export(self.ground_truth_dir) if journal is not None else None
         generator = GroundTruthGenerator(
+            canonical_ledger=journal,
+            event_stream=event_stream,
             scenario=self.scenario,
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,

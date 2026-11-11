@@ -210,7 +210,7 @@ class TestGroundTruthGenerator:
             intent_execution_snapshot=execution.snapshot(),
         ).build_document()
 
-        assert document.schema_version == 3
+        assert document.schema_version == 5
         with pytest.raises(ValueError, match="Input should be 3"):
             type(document).model_validate(
                 {
@@ -625,8 +625,8 @@ class TestGroundTruthGenerator:
         iocs = generator._extract_iocs()
 
         assert "network" in iocs
-        assert "203.0.113.50 (Attacker IP)" in iocs["network"]
-        assert "159.65.43.201:443 (C2 Server)" in iocs["network"]
+        assert "203.0.113.50 (Logon source)" in iocs["network"]
+        assert "159.65.43.201:443 (External destination)" in iocs["network"]
 
     def test_extract_iocs_processes(self, minimal_scenario):
         """_extract_iocs() should extract process IOCs."""
@@ -689,14 +689,16 @@ class TestGroundTruthGenerator:
 
     def test_format_iocs_network_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format network IOC section."""
-        iocs = {"network": {"159.65.43.201:443 (C2 Server)", "203.0.113.50 (Attacker IP)"}}
+        iocs = {
+            "network": {"159.65.43.201:443 (External destination)", "203.0.113.50 (Logon source)"}
+        }
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
 
         assert "### Network IOCs" in formatted
-        assert "- 159.65.43.201:443 (C2 Server)" in formatted
-        assert "- 203.0.113.50 (Attacker IP)" in formatted
+        assert "- 159.65.43.201:443 (External destination)" in formatted
+        assert "- 203.0.113.50 (Logon source)" in formatted
 
     def test_format_iocs_process_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format process IOC section."""
@@ -717,8 +719,8 @@ class TestGroundTruthGenerator:
         formatted = generator._format_iocs(iocs)
 
         assert "### User IOCs" in formatted
-        assert "- attacker (compromised account)" in formatted
-        assert "- victim (compromised account)" in formatted
+        assert "- attacker (storyline actor)" in formatted
+        assert "- victim (storyline actor)" in formatted
 
     def test_format_iocs_empty(self, minimal_scenario, malicious_events):
         """_format_iocs() should handle empty IOCs."""
@@ -766,7 +768,7 @@ class TestGroundTruthGenerator:
 
         # Verify all major sections present
         assert "# Ground Truth:" in content
-        assert "## Attack Summary" in content
+        assert "## Authored Attack Description" in content
         assert "## Timeline" in content
         assert "## Indicators of Compromise (IOCs)" in content
 
@@ -785,7 +787,7 @@ class TestGroundTruthGenerator:
         iocs = generator._extract_iocs()
 
         assert "network" in iocs
-        assert "159.65.43.201 (C2 Server)" in iocs["network"]
+        assert "159.65.43.201 (External destination)" in iocs["network"]
 
     def test_format_event_details_missing_fields(self, minimal_scenario, malicious_events):
         """_format_event_details() should handle missing optional fields."""

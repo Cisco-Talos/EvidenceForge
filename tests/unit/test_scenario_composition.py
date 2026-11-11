@@ -204,12 +204,26 @@ def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> Non
     assert current.scenario.time_window.duration == packed.scenario.time_window.duration
     assert current.scenario.time_window.warmup == packed.scenario.time_window.warmup
     current_storyline = {event.id: event for event in current.scenario.storyline}
+    packed_storyline = {event.id: event for event in packed.scenario.storyline}
     assert packed_storyline_ids <= current_storyline.keys()
     assert all(
         current_storyline[event.id] == event
         for event in packed.scenario.storyline
-        if event.id != "evt-005"  # The raw Apache record follows the new collection epoch.
+        # The raw Apache record follows the new epoch. Explicit RDP ownership
+        # replaces a coerced root login and its redundant context prerequisite.
+        if event.id not in {"evt-005", "evt-012", "evt-013"}
     )
+    assert current_storyline["evt-012"] == packed_storyline["evt-012"].model_copy(
+        update={"events": packed_storyline["evt-012"].events[:-1]}
+    )
+    assert current_storyline["evt-013"] == packed_storyline["evt-013"].model_copy(
+        update={"events": packed_storyline["evt-013"].events[1:]}
+    )
+    rdp = current_storyline["evt-012-rdp"]
+    assert rdp.actor == packed_storyline["evt-013"].actor
+    assert rdp.system == packed_storyline["evt-012"].system
+    assert rdp.time == "+3h01m"
+    assert rdp.events == packed_storyline["evt-012"].events[-1:]
     assert current.scenario.red_herrings == packed.scenario.red_herrings
     assert {log["format"] for log in current.scenario.output.logs} == {
         log["format"] for log in packed.scenario.output.logs
@@ -945,6 +959,12 @@ def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliati
     data.mkdir()
     (data / "events.json").write_text("{}\n", encoding="utf-8")
     snapshot = ExecutionEffectAuditCounter().snapshot()
+    from evidenceforge.events.ground_truth_occurrence import GroundTruthEventStream
+
+    (tmp_path / "GROUND_TRUTH_EVENTS.jsonl").write_bytes(b"")
+    event_stream = GroundTruthEventStream(
+        schema_version=1, count=0, sha256=hashlib.sha256(b"").hexdigest()
+    )
     ground_truth_path = tmp_path / GROUND_TRUTH_JSON_FILENAME
     write_ground_truth_document(
         ground_truth_path,
@@ -952,7 +972,10 @@ def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliati
             compiled.scenario,
             [],
             execution_effect_audit_snapshot=snapshot,
-        ).build_document(),
+            event_stream=event_stream,
+        )
+        .build_document()
+        .model_copy(update={"schema_version": 4}),
     )
     write_resolved_scenario(compiled, tmp_path)
     write_generation_manifest(

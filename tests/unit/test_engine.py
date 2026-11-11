@@ -32,7 +32,15 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.composition import compile_scenario, with_runtime_scenario
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
+from evidenceforge.events.contexts import (
+    AuthContext,
+    HostContext,
+    ProcessContext,
+)
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.checkpoints import (
     GenerationEngineParticipant,
@@ -59,21 +67,34 @@ from evidenceforge.models import (
 from evidenceforge.models.scenario import ConnectionEventSpec
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 from evidenceforge.utils.timing import HawkesState
+from tests.network_factories import network_plan
 
 
 def _mock_activity_generator_factory(mock_instance: Mock):
-    """Bind mocked generation to the bundle-owned session postcondition."""
+    """Publish canonical mock occurrences and preserve the session postcondition."""
 
     mock_instance.timing_runtime = None
     mock_instance.generate_process.return_value = 4321
+    mock_instance._resolve_parent.return_value = 0
+    mock_instance._get_system_pid.return_value = 0
     mock_instance._sample_profile_activity_gap.return_value = timedelta(0)
 
     def factory(**kwargs):
         state_manager = kwargs["state_manager"]
+        dispatcher = kwargs["dispatcher"]
+
+        def host(system):
+            return HostContext(
+                hostname=system.hostname,
+                ip=system.ip,
+                os=system.os,
+                os_category="windows",
+                system_type=system.type,
+            )
 
         def generate_logon(**request):
             state_manager.set_current_time(request["time"])
-            return state_manager.create_session(
+            logon_id = state_manager.create_session(
                 username=request["user"].username,
                 system=request["system"].hostname,
                 logon_type=request.get("logon_type", 2),
@@ -82,8 +103,73 @@ def _mock_activity_generator_factory(mock_instance: Mock):
                 session_kind="interactive",
                 lifecycle_group_id="mock-logon-bundle",
             )
+            dispatcher.dispatch_builder(
+                OccurrenceBuilder(
+                    timestamp=request["time"],
+                    event_type="logon",
+                    dst_host=host(request["system"]),
+                    auth=AuthContext(username=request["user"].username, logon_id=logon_id),
+                )
+            )
+            return logon_id
+
+        def generate_process(**request):
+            state_manager.set_current_time(request["time"])
+            plan = state_manager.plan_process_materialization(
+                system=request["system"].hostname,
+                parent_pid=request.get("parent_pid") or 0,
+                image=request["process_name"],
+                command_line=request.get("command_line") or request["process_name"],
+                username=request["user"].username,
+                integrity_level="Medium",
+                os_category="windows",
+                lifecycle_group_id=f"mock-process:{request['time'].isoformat()}",
+                start_time=request["time"],
+                logon_id=request.get("logon_id") or "",
+            )
+            identity = plan.identity
+            dispatcher.dispatch_builder(
+                OccurrenceBuilder(
+                    timestamp=request["time"],
+                    event_type="process_create",
+                    src_host=host(request["system"]),
+                    process=ProcessContext(
+                        pid=identity.pid,
+                        parent_pid=identity.parent_pid,
+                        image=identity.image,
+                        command_line=identity.command_line,
+                        username=identity.principal,
+                        logon_id=identity.logon_id,
+                        start_time=identity.started_at,
+                    ),
+                    identity_plan=EventIdentityPlan(subject=identity),
+                    lifecycle=ActionLifecycleContext(
+                        group_id=identity.lifecycle_group_id,
+                        canonical_start=identity.started_at,
+                        phase="start",
+                    ),
+                )
+            )
+            return identity.pid
+
+        def generate_connection(**request):
+            plan = network_plan(
+                src_ip=request["src_ip"],
+                src_port=53000,
+                dst_ip=request["dst_ip"],
+                dst_port=request["dst_port"],
+                protocol=request.get("protocol", "tcp"),
+                source_visible_start_time=request["time"],
+                zeek_uid="UID123",
+            )
+            dispatcher.dispatch_builder(
+                OccurrenceBuilder(timestamp=request["time"], event_type="connection", network=plan)
+            )
+            return "UID123"
 
         mock_instance.generate_logon.side_effect = generate_logon
+        mock_instance.generate_process.side_effect = generate_process
+        mock_instance.generate_connection.side_effect = generate_connection
         return mock_instance
 
     return factory

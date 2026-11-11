@@ -77,7 +77,7 @@ _MAX_FIELD_AGREEMENT_MATCHES = 100_000
 class PlausibilityScorer(DimensionScorer):
     number = 2
     name = "Plausibility"
-    weight = 0.25
+    weight = 0.20
 
     def score(
         self,

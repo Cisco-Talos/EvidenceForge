@@ -174,7 +174,13 @@ def test_authored_warmup_runs_before_collection_and_is_not_replayed_in_tail(
     ]
     engine = GenerationEngine(Scenario.model_validate(document), tmp_path / "output")
     calls: list[int] = []
-    monkeypatch.setattr(engine, "_execute_single_storyline_event", calls.append)
+    execute = engine._execute_single_storyline_event
+
+    def record_execution(index: int) -> None:
+        calls.append(index)
+        execute(index)
+
+    monkeypatch.setattr(engine, "_execute_single_storyline_event", record_execution)
     engine.generate()
     assert calls == [0, 1]
     assert engine._storyline_executed == {0, 1}

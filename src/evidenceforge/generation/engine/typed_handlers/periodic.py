@@ -146,6 +146,7 @@ def handle_beacon(
         if (
             spec.method
             or spec.uri
+            or spec.status_code is not None
             or spec.user_agent
             or getattr(spec, "request_body_len", None) is not None
             or spec.request_multipart is not None
@@ -563,6 +564,10 @@ def handle_beacon(
                     emit_dns=tick_emit_dns,
                     source_system=src_sys,
                     http=tick_http_ctx,
+                    preserve_http_outcome=(
+                        spec.status_code is not None
+                        or _entry_value(tick_sequence_entry, "status_code") is not None
+                    ),
                     ids_alerts=tick_ids_alerts,
                     proxy=proxy_ctx,
                     hostname=conn_hostname if conn_hostname is not None else spec.hostname,
@@ -603,6 +608,10 @@ def handle_beacon(
                 emit_dns=tick_emit_dns,
                 source_system=src_sys,
                 http=tick_http_ctx,
+                preserve_http_outcome=(
+                    spec.status_code is not None
+                    or _entry_value(tick_sequence_entry, "status_code") is not None
+                ),
                 ids_alerts=tick_ids_alerts,
                 hostname=conn_hostname,
                 pid=story_pid,

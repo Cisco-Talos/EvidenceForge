@@ -191,7 +191,8 @@ class CiscoAsaParser(LogParser):
         # Parse timestamp (no year — generated output stores the year in the parent dir).
         try:
             ts_with_year = f"{seed_year} {ts_str}"
-            timestamp = datetime.strptime(ts_with_year, "%Y %b %d %H:%M:%S")
+            # The generated RFC3164 family renders UTC without an offset.
+            timestamp = datetime.strptime(ts_with_year, "%Y %b %d %H:%M:%S").replace(tzinfo=UTC)
         except ValueError:
             errors.append(f"Invalid timestamp: {ts_str}")
 

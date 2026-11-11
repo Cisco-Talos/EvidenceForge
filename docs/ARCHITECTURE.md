@@ -356,8 +356,20 @@ observation data. `IntentExecutionLedger` records planner acknowledgement, stabl
 occurrence identities, and intent-scoped source-observation outcomes
 at the dispatcher boundary. `GROUND_TRUTH.json` projects one reconciliation row for every authored
 typed storyline or red-herring specification, including rows that failed to plan or produced no
-event dictionary. Ground-truth schema v2 exposes semantic occurrence IDs and no longer exposes a
-dispatch-sequence identifier.
+event dictionary. Ground-truth schemas v4/v5 add a disk-backed canonical occurrence journal and the streamed,
+manifest-bound `GROUND_TRUTH_EVENTS.jsonl`. Authored summaries, source-instance observation reasons,
+DNS returned-answer/actual-use relationships, and deterministic outcomes project from committed
+facts. Schema v5/stream v2 additionally records complete source expectations and independently
+verifies them in the equally action-weighted Ground Truth Agreement pillar (95% minimum).
+All five schema-v5 pillars have equal 20% weight. Schema-v3/v4 evaluation retains its legacy weighting. See [the ground-truth contract](reference/ground-truth.md).
+
+Process source contracts retain immutable execution transitions and independently verifiable
+readiness anchors from finalized source projections. Evaluation resolves exact host/source
+ownership and source clocks before matching; mutable image/command/credential facts are
+separate from occurrence identity. UDP accounting and scan enforcement belong to canonical
+network planning, so renderers do not repair shared accounting or infer policy from a
+closed port. Semantic verification policy remains package-owned when evaluating captured
+generation configurations.
 
 ### V2 Foundation Ownership and Scale
 

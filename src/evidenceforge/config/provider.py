@@ -135,6 +135,7 @@ _TRUSTED_DERIVED_CACHE_SLOTS: tuple[tuple[str, str], ...] = (
     ),
     ("evidenceforge.generation.storage_world", "_load_catalog_config"),
     ("evidenceforge.evaluation.thresholds", "load_thresholds"),
+    ("evidenceforge.events.evidence_projection", "source_event_contracts"),
     ("evidenceforge.formats.snare", "load_snare_projections"),
     ("evidenceforge.artifacts.run_source", "_read_source"),
     ("evidenceforge.artifacts.run_source", "_read_manifest"),

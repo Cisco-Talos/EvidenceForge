@@ -351,20 +351,32 @@ left no error message. Validation checks the inputs; it cannot guarantee that th
 installed runtime will finish generation. Preserve partial output and use **Resume**
 when offered, or **Regenerate** for a new run after correcting the reported problem.
 
-### Mac coverage in evaluations
+### Large evaluations
 
-For bundles containing a saved native Mac census, expand **macOS process coverage** in the
-evaluation scorecard. It shows each host's requested collection policy, fork/exec published
-versus expected counts, known exit publication and unknown outcomes. Start completeness is
-separate from exit completeness; historical reports without exit accounting show **Unmeasured**.
-Reports without a census say it is unavailable. These source-tree controls require a build
-containing the Mac coverage changes; they do not retrofit missing facts into old reports.
+**Settings → Jobs → Allow large evaluations** is enabled by default. Newly queued Studio
+evaluations pass `--allow-large-evaluation` to the CLI, allowing datasets above the default
+512 MiB, 10,000-file and 500,000-record limits. Large evaluations may use substantial memory
+because the evaluator currently retains parsed records in RAM. Turn the setting off to enforce
+the CLI's default limits. Already queued or running evaluations retain their captured command.
 
-A general evaluation PASS does not replace this census, prove every real background helper is
-modeled or prove complete filesystem capture. Inspect native ES/ULF/history files in the run's
-file browser and consult [Mac scope and limits](macos.md) when interpreting them. Unsupported
-complete-start requests need a qualified launch/metadata path; reducing the policy to partial
-changes the requested guarantee rather than repairing the missing evidence.
+Existing Studio preferences receive this default through the normal backed-up settings upgrade.
+The CLI's own defaults and record-level input protections are unchanged. Streaming/bounded-memory
+evaluation without fixed corpus-size caps remains P1 roadmap work.
+
+### macOS generation completeness
+
+The native macOS process census is a generation-time safeguard. Its receipt remains in
+`GROUND_TRUTH.json.macos_native_coverage`; new evaluation reports and scorecards omit the
+duplicated census, macOS-only host process counters and implementation coverage notes.
+The host log profile uses the same source-inventory fields across platforms.
+
+Inspect native ES/ULF/history files in the run's file browser and consult
+[Mac scope and limits](macos.md) when interpreting them. A passing evaluation covers its
+declared checks; it does not establish a complete population of real background tasks or
+complete filesystem capture. A complete native process request still requires qualified
+launch/metadata paths during generation.
+
+### Closing and reopening Studio
 
 Closing a window applies the configured job and authoring-turn policies. **Continue in
 background** lets app-owned work proceed; reopening Studio reconnects to it. **Checkpoint and
@@ -529,3 +541,40 @@ For launching or building from a checkout, see
 [development setup and build/test instructions in CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).
 Product release preparation and installer publication are documented separately in
 [release instructions](releases.md).
+
+### Ground-truth evaluation and visibility
+
+Schema-5 bundles show five equally weighted pillars (20% each), including Ground Truth
+Agreement with a 95% minimum. Ground truth appears below the pillar scores beside the other
+expandable report sections. Its header shows the score to two decimal places, a colored verdict,
+unique defective checks and diagnostic-message counts. Expand it for a brief list of categories,
+each initially collapsed with its colored icon, description, counts and help visible. Expand
+a category for its defective checks, then expand a check for related messages, evidence and
+timing details. A single search box matches category names, actions, occurrences, sources, rules
+and evidence. Category headers show the matching counts. Existing help icons explain scoring,
+categories and coverage. Labels accompany colored icons. A passing agreement score can still
+have defective checks. Multiple messages can describe one defective check; the score averages
+the per-action agreement scores with equal weight.
+
+Studio shows up to 100 representative messages, with complete totals and explicit truncation.
+Category/search counts describe the displayed examples when the report is truncated. New
+evaluations give related messages an exact check ID; earlier reports group their available
+action/occurrence/source/format identities and disclose that limitation. Export report JSON for
+complete per-action counts and the same bounded examples; it is not a complete findings export.
+Historical feature-bundle verification limitations are displayed explicitly. Legitimate
+zero-check actions score 100% explicitly.
+
+The new presentation works with saved evaluations without re-evaluating them. Re-evaluation
+applies evaluator fixes and adds exact diagnostic check IDs to a new report. Generation fixes
+and newly captured ground-truth provenance require a separate fresh generation followed by
+evaluation; re-evaluation cannot repair the original evidence or reconstruct uncaptured facts.
+Keep the original run for comparison. Historical report JSON remains available unchanged.
+
+The macOS process census is not a separate scorecard section or duplicated in new evaluation
+JSON. The host log profile uses the same source-inventory fields for every platform, without
+macOS-only process statistics or coverage notes. The macOS generation-time completeness guard
+and receipt in `GROUND_TRUTH.json` remain: this census includes all modeled processes, while
+agreement scoring covers authored actions and their consequences.
+Legacy schema-3/4 reports retain their four pillars and original weights and show a coverage
+limitation. Visibility validation now warns about important typed facts that no relevant source
+can record; optional source gaps and generic sensor coverage notes are informational.

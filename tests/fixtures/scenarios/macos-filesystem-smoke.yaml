@@ -58,11 +58,17 @@ output:
   destination: ./output
   compression: false
 storyline:
-  - id: close-warmup
-    time: +5s
+  - id: setup-gui-session
+    time: '2026-11-02T12:50:00Z'
     actor: alex
     system: MAC-SMOKE
-    activity: Close any warmup GUI session
+    activity: Establish the explicit pre-window GUI session that cleanup closes
+    events: [{type: logon, logon_type: 2}]
+  - id: close-warmup
+    time: +30s
+    actor: alex
+    system: MAC-SMOKE
+    activity: Close the explicit setup GUI session
     events: [{type: logoff}]
   - id: login
     time: +1m

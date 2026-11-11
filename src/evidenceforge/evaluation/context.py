@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.ground_truth import GroundTruthDocument
@@ -21,6 +22,8 @@ class EvaluationContext:
 
     observation_manifest: ObservationManifest | None = None
     ground_truth: GroundTruthDocument | None = None
+    ground_truth_root: Path | None = None
+    ground_truth_agreement: dict = field(default_factory=dict, compare=False)
     # storyline_id -> {"values": [rendered on-disk credentials], "time": datetime},
     # from GROUND_TRUTH.json. Lets the causality pillar match spillage events
     # without re-running synthesis, anchored to the actual emitted time.

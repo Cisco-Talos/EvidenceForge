@@ -4,12 +4,7 @@ description: "Generated bundle, sidecar, and output-target reference"
 
 # Generated Bundle And Output Targets
 
-## Contents
-
-- [Bundle Layout](#bundle-layout)
-- [Compiled Collection Identity](#compiled-collection-identity)
-- [Output Targets](#output-targets)
-- [Replacement And Verification](#replacement-and-verification)
+**Contents:** [Layout](#bundle-layout) · [Collection](#compiled-collection-identity) · [Targets](#output-targets) · [Recovery and replacement](#checkpoint-workspace-replacement-and-verification)
 
 Read this reference when the question is about generated paths, authoritative artifacts, target
 rendering, replacement scope, or bundle integrity. Read a family-specific evidence reference for
@@ -17,8 +12,7 @@ record fields and source behavior.
 
 ## Bundle Layout
 
-One successful current run writes one matched bundle. Some source files only exist when their
-format, topology, or feature is active.
+Successful runs write one matched bundle; source files depend on formats, topology and activity.
 
 ```text
 <bundle-root>/
@@ -46,6 +40,7 @@ format, topology, or feature is active.
     <firewall-name>/cisco_asa.log
     <firewall-name>/<year>/cisco_asa.log
   artifacts/email/<artifact-id>.eml
+  GROUND_TRUTH_EVENTS.jsonl  # streamed canonical occurrences; schema-v4/v5 bundles
   GROUND_TRUTH.json
   GROUND_TRUTH.md
   OBSERVATION_MANIFEST.json
@@ -58,15 +53,14 @@ format, topology, or feature is active.
   ENVIRONMENT.md
 ```
 
-`data/`, both ground-truth files, the observation manifest, collection profile, output-target
+`data/`, all ground-truth files, the observation manifest, collection profile, output-target
 marker, resolved scenario, and generation manifest are core current outputs. The storage manifest,
 artifact manifest, and `artifacts/` appear only when applicable. `ENVIRONMENT.md` is optional
 authored collateral; generation does not create it.
 
-`GROUND_TRUTH.json` is canonical and `GROUND_TRUTH.md` is its human-readable projection.
-`RESOLVED_SCENARIO.yaml` is the self-contained authoritative generation input. It no longer needs
-the authored include graph, packs, project configuration, or discovery directory. It remains
-generated/non-editable and cannot authorize live callbacks.
+`GROUND_TRUTH.json` is canonical; `GROUND_TRUTH.md` projects it for readers.
+`RESOLVED_SCENARIO.yaml` is self-contained; includes, packs, config and discovery are unnecessary.
+It remains generated/non-editable and cannot authorize live callbacks.
 
 `GENERATION_MANIFEST.json` is the run identity and is committed last. It records the effective
 target, seed, formats, runtime/build identity, selected pack identities and digests, resolved-file
@@ -82,8 +76,8 @@ topology visibility, coherent missingness, source timing/batching, and only then
 `OBSERVATION_MANIFEST.json` records aggregate source-observation outcomes. When exact source
 overrides are part of the effective scenario, `source_deployment_digest` binds those diagnostics to
 the immutable compiled deployment. `COLLECTION_PROFILE.json` records the primary collection window,
-observation profile, family tail policy, and export ordering. Projection envelopes themselves are
-ephemeral; the bundle does not retain one decision object per candidate record.
+observation profile, family tail policy, and export ordering. Background projection envelopes are
+ephemeral; authored source expectations persist in `GROUND_TRUTH_EVENTS.jsonl`.
 
 When diagnosing absence, distinguish an undeployed source, missing capability, invisible topology,
 coherent drop/filter, and an out-of-window record. Do not change scenario collection policy to hide
@@ -132,3 +126,9 @@ Unregistered authored collateral is preserved.
 
 After exit code 0, report effective manifest values. Use `eforge eval <bundle-root>` for independent
 containment/hash verification. Timestamped run manifests need not be byte-identical across replays.
+
+Schema-v4/v5 ground truth binds the canonical occurrence stream by count and SHA-256.
+It separates authored descriptions, actual outcomes, and source-instance observation reasons.
+Schema 5 records expected presence/absence per source; evaluation matches actual evidence.
+Keep all returned DNS answers distinct from selected/attempted addresses. Missing collection
+does not remove an occurrence; prevention does not invent an unobserved downstream transfer.

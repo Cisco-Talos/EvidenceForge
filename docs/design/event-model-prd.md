@@ -1,5 +1,11 @@
 # PRD: EvidenceForge Canonical Event Model
 
+Canonical ground-truth capture and source-observation reconciliation follow the
+[ground-truth contract](../reference/ground-truth.md).
+Execution transitions and source timing dependencies are captured from canonical/source
+owners and independently evaluated. Ordinary transport refusal is separate from policy
+prevention, and UDP accounting is finalized before source projection.
+
 The explicit `macos_launch_item.launch_profile: root_xpcproxy_v11` system-job preset
 now owns bounded root true activation through canonical fork, xpcproxy exec, setsid
 and target exec. The loaded definition retains its clean environment independently

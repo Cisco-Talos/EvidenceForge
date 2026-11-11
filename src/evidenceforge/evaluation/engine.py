@@ -47,6 +47,7 @@ from evidenceforge.evaluation.pillars import (
     PlausibilityScorer,
     TimingScorer,
 )
+from evidenceforge.evaluation.pillars.ground_truth import GroundTruthAgreementScorer
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
@@ -66,6 +67,7 @@ DIMENSION_SCORERS: list[DimensionScorer] = [
     PlausibilityScorer(),
     CausalityScorer(),
     TimingScorer(),
+    GroundTruthAgreementScorer(),
 ]
 
 
@@ -159,6 +161,7 @@ _CATEGORY_DEFINITIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "Declared Scenario Completeness",
         (
             "intent_reconciliation",
+            "ground_truth_agreement",
             "effect_reconciliation",
             "event_presence",
             "indicator_accuracy",
@@ -397,6 +400,16 @@ class EvaluationEngine:
 
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
+        if self.effective_config is not None:
+            from evidenceforge.config.provider import effective_config_scope
+
+            with effective_config_scope(self.effective_config):
+                return self._run()
+        return self._run()
+
+    def _run(self) -> QualityReport:
+        """Score using the active captured configuration scope."""
+        self._thresholds = load_thresholds()
         # 1. Discover and parse all log files
         self._progress("phase_start", {"phase": "parsing"})
         records, source_counts = self._parse_all_logs()
@@ -420,6 +433,9 @@ class EvaluationEngine:
         context = EvaluationContext(
             observation_manifest=observation_manifest,
             ground_truth=ground_truth,
+            ground_truth_root=self.output_dir
+            if (self.output_dir / "GROUND_TRUTH.json").is_file()
+            else self.output_dir.parent,
             spillage_ground_truth=self._load_spillage_ground_truth(),
             adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
             email_ground_truth=self._load_email_ground_truth(),
@@ -431,11 +447,27 @@ class EvaluationEngine:
         validate_route_inventory()
 
         # 2. Run each available pillar scorer
-        total_pillars = len(DIMENSION_SCORERS)
+        scorers = DIMENSION_SCORERS
+        if ground_truth is None or ground_truth.schema_version < 5:
+            scorers = [
+                scorer
+                for scorer in DIMENSION_SCORERS
+                if not isinstance(scorer, GroundTruthAgreementScorer)
+            ]
+            self._thresholds = self._thresholds.model_copy(
+                update={
+                    "pillars": {
+                        key: value
+                        for key, value in self._thresholds.pillars.items()
+                        if key != "ground_truth"
+                    }
+                }
+            )
+        total_pillars = len(scorers)
         self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_pillars})
         pillars: list[PillarScore] = []
         scoring_records = records
-        for i, scorer in enumerate(DIMENSION_SCORERS, 1):
+        for i, scorer in enumerate(scorers, 1):
             self._progress(
                 "dimension_start",
                 {
@@ -459,6 +491,12 @@ class EvaluationEngine:
                         source: [r for r in items if id(r) not in context.malformed_record_ids]
                         for source, items in records.items()
                     }
+                if ground_truth is None or ground_truth.schema_version < 5:
+                    pillar_score = pillar_score.model_copy(
+                        update={"weight": {1: 0.30, 2: 0.25, 3: 0.25, 4: 0.20}[pillar_score.number]}
+                    )
+                else:
+                    pillar_score = pillar_score.model_copy(update={"weight": 0.20})
                 pillars.append(pillar_score)
             except (
                 OSError,
@@ -497,6 +535,11 @@ class EvaluationEngine:
         supplementary: dict = {}
         supplementary["output_target"] = self.output_target.value
         supplementary["evaluation_capacity"] = self.capacity.model_dump()
+        if ground_truth is None or ground_truth.schema_version < 5:
+            supplementary["ground_truth_coverage"] = {
+                "mode": "legacy",
+                "limitation": "No complete per-source expectation contract; original four-pillar evaluation retained.",
+            }
         for pillar in pillars:
             supplementary.update(pillar.supplementary)
         if observation_manifest is not None:
@@ -578,6 +621,11 @@ class EvaluationEngine:
             for path in sorted(paths):
                 logger.info(f"Parsing {format_name}: {path.name}")
                 source_instance = self._source_instance(path)
+                if format_name in {"bash_history", "zsh_history"} and path.parent.name in {
+                    "bash_history",
+                    "zsh_history",
+                }:
+                    source_instance = path.parent.parent.name
                 parsed: list[ParsedRecord] = []
                 for record in parser.parse_file(path):
                     total_records += 1
@@ -588,7 +636,14 @@ class EvaluationEngine:
                         )
                     parsed.append(record)
                 for record in parsed:
+                    if record.source_host and declared_hosts.get(
+                        record.source_host.casefold(), record.source_host.casefold()
+                    ) != declared_hosts.get(source_instance.casefold(), source_instance.casefold()):
+                        record.parse_errors.append("Source host contradicts the bundle file owner")
                     record.source_instance = source_instance
+                    record.source_path = str(
+                        path.resolve().relative_to(self.output_dir.resolve(), walk_up=True)
+                    )
                     if format_name in {"macos_endpoint_security", "macos_unified_log"}:
                         # Native exports carry no hostname. Attribute them only when
                         # the bundle's source directory identifies a declared host;

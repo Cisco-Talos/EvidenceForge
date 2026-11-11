@@ -3708,54 +3708,6 @@ export interface components {
             code: "bubblewrap_missing" | "user_namespace_restricted";
         };
         /**
-         * MacosProcessCoverageSummary
-         * @description Independent canonical obligations versus committed native publication.
-         */
-        MacosProcessCoverageSummary: {
-            /**
-             * Window Start
-             * Format: date-time
-             */
-            window_start: string;
-            /**
-             * Window End
-             * Format: date-time
-             */
-            window_end: string;
-            /** Expected Forks */
-            expected_forks: number;
-            /** Expected Execs */
-            expected_execs: number;
-            /** Published Forks */
-            published_forks: number;
-            /** Published Execs */
-            published_execs: number;
-            /** Fork Identities Match */
-            fork_identities_match: boolean;
-            /** Exec Identities Match */
-            exec_identities_match: boolean;
-            /** Aggregate Births */
-            aggregate_births: number;
-            /** Aggregate Examples */
-            aggregate_examples: string[];
-            /** Complete */
-            complete: boolean;
-            /** Expected Exits */
-            expected_exits?: number | null;
-            /** Observed Exits */
-            observed_exits?: number | null;
-            /** Known Exits */
-            known_exits?: number | null;
-            /** Published Exits */
-            published_exits?: number | null;
-            /** Exit Accounting Complete */
-            exit_accounting_complete?: boolean | null;
-            /** Known Exit Identities Match */
-            known_exit_identities_match?: boolean | null;
-            /** Exit Complete */
-            exit_complete?: boolean | null;
-        };
-        /**
          * NoteHistoryEntry
          * @description Notes from one available exact release or draft, or an unavailable ancestor.
          */
@@ -4776,24 +4728,14 @@ export interface components {
             acceptance_criteria: components["schemas"]["ScorecardCriterion"][];
             /** Flags */
             flags: string[];
-            /** Macos Hosts */
-            macos_hosts?: components["schemas"]["ScorecardMacosHost"][];
-        };
-        /**
-         * ScorecardMacosHost
-         * @description Compact native process census for one host in a saved evaluation.
-         */
-        ScorecardMacosHost: {
-            /** Hostname */
-            hostname: string;
-            /** Source Profile */
-            source_profile: string;
-            /**
-             * Policy
-             * @enum {string}
-             */
-            policy: "complete" | "partial";
-            census?: components["schemas"]["MacosProcessCoverageSummary"] | null;
+            /** Ground Truth Agreement */
+            ground_truth_agreement?: {
+                [key: string]: unknown;
+            } | null;
+            /** Ground Truth Coverage */
+            ground_truth_coverage?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ScorecardPillar
@@ -5048,6 +4990,11 @@ export interface components {
              * @default 24
              */
             checkpoint_hours: number;
+            /**
+             * Allow Large Evaluation
+             * @default true
+             */
+            allow_large_evaluation: boolean;
             quit?: components["schemas"]["QuitSettings"];
             /**
              * Skill Install Scope

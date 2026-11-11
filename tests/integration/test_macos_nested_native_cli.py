@@ -74,6 +74,19 @@ def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
         text=True,
         timeout=180,
     )
+    if launch == "occupied_local":
+        assert result.returncode != 0
+        assert "foreground_shell_unavailable" in result.stdout + result.stderr
+        assert not (output / "GENERATION_MANIFEST.json").exists()
+        diagnostics = json.loads((output / "GROUND_TRUTH_DIAGNOSTICS.json").read_text())
+        assert diagnostics["status"] == "failed"
+        assert any(
+            outcome["status"] == "not_executed"
+            and outcome["reason"] == "foreground_shell_unavailable"
+            for outcome in diagnostics["intent_outcomes"].values()
+        )
+        assert (output / "GROUND_TRUTH_EVENTS.jsonl").stat().st_size > 0
+        return
     assert result.returncode == 0, result.stdout + result.stderr
     truth = json.loads((output / "GROUND_TRUTH.json").read_text())
     accepted = [
@@ -82,14 +95,6 @@ def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
         if (event.get("storyline_id") or "").startswith("coverage-command-")
     ]
     assert len(accepted) == len(MACOS_NATIVE_QUERY_COMMANDS)
-    if launch == "occupied_local":
-        assert all(
-            not event["emitted"]
-            and event["skipped_reason"] == "foreground_shell_unavailable"
-            and event["attributes"].get("pid") is None
-            for event in accepted
-        )
-        return
     assert all(event["emitted"] and event["attributes"]["pid"] > 0 for event in accepted)
     native = [
         record["event"]["exec"]

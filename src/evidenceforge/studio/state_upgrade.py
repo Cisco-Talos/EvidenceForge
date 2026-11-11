@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from evidenceforge import __version__
 from evidenceforge.studio.paths import StudioPaths
 from evidenceforge.studio.runtime import runtime_id
+from evidenceforge.studio.settings import SETTINGS_VERSION
 from evidenceforge.studio.state_database import (
     DATABASE_VERSION,
     MIGRATIONS,
@@ -188,7 +189,7 @@ def settings_document(path: Path) -> tuple[int, dict[str, object]]:
         return 0, CurrentSettings().model_dump(mode="json")
     raw = read_json(path)
     version = raw.get("schema_version", 0)
-    if type(version) is not int or version not in (0, 1, 2):
+    if type(version) is not int or version not in (0, 1, 2, 3):
         raise StudioStateError(
             f"Unsupported Studio settings version {version}; use a compatible release"
         )
@@ -200,6 +201,8 @@ def settings_document(path: Path) -> tuple[int, dict[str, object]]:
         values = raw
     if version == 2:
         from evidenceforge.studio.state_records_v3 import StudioSettings
+    elif version == 3:
+        from evidenceforge.studio.state_settings_v3 import StudioSettings
     StudioSettings.model_validate(values)
     return version, values
 
@@ -316,7 +319,7 @@ class StateCoordinator:
             if workspace
             else {
                 "database": DATABASE_VERSION,
-                "settings": 2,
+                "settings": SETTINGS_VERSION,
                 "private_layout": 1,
             },
         )
@@ -490,13 +493,17 @@ class StateCoordinator:
                     if self.layout.exists()
                     else 0,
                 }
-                if database == DATABASE_VERSION and settings == 2 and self.layout.exists():
+                if (
+                    database == DATABASE_VERSION
+                    and settings == SETTINGS_VERSION
+                    and self.layout.exists()
+                ):
                     self.verify_private_receipts()
                     self.status.state = "ready"
                     return
                 self.status.incompatible = bool(
                     self.paths.settings_file.exists()
-                    and settings < 2
+                    and settings < SETTINGS_VERSION
                     or self.paths.database_file.exists()
                     and any(entry.incompatible and entry.target > database for entry in MIGRATIONS)
                 )
@@ -511,7 +518,11 @@ class StateCoordinator:
                 self.status.target_versions = (
                     {"workspace_layout": self.layout_target}
                     if self.workspace
-                    else {"database": DATABASE_VERSION, "settings": 2, "private_layout": 1}
+                    else {
+                        "database": DATABASE_VERSION,
+                        "settings": SETTINGS_VERSION,
+                        "private_layout": 1,
+                    }
                 )
                 self.journal = OperationJournal(status=self.status)
             self.status.state = "pending"
@@ -578,7 +589,7 @@ class StateCoordinator:
         layout, values = self.journal.initial_layout, self.journal.initial_settings
         if layout is None or values is None:
             raise StudioStateError("Fresh initialization has no frozen input proof")
-        settings_image = json_bytes({"schema_version": 2, "settings": values})
+        settings_image = json_bytes({"schema_version": SETTINGS_VERSION, "settings": values})
         layout_image = json_bytes(layout)
         for path in self.destinations().values():
             safe_path(path)
