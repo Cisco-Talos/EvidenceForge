@@ -201,3 +201,11 @@ all remain mandatory before qualified artifact upload. Rust tests use the same
 custom-protocol feature as packaging. Failed package builds still save compiled
 dependencies. Windows packaged verification also requires the CPython, project,
 NSIS and Tauri notices; CPython's Windows license location is `LICENSE.txt`.
+
+Run `43111147174` now passes custom directory registration and reinstall, then
+stops at shortcut verification. The PowerShell verifier captured its error but
+did not surface stderr; the next iteration reports folder counts/actual targets
+and ensures the installer creates its known shortcut folders. Verification also
+installs/uninstalls in both default directories before the Unicode-path cases,
+checks that setup has not initialized private state, and explicitly cleans the
+direct uninstaller executable after waiting (required by NSIS `_?=` semantics).

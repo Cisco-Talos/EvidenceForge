@@ -66,22 +66,38 @@ $folders = if ($env:EFORGE_VERIFY_SCOPE -eq 'AllUsers') {
 $links = foreach ($folder in $folders) {
     $root = [Environment]::GetFolderPath($folder)
     $found = @(Get-ChildItem -LiteralPath $root -Filter 'EvidenceForge Studio.lnk' -Recurse)
-    if ($found.Count -ne 1) { throw "Expected one Studio shortcut in $root" }
+    if ($found.Count -ne 1) { throw "Expected one Studio shortcut in $root; found $($found.Count)" }
     $shortcut = $shell.CreateShortcut($found[0].FullName)
-    if ($shortcut.TargetPath -ne $env:EFORGE_VERIFY_APP) { throw 'Incorrect shortcut target' }
+    if ($shortcut.TargetPath -ne $env:EFORGE_VERIFY_APP) {
+        throw "Shortcut target '$($shortcut.TargetPath)' differs from '$env:EFORGE_VERIFY_APP'"
+    }
     $found[0].FullName
 }
 ConvertTo-Json -InputObject @($links) -Compress
 """
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=30,
         env={**os.environ, "EFORGE_VERIFY_SCOPE": scope, "EFORGE_VERIFY_APP": str(app)},
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"{scope} shortcut verification failed: {result.stderr.strip()}")
     return [Path(value) for value in json.loads(result.stdout)]
+
+
+def uninstall_app(destination: Path, scope: str) -> None:
+    """Wait for uninstallation and finish NSIS's direct-uninstaller cleanup."""
+    uninstaller = destination / "uninstall.exe"
+    installer_command([str(uninstaller), "/S", f"/{scope}", f"_?={destination}"])
+    assert registry_location(scope) is None
+    # _?= prevents NSIS's temporary copy. The waiting caller must remove that
+    # now-unmapped executable itself, as documented by NSIS command-line usage.
+    uninstaller.unlink(missing_ok=True)
+    if destination.exists():
+        destination.rmdir()  # A nonempty app directory is an uninstall failure.
 
 
 def helper_smoke(app: Path, directory: Path) -> None:
@@ -183,8 +199,38 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         "sha256": checksum,
         "signed": False,
         "scopes": {},
+        "default_directories": {},
         "desktop_acceptance": "pending Windows 11 interactive and separate-account testing",
     }
+    private_root = Path(os.environ["LOCALAPPDATA"]) / "EvidenceForge"
+    private_state_existed = private_root.exists()
+    for scope, parent in (
+        ("CurrentUser", Path(os.environ["LOCALAPPDATA"]) / "Programs"),
+        ("AllUsers", Path(os.environ.get("ProgramW6432", os.environ["ProgramFiles"]))),
+    ):
+        destination = parent / "EvidenceForge Studio"
+        if destination.exists():
+            raise RuntimeError(
+                f"Refusing to replace an existing application directory: {destination}"
+            )
+        installer_command([str(installer), "/S", f"/{scope}"])
+        try:
+            registered = registry_location(scope)
+            assert Path(registered or "") == destination, (
+                f"{scope}: default directory {registered!r}, expected {str(destination)!r}"
+            )
+            shortcuts = verify_shortcuts(scope, destination / "evidenceforge-studio.exe")
+            if not private_state_existed:
+                assert not private_root.exists(), (
+                    "Setup initialized private state before normal launch"
+                )
+        finally:
+            uninstaller = destination / "uninstall.exe"
+            if uninstaller.is_file():
+                uninstall_app(destination, scope)
+        assert registry_location(scope) is None
+        assert all(not shortcut.exists() for shortcut in shortcuts)
+        report["default_directories"][scope] = str(destination)
     with tempfile.TemporaryDirectory(prefix="eforge installed 汉 ü ") as temporary:
         root = Path(temporary).resolve()
         sentinel = root / "private/user-data.txt"
@@ -260,9 +306,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 }
             finally:
                 if installed and (destination / "uninstall.exe").is_file():
-                    installer_command(
-                        [str(destination / "uninstall.exe"), "/S", f"/{scope}", f"_?={destination}"]
-                    )
+                    uninstall_app(destination, scope)
                     uninstalled = True
                     assert registry_location(scope) is None
                     assert all(not shortcut.exists() for shortcut in shortcuts)
