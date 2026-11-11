@@ -693,3 +693,14 @@ produces canonical `syslog` occurrences, absent from the spillage consequence-ki
 that existing kind and strengthened the existing pivot regression to require **100% agreement
 and zero incorrect checks**; it passes (8.53 seconds). Behavior revision **505** records this
 policy correction with no emitted-evidence change. No acceptance thresholds were lowered.
+
+Verification on `15b85996` passes the main CI workflow, including all 16 Linux/
+Windows routine shards, all three Studio jobs and native recovery gates. The full local
+iteration interrupt/resume test also passes with byte-identical output (**442.80 seconds**).
+Extended shards 1 and 2 pass. Shard 4 found one stale archived-lineage assertion: it required
+current `evt-012` and `evt-013` to equal their archived predecessors despite the explicit RDP
+ownership repair. The archive remains unchanged. The test now pins the exact intended event
+split, target actor, source event contents and removed redundant context, while retaining full
+equality for every other archived step. That focused regression passes (2.66 seconds). This
+follow-up changes only the test and this worklog; generator and evaluator code remain at the
+already-verified snapshot. The remaining extended shard and the new-head CI rerun are pending.

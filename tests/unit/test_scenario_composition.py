@@ -204,12 +204,26 @@ def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> Non
     assert current.scenario.time_window.duration == packed.scenario.time_window.duration
     assert current.scenario.time_window.warmup == packed.scenario.time_window.warmup
     current_storyline = {event.id: event for event in current.scenario.storyline}
+    packed_storyline = {event.id: event for event in packed.scenario.storyline}
     assert packed_storyline_ids <= current_storyline.keys()
     assert all(
         current_storyline[event.id] == event
         for event in packed.scenario.storyline
-        if event.id != "evt-005"  # The raw Apache record follows the new collection epoch.
+        # The raw Apache record follows the new epoch. Explicit RDP ownership
+        # replaces a coerced root login and its redundant context prerequisite.
+        if event.id not in {"evt-005", "evt-012", "evt-013"}
     )
+    assert current_storyline["evt-012"] == packed_storyline["evt-012"].model_copy(
+        update={"events": packed_storyline["evt-012"].events[:-1]}
+    )
+    assert current_storyline["evt-013"] == packed_storyline["evt-013"].model_copy(
+        update={"events": packed_storyline["evt-013"].events[1:]}
+    )
+    rdp = current_storyline["evt-012-rdp"]
+    assert rdp.actor == packed_storyline["evt-013"].actor
+    assert rdp.system == packed_storyline["evt-012"].system
+    assert rdp.time == "+3h01m"
+    assert rdp.events == packed_storyline["evt-012"].events[-1:]
     assert current.scenario.red_herrings == packed.scenario.red_herrings
     assert {log["format"] for log in current.scenario.output.logs} == {
         log["format"] for log in packed.scenario.output.logs
