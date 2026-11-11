@@ -22,6 +22,7 @@ def run_cli(
     expected_exit_code: int = 0,
 ) -> str:
     """Run the standalone CLI without development dependencies or Studio state."""
+    print(f"Packaged CLI: {arguments}", flush=True)
     result = subprocess.run(
         [str(cli), *arguments],
         cwd=workspace,
@@ -46,6 +47,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eforge standalone 汉 ü ") as temporary:
         root = Path(temporary).resolve()
         if os.name == "nt":
+            print("Packaged runtime: install checksum-verified private copy", flush=True)
             installed = subprocess.run(
                 [
                     str(resources / "bootstrap/python.exe"),
@@ -376,6 +378,8 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
             == manifest["evidenceforge_version"]
         )
         verify_macos_native(cli, workspace, environment)
+        print("Packaged runtime: remove verification workspace", flush=True)
+    print("Packaged runtime: verification passed", flush=True)
     return {
         "architecture": architecture,
         "version": manifest["evidenceforge_version"],

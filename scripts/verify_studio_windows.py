@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import hashlib
 import json
 import os
@@ -43,6 +44,7 @@ def registry_location(scope: str) -> str | None:
 
 def installer_command(command: list[str], *, expected: int = 0) -> None:
     """Bound NSIS execution and require the expected installer result."""
+    print(f"NSIS: {command}", flush=True)
     arguments: list[str] | str = command
     if command[-1].startswith(("/D=", "_?=")):
         # NSIS consumes the entire unquoted tail for these special options.
@@ -235,6 +237,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         ("AllUsers", Path(os.environ.get("ProgramW6432", os.environ["ProgramFiles"]))),
     ):
         destination = parent / "EvidenceForge Studio"
+        print(f"{scope}: verify default installation and uninstall", flush=True)
         if destination.exists():
             raise RuntimeError(
                 f"Refusing to replace an existing application directory: {destination}"
@@ -264,6 +267,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         sentinel.write_text("preserve authored work and private data", encoding="utf-8")
         for scope in ("CurrentUser", "AllUsers"):
             destination = root / scope
+            print(f"{scope}: verify Unicode installation and reinstall", flush=True)
             command = [str(installer), "/S", f"/{scope}", f"/D={destination}"]
             installed = False
             uninstalled = False
@@ -287,7 +291,9 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     [str(installer), "/S", f"/{opposite}", f"/D={root / opposite}"], expected=2
                 )
                 assert registry_location(opposite) is None
+                print(f"{scope}: verify isolated packaged runtime", flush=True)
                 runtime = verify_runtime(destination / "runtime", "x86_64")
+                print(f"{scope}: verify installed shell and helper", flush=True)
                 helper_smoke(destination / "evidenceforge-studio.exe", root / f"launch-{scope}")
                 retained_database = root / f"launch-{scope}/private/data/studio.sqlite"
                 retained_bytes = retained_database.read_bytes()
@@ -304,6 +310,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     / f"launch-{scope}/private/data/runtimes"
                     / f"{selected['sha256']}-x86_64/python.exe"
                 )
+                print(f"{scope}: verify packaged checkpoint and resume", flush=True)
                 subprocess.run(
                     [
                         sys.executable,
@@ -346,6 +353,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     assert authored.read_bytes() == b"name: preserved authored work\n"
             assert uninstalled, "The installed preview did not provide an uninstaller"
             report["scopes"][scope]["uninstall_preservation"] = "passed"
+            print(f"{scope}: installed verification passed", flush=True)
     return report
 
 
@@ -355,7 +363,9 @@ def main() -> None:
     parser.add_argument("installer", type=Path)
     arguments = parser.parse_args()
     installer = arguments.installer.resolve()
+    faulthandler.dump_traceback_later(300, repeat=True)
     report = verify_installer(installer)
+    faulthandler.cancel_dump_traceback_later()
     output = installer.with_suffix(".verification.json")
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))

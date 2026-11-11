@@ -216,3 +216,25 @@ WScript.Shell. The pinned NSIS/Tauri helpers use IShellLinkW; verification now
 reads the shortcut through that explicit Unicode interface too, avoiding WScript
 codepage conversion. It still compares canonical target paths and rejects any
 different executable; the native result remains required.
+
+Run [43114835307](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43114835307)
+at `4421cf03` passes the complete installed verifier in 28m37s: default and Unicode
+installations/reinstalls, both scopes' shortcuts, scope-switch refusal, isolated
+runtime/resources/generation/evaluation, installed shell/helper startup, packaged
+checkpoint/resume equivalence and uninstall preservation. Native Unicode shortcut
+reading resolves the earlier WScript conversion. The report records runner image
+`20261103.298.1`, rustc 1.99.1, Python 3.12.16, Node 22.23.4 and uv 0.13.7. Installer
+SHA256 is `4b04c1f2d7e44f2809a2ac40b1336f3867598f89adf4d29706033f0cada78dda`.
+All 372 frontend and eleven Rust tests pass. Authoring stops before sandbox setup:
+native Codex discovery does not recognize the pinned npm package's `vendor/.../bin`
+layout. Inspection of official `@openai/codex@0.167.0-win32-x64` verifies that path;
+the resolver now supports it alongside the legacy `codex` layout in all three
+supported npm dependency locations. Six discovery fixtures cover these layouts.
+This remains a failed-run diagnostic, not a fully qualified preview.
+
+Follow-up harness diagnostics print each installer/runtime/CLI phase immediately,
+emit periodic stack snapshots and bound installed verification to 45 minutes. The
+observed 29-minute pass must not be mistaken for a hang. Ruff, workflow actionlint
+and 49 focused runtime/discovery/CI tests pass (four native Windows skips locally).
+Now that installed verification has passed, native authoring/service/recovery
+gates precede its longer repetition to expose remaining Windows failures sooner.

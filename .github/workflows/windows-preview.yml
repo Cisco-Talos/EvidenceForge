@@ -94,18 +94,6 @@ jobs:
       - name: Build unsigned dual-scope NSIS preview
         id: package-build
         run: uv run --no-sync python scripts/package_studio_windows.py
-      - name: Verify installed scopes, runtime and recovery
-        run: |
-          $installer = Get-ChildItem dist/windows/*-setup.exe
-          if ($installer.Count -ne 1) { throw 'Expected exactly one preview installer' }
-          uv run --no-sync python scripts/verify_studio_windows.py $installer.FullName
-      - name: Test Windows frontend contracts
-        run: npm --prefix desktop-ui test
-      - name: Test Windows native shell contracts
-        working-directory: desktop-ui/src-tauri
-        run: >-
-          cargo +stable test --locked --target x86_64-pc-windows-msvc
-          --features tauri/custom-protocol --release
       - name: Install pinned native Codex
         run: npm install --global @openai/codex@0.167.0
       - name: Verify native authoring permissions without a model
@@ -120,6 +108,19 @@ jobs:
           tests/unit/test_desktop_jobs.py tests/unit/test_desktop_controller.py
       - name: Test native state and helper recovery
         run: uv run --no-sync python -m scripts.ci_native_recovery
+      - name: Verify installed scopes, runtime and recovery
+        timeout-minutes: 45
+        run: |
+          $installer = Get-ChildItem dist/windows/*-setup.exe
+          if ($installer.Count -ne 1) { throw 'Expected exactly one preview installer' }
+          uv run --no-sync python scripts/verify_studio_windows.py $installer.FullName
+      - name: Test Windows frontend contracts
+        run: npm --prefix desktop-ui test
+      - name: Test Windows native shell contracts
+        working-directory: desktop-ui/src-tauri
+        run: >-
+          cargo +stable test --locked --target x86_64-pc-windows-msvc
+          --features tauri/custom-protocol --release
       - name: Upload verified Windows preview
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:

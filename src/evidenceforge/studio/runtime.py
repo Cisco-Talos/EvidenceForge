@@ -90,12 +90,16 @@ def _windows_codex(command: str | None) -> str | None:
     path = Path(command)
     if path.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
         return command
-    vendor = Path("vendor/x86_64-pc-windows-msvc/codex/codex.exe")
-    candidates = [
-        path.parent / "node_modules/@openai/codex" / vendor,
-        path.parent / "node_modules/@openai/codex-win32-x64" / vendor,
-        path.parent / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64" / vendor,
-    ]
+    packages = (
+        "node_modules/@openai/codex",
+        "node_modules/@openai/codex-win32-x64",
+        "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64",
+    )
+    candidates = (
+        path.parent / package / "vendor/x86_64-pc-windows-msvc" / directory / "codex.exe"
+        for package in packages
+        for directory in ("bin", "codex")
+    )
     return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
 
 

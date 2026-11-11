@@ -162,16 +162,24 @@ def test_windows_manifest_rejects_other_architecture_or_archive_path() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "package",
+    [
+        "node_modules/@openai/codex",
+        "node_modules/@openai/codex-win32-x64",
+        "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64",
+    ],
+)
+@pytest.mark.parametrize("directory", ["bin", "codex"])
 def test_npm_discovery_uses_native_binary_without_executing_a_shim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    package: str,
+    directory: str,
 ) -> None:
     monkeypatch.setattr(runtime.sys, "platform", "win32")
     shim = tmp_path / "codex.cmd"
-    native = (
-        tmp_path
-        / "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex/codex.exe"
-    )
+    native = tmp_path / package / "vendor/x86_64-pc-windows-msvc" / directory / "codex.exe"
     native.parent.mkdir(parents=True)
     native.write_bytes(b"native fixture")
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(shim))
