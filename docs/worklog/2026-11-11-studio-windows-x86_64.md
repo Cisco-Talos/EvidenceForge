@@ -138,3 +138,8 @@ round-trip, cross-process lease replacement and interrupted extraction) passes.
 Review of the pinned Codex 0.167.0 generated schema found that readiness is a unit
 request: omit params rather than sending `{}`. The transport and fake servers now
 enforce that exact contract before the model-free native sandbox probe.
+
+Prioritize NSIS build/installed verification after the short runtime and frontend
+gates, ahead of the longer general service suite, so packaging failures appear
+earlier. Every native source/Codex/recovery gate still precedes qualified artifact
+upload. Failed-run artifacts are diagnostics, not a completed preview claim.

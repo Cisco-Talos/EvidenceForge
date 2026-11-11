@@ -92,17 +92,6 @@ jobs:
           npm --prefix desktop-ui run types:check
           npm --prefix desktop-ui test
           npm --prefix desktop-ui run build
-      - name: Test native Studio service and authoring transport
-        timeout-minutes: 15
-        run: >-
-          uv run --no-sync pytest --no-cov -x
-          tests/unit/test_studio_service.py tests/unit/test_studio_chat.py
-      - name: Test native state and helper recovery
-        run: uv run --no-sync python -m scripts.ci_native_recovery
-      - name: Install pinned native Codex
-        run: npm install --global @openai/codex@0.167.0
-      - name: Verify native authoring permissions without a model
-        run: uv run --no-sync python scripts/check_studio_sandbox.py
       - name: Test Windows native shell contracts
         id: shell-tests
         working-directory: desktop-ui/src-tauri
@@ -114,6 +103,17 @@ jobs:
           $installer = Get-ChildItem dist/windows/*-setup.exe
           if ($installer.Count -ne 1) { throw 'Expected exactly one preview installer' }
           uv run --no-sync python scripts/verify_studio_windows.py $installer.FullName
+      - name: Install pinned native Codex
+        run: npm install --global @openai/codex@0.167.0
+      - name: Verify native authoring permissions without a model
+        run: uv run --no-sync python scripts/check_studio_sandbox.py
+      - name: Test native Studio service and authoring transport
+        timeout-minutes: 15
+        run: >-
+          uv run --no-sync pytest --no-cov -x
+          tests/unit/test_studio_service.py tests/unit/test_studio_chat.py
+      - name: Test native state and helper recovery
+        run: uv run --no-sync python -m scripts.ci_native_recovery
       - name: Upload verified Windows preview
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
