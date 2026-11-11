@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 504
+current_revision: 505
 history_start_revision: 1
-behavior_surface_sha256: be41b14c7cd58af2b624f2b39d67de984d1a7c927f9d7a73879449bab815fa60
+behavior_surface_sha256: ff13f30722211954b84575a3f152d034766c4f48028f90ddddc611f3338bc548
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5821,3 +5821,12 @@ changes:
   - syslog
   summary: Preserve explicit authentication occurrences, finalize bounded Mac SSH commands before
     subsequent queries, and retain the ground-truth journal across retryable terminal publication.
+- revision: 505
+  id: recognize-syslog-spillage-consequences
+  impact: none
+  domains:
+  - ground-truth-source-contracts
+  formats:
+  - syslog
+  summary: Recognize existing syslog credential-spillage occurrences as valid authored
+    consequences without changing their canonical facts or emitted evidence.

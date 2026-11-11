@@ -112,7 +112,7 @@ authored_kinds:
   email_message: [connection]
   email_read: [connection]
   macos_launch_item: [file_create, file_delete, process_create, process_terminate, process_job_control, job_control]
-  spillage: [connection, process_create, bash_command, zsh_command]
+  spillage: [connection, process_create, bash_command, zsh_command, syslog]
   adversarial_payload: [connection, process_create, bash_command, zsh_command, file_create]
 # Important typed facts. Alternatives must express the fact, not merely nearby traffic.
 typed_facts:

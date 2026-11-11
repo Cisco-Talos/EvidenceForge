@@ -680,3 +680,16 @@ tests**, including the cross-thread retry; the still-running iteration recovery 
 only failure in that combined pre-owner-correction selection. All routine CI jobs other than
 the identified glibc compiler error pass, including the three Studio build jobs. Final snapshot
 CI will rerun all gates after these owner and fixture repairs.
+
+The corrected full six-hour iteration scenario now completes: its default-target fresh-process
+pair is byte-identical and evaluates successfully (**one extended case passed**, 486.78 seconds
+before the following SOF-ELK case was interrupted for the final policy snapshot). The concurrent
+local interrupt/resume comparison was also stopped before changing that policy, so neither
+interruption is a validation failure or claimed pass; fresh remote checks own final verification.
+All remaining findings from the superseded slow shards are classified. Their additional source
+retry failures share the repaired journal lifetime, and auxiliary UDP cases share the corrected
+fixture. One genuine semantic contract omission remained: `syslog_message` credential spillage
+produces canonical `syslog` occurrences, absent from the spillage consequence-kind list. Added
+that existing kind and strengthened the existing pivot regression to require **100% agreement
+and zero incorrect checks**; it passes (8.53 seconds). Behavior revision **505** records this
+policy correction with no emitted-evidence change. No acceptance thresholds were lowered.

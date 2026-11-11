@@ -292,6 +292,9 @@ class TestSpillageEval:
         assert pivot.passed is True
         assert pivot.actual is not None
         assert pivot.actual >= pivot.threshold
+        agreement = report.supplementary["ground_truth_agreement"]
+        assert agreement["score"] == 100, agreement
+        assert agreement["incorrect"] == 0
 
     def test_eval_reads_canonical_ground_truth_not_synthesis(
         self, spillage_scenario, generated_spillage, tmp_path
