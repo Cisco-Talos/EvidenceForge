@@ -238,3 +238,10 @@ observed 29-minute pass must not be mistaken for a hang. Ruff, workflow actionli
 and 49 focused runtime/discovery/CI tests pass (four native Windows skips locally).
 Now that installed verification has passed, native authoring/service/recovery
 gates precede its longer repetition to expose remaining Windows failures sooner.
+
+Run `43120529893` resolves the current npm binary correctly and stops at the setup
+CLI's required identity selector, before any permission probe. CI provisioning now
+explicitly supplies `--current-user` for the disposable runner account, alongside
+its isolated CODEX_HOME. The setup remains elevated; no sandbox fallback or skip
+is introduced. This failure is exposed in six minutes without repeating the
+29-minute installed verifier.

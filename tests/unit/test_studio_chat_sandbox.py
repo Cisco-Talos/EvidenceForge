@@ -59,6 +59,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                 "sandbox",
                 "setup",
                 "--elevated",
+                "--current-user",
                 "--codex-home",
                 str(root / "codex-home"),
             ],
