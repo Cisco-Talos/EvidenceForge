@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableSet
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,4 +41,4 @@ class EvaluationContext:
     effective_config: EffectiveConfig | None = None
     # Parseability owns this run-local exclusion set. Records remain in report
     # counts and exact acceptance gates, but cannot enter typed cross-source indexes.
-    malformed_record_ids: set[int] = field(default_factory=set, compare=False)
+    malformed_record_ids: MutableSet[int] = field(default_factory=set, compare=False)

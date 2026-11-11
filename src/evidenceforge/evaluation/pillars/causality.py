@@ -37,6 +37,7 @@ import ntpath
 import re
 import shlex
 from collections import defaultdict
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
@@ -50,9 +51,21 @@ from evidenceforge.evaluation.dimensions import (
     _noop_callback,
     aggregate_sub_scores,
 )
+from evidenceforge.evaluation.indexes import HostTimeIndex
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
 from evidenceforge.evaluation.rules import load_rules_file
+from evidenceforge.evaluation.storage import (
+    PayloadSearch,
+    SpillSequence,
+    append_group,
+    bounded_groups,
+    bounded_list,
+    bounded_map,
+    bounded_set,
+    current_workspace,
+    record_identity,
+)
 from evidenceforge.evaluation.storyline import (
     _DURATION_EVENT_TYPES,
     TIME_TOLERANCE,
@@ -93,7 +106,7 @@ class CausalityScorer(DimensionScorer):
 
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
@@ -224,8 +237,11 @@ class CausalityScorer(DimensionScorer):
                 }
             self._initialize_pivot_identity(scenario)
             # Build host-time index and find traces
-            host_time_index = self._build_host_time_index(records)
-            self._find_traces(resolved, records, host_time_index)
+            if context.ground_truth is not None and context.ground_truth.schema_version == 5:
+                host_time_index = {}
+            else:
+                host_time_index = self._build_host_time_index(records)
+                self._find_traces(resolved, records, host_time_index)
         else:
             self._proxy_mode = "transparent"
             self._proxy_listener_port = 8080
@@ -234,7 +250,7 @@ class CausalityScorer(DimensionScorer):
             self._email_server_ips = {}
             self._email_server_hosts = {}
             self._initialize_pivot_identity(scenario)
-            host_time_index = self._build_host_time_index(records)
+            host_time_index = {}
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         self._canonical_agreement = None
@@ -243,12 +259,15 @@ class CausalityScorer(DimensionScorer):
 
             self._canonical_agreement = prepare_ground_truth_agreement(context, records, scenario)
             bindings = context.ground_truth_agreement["bindings"]
-            by_step: dict[str, list[ParsedRecord]] = defaultdict(list)
+            by_step = bounded_groups()
             for action in self._canonical_agreement.actions:
                 by_step[action.storyline_id].extend(bindings.get(action.intent_id, []))
             for event in resolved:
-                event.traces = list(
-                    {id(record): record for record in by_step.get(event.storyline_id, [])}.values()
+                event.traces = bounded_list(
+                    bounded_map(
+                        (record_identity(record), record)
+                        for record in by_step.get(event.storyline_id, [])
+                    ).values()
                 )
         vis = VisibilityModel(scenario, enabled)
 
@@ -303,7 +322,7 @@ class CausalityScorer(DimensionScorer):
     def _score_intent_reconciliation(
         scenario: Scenario,
         context: EvaluationContext,
-        records: dict[str, list[ParsedRecord]] | None = None,
+        records: RecordCorpus | None = None,
     ) -> SubScore:
         """Require every authored typed intent to survive planning reconciliation."""
 
@@ -523,9 +542,19 @@ class CausalityScorer(DimensionScorer):
 
     @staticmethod
     def _build_host_time_index(
-        records: dict[str, list[ParsedRecord]],
-    ) -> dict[str, dict[str, list[ParsedRecord]]]:
-        index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(lambda: defaultdict(list))
+        records: RecordCorpus,
+    ) -> dict[str, RecordCorpus]:
+        workspace = current_workspace()
+        if workspace is not None and "host_time_index" in workspace.shared:
+            return workspace.shared["host_time_index"]
+        index = HostTimeIndex(workspace) if workspace else defaultdict(lambda: defaultdict(list))
+
+        def add(key: str, format_name: str, record: ParsedRecord) -> None:
+            if isinstance(index, HostTimeIndex):
+                index.append(key, format_name, record)
+            else:
+                index[key][format_name].append(record)
+
         for format_name, record_list in records.items():
             for rec in record_list:
                 if rec.timestamp is None:
@@ -544,10 +573,10 @@ class CausalityScorer(DimensionScorer):
                 bucket = int(ts.timestamp()) // 60
                 if hostname:
                     hn_lower = hostname.lower()
-                    index[f"{hn_lower}|{bucket}"][format_name].append(rec)
+                    add(f"{hn_lower}|{bucket}", format_name, rec)
                     if "." in hn_lower:
                         bare = hn_lower.split(".")[0]
-                        index[f"{bare}|{bucket}"][format_name].append(rec)
+                        add(f"{bare}|{bucket}", format_name, rec)
                 for ip_field in (
                     "id.orig_h",
                     "id.resp_h",
@@ -564,11 +593,13 @@ class CausalityScorer(DimensionScorer):
                     if ip_val and ip_val not in (hostname, ""):
                         normalized = CausalityScorer._normalize_index_value(ip_val)
                         if normalized:
-                            index[f"{normalized}|{bucket}"][format_name].append(rec)
+                            add(f"{normalized}|{bucket}", format_name, rec)
                 target_username = rec.fields.get("TargetUserName")
                 for alias in CausalityScorer._username_match_aliases(target_username):
-                    index[f"{alias}|{bucket}"][format_name].append(rec)
-        return dict(index)
+                    add(f"{alias}|{bucket}", format_name, rec)
+        if workspace is not None:
+            workspace.shared["host_time_index"] = index
+        return index
 
     @classmethod
     def _normalize_index_value(cls, value: Any) -> str:
@@ -591,10 +622,11 @@ class CausalityScorer(DimensionScorer):
     def _find_traces(
         self,
         resolved: list[ResolvedEvent],
-        records: dict[str, list[ParsedRecord]],
-        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        records: RecordCorpus,
+        host_time_index: Mapping[str, RecordCorpus],
     ) -> None:
         for event in resolved:
+            event.traces = bounded_list()
             for event_type in event.event_types:
                 if event_type in {"email_message", "email_read"}:
                     traces = self._search_for_email_event(event, event_type, records)
@@ -606,7 +638,7 @@ class CausalityScorer(DimensionScorer):
         self,
         event: ResolvedEvent,
         event_type: str,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
     ) -> list[ParsedRecord]:
         """Search email storyline traces without relying on the actor host index.
 
@@ -614,11 +646,11 @@ class CausalityScorer(DimensionScorer):
         artifact manifest rather than the storyline actor's workstation. Mailbox reads
         are opaque TLS sessions keyed by the reader host and mailbox server.
         """
-        found: list[ParsedRecord] = []
-        seen: set[int] = set()
+        found = bounded_list()
+        seen = bounded_set()
         for format_name, record_list in records.items():
             for record in record_list:
-                if id(record) in seen:
+                if record_identity(record) in seen:
                     continue
                 matches = self._record_matches(record, format_name, event, event_type)
                 if matches and (
@@ -626,7 +658,7 @@ class CausalityScorer(DimensionScorer):
                     or self._email_record_has_ground_truth_identity(record, event)
                 ):
                     found.append(record)
-                    seen.add(id(record))
+                    seen.add(record_identity(record))
         return found
 
     def _email_record_has_ground_truth_identity(
@@ -751,7 +783,7 @@ class CausalityScorer(DimensionScorer):
         self,
         event: ResolvedEvent,
         event_type: str,
-        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        host_time_index: Mapping[str, RecordCorpus],
         *,
         _canonical_anchor: datetime | None = None,
     ) -> list[ParsedRecord]:
@@ -759,14 +791,14 @@ class CausalityScorer(DimensionScorer):
             anchors := getattr(self, "_macos_trace_times", {}).get((event.storyline_id, event_type))
         ):
             # Search actual occurrences without changing authored timing assessment.
-            unique: dict[int, ParsedRecord] = {}
+            unique = bounded_map()
             for anchor in anchors:
                 for record in self._search_for_event_indexed(
                     event, event_type, host_time_index, _canonical_anchor=anchor
                 ):
-                    unique[id(record)] = record
-            return list(unique.values())
-        found: list[ParsedRecord] = []
+                    unique[record_identity(record)] = record
+            return bounded_list(unique.values())
+        found = bounded_list()
         # Prefer a per-type anchor time when set (a step carrying both spillage and
         # adversarial_payload anchors each type to its own emitted time); else event.time.
         evt_time = (
@@ -823,27 +855,34 @@ class CausalityScorer(DimensionScorer):
             for username in self._expected_usernames_for_event(event):
                 lookup_keys.extend(self._username_match_aliases(username))
 
-        seen: set[int] = set()
-        for hostname_key in lookup_keys:
-            for b in bucket_range:
-                key = f"{hostname_key}|{b}"
-                if key not in host_time_index:
-                    continue
-                for format_name, recs in host_time_index[key].items():
-                    for record in recs:
-                        if id(record) in seen:
-                            continue
-                        ts = record.timestamp
-                        if ts is None:
-                            continue
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=UTC)
-                        delta = (ts - evt_time).total_seconds()
-                        if delta < -bwd_secs or delta > total_fwd_secs:
-                            continue
-                        if self._record_matches(record, format_name, event, event_type):
-                            found.append(record)
-                            seen.add(id(record))
+        seen = bounded_set()
+        keys = [
+            f"{hostname_key}|{bucket}" for hostname_key in lookup_keys for bucket in bucket_range
+        ]
+        if isinstance(host_time_index, HostTimeIndex):
+            candidates = host_time_index.candidates(keys)
+        else:
+            candidates = (
+                (format_name, record)
+                for key in keys
+                for format_name, records in host_time_index.get(key, {}).items()
+                for record in records
+            )
+        for format_name, record in candidates:
+            if record_identity(record) in seen:
+                continue
+            ts = record.timestamp
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            delta = (ts - evt_time).total_seconds()
+            if delta < -bwd_secs or delta > total_fwd_secs:
+                continue
+            if self._record_matches(record, format_name, event, event_type):
+                found.append(record)
+                seen.add(record_identity(record))
+
         return found
 
     @staticmethod
@@ -1791,16 +1830,30 @@ class CausalityScorer(DimensionScorer):
             expected = gt.get("values", [])
             if not expected:
                 return bool(event.traces)
-            observed: list[str] = []
-            for record in event.traces:
-                for field in self._SPILLAGE_TEXT_FIELD.get(record.source_format, ()):
-                    value = record.fields.get(field)
-                    if value:
-                        observed.append(str(value))
-            blob = "\n".join(observed)
-            return all(value and value in blob for value in expected)
+            parts = (
+                str(record.fields[field])
+                for record in event.traces
+                for field in self._SPILLAGE_TEXT_FIELD.get(record.source_format, ())
+                if record.fields.get(field)
+            )
+            # This historical fallback does not normalize newlines.
+            found = bounded_set()
+            remaining_values = [value for value in expected if value]
+            if len(remaining_values) != len(expected):
+                return False
+            overlap = max((len(value) - 1 for value in remaining_values), default=0)
+            tail = ""
+            first = True
+            for part in parts:
+                text = tail + ("" if first else "\n") + part
+                first = False
+                for value in remaining_values:
+                    if value in text:
+                        found.add(value)
+                tail = text[-overlap:] if overlap else ""
+            return all(value in found for value in expected)
 
-        remaining = list(event.traces)
+        remaining = bounded_list(event.traces)
         for rec in records:
             wanted = rec.get("value")
             allowed = set(rec.get("expected_sources") or ())
@@ -1848,7 +1901,7 @@ class CausalityScorer(DimensionScorer):
         """Collapse CRLF/CR to LF so a forged-line split matches its source text."""
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
-    def _build_ap_search_text(self, records: dict[str, list[ParsedRecord]]) -> dict[str, str]:
+    def _build_ap_search_text(self, records: RecordCorpus) -> dict[str, PayloadSearch]:
         """Build a per-format, newline-normalized search blob for payload presence.
 
         Concatenates each record's parsed text field(s) AND its raw line, in file
@@ -1858,18 +1911,30 @@ class CausalityScorer(DimensionScorer):
         no ``message`` field) — be found as a single contiguous substring even though
         no single parsed record contains it.
         """
-        blobs: dict[str, str] = {}
+        patterns = {
+            self._normalize_nl(item["value"])
+            for group in getattr(self, "_adversarial_payload_gt", {}).values()
+            for item in group.get("records", [])
+            if item.get("value")
+        }
+        if not patterns:
+            return {}
+        blobs = {}
         for fmt, recs in records.items():
             text_fields = self._ADVERSARIAL_TEXT_FIELD.get(fmt, ())
-            parts: list[str] = []
-            for rec in recs:
-                for field in text_fields:
-                    val = rec.fields.get(field)
-                    if val:
-                        parts.append(str(val))
-                if rec.raw:
-                    parts.append(rec.raw)
-            blobs[fmt] = self._normalize_nl("\n".join(parts))
+
+            def parts(
+                recs: Sequence[ParsedRecord] = recs, text_fields: tuple[str, ...] = text_fields
+            ) -> Iterator[str]:
+                for rec in recs:
+                    for field in text_fields:
+                        value = rec.fields.get(field)
+                        if value:
+                            yield str(value)
+                    if rec.raw:
+                        yield rec.raw
+
+            blobs[fmt] = PayloadSearch(parts(), patterns)
         return blobs
 
     def _adversarial_payload_record_matches(
@@ -2323,7 +2388,7 @@ class CausalityScorer(DimensionScorer):
 
     def _score_causal_ordering(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
     ) -> SubScore:
         causal_rules = load_rules_file("causal_pairs.yaml")
@@ -2370,7 +2435,16 @@ class CausalityScorer(DimensionScorer):
             match_mode = rule.get("match_mode", "exact")
             exclude_ports = rule.get("exclude_ports", [])
 
-            before_index: dict[str, list[ParsedRecord]] = defaultdict(list)
+            before_index = bounded_map()
+
+            def retain_earliest(
+                key: str, record: ParsedRecord, index: MutableMapping[str, datetime] = before_index
+            ) -> None:
+                time = _normalize_ts(record.timestamp)
+                previous = index.get(key)
+                if previous is None or time < previous:
+                    index[key] = time
+
             for rec in before_records:
                 if rec.timestamp is None:
                     continue
@@ -2387,12 +2461,12 @@ class CausalityScorer(DimensionScorer):
                                 idx_key = str(item)
                                 if extra_match:
                                     idx_key = f"{idx_key}|{rec.fields.get(extra_match, '')}"
-                                before_index[idx_key].append(rec)
+                                retain_earliest(idx_key, rec)
                         else:
                             idx_key = str(key_val)
                             if extra_match:
                                 idx_key = f"{idx_key}|{rec.fields.get(extra_match, '')}"
-                            before_index[idx_key].append(rec)
+                            retain_earliest(idx_key, rec)
 
             exclude_accounts = rule.get("exclude_accounts", [])
             tolerance = rule.get("tolerance", 0.0)
@@ -2435,15 +2509,11 @@ class CausalityScorer(DimensionScorer):
                     idx_key = str(key_val)
                     if extra_match:
                         idx_key = f"{idx_key}|{rec.fields.get(extra_match, '')}"
-                    matching_befores = before_index.get(idx_key, [])
-                    if not matching_befores:
+                    earliest = before_index.get(idx_key)
+                    if earliest is None:
                         continue
                     rec_ts_norm = _normalize_ts(rec.timestamp)
-                    any_before_earlier = any(
-                        _normalize_ts(b.timestamp) <= rec_ts_norm
-                        for b in matching_befores
-                        if b.timestamp is not None
-                    )
+                    any_before_earlier = earliest <= rec_ts_norm
                     if any_before_earlier:
                         rule_total += 1
                         rule_correct += 1
@@ -2515,7 +2585,7 @@ class CausalityScorer(DimensionScorer):
     ) -> tuple[int, int, list[str]]:
         """Score exact-tuple remote logins after the closest visible inbound FLOW."""
 
-        flows: dict[tuple[str, ...], list[ParsedRecord]] = defaultdict(list)
+        flows = bounded_groups()
         for record in records:
             fields = record.fields
             if (
@@ -2546,18 +2616,18 @@ class CausalityScorer(DimensionScorer):
             if not matching_flows:
                 continue
             login_time = _normalize_ts(record.timestamp)
-            bounded_flows = [
-                flow
-                for flow in matching_flows
-                if flow.timestamp is not None
-                and abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()) <= 5.0
-            ]
-            if not bounded_flows:
-                continue
             nearest_flow = min(
-                bounded_flows,
+                (
+                    flow
+                    for flow in matching_flows
+                    if flow.timestamp is not None
+                    and abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()) <= 5.0
+                ),
                 key=lambda flow: abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()),
+                default=None,
             )
+            if nearest_flow is None:
+                continue
             total += 1
             # eCAR timestamps serialize at millisecond precision; equal timestamps
             # cannot establish which observation occurred first.
@@ -2573,14 +2643,12 @@ class CausalityScorer(DimensionScorer):
     @classmethod
     def _score_process_parent_integrity(
         cls,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
     ) -> tuple[int, int, list[str]]:
         """Reject only parents proven terminated before a child without PID reuse."""
 
-        lifecycles: dict[tuple[str, str, int], dict[str, list[datetime]]] = defaultdict(
-            lambda: {"create": [], "terminate": []}
-        )
-        children: list[tuple[str, str, int, datetime, int | None]] = []
+        lifecycles = bounded_groups(ordered=True)
+        children = bounded_list()
         for format_name in ("ecar", "windows_event_sysmon"):
             for record in records.get(format_name, []):
                 if record.timestamp is None:
@@ -2608,7 +2676,12 @@ class CausalityScorer(DimensionScorer):
                     continue
                 timestamp = _normalize_ts(record.timestamp)
                 key = (format_name, host, pid)
-                lifecycles[key]["create" if is_create else "terminate"].append(timestamp)
+                append_group(
+                    lifecycles,
+                    (*key, "create" if is_create else "terminate"),
+                    timestamp,
+                    sort=timestamp,
+                )
                 if is_create:
                     parent = cls._coerce_pid(fields.get("ppid") or fields.get("ParentProcessId"))
                     children.append((format_name, host, pid, timestamp, parent))
@@ -2619,16 +2692,21 @@ class CausalityScorer(DimensionScorer):
         for format_name, host, child_pid, child_time, parent_pid in children:
             if parent_pid in {None, 0, 4}:
                 continue
-            lifecycle = lifecycles.get((format_name, host, parent_pid))
-            if lifecycle is None or not lifecycle["create"] or not lifecycle["terminate"]:
-                continue
-            prior_creates = [time for time in lifecycle["create"] if time <= child_time]
-            prior_terminations = [time for time in lifecycle["terminate"] if time < child_time]
-            if not prior_creates or not prior_terminations:
+            creates = lifecycles.get((format_name, host, parent_pid, "create"), ())
+            terminations = lifecycles.get((format_name, host, parent_pid, "terminate"), ())
+            last_create = (
+                creates.latest_before(child_time)
+                if isinstance(creates, SpillSequence)
+                else max((time for time in creates if time <= child_time), default=None)
+            )
+            last_terminate = (
+                terminations.latest_before(child_time, strict=True)
+                if isinstance(terminations, SpillSequence)
+                else max((time for time in terminations if time < child_time), default=None)
+            )
+            if last_create is None or last_terminate is None:
                 continue
             total += 1
-            last_create = max(prior_creates)
-            last_terminate = max(prior_terminations)
             if last_create > last_terminate:
                 correct += 1
             elif len(failures) < 10:
@@ -3394,7 +3472,7 @@ class CausalityScorer(DimensionScorer):
                 prev_expected = event.time
                 continue
 
-            trace_times = []
+            trace_times = bounded_list()
             for t in event.traces:
                 if t.timestamp:
                     ts = t.timestamp
@@ -3464,7 +3542,7 @@ class CausalityScorer(DimensionScorer):
         self,
         resolved: list[ResolvedEvent],
         vis: VisibilityModel,
-        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        host_time_index: Mapping[str, RecordCorpus],
         context: EvaluationContext,
     ) -> SubScore:
         if getattr(self, "_canonical_agreement", None) is not None:
@@ -3602,7 +3680,7 @@ class CausalityScorer(DimensionScorer):
 
 
 def _build_host_log_profile(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
     vis: VisibilityModel,
     scenario: Scenario | None = None,
 ) -> dict[str, dict]:

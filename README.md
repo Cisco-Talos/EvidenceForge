@@ -300,7 +300,7 @@ For scripted or non-interactive use:
 | `eforge resources predict <scenario.yaml> [--destination <dir>] [--checkpoint-hours N] [--json]` | Predict generated-data size, peak memory, and disk requirements without generating output or running validation |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
 | `eforge pack <command>` | Discover, author, lock, validate, package, inspect, import, or hydrate industry and organization packs |
-| `eforge eval <output_dir> [-s <scenario.yaml>] [--allow-large-evaluation]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
+| `eforge eval <output_dir> [-s <scenario.yaml>] [--memory-budget-mib 256] [--scratch-dir <directory>]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge schema <selector> [--json]` | Show one focused installed-version authored-scenario contract, such as `environment.network_identities` or `event.email_read`. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |

@@ -189,7 +189,7 @@ def settings_document(path: Path) -> tuple[int, dict[str, object]]:
         return 0, CurrentSettings().model_dump(mode="json")
     raw = read_json(path)
     version = raw.get("schema_version", 0)
-    if type(version) is not int or version not in (0, 1, 2, 3):
+    if type(version) is not int or version not in (0, 1, 2, 3, 4):
         raise StudioStateError(
             f"Unsupported Studio settings version {version}; use a compatible release"
         )
@@ -203,6 +203,8 @@ def settings_document(path: Path) -> tuple[int, dict[str, object]]:
         from evidenceforge.studio.state_records_v3 import StudioSettings
     elif version == 3:
         from evidenceforge.studio.state_settings_v3 import StudioSettings
+    elif version == 4:
+        from evidenceforge.studio.state_settings_v4 import StudioSettings
     StudioSettings.model_validate(values)
     return version, values
 

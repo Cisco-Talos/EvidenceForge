@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
+from evidenceforge.evaluation.storage import (
+    bounded_groups,
+    bounded_list,
+    bounded_set,
+    record_identity,
+)
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.events.ground_truth_occurrence import read_ground_truth_occurrences
 
@@ -26,9 +31,9 @@ def _pid(value: object) -> int | None:
 
 
 def _endpoint_index(
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> dict[tuple[str, str, int, str], list[ParsedRecord]]:
-    result: dict[tuple[str, str, int, str], list[ParsedRecord]] = defaultdict(list)
+    result = bounded_groups()
     for format_name in ("ecar", "windows_event_security", "windows_event_sysmon"):
         for record in records.get(format_name, []):
             fields = record.fields
@@ -86,7 +91,7 @@ def _matching_endpoint(
 def reconcile_canonical_ground_truth(
     root: Path,
     document: GroundTruthDocument,
-    records: dict[str, list[ParsedRecord]],
+    records: RecordCorpus,
 ) -> tuple[set[str], list[str]]:
     """Reject missing consequences and mismatched observed network facts.
 
@@ -103,9 +108,9 @@ def reconcile_canonical_ground_truth(
     )
     if document.event_stream is None:
         return expected, ["Schema-v4 ground truth has no canonical occurrence stream"]
-    index: dict[tuple[str, str, str], list[ParsedRecord]] = defaultdict(list)
+    index = bounded_groups()
     endpoints = _endpoint_index(records)
-    used_endpoints: set[int] = set()
+    used_endpoints = bounded_set()
     for format_name in ("zeek_conn", "zeek_http", "zeek_dns"):
         for record in records.get(format_name, []):
             if not record.parse_errors and record.fields.get("uid"):
@@ -148,19 +153,19 @@ def reconcile_canonical_ground_truth(
                         ):
                             if host.get("fqdn"):
                                 aliases.add(str(host["fqdn"]).casefold())
-                    candidates = [
+                    candidates = bounded_list(
                         record
                         for alias in aliases
                         for record in endpoints.get(
                             (observation.format, alias, process["pid"], phase), []
                         )
-                    ]
+                    )
 
                     matched = next(
                         (
                             record
                             for record in candidates
-                            if id(record) not in used_endpoints
+                            if record_identity(record) not in used_endpoints
                             and _matching_endpoint(
                                 record, process, observation.format, observation.observed_time
                             )
@@ -168,7 +173,7 @@ def reconcile_canonical_ground_truth(
                         None,
                     )
                     if matched is not None:
-                        used_endpoints.add(id(matched))
+                        used_endpoints.add(record_identity(matched))
                     else:
                         invalid.add(row.intent_id)
                         if len(failures) < 20:
@@ -195,22 +200,22 @@ def reconcile_canonical_ground_truth(
                     (observation.format, (observation.source_host or "").casefold(), uid), []
                 )
                 if observation.format == "zeek_http":
-                    candidates = [
+                    candidates = bounded_list(
                         record
                         for record in candidates
                         if record.fields.get("method") == context.get("method")
                         and record.fields.get("uri") == context.get("uri")
                         and record.fields.get("trans_depth", 1) == context.get("trans_depth", 1)
-                    ]
+                    )
                     comparisons = {
                         key: context[key] for key in ("host", "status_code") if key in context
                     }
                 elif observation.format == "zeek_dns":
-                    candidates = [
+                    candidates = bounded_list(
                         record
                         for record in candidates
                         if record.fields.get("query") == context.get("query")
-                    ]
+                    )
                     comparisons = {"answers": context.get("answers", [])}
                 else:
                     comparisons = {

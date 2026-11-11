@@ -28,13 +28,14 @@ Each parser reads generated log output and yields structured ParsedRecord object
 import logging
 import os
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from evidenceforge.evaluation.filesystem import directory_entries
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,9 @@ def iter_bounded_text_lines(
 class ParsedRecord(BaseModel):
     """A single parsed log record from any format."""
 
+    evaluation_id: int | None = Field(default=None, exclude=True)
+    evaluation_owner: int | None = Field(default=None, exclude=True)
+    evaluation_size: int | None = Field(default=None, exclude=True)
     source_format: str
     raw: str
     fields: dict[str, Any] = Field(default_factory=dict)
@@ -82,6 +86,9 @@ class ParsedRecord(BaseModel):
     source_path: str | None = None
     representation: str | None = None
     source_fields: list[tuple[str, str]] = Field(default_factory=list)
+
+
+type RecordCorpus = Mapping[str, Sequence[ParsedRecord]]
 
 
 class LogParser(ABC):
@@ -139,34 +146,36 @@ def _is_safe_path(path: Path, root: Path) -> bool:
 
 def _discover_bash_history_files(output_dir: Path, output_root: Path) -> list[Path]:
     """Discover bash history files across supported output layouts."""
-    files: dict[Path, None] = {}
+    from evidenceforge.evaluation.storage import bounded_set, bounded_sorted
+
+    files = bounded_set()
 
     def add_history_files(history_dir: Path) -> None:
         if not _is_safe_path(history_dir, output_root) or not history_dir.is_dir():
             return
-        for candidate in history_dir.iterdir():
+        for candidate in directory_entries(history_dir):
             if not _is_safe_path(candidate, output_root) or not candidate.is_file():
                 continue
             if candidate.suffix in (".history", ".bash_history"):
-                files[candidate] = None
+                files.add(candidate)
 
     def add_legacy_history_tree(history_root: Path) -> None:
         add_history_files(history_root)
         if not _is_safe_path(history_root, output_root) or not history_root.is_dir():
             return
-        for host_dir in history_root.iterdir():
+        for host_dir in directory_entries(history_root):
             if not _is_safe_path(host_dir, output_root) or not host_dir.is_dir():
                 continue
             add_history_files(host_dir)
 
     add_legacy_history_tree(output_dir / "bash_history")
-    for child in output_dir.iterdir():
+    for child in directory_entries(output_dir):
         if not _is_safe_path(child, output_root) or not child.is_dir():
             continue
         if child.name == "bash_history":
             continue
         add_history_files(child / "bash_history")
-        for subdir in child.iterdir():
+        for subdir in directory_entries(child):
             if not _is_safe_path(subdir, output_root) or not subdir.is_dir():
                 continue
             if subdir.name == "bash_history":
@@ -174,7 +183,7 @@ def _discover_bash_history_files(output_dir: Path, output_root: Path) -> list[Pa
             else:
                 add_history_files(subdir / "bash_history")
 
-    return sorted(files, key=lambda path: path.as_posix())
+    return bounded_sorted(files, key=lambda path: path.as_posix())
 
 
 def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str, list[Path]]:
@@ -186,15 +195,17 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
     Returns:
         Dict mapping format_name to list of file paths.
     """
-    result: dict[str, list[Path]] = {}
+    from evidenceforge.evaluation.storage import bounded_list, bounded_sorted
+
+    result = {}
     output_root = output_dir.resolve()
     bash_history_files = _discover_bash_history_files(output_dir, output_root)
     if bash_history_files:
         result["bash_history"] = bash_history_files
 
     # Collect all candidate files: top-level + one level of subdirectories
-    candidates: list[Path] = []
-    for child in output_dir.iterdir():
+    candidates = bounded_list()
+    for child in directory_entries(output_dir):
         if not _is_safe_path(child, output_root):
             continue
         if child.is_file():
@@ -203,7 +214,7 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
             if child.name == "bash_history":
                 continue
             # Per-host FQDN or per-sensor subdirectory
-            for subfile in child.iterdir():
+            for subfile in directory_entries(child):
                 if not _is_safe_path(subfile, output_root):
                     continue
                 if subfile.is_file():
@@ -212,7 +223,7 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
                     if subfile.name == "bash_history":
                         continue
                     # Deeper subdirectory (e.g., per-sensor logs)
-                    for deepfile in subfile.iterdir():
+                    for deepfile in directory_entries(subfile):
                         if _is_safe_path(deepfile, output_root) and deepfile.is_file():
                             candidates.append(deepfile)
 
@@ -228,10 +239,12 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
         parser.output_target = output_target
         for candidate in candidates:
             if parser.can_parse(candidate):
-                result.setdefault(format_name, []).append(candidate)
+                if format_name not in result:
+                    result[format_name] = bounded_list()
+                result[format_name].append(candidate)
 
     return {
-        format_name: sorted(paths, key=lambda path: path.as_posix())
+        format_name: bounded_sorted(paths, key=lambda path: path.as_posix())
         for format_name, paths in sorted(result.items())
     }
 

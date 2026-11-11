@@ -28,7 +28,7 @@ from typing import Any
 
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
 from evidenceforge.models.scenario import Scenario
 
 # Progress callback: (event_type, data) -> None
@@ -70,7 +70,7 @@ class DimensionScorer(ABC):
     @abstractmethod
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,

@@ -4990,11 +4990,6 @@ export interface components {
              * @default 24
              */
             checkpoint_hours: number;
-            /**
-             * Allow Large Evaluation
-             * @default true
-             */
-            allow_large_evaluation: boolean;
             quit?: components["schemas"]["QuitSettings"];
             /**
              * Skill Install Scope

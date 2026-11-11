@@ -27,12 +27,17 @@ checks acceptance criteria, and assembles the QualityReport.
 """
 
 import logging
+import sqlite3
+from collections.abc import Sequence
+from copy import copy
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 
 from evidenceforge.composition.models import EffectiveConfig
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
+from evidenceforge.evaluation.ingestion import IngestionStatistics
 from evidenceforge.evaluation.limits import EvaluationCapacity, EvaluationLimits
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
@@ -40,7 +45,12 @@ from evidenceforge.evaluation.models import (
     PillarScore,
     QualityReport,
 )
-from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
+from evidenceforge.evaluation.parsers import (
+    ParsedRecord,
+    RecordCorpus,
+    discover_log_files,
+    get_parser,
+)
 from evidenceforge.evaluation.pillars import (
     CausalityScorer,
     ParseabilityScorer,
@@ -48,12 +58,20 @@ from evidenceforge.evaluation.pillars import (
     TimingScorer,
 )
 from evidenceforge.evaluation.pillars.ground_truth import GroundTruthAgreementScorer
+from evidenceforge.evaluation.pillars.parseability import RecordValidationAccumulator
+from evidenceforge.evaluation.storage import (
+    EvaluationWorkspace,
+    bounded_list,
+    bounded_set,
+    bounded_sorted,
+    current_workspace,
+    evaluation_workspace,
+)
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.models.exceptions import (
     EvaluationError,
-    EvaluationLimitError,
     EvidenceForgeError,
 )
 from evidenceforge.models.scenario import Scenario
@@ -273,8 +291,12 @@ class EvaluationEngine:
         limits: EvaluationLimits | None = None,
         allow_large_evaluation: bool = False,
         effective_config: EffectiveConfig | None = None,
+        memory_budget_bytes: int = 256 * 1024 * 1024,
+        scratch_dir: Path | None = None,
     ):
-        self.output_dir = output_dir
+        self.output_dir = output_dir.resolve()
+        self.memory_budget_bytes = memory_budget_bytes
+        self.scratch_dir = scratch_dir.expanduser().resolve() if scratch_dir else None
         self.scenario = scenario
         self.verbose = verbose
         self._progress = progress_callback
@@ -297,10 +319,9 @@ class EvaluationEngine:
         without re-running synthesis, and anchor matching/timing to the *actual*
         emitted time (bash dwell scheduling can shift it past the storyline time).
         """
-        from evidenceforge.events.ground_truth import load_ground_truth_document
 
         result: dict[str, dict] = {}
-        document = load_ground_truth_document(self.output_dir, self.scenario)
+        document = self._ground_truth_document
         if document is None:
             return result
         for rec in document.events:
@@ -333,10 +354,9 @@ class EvaluationEngine:
         against the source's raw lines so a CRLF split still counts), without
         re-running synthesis.
         """
-        from evidenceforge.events.ground_truth import load_ground_truth_document
 
         result: dict[str, dict] = {}
-        document = load_ground_truth_document(self.output_dir, self.scenario)
+        document = self._ground_truth_document
         if document is None:
             return result
         for rec in document.events:
@@ -361,10 +381,9 @@ class EvaluationEngine:
 
     def _load_email_ground_truth(self) -> dict[str, dict]:
         """Load emitted email identifiers from GROUND_TRUTH.json, keyed by storyline id."""
-        from evidenceforge.events.ground_truth import load_ground_truth_document
 
         result: dict[str, dict] = {}
-        document = load_ground_truth_document(self.output_dir, self.scenario)
+        document = self._ground_truth_document
         if document is None:
             return result
         for rec in document.events:
@@ -400,18 +419,40 @@ class EvaluationEngine:
 
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
-        if self.effective_config is not None:
-            from evidenceforge.config.provider import effective_config_scope
+        workspace = EvaluationWorkspace(self.memory_budget_bytes, self.scratch_dir)
+        started = perf_counter()
+        try:
+            with evaluation_workspace(workspace):
+                if self.effective_config is not None:
+                    from evidenceforge.config.provider import effective_config_scope
 
-            with effective_config_scope(self.effective_config):
-                return self._run()
-        return self._run()
+                    with effective_config_scope(self.effective_config):
+                        report = self._run()
+                else:
+                    report = self._run()
+                report.supplementary["evaluation_resources"] = {
+                    "working_memory_bytes": workspace.memory_bytes,
+                    "peak_retained_estimate_bytes": workspace.peak_retained_bytes,
+                    "spilled": workspace.spilled,
+                }
+                self._progress("evaluation_done", {"elapsed_seconds": perf_counter() - started})
+                return report
+        except sqlite3.Error as exc:
+            raise EvaluationError(
+                "Evaluation scratch storage failed; check free disk space and scratch-directory access"
+            ) from exc
+        finally:
+            workspace.close()
 
     def _run(self) -> QualityReport:
         """Score using the active captured configuration scope."""
         self._thresholds = load_thresholds()
+        # Compact authored metadata is loaded once; the detailed occurrence sidecar stays streamed.
+        ground_truth = load_ground_truth_document(self.output_dir, self.scenario)
+        self._ground_truth_document = ground_truth
         # 1. Discover and parse all log files
         self._progress("phase_start", {"phase": "parsing"})
+        parsing_started = perf_counter()
         records, source_counts = self._parse_all_logs()
         total_records = sum(source_counts.values())
         self._progress(
@@ -420,16 +461,16 @@ class EvaluationEngine:
                 "phase": "parsing",
                 "total_records": total_records,
                 "sources": len(source_counts),
+                "elapsed_seconds": perf_counter() - parsing_started,
             },
         )
 
-        logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
+        logger.info("Parsed %s records across %s sources", total_records, len(source_counts))
         observation_manifest = load_observation_manifest(
             self.output_dir,
             self.scenario,
             effective_config=self.effective_config,
         )
-        ground_truth = load_ground_truth_document(self.output_dir, self.scenario)
         context = EvaluationContext(
             observation_manifest=observation_manifest,
             ground_truth=ground_truth,
@@ -440,6 +481,7 @@ class EvaluationEngine:
             adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
             email_ground_truth=self._load_email_ground_truth(),
             effective_config=self.effective_config,
+            malformed_record_ids=current_workspace().shared["malformed_record_ids"],
         )
 
         from evidenceforge.evaluation.validation_routes import validate_route_inventory
@@ -447,12 +489,10 @@ class EvaluationEngine:
         validate_route_inventory()
 
         # 2. Run each available pillar scorer
-        scorers = DIMENSION_SCORERS
+        scorers = [copy(scorer) for scorer in DIMENSION_SCORERS]
         if ground_truth is None or ground_truth.schema_version < 5:
             scorers = [
-                scorer
-                for scorer in DIMENSION_SCORERS
-                if not isinstance(scorer, GroundTruthAgreementScorer)
+                scorer for scorer in scorers if not isinstance(scorer, GroundTruthAgreementScorer)
             ]
             self._thresholds = self._thresholds.model_copy(
                 update={
@@ -477,7 +517,8 @@ class EvaluationEngine:
                     "total": total_pillars,
                 },
             )
-            logger.info(f"Scoring Pillar {scorer.number}: {scorer.name}")
+            logger.info("Scoring Pillar %s: %s", scorer.number, scorer.name)
+            scoring_started = perf_counter()
             pillar_score: PillarScore
             try:
                 pillar_score = scorer.score(
@@ -487,10 +528,7 @@ class EvaluationEngine:
                     progress=self._progress,
                 )
                 if isinstance(scorer, ParseabilityScorer) and context.malformed_record_ids:
-                    scoring_records = {
-                        source: [r for r in items if id(r) not in context.malformed_record_ids]
-                        for source, items in records.items()
-                    }
+                    scoring_records = current_workspace().shared["valid_records"]
                 if ground_truth is None or ground_truth.schema_version < 5:
                     pillar_score = pillar_score.model_copy(
                         update={"weight": {1: 0.30, 2: 0.25, 3: 0.25, 4: 0.20}[pillar_score.number]}
@@ -515,6 +553,7 @@ class EvaluationEngine:
                     "number": scorer.number,
                     "name": scorer.name,
                     "score": pillar_score.score,
+                    "elapsed_seconds": perf_counter() - scoring_started,
                 },
             )
 
@@ -572,26 +611,32 @@ class EvaluationEngine:
             supplementary=supplementary,
         )
 
-    def _parse_all_logs(self) -> tuple[dict[str, list[ParsedRecord]], dict[str, int]]:
+    def _parse_all_logs(self) -> tuple[RecordCorpus, dict[str, int]]:
         """Discover and parse all log files in the output directory."""
         file_map = discover_log_files(self.output_dir, output_target=self.output_target)
-        unique_paths = {path for paths in file_map.values() for path in paths}
+        unique_paths = bounded_set(path for paths in file_map.values() for path in paths)
         corpus_bytes = sum(path.stat().st_size for path in unique_paths)
         self.capacity = EvaluationCapacity(
             files=len(unique_paths),
             corpus_bytes=corpus_bytes,
             limits_overridden=self.allow_large_evaluation,
         )
-        violations: list[str] = []
-        if len(unique_paths) > self.limits.max_files:
-            violations.append(f"{len(unique_paths)} files exceeds {self.limits.max_files}")
-        if corpus_bytes > self.limits.max_corpus_bytes:
-            violations.append(f"{corpus_bytes} corpus bytes exceeds {self.limits.max_corpus_bytes}")
-        if violations and not self.allow_large_evaluation:
-            raise EvaluationLimitError(
-                "Evaluation corpus exceeds the supported envelope: " + "; ".join(violations)
-            )
-        records: dict[str, list[ParsedRecord]] = {}
+        workspace = current_workspace()
+        malformed = bounded_set()
+        validation = RecordValidationAccumulator(malformed)
+        statistics = IngestionStatistics(
+            self.scenario,
+            available_formats=set(file_map),
+            source_index=bool(
+                getattr(self, "_ground_truth_document", None)
+                and self._ground_truth_document.schema_version == 5
+            ),
+        )
+        if workspace is not None:
+            workspace.shared["malformed_record_ids"] = malformed
+            workspace.shared["statistics"] = statistics
+        records: dict[str, Sequence[ParsedRecord]] = {}
+        valid_records: dict[str, Sequence[ParsedRecord]] = {}
         source_counts: dict[str, int] = {}
         total_records = 0
         declared_hosts = {
@@ -617,43 +662,54 @@ class EvaluationEngine:
             parser = get_parser(format_name)
             parser.scenario = self.scenario
             parser.output_target = self.output_target
-            format_records: list[ParsedRecord] = []
-            for path in sorted(paths):
-                logger.info(f"Parsing {format_name}: {path.name}")
+            format_records = bounded_list()
+            format_valid = bounded_list()
+            for path in bounded_sorted(paths, key=lambda path: path.as_posix()):
+                logger.info("Parsing %s: %s", format_name, path.name)
                 source_instance = self._source_instance(path)
+                source_path = str(path.resolve().relative_to(self.output_dir, walk_up=True))
                 if format_name in {"bash_history", "zsh_history"} and path.parent.name in {
                     "bash_history",
                     "zsh_history",
                 }:
                     source_instance = path.parent.parent.name
-                parsed: list[ParsedRecord] = []
+                parsed = bounded_list()
                 for record in parser.parse_file(path):
                     total_records += 1
-                    if total_records > self.limits.max_records and not self.allow_large_evaluation:
-                        raise EvaluationLimitError(
-                            "Evaluation parsed record count exceeds "
-                            f"{self.limits.max_records} at {path}"
+                    if total_records % 10_000 == 0:
+                        self._progress(
+                            "parsing_progress", {"format": format_name, "records": total_records}
                         )
-                    parsed.append(record)
-                for record in parsed:
                     if record.source_host and declared_hosts.get(
                         record.source_host.casefold(), record.source_host.casefold()
                     ) != declared_hosts.get(source_instance.casefold(), source_instance.casefold()):
                         record.parse_errors.append("Source host contradicts the bundle file owner")
                     record.source_instance = source_instance
-                    record.source_path = str(
-                        path.resolve().relative_to(self.output_dir.resolve(), walk_up=True)
-                    )
+                    record.source_path = source_path
                     if format_name in {"macos_endpoint_security", "macos_unified_log"}:
                         # Native exports carry no hostname. Attribute them only when
                         # the bundle's source directory identifies a declared host;
                         # direct exports and unknown/sensor directories stay unattributed.
                         record.source_host = declared_hosts.get(source_instance.casefold())
-                parsed.sort(key=lambda record: (record.line_number or 0, record.raw))
-                format_records.extend(parsed)
+                    workspace = current_workspace()
+                    if workspace is not None:
+                        workspace.add_record(record)
+                    parsed.append(record)
+                for record in bounded_sorted(
+                    parsed, key=lambda record: (record.line_number or 0, record.raw)
+                ):
+                    valid = validation.consume(format_name, record)
+                    if valid:
+                        statistics.consume(format_name, record)
+                        format_valid.append(record)
+                    format_records.append(record)
             records[format_name] = format_records
+            valid_records[format_name] = format_valid
             source_counts[format_name] = len(format_records)
 
+        if workspace is not None:
+            workspace.shared["parseability_scores"] = validation.scores()
+            workspace.shared["valid_records"] = valid_records
         self.capacity = self.capacity.model_copy(update={"parsed_records": total_records})
 
         return records, source_counts

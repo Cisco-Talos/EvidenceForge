@@ -8,7 +8,8 @@ import json
 import random
 import re
 from bisect import bisect_left, bisect_right
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from email.utils import getaddresses
 from pathlib import Path, PurePosixPath
@@ -42,8 +43,18 @@ from evidenceforge.models.exceptions import EvaluationError
 from evidenceforge.models.scenario import EmailDistributionGroup, EmailMessageEventSpec
 
 from .finding_samples import FindingSamples
-from .parsers import ParsedRecord
+from .parsers import ParsedRecord, RecordCorpus
 from .process_commands import process_commands_agree
+from .storage import (
+    SpillGroups,
+    SpillSequence,
+    append_group,
+    bounded_groups,
+    bounded_list,
+    bounded_map,
+    current_workspace,
+    record_identity,
+)
 
 
 class ActionAgreement(BaseModel):
@@ -85,7 +96,7 @@ class GroundTruthAgreementResult(BaseModel):
 
 
 class _RecordIndex:
-    def __init__(self, records: dict[str, list[ParsedRecord]], scenario: Scenario) -> None:
+    def __init__(self, records: RecordCorpus, scenario: Scenario) -> None:
         self.aliases: dict[str, str] = {}
         domain = scenario.environment.domain or next(
             (
@@ -116,49 +127,102 @@ class _RecordIndex:
             self.aliases[name] = name
             self.aliases[sensor.name.casefold()] = name
             self.aliases[f"{name}.{domain}".casefold()] = name
-        self.timestamps: dict[int, datetime] = {}
-        buckets: dict[tuple[str, str], list[ParsedRecord]] = defaultdict(list)
-        self.ids: dict[tuple[str, str, str, str], list[ParsedRecord]] = defaultdict(list)
+        self.times = {}
+        self.timestamps = bounded_map()
+        self._scenario = scenario
+        self._original_hosts = original_hosts
+        workspace = current_workspace()
+        buckets = SpillGroups(workspace, ordered=True) if workspace else defaultdict(list)
+        self.ids = bounded_groups()
+        self.buckets = buckets
         for fmt, items in records.items():
             for record in items:
-                if record.parse_errors:
-                    continue
-                host = self.host(
-                    record.source_host
-                    or record.source_instance
-                    or str(record.fields.get("hostname") or record.fields.get("Computer") or "")
-                )
-                buckets[(fmt, host)].append(record)
-                if record.timestamp is not None:
-                    timestamp = record.timestamp
-                    if timestamp.tzinfo is None:
-                        from evidenceforge.utils.time import get_system_timezone
+                self.add(fmt, record)
+        if workspace is not None:
+            self.buckets = buckets
+            self.times = None
+        else:
+            self.buckets = {
+                key: sorted(items, key=lambda r: self.time(r).timestamp() if self.time(r) else 0)
+                for key, items in buckets.items()
+            }
+            self.times = {
+                key: [self.time(r).timestamp() if self.time(r) else 0 for r in items]
+                for key, items in self.buckets.items()
+            }
 
-                        zone = pytz.timezone(
-                            get_system_timezone(
-                                original_hosts.get(host, host), scenario.environment
-                            )
-                        )
-                        timestamp = zone.localize(timestamp)
-                    self.timestamps[id(record)] = timestamp.astimezone(UTC)
-                for field in ("uid", "fuid", "objectID", "execution_id", "logon_id", "ppid", "pid"):
-                    if record.fields.get(field):
-                        self.ids[(fmt, host, field, str(record.fields[field]))].append(record)
-        self.buckets = {
-            key: sorted(items, key=lambda r: self.time(r).timestamp() if self.time(r) else 0)
-            for key, items in buckets.items()
-        }
-        self.times = {
-            key: [self.time(r).timestamp() if self.time(r) else 0 for r in items]
-            for key, items in self.buckets.items()
-        }
+    def add(self, fmt: str, record: ParsedRecord) -> None:
+        """Index one independently validated source record during ingestion."""
+        if record.parse_errors:
+            return
+        host = self.host(
+            record.source_host
+            or record.source_instance
+            or str(record.fields.get("hostname") or record.fields.get("Computer") or "")
+        )
+        if record.timestamp is not None:
+            timestamp = record.timestamp
+            if timestamp.tzinfo is None:
+                from evidenceforge.utils.time import get_system_timezone
+
+                zone = pytz.timezone(
+                    get_system_timezone(
+                        self._original_hosts.get(host, host), self._scenario.environment
+                    )
+                )
+                timestamp = zone.localize(timestamp)
+            timestamp = timestamp.astimezone(UTC)
+            if current_workspace() is None:
+                self.timestamps[record_identity(record)] = timestamp
+        append_group(
+            self.buckets,
+            (fmt, host),
+            record,
+            sort=timestamp.timestamp() if record.timestamp is not None else 0.0,
+        )
+        for field in ("uid", "fuid", "objectID", "execution_id", "logon_id", "ppid", "pid"):
+            if record.fields.get(field):
+                append_group(
+                    self.ids,
+                    (fmt, host, field, str(record.fields[field])),
+                    record,
+                    sort=timestamp.timestamp() if record.timestamp is not None else 0.0,
+                )
 
     def host(self, value: str) -> str:
         return self.aliases.get(value.casefold(), value.casefold())
 
     def time(self, record: ParsedRecord) -> datetime | None:
         """Return an independently normalized source timestamp without mutating input."""
-        return self.timestamps.get(id(record))
+        if self.times is not None:
+            return self.timestamps.get(record_identity(record))
+        timestamp = record.timestamp
+        if timestamp is None:
+            return None
+        if timestamp.tzinfo is None:
+            from evidenceforge.utils.time import get_system_timezone
+
+            host = self.host(
+                record.source_host
+                or record.source_instance
+                or str(record.fields.get("hostname") or record.fields.get("Computer") or "")
+            )
+            zone = pytz.timezone(
+                get_system_timezone(
+                    self._original_hosts.get(host, host), self._scenario.environment
+                )
+            )
+            timestamp = zone.localize(timestamp)
+        return timestamp.astimezone(UTC)
+
+    def identity_at(
+        self, fmt: str, host: str, field: str, value: str, at: datetime
+    ) -> Sequence[ParsedRecord]:
+        """Find timing witnesses without scanning a process's complete lifetime."""
+        records = self.ids.get((fmt, host, field, value), ())
+        if isinstance(records, SpillSequence):
+            return records.in_range(at.timestamp() - 0.001, at.timestamp() + 0.001)
+        return records
 
     @staticmethod
     def anchor(
@@ -226,6 +290,10 @@ class _RecordIndex:
                 end = max(end, datetime.fromisoformat(network["closed_at"]).timestamp() + 2)
         key = (fmt, host)
         items = self.buckets.get(key, [])
+        if isinstance(items, SpillSequence):
+            return items.in_range(start, end, exclusive_upper=bool(quantum and timing == "point"))
+        if self.times is None:
+            return []
         times = self.times.get(key, [])
         upper = (
             bisect_left(times, end) if quantum and timing == "point" else bisect_right(times, end)
@@ -233,7 +301,33 @@ class _RecordIndex:
         return items[bisect_left(times, start) : upper]
 
 
+def _normalize_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    return getattr(address, "ipv4_mapped", None) or address
+
+
+def _short_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    workspace = current_workspace()
+    limit = min(4096, workspace.memory_bytes // 4096) if workspace else 0
+    if not limit:
+        return _normalize_ip(value)
+    cache = workspace.shared.setdefault("ip_normalization", OrderedDict())
+    if value in cache:
+        cache.move_to_end(value)
+        return cache[value]
+    result = _normalize_ip(value)
+    cache[value] = result
+    if len(cache) > limit:
+        cache.popitem(last=False)
+    return result
+
+
 def _equal(actual: object, expected: object, key: str) -> bool:
+    if isinstance(actual, str) and isinstance(expected, str) and actual == expected:
+        return True
     if key.casefold() in {"sha256", "sha1", "md5", "fingerprint"}:
         return str(actual).casefold() == str(expected).casefold()
     if key.endswith("destination.new_path") and isinstance(actual, dict):
@@ -262,12 +356,11 @@ def _equal(actual: object, expected: object, key: str) -> bool:
         except (TypeError, ValueError):
             return False
     if any(part in key.lower() for part in ("ip", "address", "orig_h", "resp_h")):
-        try:
-            a = ipaddress.ip_address(str(actual))
-            b = ipaddress.ip_address(str(expected))
-            return (getattr(a, "ipv4_mapped", None) or a) == (getattr(b, "ipv4_mapped", None) or b)
-        except ValueError:
-            pass
+        a_text, b_text = str(actual), str(expected)
+        a = _short_ip(a_text) if len(a_text) <= 128 else _normalize_ip(a_text)
+        b = _short_ip(b_text) if len(b_text) <= 128 else _normalize_ip(b_text)
+        if a is not None and b is not None:
+            return a == b
     if "UserName" in key or key in {"principal", "User"}:
         return (
             str(actual).rsplit("\\", 1)[-1].casefold()
@@ -808,8 +901,8 @@ def evaluate_ground_truth(
     root: Path,
     document: GroundTruthDocument,
     scenario: Scenario,
-    records: dict[str, list[ParsedRecord]],
-) -> tuple[GroundTruthAgreementResult, dict[str, list[ParsedRecord]]]:
+    records: RecordCorpus,
+) -> tuple[GroundTruthAgreementResult, RecordCorpus]:
     """Verify all three contracts and score each authored action with equal weight."""
     authored = AuthoredIntentLedger.from_scenario(scenario)
     actions = {
@@ -819,8 +912,15 @@ def evaluate_ground_truth(
     samples = FindingSamples()
     limitations: set[str] = set()
     counts: Counter[str] = Counter()
-    bindings: dict[str, list[ParsedRecord]] = defaultdict(list)
-    index = _RecordIndex(records, scenario)
+    bindings = bounded_groups()
+    workspace = current_workspace()
+    index = (
+        workspace.shared["statistics"].source_index
+        if workspace is not None
+        and workspace.shared.get("statistics")
+        and workspace.shared["statistics"].source_index is not None
+        else _RecordIndex(records, scenario)
+    )
     inventory = _source_inventory(scenario)
     smb_results: dict[str, set[str]] = defaultdict(set)
     seen_by_intent: dict[str, set[str]] = defaultdict(set)
@@ -832,7 +932,9 @@ def evaluate_ground_truth(
     seen_facts: dict[str, set[str]] = defaultdict(set)
     semantic_errors: dict[str, set[str]] = defaultdict(set)
     semantic_actual: dict[str, list[dict]] = defaultdict(list)
-    timing_points: dict[tuple[str, str], list[tuple[datetime, str]]] = defaultdict(list)
+    from .source_timing_proof import TimingPoints
+
+    timing_points = TimingPoints()
     if document.event_stream is not None:
         for point in read_ground_truth_occurrences(root, document.event_stream):
             for source in point.source_expectations:
@@ -891,8 +993,8 @@ def evaluate_ground_truth(
                         if session_id:
                             keys.append("session:" + str(session_id))
                     for key in filter(None, keys):
-                        timing_points[(source.source_instance, str(key))].append(
-                            (native_point, point.occurrence_id)
+                        timing_points.add(
+                            (source.source_instance, str(key)), native_point, point.occurrence_id
                         )
     for section, steps in [
         ("storyline", scenario.storyline),
@@ -1339,7 +1441,7 @@ def evaluate_ground_truth(
                 fail(action, "unsupported_evidence_contract", row, expectation, str(exc))
             if not requirements and expectation.expected == "present":
                 errors.append("empty_evidence_contract")
-            found = []
+            found = bounded_list()
             facts_ok = True
             time_ok = True
             cardinality_ok = True
@@ -1348,15 +1450,15 @@ def evaluate_ground_truth(
                 candidates = index.candidates(
                     row, expectation, requirement.selector, requirement.timing
                 )
-                selected = [
+                selected = bounded_list(
                     record for record in candidates if _fields_match(record, requirement.selector)
-                ]
-                matched = [
+                )
+                matched = bounded_list(
                     record
                     for record in selected
                     if _fields_match(record, requirement.required)
                     and all(value in record.raw for value in requirement.contains)
-                ]
+                )
                 requirement_diagnostics.append(
                     {
                         "selector": _bounded_facts(requirement.selector),
@@ -1568,7 +1670,7 @@ def evaluate_ground_truth(
                 expected, errors = validate_raw_expectation(
                     receipt, scenario, spec, intent_inputs[identity].system
                 )
-                candidates = [
+                candidates = bounded_list(
                     record
                     for record in records.get(spec.target_format, [])
                     if str(record.source_host or record.fields.get("hostname") or "").casefold()
@@ -1595,7 +1697,7 @@ def evaluate_ground_truth(
                         ).total_seconds()
                     )
                     <= 2
-                ]
+                )
                 if errors or (expected and len(candidates) != 1) or (not expected and candidates):
                     action.incorrect += 1
                     fail(
@@ -1698,4 +1800,4 @@ def evaluate_ground_truth(
         findings_truncated=sum(counts.values()) > len(findings),
         verification_limitations=sorted(limitations),
     )
-    return result, dict(bindings)
+    return result, bindings

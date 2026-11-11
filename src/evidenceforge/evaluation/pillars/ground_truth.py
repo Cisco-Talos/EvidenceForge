@@ -9,13 +9,13 @@ from evidenceforge.evaluation.ground_truth_agreement import (
     evaluate_ground_truth,
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.parsers import RecordCorpus
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import EvaluationError
 
 
 def prepare_ground_truth_agreement(
-    context: EvaluationContext, records: dict[str, list[ParsedRecord]], scenario: Scenario
+    context: EvaluationContext, records: RecordCorpus, scenario: Scenario
 ) -> GroundTruthAgreementResult:
     """Compute once and retain runtime bindings separately from serialized findings."""
     if "result" not in context.ground_truth_agreement:
@@ -37,7 +37,7 @@ class GroundTruthAgreementScorer(DimensionScorer):
 
     def score(
         self,
-        records: dict[str, list[ParsedRecord]],
+        records: RecordCorpus,
         scenario: Scenario,
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,

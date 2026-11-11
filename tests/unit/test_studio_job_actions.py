@@ -166,17 +166,14 @@ def test_historical_failed_evaluation_exposes_cli_error_without_rewriting_state(
     assert job.status_message == "Invalid JSON: EOF while parsing a value"
 
 
-@pytest.mark.parametrize("allowed", [True, False])
-def test_studio_evaluation_captures_large_dataset_preference(
-    jobs: StudioJobStore, allowed: bool
-) -> None:
+def test_studio_evaluation_uses_automatic_resource_management(jobs: StudioJobStore) -> None:
     from evidenceforge.studio.jobs import queue_studio_evaluation
     from evidenceforge.studio.settings import StudioSettings
 
     generation = _job(jobs, "generation", "completed")
-    settings = StudioSettings() if allowed else StudioSettings(allow_large_evaluation=False)
+    settings = StudioSettings()
     job = queue_studio_evaluation(jobs, generation, settings)
-    assert ("--allow-large-evaluation" in job.command) == allowed
+    assert "--allow-large-evaluation" not in job.command
     assert jobs.load_evaluations()[0].command == job.command
-    settings.allow_large_evaluation = not allowed
-    assert ("--allow-large-evaluation" in jobs.load_evaluations()[0].command) == allowed
+    settings.max_concurrent_generations = 5
+    assert "--allow-large-evaluation" not in jobs.load_evaluations()[0].command

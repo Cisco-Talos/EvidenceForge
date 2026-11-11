@@ -71,9 +71,10 @@ Treat these exits as distinct outcomes:
 
 - Never add `--allow-scenario-mismatch` automatically. Explain that scoring will still use the
   bundle's resolved scenario, and continue only after explicit user approval.
-- Never add `--allow-large-evaluation` automatically. The defaults cap evaluation at 512 MiB,
-  10,000 files, and 500,000 parsed records. Use the override only after the user confirms the corpus
-  is trusted and available memory is adequate; it does not relax parser or file-safety checks.
+- Never add `--allow-large-evaluation` automatically. It is a deprecated compatibility option;
+  full evaluations now spill to disk automatically without corpus byte/file/record-count caps.
+  `--memory-budget-mib` controls the working-state spill threshold (default 256 MiB), and
+  `--scratch-dir` selects temporary storage. Neither relaxes per-record or file-safety checks.
 - Do not use `--real-parsers`: it is reserved and does not run an evaluation.
 
 ## 3. Interpret the report dynamically
