@@ -25,6 +25,8 @@
 Supports Rich text (terminal) and JSON output formats.
 """
 
+import json
+
 from rich.console import Console
 
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
@@ -52,6 +54,42 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
         profile = observation.get("profile", "complete")
         manifest_note = "manifest loaded" if observation.get("manifest_present") else "no manifest"
         console.print(f"Observation profile: {profile} ({manifest_note})")
+    agreement = report.supplementary.get("ground_truth_agreement")
+    if agreement:
+        console.print(
+            f"Ground truth agreement: {agreement['score']:.2f}% (minimum 95%); {agreement['correct']} correct / "
+            f"{agreement['correct'] + agreement['incorrect']} checks, "
+            f"{len(agreement['actions'])} equally weighted actions; "
+            f"{agreement['expected_absences']} expected absences, "
+            f"{agreement['coverage_gaps']} coverage gaps."
+        )
+        if "total_findings" in agreement:
+            console.print(
+                f"  {agreement['total_findings']} rule findings across {agreement['incorrect']} defective checks; "
+                f"{len(agreement.get('findings', []))} representative examples retained"
+                + (" (truncated)." if agreement.get("findings_truncated") else ".")
+            )
+        for note in agreement.get("verification_limitations", []):
+            console.print("  Verification limitation: " + note, markup=False)
+        displayed = agreement.get("findings", [])[: 5 if not verbose else 20]
+        if displayed:
+            console.print(
+                f"  Showing {len(displayed)} of {len(agreement.get('findings', []))} retained examples."
+            )
+        for finding in displayed:
+            console.print(
+                f"  {finding['intent_id']} · {finding.get('source_instance') or 'canonical truth'} "
+                f"· {finding['rule']}",
+                markup=False,
+            )
+            if finding.get("details"):
+                console.print(
+                    "    " + json.dumps(finding["details"], ensure_ascii=False, default=str)[:1200],
+                    markup=False,
+                )
+    limitation = report.supplementary.get("ground_truth_coverage", {}).get("limitation")
+    if limitation:
+        console.print(f"Ground-truth coverage limitation: {limitation}")
 
     console.print()
 

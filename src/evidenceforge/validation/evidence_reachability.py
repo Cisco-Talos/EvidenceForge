@@ -353,6 +353,9 @@ def analyze_evidence_reachability(
     observable_formats = _observable_source_formats(compilation.deployment, scenario)
     observable_text = ", ".join(observable_formats) if observable_formats else "none"
     findings: list[EvidenceReachabilityFinding] = []
+    from evidenceforge.validation.typed_visibility import analyze_typed_fact_visibility
+
+    findings.extend(analyze_typed_fact_visibility(scenario, compilation.deployment))
     for activation in activations:
         if _activation_is_reachable(
             activation,

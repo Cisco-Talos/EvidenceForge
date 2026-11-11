@@ -2919,6 +2919,19 @@ class NetworkTransactionPlanner:
         ocsp = request.ocsp
         proxy = request.proxy
         firewall = request.firewall
+        if firewall is not None and not firewall.enforcing_entities:
+            visibility = executor.dispatcher.visibility_engine
+            enforcing = (
+                [
+                    str(sensor.hostname or sensor.name)
+                    for sensor in visibility.get_observing_sensors(src_ip, dst_ip)
+                    if sensor.type == "firewall"
+                ]
+                if visibility is not None
+                else []
+            )
+            if len(enforcing) == 1:
+                firewall = replace(firewall, enforcing_entities=tuple(enforcing))
         hostname = request.hostname
         proxy_bypass = request.proxy_bypass
         process_image = request.process_image

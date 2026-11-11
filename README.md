@@ -17,6 +17,11 @@ Generate realistic synthetic security logs for cybersecurity threat hunting trai
 For background on the project and why we built it, read our announcement:
 [Introducing EvidenceForge: synthetic security logs that don't look (as) fake](https://blog.talosintelligence.com/introducing-evidenceforge-synthetic-security-logs-that-dont-look-as-fake).
 
+See the [deterministic ground-truth contract](docs/reference/ground-truth.md) for authored intent,
+actual occurrences, source observation, and prevention semantics.
+Evaluation checks process transitions by execution identity and reports source-specific
+matching details, timing provenance and explicit diagnostic limits.
+
 ## What It Does
 
 EvidenceForge creates multi-format security log datasets from YAML scenario definitions. You
@@ -40,7 +45,8 @@ baseline-only scenarios explicitly state that no malicious events were generated
 - **Repeatable generation at scale** — Deterministic seeds, resource forecasts, progress reporting,
   and resumable checkpoints support complex simulations and huge datasets.
 - **Validation and quality measurement** — Catch schema, cross-reference, topology, and capacity
-  problems before generation, then evaluate the resulting evidence across four quality pillars.
+  problems before generation, then evaluate schema-5 bundles across five equally weighted
+  quality pillars. Legacy schema-3/4 bundles retain their four-pillar evaluation.
 - **Reusable environment modeling** — Split scenarios with YAML includes, compose versioned
   industry or organization packs, and apply project-local configuration overlays.
 
@@ -370,18 +376,21 @@ and `generate` preflight packaged contracts; `eval` checks emitted records. Acce
 gates. Existing scenario/overlay/pack interfaces remain supported; rules and thresholds are
 package-owned. See [record validation](docs/reference/RECORD_VALIDATION.md).
 
-EvidenceForge can evaluate a generated bundle across four complementary quality pillars:
+EvidenceForge can evaluate a generated bundle across five complementary quality pillars for schema-5 bundles:
 
 | Pillar | Weight | What it measures |
 |--------|--------|-----------------|
-| Parseability | 30% | Source conformance and format constraints |
-| Plausibility | 25% | Values, cross-source agreement, distributions, diversity, and anomaly rates |
-| Causality | 25% | Event presence, ordering, authored-intent reconciliation, and investigative pivots |
+| Parseability | 20% | Source conformance and format constraints |
+| Plausibility | 20% | Values, cross-source agreement, distributions, diversity, and anomaly rates |
+| Causality | 20% | Event presence, ordering, authored-intent reconciliation, and investigative pivots |
 | Timing | 20% | Attack-chain timing, burstiness, regularity, diurnal patterns, and event rates |
+| Ground Truth Agreement | 20% | Deterministic action/source expectations compared with actual evidence (95% minimum) |
 
 Applicable hard gates must pass; aspirational targets show where quality can improve without
 turning every shortfall into a failure. Measures that do not apply to a dataset are reported as
-unavailable rather than receiving an automatic perfect score.
+unavailable rather than receiving an automatic perfect score. Ground Truth Agreement explicitly
+scores legitimate zero-check actions at 100%, with scope and counts. Legacy schema-3/4 bundles
+retain four-pillar evaluation and original weighting. See [ground-truth contracts](docs/reference/ground-truth.md).
 
 ```bash
 uv run eforge eval ./output

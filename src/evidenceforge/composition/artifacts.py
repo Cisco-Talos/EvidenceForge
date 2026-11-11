@@ -257,6 +257,25 @@ def verify_generation_bundle(output_root: Path) -> dict[str, Any]:
             )
         except (ValidationError, ValueError) as exc:
             raise SchemaValidationError(f"invalid ground truth document: {exc}") from exc
+        if ground_truth.schema_version >= 4:
+            from evidenceforge.events.ground_truth_occurrence import read_ground_truth_occurrences
+
+            if ground_truth.event_stream is None:
+                raise SchemaValidationError(
+                    "schema-v4 ground truth requires its occurrence sidecar"
+                )
+            if ground_truth.schema_version == 5 and (
+                ground_truth.event_stream.schema_version != 2
+                or ground_truth.expectation_contract is None
+            ):
+                raise SchemaValidationError(
+                    "schema-v5 ground truth requires its source expectation contract and schema-2 stream"
+                )
+            try:
+                for _row in read_ground_truth_occurrences(output_root, ground_truth.event_stream):
+                    pass
+            except (OSError, ValueError) as exc:
+                raise SchemaValidationError(f"invalid canonical occurrence sidecar: {exc}") from exc
         ground_truth_effects = (
             ground_truth.effect_reconciliation.model_dump(mode="json")
             if ground_truth.effect_reconciliation is not None

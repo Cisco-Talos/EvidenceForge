@@ -204,6 +204,7 @@ class SourceTimingPlan:
     source_times: dict[str, datetime] = field(default_factory=dict)
     finalized_times: dict[str, datetime] = field(default_factory=dict)
     finalized_flags: dict[str, bool] = field(default_factory=dict)
+    validation_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def _clone(self) -> SourceTimingPlan:
         """Copy one trusted plan without recursive generic object traversal."""
@@ -216,6 +217,10 @@ class SourceTimingPlan:
             source_times=self.source_times.copy(),
             finalized_times=self.finalized_times.copy(),
             finalized_flags=self.finalized_flags.copy(),
+            validation_receipts={
+                key: {**value, "anchors": [dict(anchor) for anchor in value.get("anchors", [])]}
+                for key, value in self.validation_receipts.items()
+            },
         )
 
 
@@ -4655,6 +4660,70 @@ class SourceTimingPlanner:
         timestamp: datetime,
     ) -> None:
         """Publish the final visible dependent frontier after all source constraints."""
+
+        if family == "ecar" and event.process is not None and event.identity_plan is not None:
+            subject = event.identity_plan.subject
+            actor = event.identity_plan.actor
+            if isinstance(subject, ProcessIdentity):
+                anchors = []
+
+                def anchor(kind: str, identity: str, at: datetime | None) -> None:
+                    if at is not None and at < timestamp:
+                        anchors.append({"kind": kind, "identity": identity, "time": at.isoformat()})
+
+                anchor(
+                    "preferred_create"
+                    if event.event_type in _PROCESS_START_EVENT_TYPES
+                    else "process_create",
+                    subject.object_id,
+                    self._ecar_process_create_times.get(subject.object_id),
+                )
+                anchor(
+                    "process_frontier",
+                    subject.object_id,
+                    self._process_dependent_create_times.get(
+                        (family, source_instance, subject.object_id)
+                    ),
+                )
+                if isinstance(actor, ProcessIdentity):
+                    if event.event_type in _PROCESS_START_EVENT_TYPES:
+                        anchor(
+                            "parent_create",
+                            actor.object_id,
+                            self._ecar_process_create_times.get(actor.object_id),
+                        )
+                    elif event.event_type == "process_exec":
+                        anchor(
+                            "previous_execution",
+                            actor.execution_id,
+                            self._runtime_process_execution_times.get(
+                                (family, source_instance, actor.execution_id)
+                            ),
+                        )
+                lifecycle = event.lifecycle
+                session_group = lifecycle.parent_group_id if lifecycle else None
+                if session_group:
+                    anchor(
+                        "session_login",
+                        session_group,
+                        self._latest_session_start_times.get((family, session_group)),
+                    )
+                    if anchors and anchors[-1]["kind"] == "session_login":
+                        anchors[-1]["logon_id"] = subject.logon_id
+                self._ensure_plan(event).validation_receipts[source_instance] = {
+                    "version": 1,
+                    "phase": str(event.event_type),
+                    "object_id": subject.object_id,
+                    "execution_id": subject.execution_id,
+                    "canonical_time": self._ensure_plan(event).canonical_timestamp.isoformat(),
+                    "native_time": timestamp.isoformat(),
+                    "policy": "source.ecar_process_create"
+                    if event.event_type in _PROCESS_START_EVENT_TYPES
+                    else "source.ecar_process_terminate"
+                    if event.event_type in _PROCESS_END_EVENT_TYPES
+                    else self._endpoint_event_source_key(event, family, phase),
+                    "anchors": anchors,
+                }
 
         if family == "ecar" and event.event_type in _PROCESS_START_EVENT_TYPES:
             # Session/transport/execution constraints run after the preliminary

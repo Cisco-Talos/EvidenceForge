@@ -94,6 +94,7 @@ class BashHistoryParser(LogParser):
                         "command": command,
                     },
                     timestamp=timestamp,
+                    source_host=hostname,
                     parse_errors=errors,
                     line_number=record_num,
                 )
@@ -110,6 +111,7 @@ class BashHistoryParser(LogParser):
                             "command": line,
                         },
                         timestamp=None,
+                        source_host=hostname,
                         parse_errors=["Command without preceding timestamp"],
                         line_number=record_num,
                     )

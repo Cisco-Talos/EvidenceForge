@@ -25,6 +25,7 @@ from weakref import WeakValueDictionary
 from pydantic import BaseModel
 
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+from evidenceforge.generation.ground_truth_ledger import GroundTruthLedger
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
 
@@ -789,6 +790,7 @@ class IntentExecutionLedger:
             raise ValueError("hot_identity_capacity must be positive")
         if identity_sample_limit <= 0:
             raise ValueError("identity_sample_limit must be positive")
+        self.ground_truth: GroundTruthLedger | None = None
         self._authored = authored
         self._authored_ids = authored.intent_ids
         self._aggregates: dict[str, _IntentExecutionAggregate] = {}

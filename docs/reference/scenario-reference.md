@@ -4,6 +4,9 @@ description: "Scenario Schema Reference"
 
 # Scenario Schema Reference
 
+Ground-truth artifacts, prevention, observation, and DNS/address reconciliation are documented in
+[the deterministic ground-truth contract](ground-truth.md).
+
 This document describes the authored EvidenceForge Scenario 1.0, 2.0 and 3.0 schemas and their
 current semantics. Older phase labels identify when individual fields were introduced.
 

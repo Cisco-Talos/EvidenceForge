@@ -15,6 +15,7 @@ from pathlib import Path
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
+from evidenceforge.events.ground_truth_occurrence import GROUND_TRUTH_EVENTS_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.profiling import GENERATION_PROFILE_FILENAME
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
@@ -42,6 +43,8 @@ class SidecarRegistry:
             SidecarSpec("data", required=True, directory=True),
             SidecarSpec("GROUND_TRUTH.md", required=True),
             SidecarSpec(GROUND_TRUTH_JSON_FILENAME, required=True),
+            SidecarSpec(GROUND_TRUTH_EVENTS_FILENAME),
+            SidecarSpec("GROUND_TRUTH_DIAGNOSTICS.json"),
             SidecarSpec(OBSERVATION_MANIFEST_FILENAME, required=True),
             SidecarSpec(ARTIFACTS_MANIFEST_FILENAME),
             SidecarSpec(COLLECTION_PROFILE_FILENAME),
@@ -121,8 +124,13 @@ class SidecarRegistry:
                     raise PermissionError(f"generated bundle contains a symlink: {candidate}")
                 if candidate.is_file():
                     relative = logical_path(candidate.relative_to(root))
-                    hashes[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+                    hashes[relative] = self._file_hash(candidate)
         return dict(sorted(hashes.items()))
+
+    @staticmethod
+    def _file_hash(path: Path) -> str:
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
 
     def replace(self, staged_root: Path, destination_root: Path) -> None:
         """Atomically install a staged matched set, restoring the old set on failure."""

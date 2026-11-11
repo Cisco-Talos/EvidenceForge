@@ -1,0 +1,221 @@
+# Semantic source contracts, independent of emitter implementation.
+version: 1
+windows_event_security:
+  process_create: 4688
+  system_process_create: 4688
+  process_terminate: 4689
+  logon: 4624
+  machine_logon: 4624
+  logoff: 4634
+  failed_logon: 4625
+  kerberos_tgt: 4768
+  kerberos_tgt_renewal: 4770
+  kerberos_service: 4769
+  kerberos_preauth_failed: 4771
+  ntlm_validation: 4776
+  explicit_credentials: 4648
+  wfp_connection: 5156
+  log_cleared: 1102
+  service_installed: 4697
+  scheduled_task_created: 4698
+  scheduled_task_deleted: 4699
+  scheduled_task_enabled: 4700
+  scheduled_task_disabled: 4701
+  group_member_added_global: 4728
+  group_member_removed_global: 4729
+  group_member_added_local: 4732
+  group_member_removed_local: 4733
+  group_member_added_universal: 4756
+  group_member_removed_universal: 4757
+  account_created: 4720
+  account_deleted: 4726
+  account_changed: 4738
+  password_change: 4723
+  password_reset: 4724
+  workstation_locked: 4800
+  workstation_unlocked: 4801
+  rdp_reconnect: 4778
+  rdp_disconnect: 4779
+windows_event_sysmon:
+  process_create: 1
+  system_process_create: 1
+  process_terminate: 5
+  connection: 3
+  wfp_connection: 3
+  file_create: 11
+  file_modify: 11
+  registry_modify: 13
+  image_load: 7
+  create_remote_thread: 8
+  process_access: 10
+ecar:
+  process_create: [PROCESS, CREATE]
+  system_process_create: [PROCESS, CREATE]
+  process_fork: [PROCESS, CREATE]
+  process_exec: [PROCESS, MODIFY]
+  process_audit_bind: [PROCESS, MODIFY]
+  process_privilege_drop: [PROCESS, MODIFY]
+  process_service_drop: [PROCESS, MODIFY]
+  process_job_control: [PROCESS, MODIFY]
+  process_terminate: [PROCESS, TERMINATE]
+  logon: [USER_SESSION, LOGIN]
+  machine_logon: [USER_SESSION, LOGIN]
+  ssh_session: [USER_SESSION, LOGIN]
+  failed_logon: [USER_SESSION, LOGIN]
+  logoff: [USER_SESSION, LOGOUT]
+  connection: [FLOW, CONNECT]
+  file_read: [FILE, READ]
+  file_create: [FILE, CREATE]
+  file_modify: [FILE, WRITE]
+  file_delete: [FILE, DELETE]
+  file_rename: [FILE, RENAME]
+  file_close: [FILE, CLOSE]
+  registry_modify: [REGISTRY, MODIFY]
+  image_load: [MODULE, LOAD]
+  create_remote_thread: [THREAD, CREATE]
+  process_access: [PROCESS, ACCESS]
+  service_installed: [SERVICE, CREATE]
+  smb_file_read: [FILE, READ]
+  smb_file_write: [FILE, WRITE]
+  smb_file_rename: [FILE, RENAME]
+  smb_file_delete: [FILE, DELETE]
+  smb_directory_enumeration: [FILE, READ]
+# Canonical consequence alternatives for each authored typed activity.
+authored_kinds:
+  process: [process_create, process_exec, process_attempt, macos_policy_refusal]
+  logon: [logon, ssh_session]
+  failed_logon: [failed_logon]
+  logoff: [logoff]
+  connection: [connection]
+  beacon: [connection]
+  dns_query: [connection]
+  port_scan: [connection]
+  web_scan: [connection]
+  credential_spray: [failed_logon]
+  dga_queries: [connection]
+  dns_tunnel: [connection]
+  dhcp_lease: [dhcp_lease]
+  ssh_session: [ssh_session, failed_logon]
+  rdp_session: [logon, failed_logon]
+  smb_activity: [smb_tree_connect, smb_file_read, smb_file_write, smb_file_delete, smb_file_rename, smb_directory_enumeration]
+  account_created: [account_created]
+  account_deleted: [account_deleted]
+  group_member_added: [group_member_added_global, group_member_added_local, group_member_added_universal]
+  service_installed: [service_installed]
+  scheduled_task_created: [scheduled_task_created]
+  log_cleared: [log_cleared]
+  create_remote_thread: [create_remote_thread]
+  process_access: [process_access]
+  explicit_credentials: [explicit_credentials]
+  workstation_lock: [workstation_locked]
+  workstation_unlock: [workstation_unlocked]
+  email_message: [connection]
+  email_read: [connection]
+  macos_launch_item: [file_create, file_delete, process_create, process_terminate, process_job_control, job_control]
+  spillage: [connection, process_create, bash_command, zsh_command]
+  adversarial_payload: [connection, process_create, bash_command, zsh_command, file_create]
+# Important typed facts. Alternatives must express the fact, not merely nearby traffic.
+typed_facts:
+  dhcp_lease:
+    formats: [zeek_dhcp]
+    capability: NETWORK
+  transport:
+    formats: [zeek_conn, ecar, windows_event_sysmon, windows_event_security, cisco_asa]
+    capability: NETWORK
+  http_result:
+    formats: [zeek_http, proxy_access, web_access]
+    capability: HTTP
+  dns_answer:
+    formats: [zeek_dns, windows_event_sysmon]
+    capability: DNS
+  smtp_result:
+    formats: [zeek_smtp]
+    capability: NETWORK
+  authentication:
+    formats: [windows_event_security, ecar, syslog, macos_unified_log]
+    capability: AUTHENTICATION
+# Required facts use native field names, independent of templates.
+native_context_fields:
+  windows_event_security:
+    account_management:
+      TargetUserName: target_username
+      TargetSid: target_sid
+    group_membership:
+      TargetUserName: group_name
+      MemberName: member_name
+      MemberSid: member_sid
+    service:
+      ServiceName: service_name
+      ServiceFileName: service_file_name
+      ServiceAccount: service_account
+    scheduled_task:
+      TaskName: task_name
+  windows_event_sysmon:
+    remote_thread:
+      TargetProcessId: target_pid
+      TargetImage: target_image
+      NewThreadId: new_thread_id
+    process_access:
+      SourceProcessId: source_pid
+      TargetProcessId: target_pid
+      TargetImage: target_image
+      GrantedAccess: granted_access
+  ecar:
+    remote_thread:
+      target_pid: target_pid
+      target_image_path: target_image
+    process_access:
+      target_pid: target_pid
+      target_image_path: target_image
+      granted_access: granted_access
+    service:
+      service_name: service_name
+      image_path: service_file_name
+      service_account: service_account
+authored_bindings:
+  account_created: {account_management.target_username: target_username}
+  account_deleted: {account_management.target_username: target_username}
+  group_member_added: {group_membership.group_name: group_name}
+  service_installed: {service.service_name: service_name, service.service_file_name: service_file_name}
+  scheduled_task_created: {scheduled_task.task_name: task_name}
+  create_remote_thread: {remote_thread.target_image: target_process}
+  process_access: {process_access.target_image: target_process, process_access.granted_access: access_mask}
+macos_native_selectors:
+  process_fork: [11, event.fork.child]
+  process_create: [11, event.fork.child]
+  process_exec: [9, event.exec.target]
+  process_terminate: [15, process]
+  file_create: [13, process]
+  file_close: [12, process]
+  file_rename: [25, process]
+  file_delete: [32, process]
+
+sysmon_dns_status: {NOERROR: "0", SERVFAIL: "9002", NXDOMAIN: "9003", NOTIMP: "9501", REFUSED: "9005"}
+native_source_time_bounds:
+  logoff: {ecar: 15, windows_security: 15, syslog: 4}
+
+authored_launch_item_consequences:
+  write: [file_create, file_modify]
+  bootstrap: [job_control]
+  activate: [process_create, process_fork, process_exec]
+  exit: [process_terminate]
+  unload: [process_terminate, job_control]
+  remove: [file_delete]
+
+# Native observation clock is part of identity for repeated same-process/key effects.
+native_identity_clock_microseconds:
+  registry_modify: {ecar: 1000, windows_event_sysmon: 1000}
+  process_exec: {ecar: 1000}
+  process_audit_bind: {ecar: 1000}
+  process_privilege_drop: {ecar: 1000}
+  process_service_drop: {ecar: 1000}
+  process_job_control: {ecar: 1000}
+
+authored_smb_consequences:
+  browse: [smb_directory_enumeration]
+  read: [smb_file_read]
+  create: [smb_file_write]
+  update: [smb_file_write]
+  delete: [smb_file_delete]
+  copy: [smb_file_read, smb_file_write]
+  move: [smb_file_read, smb_file_write, smb_file_rename]

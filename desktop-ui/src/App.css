@@ -1451,8 +1451,50 @@ html[data-platform="linux"] select optgroup { color: var(--text); background-col
 .send-mode-menu [data-highlighted] { background: #213a60; border-radius: 4px; }
 .send-mode-menu [data-disabled] { opacity: .45; cursor: default; }
 
-.scorecard-macos-coverage { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
-.scorecard-macos-coverage summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
-.scorecard-macos-coverage dl { margin: 8px 0 16px; }
-.scorecard-macos-coverage dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 4px 0; }
-.scorecard-macos-coverage dd { margin: 0; font-variant-numeric: tabular-nums; }
+.ground-truth-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; list-style: none; }
+.ground-truth-heading::-webkit-details-marker, .ground-truth-check > summary::-webkit-details-marker { display: none; }
+.ground-truth-heading > strong { color: #dbe8f5; font-size: 12px; }
+.ground-truth-status { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ground-truth-totals { margin-left: auto; color: #acc2d9; }
+.ground-truth-chevron { flex: none; color: #90aac7; transition: transform .15s; }
+.ground-truth-diagnostics[open] > summary > .ground-truth-chevron, .ground-truth-check[open] > summary > .ground-truth-chevron { transform: rotate(180deg); }
+.ground-truth-body { padding: 12px; }
+.ground-truth-explanation { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; line-height: 1.5; }
+.ground-truth-explanation .help-icon { flex: none; }
+.ground-truth-limitations { display: flex; align-items: flex-start; gap: 8px; padding: 10px; margin: 12px 0; border: 1px solid #735837; border-radius: 6px; background: #2c2a2a; }
+.ground-truth-limitations > svg { flex: none; margin-top: 1px; }
+.ground-truth-limitations p { margin: 5px 0 0; color: #bdc8d5; }
+.ground-truth-truncation { display: flex; align-items: flex-start; gap: 7px; color: #e6bb75; line-height: 1.5; }
+.ground-truth-truncation svg { flex: none; }
+.ground-truth-search { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 14px 0 8px; position: relative; color: #acc2d9; font-size: 11px; }
+.ground-truth-search input { width: 100%; min-width: 0; min-height: 32px; padding: 6px 8px; border: 1px solid #35516c; border-radius: 5px; background: var(--section-header); color: #dbe8f5; font-size: 12px; }
+.ground-truth-search > svg { position: absolute; bottom: 9px; left: 8px; }
+.ground-truth-search > input { padding-left: 29px; }
+.ground-truth-filter-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 10px 0; color: #acc2d9; }
+.ground-truth-category { margin-top: 10px; border: 1px solid #304963; border-radius: 6px; overflow: hidden; }
+.ground-truth-category-disclosure > summary { padding: 10px; background: var(--section-header); list-style: none; }
+.ground-truth-category-disclosure > summary::-webkit-details-marker { display: none; }
+.ground-truth-category-disclosure[open] > summary .ground-truth-chevron { transform: rotate(180deg); }
+.ground-truth-category-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.ground-truth-category-heading > h4 { margin: 0; color: #dbe8f5; font-size: 12px; }
+.ground-truth-category-heading > span { margin-left: auto; color: #acc2d9; }
+.ground-truth-category-description { margin: 6px 0 0; }
+.ground-truth-category-body { padding: 0 10px 10px; }
+.ground-truth-check { border: 1px solid #304963; border-radius: 6px; margin-top: 7px; overflow: hidden; }
+.ground-truth-check > summary { display: flex; align-items: center; gap: 8px; list-style: none; padding: 10px; background: var(--section-header); }
+.ground-truth-check > summary > svg { flex: none; }
+.ground-truth-check > summary > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ground-truth-check > summary strong { color: #dbe8f5; }
+.ground-truth-check > summary small { display: block; margin-top: 4px; color: #acc2d9; }
+.ground-truth-message-count { flex: none; color: #acc2d9; }
+.ground-truth-check-body { padding: 0 10px 10px; overflow-wrap: anywhere; }
+.ground-truth-check-body > p { line-height: 1.5; }
+.ground-truth-message { margin-top: 10px; }
+.ground-truth-message > summary { display: flex; flex-wrap: wrap; gap: 5px 12px; padding: 6px 0; }
+.ground-truth-message code { color: #9fb5cd; overflow-wrap: anywhere; }
+.ground-truth-message pre { max-height: 360px; max-width: 100%; overflow: auto; padding: 10px; border: 1px solid #304963; border-radius: 5px; background: #0d192a; color: #c3d6ee; font-size: 11px; }
+@media (max-width: 560px) {
+  .ground-truth-heading .ground-truth-totals { order: 3; width: 100%; margin-left: 0; }
+  .ground-truth-heading > .ground-truth-chevron { margin-left: auto; }
+  .ground-truth-category-heading > span { margin-left: 0; }
+}

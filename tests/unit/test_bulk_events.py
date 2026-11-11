@@ -1036,19 +1036,16 @@ class TestPortScanConnectionProfile:
             80,
             external=True,
         )
-        denied, conn_state, service, _duration, _orig_bytes, _resp_bytes = (
-            _port_scan_connection_profile(
-                rng,
-                port=80,
-                target_system=target,
-                external=True,
-                default_deny_state="S0",
-            )
+        transport = _port_scan_connection_profile(
+            rng,
+            port=80,
+            target_system=target,
+            external=True,
+            default_deny_state="S0",
         )
 
-        assert not denied
-        assert conn_state in {"SF", "RSTO", "RSTR"}
-        assert service == "http"
+        assert transport.conn_state in {"SF", "RSTO", "RSTR"}
+        assert transport.service == "http"
 
     def test_profile_includes_filtered_and_rejected_closed_ports(self):
         rng = random.Random(42)
@@ -1071,8 +1068,8 @@ class TestPortScanConnectionProfile:
             for _ in range(120)
         ]
 
-        assert all(sample[0] for sample in samples)
-        assert {sample[1] for sample in samples} >= {"S0", "REJ"}
+        assert {sample.conn_state for sample in samples} >= {"S0", "REJ"}
+        assert all(not hasattr(sample, "denied") for sample in samples)
 
 
 class TestPortScanTargetResolution:
@@ -1112,6 +1109,10 @@ class TestPortScanTargetResolution:
 
         class Visibility:
             _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def get_observing_sensors(src_ip: str, dst_ip: str) -> list[NetworkSensor]:
+                return network.sensors
 
             @staticmethod
             def get_public_inbound_address(ip: str) -> str | None:
@@ -1178,6 +1179,10 @@ class TestPortScanTargetResolution:
 
         class Visibility:
             _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def get_observing_sensors(src_ip: str, dst_ip: str) -> list[NetworkSensor]:
+                return network.sensors
 
             @staticmethod
             def get_public_inbound_address(ip: str) -> str | None:

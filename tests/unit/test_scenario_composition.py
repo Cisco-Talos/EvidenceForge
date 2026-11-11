@@ -945,6 +945,12 @@ def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliati
     data.mkdir()
     (data / "events.json").write_text("{}\n", encoding="utf-8")
     snapshot = ExecutionEffectAuditCounter().snapshot()
+    from evidenceforge.events.ground_truth_occurrence import GroundTruthEventStream
+
+    (tmp_path / "GROUND_TRUTH_EVENTS.jsonl").write_bytes(b"")
+    event_stream = GroundTruthEventStream(
+        schema_version=1, count=0, sha256=hashlib.sha256(b"").hexdigest()
+    )
     ground_truth_path = tmp_path / GROUND_TRUTH_JSON_FILENAME
     write_ground_truth_document(
         ground_truth_path,
@@ -952,7 +958,10 @@ def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliati
             compiled.scenario,
             [],
             execution_effect_audit_snapshot=snapshot,
-        ).build_document(),
+            event_stream=event_stream,
+        )
+        .build_document()
+        .model_copy(update={"schema_version": 4}),
     )
     write_resolved_scenario(compiled, tmp_path)
     write_generation_manifest(

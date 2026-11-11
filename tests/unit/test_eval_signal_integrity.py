@@ -898,6 +898,7 @@ class TestPivotLinkability:
         )
         ground_truth = GroundTruthDocument.model_validate(
             {
+                "schema_version": 3,
                 "scenario_name": scenario.name,
                 "scenario_description": scenario.description,
                 "generated_at": T0 + timedelta(hours=8),
@@ -1533,7 +1534,7 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         assert result.number == 3
         assert result.name == "Causality"
-        assert result.weight == 0.25
+        assert result.weight == 0.2
         assert result.score is not None
         assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 

@@ -91,6 +91,7 @@ def handle_connection(
     if (
         spec.method
         or spec.uri
+        or spec.status_code is not None
         or authored_request_body_len is not None
         or authored_request_multipart is not None
         or authored_response_multipart is not None
@@ -449,6 +450,7 @@ def handle_connection(
         emit_dns=emit_dns,
         source_system=src_sys,
         http=http_ctx,
+        preserve_http_outcome=spec.status_code is not None,
         ids_alerts=ids_alerts,
         pid=story_pid,
         process_image=story_image,

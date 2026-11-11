@@ -141,6 +141,15 @@ def production_checkpoint_participants(
         GenerationEngineParticipant(engine),
         GenerationRngParticipant(),
     ]
+    ground_truth = engine.intent_execution_ledger.ground_truth
+    if ground_truth is not None:
+        participants.append(
+            SQLiteSpoolParticipant(
+                owner="ground-truth-occurrences",
+                connection=ground_truth.checkpoint_connection,
+                tables=ground_truth.tables,
+            )
+        )
     for format_name in ("windows_event_security", "windows_event_sysmon"):
         emitter = engine.emitters.get(format_name)
         if emitter is not None:

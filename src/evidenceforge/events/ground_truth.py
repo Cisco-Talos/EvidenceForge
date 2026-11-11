@@ -10,8 +10,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from evidenceforge.events.ground_truth_occurrence import (
+    GroundTruthEventStream,
+    GroundTruthExpectationContract,
+    GroundTruthExpectationSummary,
+)
 from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
@@ -20,7 +33,7 @@ from evidenceforge.utils.time import resolve_time_window
 logger = logging.getLogger(__name__)
 
 GROUND_TRUTH_JSON_FILENAME = "GROUND_TRUTH.json"
-GROUND_TRUTH_SCHEMA_VERSION = 3
+GROUND_TRUTH_SCHEMA_VERSION = 5
 MAX_GROUND_TRUTH_BYTES = 8_388_608
 
 GroundTruthSection = Literal["storyline", "red_herring"]
@@ -29,6 +42,10 @@ GroundTruthSection = Literal["storyline", "red_herring"]
 class GroundTruthAttributesBase(BaseModel):
     """Known ground-truth attribute fields across tracked event kinds."""
 
+    hostname: str | None = None
+    canonical_occurrence_count: int | None = None
+    http_statuses: list[int] | None = None
+    network_destinations: list[str] | None = None
     action: str | None = None
     artifact_id: str | None = None
     artifact_path: str | None = None
@@ -934,7 +951,7 @@ class IdsEvaluationSummary(BaseModel):
 class GroundTruthDocument(BaseModel):
     """Canonical machine-readable ground-truth document."""
 
-    schema_version: Literal[3] = GROUND_TRUTH_SCHEMA_VERSION
+    schema_version: Literal[3, 4, 5] = GROUND_TRUTH_SCHEMA_VERSION
     scenario_name: str
     scenario_description: str
     generated_at: datetime
@@ -948,6 +965,11 @@ class GroundTruthDocument(BaseModel):
     intent_reconciliation: GroundTruthIntentReconciliation | None = None
     effect_reconciliation: GroundTruthExecutionEffectReconciliation | None = None
     events: list[GroundTruthEvent] = Field(default_factory=list)
+    event_stream: GroundTruthEventStream | None = None
+    expectation_contract: GroundTruthExpectationContract | None = None
+    source_expectation_summary: GroundTruthExpectationSummary | None = None
+    intent_outcomes: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+    background_counts: dict[str, int] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
 

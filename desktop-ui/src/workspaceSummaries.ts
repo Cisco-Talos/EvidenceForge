@@ -61,8 +61,9 @@ export function scoringSummary(generation: StudioJob | undefined, evaluation: St
   const status = report?.acceptance_passed === true ? "Passed" : report?.acceptance_passed === false ? "Failed" : "Indeterminate";
   const headline = evaluation.status === "completed" && report && !report.error
     ? `${report.overall_score?.toFixed(0) ?? "N/A"}/100 · ${status}${report.total_records == null ? "" : ` · ${report.total_records.toLocaleString()} records`}`
-    : report?.error ? "Score report unavailable" : `Evaluation ${evaluation.status}`;
-  return { headline, detail: `${context} · Evaluation #${evaluation.id.slice(0, 8)}`, inputs };
+    : evaluation.status === "failed" ? "Evaluation failed" : report?.error ? "Score report unavailable" : `Evaluation ${evaluation.status}`;
+  const failure = evaluation.status === "failed" ? report?.error || evaluation.status_message : undefined;
+  return { headline, detail: `${context} · Evaluation #${evaluation.id.slice(0, 8)}${failure ? ` · ${failure}` : ""}`, inputs };
 }
 
 /** Summarize generation and evaluation of the same latest run, plus all owned/imported data. */

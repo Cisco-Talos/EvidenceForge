@@ -384,3 +384,27 @@ def test_background_controller_checkpoints_after_handoff(
     controller.ensure_controller(directory)
     _wait_for(lambda: jobs.load_generations()[0].status == "completed")
     assert (paused.output_root / "GENERATION_MANIFEST.json").exists()
+
+
+def test_failed_evaluation_preserves_cli_capacity_error_instead_of_empty_json(
+    tmp_path: Path,
+) -> None:
+    job = _evaluation(tmp_path, "oversized")
+    job.result_file.write_text("")
+    job.log_file.write_text(
+        "Parsing log files...\n\n\x1b[31mError: Evaluation failed: Evaluation corpus exceeds the supported envelope:\n"
+        "864106704 corpus bytes exceeds 536870912\x1b[0m\n\n"
+    )
+    controller._finish_evaluation(job, JobStore(tmp_path / "state"))
+    assert job.status == "failed"
+    assert "864106704 corpus bytes exceeds 536870912" in job.status_message
+    assert "Invalid JSON" not in job.status_message
+    assert not (tmp_path / "state" / "evaluations" / "oversized.json").exists()
+
+
+def test_unreadable_evaluation_without_cli_error_has_actionable_fallback(tmp_path: Path) -> None:
+    job = _evaluation(tmp_path, "broken")
+    job.result_file.write_text("not JSON")
+    controller._finish_evaluation(job, JobStore(tmp_path / "state"))
+    assert job.status == "failed"
+    assert "Open the evaluation log" in job.status_message

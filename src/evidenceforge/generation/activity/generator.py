@@ -27779,6 +27779,26 @@ class ActivityGenerator:
         )
         return int(sampled + 0.5)
 
+    def _record_ground_truth_dns_resolution(
+        self,
+        request: DnsLookupRequest,
+        hostname: str,
+        resolver: str,
+        *,
+        cached: bool,
+    ) -> None:
+        """Publish address use from the DNS/cache owner, independently of source visibility."""
+        execution = getattr(self.dispatcher, "intent_execution_ledger", None)
+        if execution is not None and execution.ground_truth is not None:
+            execution.ground_truth.note_dns_resolution(
+                client=request.src_ip,
+                domain=hostname,
+                selected_ip=request.dst_ip,
+                at=request.time,
+                resolver=resolver,
+                cached=cached,
+            )
+
     def _execute_dns_lookup_bundle(self, request: DnsLookupRequest) -> None:
         """Expand one DNS lookup request into canonical evidence."""
         src_ip = request.src_ip
@@ -27866,6 +27886,9 @@ class ActivityGenerator:
             if not self._dns_observation_time_is_visible(
                 time
             ) or self._dns_observation_epoch_is_visible(cached_at):
+                self._record_ground_truth_dns_resolution(
+                    request, hostname, dns_server_ip, cached=True
+                )
                 return  # Cache hit — skip DNS emission
 
         _src_os = "windows"
@@ -28099,6 +28122,8 @@ class ActivityGenerator:
             parent_action_group_id=request.parent_action_group_id,
             preserve_start_time=request.planned_query_time is not None,
         )
+        if force_address:
+            self._record_ground_truth_dns_resolution(request, hostname, dns_server_ip, cached=False)
         if not dns_uid:
             return
         if pending_cache_window is not None:

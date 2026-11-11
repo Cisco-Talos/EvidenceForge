@@ -4,6 +4,9 @@ description: "Evidence Formats Reference"
 
 # Evidence Formats Reference
 
+Ground-truth artifacts, prevention, observation, execution identities and source-clock
+reconciliation are documented in [the deterministic ground-truth contract](ground-truth.md).
+
 This document lists every evidence type EvidenceForge can generate, where to find it in the output, and any known limitations.
 
 ## Contents
@@ -806,7 +809,9 @@ census in `GROUND_TRUTH.json.macos_native_coverage` distinguishes expected/publi
 expected/observed/known/published exits, unknown results and collection decisions. File events
 do not count as process births and do not establish complete filesystem capture. Existing
 processes get no retrospective birth; surviving processes have no in-window exit obligation.
-Studio exposes the saved host process census separately from the general evaluation result.
+The generation-time guard and its ground-truth receipt are independent of authored-action
+agreement. Studio does not duplicate this source-specific census in its scorecard, and new
+evaluation reports omit the supplementary copy. Historical reports remain readable.
 
 Source policy owns missingness/windows/delay. Canonical publication retains immutable native
 facts, source delivery allocates counters in occurrence order, and retries reuse retained

@@ -26,6 +26,7 @@ const snapshot: StudioSnapshot = {
     output_parents: {},
     max_concurrent_generations: 2,
     checkpoint_hours: 24,
+    allow_large_evaluation: true,
     search_match_limit: 5,
     quit: {
       action: "continue", continue_queued_generations: true,

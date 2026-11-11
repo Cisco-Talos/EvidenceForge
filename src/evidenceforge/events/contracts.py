@@ -850,7 +850,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.CLOSURE,
         state=StateEffect.WRITE,
-        emitters=_formats(FormatKind.ECAR, FormatKind.WINDOWS_EVENT_SECURITY),
+        emitters=_formats(FormatKind.ECAR, FormatKind.WINDOWS_EVENT_SECURITY, FormatKind.SYSLOG),
     ),
     EventKind.LOGON: _contract(
         EventKind.LOGON,

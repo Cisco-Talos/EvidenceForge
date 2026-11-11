@@ -112,6 +112,17 @@ SETTINGS_MIGRATIONS = (
             JsonChange(action="set", field="schema_version", literal="2"),
         ),
     ),
+    SettingsMigration(
+        id="studio-settings-0003",
+        source=2,
+        target=3,
+        description="Allow large Studio evaluations by default",
+        affected=("settings",),
+        changes=(
+            JsonChange(action="default", field="settings.allow_large_evaluation", literal="true"),
+            JsonChange(action="set", field="schema_version", literal="3"),
+        ),
+    ),
 )
 LAYOUT_MIGRATIONS = tuple(
     ContractMigration(

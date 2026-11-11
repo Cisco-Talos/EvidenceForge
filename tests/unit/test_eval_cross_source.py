@@ -52,7 +52,7 @@ CAUSALITY_SUB_SCORE_KEYS = [
 ]
 
 
-def test_mac_profile_describes_conditional_native_sources_and_actual_process_coverage() -> None:
+def test_mac_profile_retains_source_inventory_without_special_process_statistics() -> None:
     from evidenceforge.evaluation.pillars.causality import _build_host_log_profile
     from tests.unit.test_macos_installed_provisioning import _scenario
 
@@ -97,12 +97,12 @@ def test_mac_profile_describes_conditional_native_sources_and_actual_process_cov
         "zsh_history",
         "macos_unified_log",
     }
-    assert profile["process_coverage"] == {
-        "ecar_process_creates": 2,
-        "ecar_forks": 1,
-        "ecar_aggregate_creates": 1,
-        "native_es_event_11": 1,
+    assert profile["volume_by_format"] == {
+        "ecar": 2,
+        "macos_endpoint_security": 1,
     }
+    assert "process_coverage" not in profile
+    assert "coverage_notes" not in profile
 
 
 def test_host_profile_uses_exact_source_disablement() -> None:
@@ -373,7 +373,7 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         assert result.number == 3
         assert result.name == "Causality"
-        assert result.weight == 0.25
+        assert result.weight == 0.2
         assert result.score is None
         assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 

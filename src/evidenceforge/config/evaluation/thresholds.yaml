@@ -15,7 +15,7 @@ pillars:
   # Pillar 1 — Parseability
   # Goal: generated records parse cleanly under the same rules as real downstream parsers.
   parseability:
-    weight: 0.30
+    weight: 0.20
     sub_scores:
       spec_conformance:
         minimum: 100
@@ -32,7 +32,7 @@ pillars:
   # Goal: no impossible or highly-improbable field values, combinations, or
   #       population characteristics.
   plausibility:
-    weight: 0.25
+    weight: 0.20
     sub_scores:
       value_plausibility:
         minimum: 95
@@ -74,7 +74,7 @@ pillars:
   # Goal: before/after relationships are correct in background noise and
   #       along the storyline.
   causality:
-    weight: 0.25
+    weight: 0.20
     sub_scores:
       causal_ordering:
         minimum: 90
@@ -146,3 +146,12 @@ pillars:
         aspirational: 100
         hard_gate: false
         # Impossible rates indicate a generator bug; should be near-perfect.
+
+  # Pillar 5 — Ground truth, with equal weighting per authored action.
+  ground_truth:
+    weight: 0.20
+    sub_scores:
+      ground_truth_agreement:
+        minimum: 95
+        aspirational: 100
+        hard_gate: true

@@ -298,7 +298,7 @@ class TestOverallDimension:
 
         assert result.number == 1
         assert result.name == "Parseability"
-        assert result.weight == 0.30
+        assert result.weight == 0.2
         assert result.score is not None
         assert len(result.sub_scores) == 2
 

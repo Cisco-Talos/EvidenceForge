@@ -378,7 +378,7 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         assert result.number == 2
         assert result.name == "Plausibility"
-        assert result.weight == 0.25
+        assert result.weight == 0.2
         assert result.score is not None
         assert len(result.sub_scores) == 7
         ids = next(score for score in result.sub_scores if score.key == "ids_integrity")

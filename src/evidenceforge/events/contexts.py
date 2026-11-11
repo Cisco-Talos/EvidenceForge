@@ -331,6 +331,12 @@ class NetworkTransactionDraft:
             orig_packets = 1
         if resp_ip_bytes > 0 and resp_packets == 0:
             resp_packets = 1
+        if self.protocol == "udp":
+            from ipaddress import ip_address
+
+            overhead = 48 if ip_address(self.src_ip).version == 6 else 28
+            orig_ip_bytes = orig_payload + overhead * orig_packets
+            resp_ip_bytes = resp_payload + overhead * resp_packets
         return NetworkTrafficLedger(
             orig=DirectionalTrafficLedger(orig_payload, orig_packets, orig_ip_bytes),
             resp=DirectionalTrafficLedger(resp_payload, resp_packets, resp_ip_bytes),
@@ -1068,6 +1074,7 @@ class FirewallContext:
     duration: str = ""  # "H:MM:SS" for teardown
     deny_hash_a: str = "0x0"  # ASA deny metadata hash field
     deny_hash_b: str = "0x0"  # ASA deny metadata hash field
+    enforcing_entities: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

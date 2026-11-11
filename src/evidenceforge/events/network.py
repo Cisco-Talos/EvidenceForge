@@ -501,6 +501,17 @@ class NetworkTransactionPlan:
                     raise ValueError(
                         "Canonical IP-byte accounting exceeds the modeled 1500-byte MTU"
                     )
+        if self.protocol == "udp":
+            from ipaddress import ip_address
+
+            overhead = 48 if ip_address(self.src_ip).version == 6 else 28
+            if any(
+                direction.ip_bytes != direction.payload_bytes + overhead * direction.packets
+                for direction in (self.traffic.orig, self.traffic.resp)
+            ):
+                raise ValueError(
+                    "Canonical UDP accounting disagrees with packet and payload counts"
+                )
         if self.closed_at is not None:
             if self.closed_at < self.started_at:
                 raise ValueError("Network transaction close cannot precede its start")

@@ -2862,7 +2862,7 @@ class ScenarioValidator:
         if network and not sensors:
             self.issues.append(
                 ValidationIssue(
-                    severity="warning",
+                    severity="info",
                     field_path="environment.network.sensors",
                     message=(
                         "Network topology is configured without sensors; Zeek, IDS, "
@@ -2880,7 +2880,7 @@ class ScenarioValidator:
         if network and not firewall_sensors:
             self.issues.append(
                 ValidationIssue(
-                    severity="warning",
+                    severity="info",
                     field_path="environment.network.sensors",
                     message=(
                         "Network topology has no firewall sensor; firewall policy, NAT, "
@@ -3152,7 +3152,7 @@ class ScenarioValidator:
             if segment.systems and segment.name not in monitored_segments:
                 self.issues.append(
                     ValidationIssue(
-                        severity="warning",
+                        severity="info",
                         field_path=f"environment.network.segments.{idx}",
                         message=(
                             f"Segment '{segment.name}' has systems but no sensor monitoring it"
@@ -3163,7 +3163,7 @@ class ScenarioValidator:
             if segment.systems and segment.name not in link_local_span_segments:
                 self.issues.append(
                     ValidationIssue(
-                        severity="warning",
+                        severity="info",
                         field_path=f"environment.network.segments.{idx}",
                         message=(
                             f"Segment '{segment.name}' has no SPAN-style Zeek sensor for "
@@ -4501,7 +4501,7 @@ class ScenarioValidator:
             if sensor.type == "firewall" and "cisco_asa" not in sensor.log_formats:
                 self.issues.append(
                     ValidationIssue(
-                        severity="warning",
+                        severity="info",
                         field_path=f"{prefix}.log_formats",
                         message=(
                             f"Firewall sensor '{sensor.name}' does not include "

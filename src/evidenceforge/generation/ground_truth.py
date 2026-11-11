@@ -38,11 +38,13 @@ from evidenceforge.events.ground_truth import (
     GroundTruthEvent,
     write_ground_truth_document,
 )
+from evidenceforge.events.ground_truth_occurrence import GroundTruthEventStream
 from evidenceforge.events.macos_native_coverage import (
     MacosNativeActionCoverage,
     MacosNativeCoverage,
     MacosNativeCoverageCount,
 )
+from evidenceforge.generation.ground_truth_ledger import GroundTruthLedger, _is_domain
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
@@ -110,7 +112,11 @@ class GroundTruthGenerator:
         intent_execution_snapshot: tuple[IntentExecutionSnapshot, ...] = (),
         execution_effect_audit_snapshot: ExecutionEffectAuditSnapshot | None = None,
         macos_native_coverage: MacosNativeCoverage | None = None,
+        canonical_ledger: GroundTruthLedger | None = None,
+        event_stream: GroundTruthEventStream | None = None,
     ):
+        self.canonical_ledger = canonical_ledger
+        self.event_stream = event_stream
         self.macos_native_coverage = macos_native_coverage
         self.scenario = scenario
         self._collection_start, self._collection_end = resolve_time_window(scenario.time_window)
@@ -132,6 +138,19 @@ class GroundTruthGenerator:
         document = GroundTruthDocument.model_validate(
             {
                 "schema_version": GROUND_TRUTH_SCHEMA_VERSION,
+                "event_stream": self.event_stream,
+                "expectation_contract": self.canonical_ledger.expectation_contract()
+                if self.canonical_ledger
+                else None,
+                "source_expectation_summary": self.canonical_ledger.expectation_summary()
+                if self.canonical_ledger
+                else None,
+                "intent_outcomes": self.canonical_ledger.intent_results()
+                if self.canonical_ledger
+                else {},
+                "background_counts": self.canonical_ledger.background_counts()
+                if self.canonical_ledger
+                else {},
                 "scenario_name": self.scenario.name,
                 "scenario_description": self.scenario.description,
                 "generated_at": generated_at,
@@ -316,13 +335,42 @@ class GroundTruthGenerator:
             f"**Generated:** {doc.generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         )
 
-        content.append("\n## Attack Summary\n")
+        content.append("\n## Authored Attack Description\n")
+        content.append(
+            "Descriptions below are authored intent. Execution facts and prevention outcomes are recorded separately in the canonical event stream.\n"
+        )
         content.append(self._create_narrative(doc))
 
         content.append("\n## Timeline\n")
+        if doc.event_stream is not None:
+            content.append(
+                f"Detailed canonical occurrences: {doc.event_stream.count}; see `{doc.event_stream.path}`.\n"
+            )
+            content.append(self._canonical_outcome_summary())
         content.append(self._create_timeline(doc))
 
-        if self._include_source_evidence_status(doc):
+        if doc.schema_version == 5 and doc.source_expectation_summary is not None:
+            summary = doc.source_expectation_summary
+            content.append("\n## Source Evidence Expectations\n")
+            content.append(
+                f"Expected presence: {summary.present}; expected absence: {summary.absent}; coverage gaps: {summary.coverage_gaps}. These are collection predictions; independently verified matches belong to the evaluation report.\n"
+            )
+            content.append(
+                "| Exact source / format | Expected present | Expected absent |\n|---|---:|---:|\n"
+            )
+            for source, counts in summary.by_source.items():
+                content.append(
+                    f"| {source} | {counts.get('present', 0)} | {counts.get('absent', 0)} |\n"
+                )
+            content.append(
+                "\nExclusions: "
+                + (
+                    ", ".join(f"{key}: {value}" for key, value in summary.exclusion_reasons.items())
+                    or "none"
+                )
+                + ". Full conditions and missing families are in the occurrence stream.\n"
+            )
+        elif self._include_source_evidence_status(doc):
             content.append("\n## Source Evidence Status\n")
             content.append(self._create_source_evidence_status_section(doc))
 
@@ -366,6 +414,10 @@ class GroundTruthGenerator:
             content.append(self._create_ids_evaluation_section(doc))
 
         content.append("\n## Indicators of Compromise (IOCs)\n")
+        if doc.event_stream is not None:
+            content.append(
+                "Canonical indicators are sampled at 128 new entries per authored intent; the event stream retains every occurrence and relationship. Address membership does not establish infrastructure ownership.\n"
+            )
         content.append(self._format_iocs(self._extract_iocs(doc)))
 
         if doc.red_herring_steps:
@@ -486,6 +538,10 @@ class GroundTruthGenerator:
                 rendered = str(attributes.get("rendered_value") or value)
                 attributes["value_sha256"] = hashlib.sha256(value.encode("utf-8")).hexdigest()
                 attributes["rendered_sha256"] = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        if self.canonical_ledger is not None and event.get("intent_id"):
+            attributes.update(
+                self.canonical_ledger.summary(event["intent_id"], event["type"], event.get("pid"))
+            )
         record = {
             "record_id": "",
             "kind": event["type"],
@@ -596,6 +652,24 @@ class GroundTruthGenerator:
         payload["type"] = payload.pop("kind")
         payload.update(attributes)
         return payload
+
+    def _canonical_outcome_summary(self) -> str:
+        if self.canonical_ledger is None:
+            return ""
+        lines = ["| Intent | Occurrence | Actual outcome | Details |", "|---|---|---|---|"]
+        shown: set[tuple[str, str, str]] = set()
+        for row in self.canonical_ledger.rows():
+            http = row.facts.get("http")
+            detail = (
+                f"HTTP {http.get('method')} {http.get('status_code')}"
+                if isinstance(http, dict)
+                else row.outcome.reason or ""
+            )
+            key = (row.intent_id, row.outcome.result, detail)
+            if detail and key not in shown:
+                shown.add(key)
+                lines.append(f"| {row.intent_id} | {row.kind} | {row.outcome.result} | {detail} |")
+        return "\n".join(lines) + "\n"
 
     def _create_narrative(self, document: GroundTruthDocument | None = None) -> str:
         if document is None:
@@ -879,6 +953,8 @@ class GroundTruthGenerator:
         return "\n".join(lines) + "\n"
 
     def _extract_iocs(self, document: GroundTruthDocument | None = None) -> dict[str, set]:
+        if self.canonical_ledger is not None:
+            return self._extract_canonical_iocs()
         iocs = {"network": set(), "processes": set(), "users": set(), "files": set()}
         events = (
             self.malicious_events if document is None else self._storyline_event_dicts(document)
@@ -889,7 +965,7 @@ class GroundTruthGenerator:
             iocs["users"].add(event["actor"])
             if event["type"] == "logon":
                 if "source_ip" in event:
-                    iocs["network"].add(f"{event['source_ip']} (Attacker IP)")
+                    iocs["network"].add(f"{event['source_ip']} (Logon source)")
             elif event["type"] == "process":
                 if "process_name" in event:
                     iocs["processes"].add(event["process_name"])
@@ -905,7 +981,7 @@ class GroundTruthGenerator:
                         is_internal = ipaddress.ip_address(dst_ip).is_private
                     except (ValueError, TypeError):
                         is_internal = False
-                    label = "Internal Server" if is_internal else "C2 Server"
+                    label = "Internal destination" if is_internal else "External destination"
                     iocs["network"].add(
                         f"{dst_ip}:{dst_port} ({label})" if dst_port else f"{dst_ip} ({label})"
                     )
@@ -984,6 +1060,70 @@ class GroundTruthGenerator:
                     iocs["users"].add(f"{event['target_username']} (Explicit Credential Target)")
         return {category: values for category, values in iocs.items() if values}
 
+    def _extract_canonical_iocs(self) -> dict[str, set[str]]:
+        """Derive bounded IOC samples exclusively from committed canonical facts."""
+        assert self.canonical_ledger is not None
+        iocs: dict[str, set[str]] = {
+            "network": set(),
+            "processes": set(),
+            "users": set(),
+            "files": set(),
+        }
+        counts: dict[str, int] = {}
+        secret_intents = {
+            intent.intent_id
+            for intent in (
+                self.authored_intent_ledger.intents if self.authored_intent_ledger else ()
+            )
+            if intent.event_type == "spillage"
+        }
+        for row in self.canonical_ledger.rows():
+            if row.section != "storyline" or counts.get(row.intent_id, 0) >= 128:
+                continue
+            candidates: list[tuple[str, str]] = []
+            network = row.facts.get("network")
+            if (
+                isinstance(network, dict)
+                and not row.facts.get("dns")
+                and network.get("dst_port") != 53
+            ):
+                if network.get("dst_ip"):
+                    candidates.append(
+                        (
+                            "network",
+                            f"{network['dst_ip']}:{network.get('dst_port', '')} (Canonical destination)",
+                        )
+                    )
+                hostname = str(network.get("hostname") or "")
+                if _is_domain(hostname):
+                    candidates.append(("network", f"{hostname} (Canonical domain)"))
+            for name in ("process", "auth"):
+                context = row.facts.get(name)
+                if isinstance(context, dict):
+                    if context.get("username"):
+                        candidates.append(("users", str(context["username"])))
+                    if context.get("image"):
+                        candidates.append(("processes", str(context["image"])))
+                    if context.get("command_line") and row.intent_id not in secret_intents:
+                        candidates.append(("processes", f"`{context['command_line']}`"))
+                    if context.get("source_ip") and context["source_ip"] != "-":
+                        candidates.append(("network", f"{context['source_ip']} (Logon source)"))
+            file = row.facts.get("file")
+            if isinstance(file, dict) and file.get("path"):
+                candidates.append(("files", str(file["path"])))
+            for transfer in row.facts.get("file_transfers", []):
+                if isinstance(transfer, dict):
+                    for field in ("filename", "md5", "sha1", "sha256"):
+                        if transfer.get(field):
+                            candidates.append(("files", f"{field}: {transfer[field]}"))
+            for category, value in candidates:
+                if counts.get(row.intent_id, 0) >= 128:
+                    break
+                if value not in iocs[category]:
+                    iocs[category].add(value)
+                    counts[row.intent_id] = counts.get(row.intent_id, 0) + 1
+        return {category: values for category, values in iocs.items() if values}
+
     def _create_red_herring_section(self, document: GroundTruthDocument | None = None) -> str:
         events = (
             self.red_herring_events if document is None else self._red_herring_event_dicts(document)
@@ -1016,7 +1156,8 @@ class GroundTruthGenerator:
             sections.append("")
         if iocs.get("users"):
             sections.append("### User IOCs\n")
-            sections.extend(f"- {ioc} (compromised account)" for ioc in sorted(iocs["users"]))
+            label = "canonical principal" if self.canonical_ledger else "storyline actor"
+            sections.extend(f"- {ioc} ({label})" for ioc in sorted(iocs["users"]))
             sections.append("")
         if iocs.get("files"):
             sections.append("### File IOCs\n")

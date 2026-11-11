@@ -46,6 +46,7 @@ format, topology, or feature is active.
     <firewall-name>/cisco_asa.log
     <firewall-name>/<year>/cisco_asa.log
   artifacts/email/<artifact-id>.eml
+  GROUND_TRUTH_EVENTS.jsonl  # streamed canonical occurrences; schema-v4/v5 bundles
   GROUND_TRUTH.json
   GROUND_TRUTH.md
   OBSERVATION_MANIFEST.json
@@ -58,7 +59,7 @@ format, topology, or feature is active.
   ENVIRONMENT.md
 ```
 
-`data/`, both ground-truth files, the observation manifest, collection profile, output-target
+`data/`, all ground-truth files, the observation manifest, collection profile, output-target
 marker, resolved scenario, and generation manifest are core current outputs. The storage manifest,
 artifact manifest, and `artifacts/` appear only when applicable. `ENVIRONMENT.md` is optional
 authored collateral; generation does not create it.
@@ -132,3 +133,8 @@ Unregistered authored collateral is preserved.
 
 After exit code 0, report effective manifest values. Use `eforge eval <bundle-root>` for independent
 containment/hash verification. Timestamped run manifests need not be byte-identical across replays.
+
+Schema-v4 ground truth binds the canonical occurrence stream by count and SHA-256.
+It separates authored descriptions, actual outcomes, and source-instance observation reasons.
+Keep all returned DNS answers distinct from selected/attempted addresses. Missing collection
+does not remove an occurrence; prevention does not invent an unobserved downstream transfer.

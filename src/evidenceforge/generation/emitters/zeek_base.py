@@ -191,7 +191,8 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
             continue
         packet_count = packets if isinstance(packets, int) and packets > 0 else 1
         if proto == "udp":
-            render_data[f"{side}_ip_bytes"] = payload + (header_bytes * packet_count)
+            # Canonical UDP budgets are finalized before observation/rendering.
+            # Keep a mismatch visible instead of silently rewriting shared truth.
             continue
         minimum_ip_bytes = payload + (header_bytes * packet_count)
         if ip_bytes < minimum_ip_bytes:

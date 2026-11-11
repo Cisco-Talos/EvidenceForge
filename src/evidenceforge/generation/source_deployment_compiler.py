@@ -719,6 +719,27 @@ def compile_scenario_source_deployment(
     )
     scenario_overrides, raw_scenario_overrides = _scenario_override_map(scenario)
     known_ids = set(source_ids)
+    # An explicitly configured sensor remains known when its export is filtered.
+    # Validate its policy without adding it to the live deployment/ordinal set.
+    configured_sensors = _drafts_for_sensors(
+        scenario, frozenset(descriptor.name for descriptor in catalog.descriptors), catalog
+    )
+    for draft in configured_sensors:
+        identity = draft.identity.source_instance
+        if identity in known_ids:
+            continue
+        raw = raw_scenario_overrides.get(identity)
+        if raw is not None:
+            _validate_scenario_guards(identity, raw, draft)
+        _effective_deployment(
+            draft,
+            profile_name=profile_name,
+            profile=profile_data,
+            project_pack=project_overrides.get(identity),
+            scenario_override=scenario_overrides.get(identity),
+            catalog=catalog,
+        )
+        known_ids.add(identity)
     unused_project = sorted(set(project_overrides) - known_ids)
     unused_scenario = sorted(set(scenario_overrides) - known_ids)
     if unused_project:

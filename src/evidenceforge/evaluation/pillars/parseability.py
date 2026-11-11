@@ -70,7 +70,7 @@ SYSMON_VARIANT_MAP = _variant_map("windows_event_sysmon")
 class ParseabilityScorer(DimensionScorer):
     number = 1
     name = "Parseability"
-    weight = 0.30
+    weight = 0.20
 
     def score(
         self,
