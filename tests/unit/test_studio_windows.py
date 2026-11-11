@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +52,49 @@ def test_npm_discovery_uses_native_binary_without_executing_a_shim(
     assert runtime.discover_codex() == str(native)
     native.unlink()
     assert runtime.discover_codex() is None
+
+
+def test_explicit_python_command_preserves_arguments_without_shell_associations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = tmp_path / "configured command ü.py"
+    script.write_text("import json,sys; print(json.dumps(sys.argv[1:]))", encoding="utf-8")
+    monkeypatch.setattr(processes, "os", SimpleNamespace(name="nt"))
+    arguments = ["two words", "ü & literal", "$(literal)"]
+    result = subprocess.run(
+        [*processes.executable_command(script), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import json
+
+    assert json.loads(result.stdout) == arguments
+
+
+def test_windows_protocol_fixture_responds_to_preflight_before_transport_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.support import studio_executable
+
+    script = tmp_path / "fake-codex"
+    script.write_text(
+        "import json,sys\nfor line in sys.stdin:\n    request = json.loads(line)\n    print(json.dumps({'id': request['id'], 'result': {}}), flush=True)\n"
+    )
+    monkeypatch.setattr(studio_executable, "os", SimpleNamespace(name="nt"))
+    prepared = studio_executable.prepare_script(script, codex=True)
+    result = subprocess.run(
+        [sys.executable, str(prepared)],
+        input='{"id":1,"method":"windowsSandbox/readiness"}\n',
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import json
+
+    assert json.loads(result.stdout) == {"id": 1, "result": {"status": "ready"}}
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows kernel lease and launch flags")

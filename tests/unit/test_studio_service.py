@@ -37,6 +37,7 @@ from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_pa
 from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import Conversation, StudioStore
+from tests.support.studio_executable import prepare_script
 
 
 def _paths(root: Path) -> StudioPaths:
@@ -1575,7 +1576,7 @@ def test_two_generation_progress_streams_reconcile_independently(
         "(output / 'GENERATION_MANIFEST.json').write_text('{}')\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_EFORGE_BIN", str(fake))
     app = create_app(_paths(tmp_path / "private"), "local-secret")
@@ -1659,7 +1660,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         "    print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
     monkeypatch.delenv("EFORGE_DESKTOP_EFORGE_BIN", raising=False)
@@ -1860,7 +1861,7 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         "    print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
     app = create_app(_paths(tmp_path / "private"), "local-secret")
@@ -2276,7 +2277,7 @@ def test_codex_transport_distinguishes_rejection_timeout_and_process_exit(tmp_pa
         "    print(json.dumps(reply), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def event(method: str, params: dict[str, object]) -> None:
         pass
@@ -2441,7 +2442,7 @@ def test_codex_response_is_not_blocked_by_slow_notification_handler(tmp_path: Pa
         "        print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def exercise() -> None:
         release_event = asyncio.Event()
@@ -2639,7 +2640,7 @@ def test_codex_classifies_empty_rollout_as_history_pending(tmp_path: Path) -> No
         "    print(json.dumps(response), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def exercise() -> None:
         async def on_event(method: str, params: dict[str, object]) -> None:

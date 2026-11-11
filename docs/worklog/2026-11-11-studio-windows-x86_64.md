@@ -39,3 +39,37 @@ generation-behavior revision 509 checks pass. No release version changed.
 Native Windows CI, installed preview verification, packaged Mac/Linux regression
 builds, Windows 11 interactive acceptance and actual separate-account testing are
 not yet claimed.
+
+## Windows-only iteration decision
+
+The user requested Windows-only CI iterations on November 11, deferring repeated
+Mac/Linux gates until the Windows installer is stable. `Windows Studio Preview`
+now runs directly on pushes to this branch and is callable through Installer
+Builds. It retains focused native Windows contracts, state/helper crash recovery,
+model-free Codex permission checks, Rust shell tests and actual NSIS verification.
+UV/npm and Rust build caches reduce repeated setup/compilation. New pushes cancel
+superseded preview runs.
+
+Automatic full CI is suppressed only for this exact draft PR branch targeting
+dev. Ready-for-review now explicitly triggers normal full CI; manual dispatch,
+dev/main and release callers retain all gates. Keep the PR draft during this
+iteration phase and remove the temporary branch guard before integration.
+
+GitHub rejected three initial attempts before assigning jobs with `startup_failure`.
+The public run summary reports only "An unexpected error has occurred and we've
+been automatically notified." Actionlint finds no new workflow errors (its older
+schema does not recognize the pre-existing `concurrency.queue` field). The direct
+Windows entry point also isolates execution from reusable-workflow expansion.
+No native Windows success or installer artifact is claimed from those attempts.
+
+Additional local evidence: 145/145 native Mac slow recovery cases pass; an isolated
+Mac standalone app builds and passes the complete packaged runtime/resource,
+generation and evaluation verifier. The broad Mac Studio suite reported 713
+passed, six skipped, and three helper-attachment failures while Python sources
+were being edited. Those three pass on a stable tree (four ownership cases total).
+The helper source fingerprint correctly treated the changing build as a different
+runtime; do not edit source during identity-sensitive tests. Subsequent targeted
+portable transport/job checks pass (36 cases), as do all sixteen chat cases and
+the five Settings UI cases. The pinned Windows Python archive verifies against
+upstream SHA256, has 3,325 regular/directory entries with no links, and includes
+both vcruntime DLLs.

@@ -16,6 +16,7 @@ from evidenceforge.studio.codex import CodexTimeoutError
 from evidenceforge.studio.service import StudioService, create_app
 from evidenceforge.studio.state_records_v3 import ChatTurn
 from evidenceforge.studio.store import Conversation
+from tests.support.studio_executable import prepare_script
 from tests.support.studio_state import paths
 
 
@@ -523,7 +524,7 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
         ),
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
     private = paths(tmp_path / "private")

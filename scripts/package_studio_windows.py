@@ -30,7 +30,11 @@ def main() -> None:
     config = assemble(root, build, ["x86_64"], platform="windows")
     if arguments.assemble_only:
         return
-    environment = {**os.environ, "CARGO_TARGET_DIR": str(build / "target")}
+    environment = {
+        **os.environ,
+        "CARGO_TARGET_DIR": str(build / "target"),
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS": "-C target-feature=+crt-static",
+    }
     frontend = root / "desktop-ui"
     run(
         [

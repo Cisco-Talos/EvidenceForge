@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.studio.linux_sandbox import linux_sandbox_notice
-from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.processes import executable_command, launch_options
 from evidenceforge.studio.runtime import command_environment, discover_codex
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class CodexClient:
                 raise CodexDisconnectedError("Codex CLI was not found; set its path in Settings")
             try:
                 self.process = await asyncio.create_subprocess_exec(
-                    command,
+                    *executable_command(command),
                     "app-server",
                     *(arg for override in self.config_overrides for arg in ("-c", override)),
                     stdin=asyncio.subprocess.PIPE,

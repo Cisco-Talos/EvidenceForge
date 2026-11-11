@@ -15,6 +15,7 @@ from evidenceforge.desktop import jobs
 from evidenceforge.desktop.jobs import process_running, refresh_status
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
 from evidenceforge.desktop.state import StateStore
+from tests.support.studio_executable import prepare_script
 
 
 def test_detached_generation_can_be_rediscovered_after_launcher_exits(tmp_path: Path) -> None:
@@ -33,7 +34,7 @@ def test_detached_generation_can_be_rediscovered_after_launcher_exits(tmp_path: 
         "time.sleep(30)\n",
         encoding="utf-8",
     )
-    executable.chmod(0o755)
+    executable = prepare_script(executable)
     state_dir = tmp_path / "state"
     launcher = (
         "import sys\n"

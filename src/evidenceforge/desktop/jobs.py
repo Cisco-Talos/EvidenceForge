@@ -14,7 +14,7 @@ from uuid import uuid4
 import psutil
 
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
-from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.processes import executable_command, launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 
 _detached_processes: list[subprocess.Popen[bytes]] = []
@@ -24,9 +24,9 @@ def _eforge_command(settings: AppSettings | None = None) -> list[str]:
     """Use the installed interpreter during development or an explicit packaged CLI."""
     configured = os.environ.get("EFORGE_DESKTOP_EFORGE_BIN")
     if configured:
-        return [str(Path(configured).expanduser().resolve())]
+        return executable_command(Path(configured).expanduser().resolve())
     if settings is not None and settings.eforge_path is not None:
-        return [str(settings.eforge_path.expanduser().resolve())]
+        return executable_command(settings.eforge_path.expanduser().resolve())
     if getattr(sys, "frozen", False):
         executable = shutil.which("eforge")
         if executable is None:

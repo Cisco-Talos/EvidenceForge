@@ -115,6 +115,25 @@ def test_embedded_installer_matrix_selector_is_valid_python() -> None:
     assert "has_linux=" in script
 
 
+def test_windows_draft_iteration_defers_full_gates_until_ready_for_review() -> None:
+    ci = workflow("ci.yml")
+    assert "ready_for_review" in ci[True]["pull_request"]["types"]
+    for name in ("inputs", "lint", "studio-state-recovery", "ci-required"):
+        condition = ci["jobs"][name]["if"]
+        assert "github.event_name == 'pull_request'" in condition
+        assert "github.base_ref == 'dev'" in condition
+        assert "github.head_ref == 'codex/studio-windows-x86_64'" in condition
+        assert "github.event.pull_request.draft" in condition
+    preview = workflow("windows-preview.yml")
+    assert preview[True]["push"]["branches"] == ["codex/studio-windows-x86_64"]
+    assert preview["jobs"]["preview"]["runs-on"] == "windows-2025"
+    assert preview["concurrency"]["cancel-in-progress"] is True
+    commands = "\n".join(step.get("run", "") for step in preview["jobs"]["preview"]["steps"])
+    assert "scripts.ci_native_recovery" in commands
+    assert "verify_studio_windows.py" in commands
+    assert "package_studio_windows.py" in commands
+
+
 def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -> None:
     jobs = workflow("release.yml")["jobs"]
     assert jobs["build-installers"]["needs"] == ["release-scope", "validate-release-version"]

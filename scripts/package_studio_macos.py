@@ -245,6 +245,8 @@ def assemble(
             run(
                 [
                     "rustc",
+                    "-C",
+                    "target-feature=+crt-static",
                     "--edition",
                     "2021",
                     "-O",

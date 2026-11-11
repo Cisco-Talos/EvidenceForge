@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+from pathlib import Path
 from typing import Any
+
+
+def executable_command(command: str | Path) -> list[str]:
+    """Run explicit Python scripts on Windows without relying on shell associations."""
+    path = str(command)
+    if os.name == "nt" and Path(path).suffix.lower() == ".py":
+        return [sys.executable, path]
+    return [path]
 
 
 def launch_options(*, detached: bool = False) -> dict[str, Any]:

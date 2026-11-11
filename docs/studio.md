@@ -63,6 +63,11 @@ its disposable Windows runner exercises both installation scopes and writes a
 verification report alongside the artifact. The verifier refuses to run on an
 ordinary workstation or one with an existing Studio installation.
 
+During development, **Windows Studio Preview** runs Windows-only checks/builds on
+each push to `codex/studio-windows-x86_64`, with dependency/build caches and
+cancellation of superseded runs. This draft branch temporarily defers full
+Mac/Linux CI; marking the PR ready explicitly starts the full platform gates.
+
 Windows 11 interactive testing must still cover downloaded-file trust controls,
 both scopes, cancelled UAC, separate administrator credentials and intended-user
 ownership, normal-user launch, authoring/sign-in, dialogs, scaling and imports/
