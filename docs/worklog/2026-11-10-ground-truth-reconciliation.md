@@ -68,7 +68,7 @@ Generation-heavy checks used `--no-cov`; no release coverage gate or full releas
   engine finalization, bundle corruption/integrity, partial-output handling and human-report
   spillage redaction. Existing mocked engine fixtures now publish valid canonical occurrences
   instead of silently bypassing the new intent completion guard.
-- Default and SOF-ELK CLI suspend/resume tests passed (2 tests, 59.48 seconds), comparing all
+- Default and SOF-ELK® CLI suspend/resume tests passed (2 tests, 59.48 seconds), comparing all
   deterministic bundle files including the new JSONL sidecar against uninterrupted controls.
 - Native Mac denied-launch and failed-exec checkpoint/resume tests passed (2 tests, 51.97
   seconds). These verify prevention/ordinary-failure recovery without inventing successful starts.
@@ -576,3 +576,27 @@ retained ground-truth census correctly and needed no regeneration.
 Checked **75 relative links** and available YAML front matter across six relevant documentation
 files; no missing targets or metadata errors remain. Stale-panel/filter/four-pillar wording
 search and whitespace checks passed. No release notes, product version or runtime code changed.
+
+### PR integration and CI — November 11
+
+User authorized opening a PR to `dev`, monitoring/fixing CI and merging after validation.
+Feature commit `9d105bb5` is on PR **#470**. The full frontend suite passes **371 tests**
+(13.18 seconds). Full routine and remote CI runs are in progress; no merge has occurred.
+
+Integration repairs preserve the production checks:
+
+- Recovery fixtures now explicitly establish the GUI session their cleanup logoffs close.
+  The combined workload seeds these sessions in warmup and places cleanup far enough inside
+  collection for its existing source/session timing. The native-workspace/terminal fixtures
+  similarly provide an authored session instead of assuming baseline creates a storyline owner.
+  Combined exact recovery and native-workspace recovery both pass (**two tests**, 80.01 seconds),
+  including resumed/control and source-filter comparisons. This resolves the two previously
+  recorded fixture failures without accepting missing required intents or weakening assertions.
+- The shared test network factory now supplies protocol-correct UDP IP-byte defaults while
+  preserving explicit values for validation. The authored-hour ordering spy calls the real
+  execution owner rather than suppressing all canonical occurrences. The affected ASA,
+  network-observation, ordering and documentation controls pass **159 tests** (7.26 seconds).
+- The first remote lint failure was the worklog's first trademark reference; corrected the
+  required marker. Lint/format and behavior/version declarations remain required.
+
+No product version, release tag, publication or scoring threshold change is included.

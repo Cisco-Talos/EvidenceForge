@@ -212,6 +212,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
             }
             for index, (when, kind) in enumerate(
                 [
+                    ("+30s", "logon"),
                     ("+1m", "logoff"),
                     ("+2m", "logon"),
                     ("+1h10m", "logoff"),
@@ -336,11 +337,19 @@ def test_short_generation_checkpoint_suspension_and_resume(
         }
         scenario_data["storyline"] = [
             {
-                "id": "close-warmup",
-                "time": "+5s",
+                "id": "cleanup-owner-login",
+                "time": "+0s",
                 "actor": "alex",
                 "system": "MAC-01",
-                "activity": "Close the warmup desktop",
+                "activity": "Establish the explicit session owned by fixture cleanup",
+                "events": [{"type": "logon", "logon_type": 2}],
+            },
+            {
+                "id": "close-warmup",
+                "time": "+30s",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Close the explicit setup desktop",
                 "events": [{"type": "logoff"}],
             },
             {
