@@ -22,6 +22,7 @@ from evidenceforge.studio.bootstrap import ServiceDescriptor
 from evidenceforge.studio.service import StudioService
 from evidenceforge.studio.state_upgrade import StateCoordinator
 from evidenceforge.studio.store import StudioStore
+from tests.support.studio_process import stop_helper_child, verified_helper_child
 from tests.support.studio_state import paths
 
 
@@ -38,6 +39,7 @@ def helper_process(tmp_path: Path) -> Iterator[tuple[subprocess.Popen[str], Serv
             text=True,
             env=environment,
         )
+        native: psutil.Process | None = None
         try:
             ready: Queue[str] = Queue()
             assert process.stdout is not None
@@ -46,10 +48,11 @@ def helper_process(tmp_path: Path) -> Iterator[tuple[subprocess.Popen[str], Serv
             descriptor = ServiceDescriptor.model_validate_json(
                 paths(tmp_path / "private").service_file.read_text()
             )
-            assert descriptor.pid == process.pid
+            native = verified_helper_child(process.pid, descriptor)
             yield process, descriptor
         finally:
-            # Only this harness's unreaped Popen child is eligible for cleanup.
+            stop_helper_child(native)
+            # Reap the virtualenv launcher as well as its verified interpreter.
             if process.poll() is None:
                 process.terminate()
                 try:

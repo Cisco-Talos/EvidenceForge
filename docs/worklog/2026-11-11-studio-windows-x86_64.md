@@ -96,3 +96,11 @@ types, frontend and real service/transport tests on Windows, align shell tests
 with the installer's release target for build reuse, and add scope-specific
 Start-menu/Desktop target and uninstall checks. Verification reports include the
 exact Python/Rust/Node/uv versions as well as the runner image and source SHA.
+
+Run `43100432955` passed 69 native runtime/filesystem/process tests and 197 routine
+state durability/migration tests. The next helper suite passed 53 cases but found
+five harness assertions equating a Windows virtualenv redirector PID with the
+announced interpreter PID. The harness now accepts only a directly owned native
+Python child with matching creation time, executable and account, and cleans that
+verified process before reaping its launcher. Production ownership checks remain
+unchanged. The slow crash matrix and installer stages had not run at this point.
