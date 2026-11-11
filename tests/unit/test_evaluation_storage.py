@@ -276,6 +276,41 @@ def test_sql_failure_has_no_report_and_releases_scratch(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    "kind", ["records", "keys", "range", "host_rows", "host_keys", "candidates"]
+)
+def test_shutdown_releases_scratch_with_suspended_reader(tmp_path: Path, kind: str) -> None:
+    from collections.abc import Generator
+
+    workspace = EvaluationWorkspace(1, tmp_path)
+    try:
+        with evaluation_workspace(workspace):
+            records = bounded_list()
+            index = HostTimeIndex(workspace)
+            for number in range(4):
+                record = workspace.add_record(ParsedRecord(source_format="ecar", raw=str(number)))
+                records.append(record)
+                index.append("host", "ecar", record)
+            mapping = bounded_map((number, str(number)) for number in range(4))
+            ordered = bounded_sorted(range(4))
+            readers = {
+                "records": records,
+                "keys": mapping,
+                "range": ordered.in_range(0, 3),
+                "host_rows": index["host"]["ecar"],
+                "host_keys": index,
+                "candidates": index.candidates(["host"]),
+            }
+            reader = iter(readers[kind])
+            assert isinstance(reader, Generator)
+            assert next(reader) is not None
+            workspace.close()
+            assert list(tmp_path.iterdir()) == []
+            reader.close()
+    finally:
+        workspace.close()
+
+
 @pytest.mark.parametrize("budget", [1, 10_000_000])
 def test_time_range_queries_preserve_insertion_order(tmp_path: Path, budget: int) -> None:
     from evidenceforge.evaluation.storage import append_group

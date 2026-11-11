@@ -134,6 +134,23 @@ class EvaluationWorkspace:
         self.shared: dict[object, Any] = {}
         self._closed = False
         self._spillables: list[weakref.ReferenceType] = []
+        self._cursors: set[sqlite3.Cursor] = set()
+
+    @contextmanager
+    def query(
+        self, sql: str, parameters: Sequence[Any] | Mapping[str, Any] = ()
+    ) -> Iterator[sqlite3.Cursor]:
+        """Own streaming statements, including iterators retained by error tracebacks."""
+        assert self.db is not None
+        cursor = self.db.execute(sql, parameters)
+        self._cursors.add(cursor)
+        try:
+            yield cursor
+        finally:
+            # Workspace shutdown can precede a suspended generator's finalization.
+            if cursor in self._cursors:
+                self._cursors.remove(cursor)
+                cursor.close()
 
     def register_spillable(self, value: Any) -> None:
         self._spillables.append(weakref.ref(value))
@@ -330,8 +347,9 @@ class EvaluationWorkspace:
                 yield pickle.loads(key)
         else:
             assert self.db is not None
-            for row in self.db.execute("SELECT k FROM groups WHERE ns=? ORDER BY first_ord", (ns,)):
-                yield pickle.loads(row[0])
+            with self.query("SELECT k FROM groups WHERE ns=? ORDER BY first_ord", (ns,)) as cursor:
+                for row in cursor:
+                    yield pickle.loads(row[0])
 
     def forget_order(self, ns: int, key: bytes) -> None:
         cached = self._ordered.get(ns, {}).pop(key, None)
@@ -362,14 +380,14 @@ class EvaluationWorkspace:
         else:
             assert self.db is not None
             ordering = "e.sort,e.ord" if ordered else "e.ord"
-            cursor = self.db.execute(
+            with self.query(
                 "SELECT e.rid, CASE WHEN e.rid IS NULL THEN e.payload ELSE r.payload END "
                 "FROM entries e LEFT JOIN records r ON r.id=e.rid "
                 f"WHERE e.ns=? AND e.k=? ORDER BY {ordering}",
                 (ns, key),
-            )
-            for rid, payload in cursor:
-                yield self.decode(rid, payload)
+            ) as cursor:
+                for rid, payload in cursor:
+                    yield self.decode(rid, payload)
 
     def discard(self, ns: int, key: bytes) -> None:
         if ns in self._groups:
@@ -393,6 +411,8 @@ class EvaluationWorkspace:
         self._ordered.clear()
         self._next.clear()
         self._spillables.clear()
+        while self._cursors:
+            self._cursors.pop().close()
         if self.db is not None:
             self.db.close()
             self.db = None
@@ -503,13 +523,14 @@ class SpillSequence(Sequence[T]):
             return
         assert self.workspace.db is not None
         comparator = "<" if exclusive else "<="
-        for rid, payload in self.workspace.db.execute(
+        with self.workspace.query(
             "SELECT e.rid, CASE WHEN e.rid IS NULL THEN e.payload ELSE r.payload END "
             "FROM entries e LEFT JOIN records r ON r.id=e.rid "
             f"WHERE e.ns=? AND e.k=? AND e.sort>=? AND e.sort{comparator}? ORDER BY e.sort,e.ord",
             (self.ns, self.key, lower, upper),
-        ):
-            yield self.workspace.decode(rid, payload)
+        ) as cursor:
+            for rid, payload in cursor:
+                yield self.workspace.decode(rid, payload)
 
     @overload
     def __getitem__(self, index: int) -> T: ...

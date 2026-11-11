@@ -126,3 +126,21 @@ A separate untouched source export of `c44d7a72` evaluated the retained 148,961-
 bundle. The merged feature report matched that current-dev report exactly, excluding only
 `evaluated_at` and additive resource diagnostics. Reference and candidate artifacts are under
 `/private/tmp/eforge-eval-benchmark/` with labels `current-dev-c44d7a72` and `merged-dev-c44d7a72`.
+
+### Native Windows scratch cleanup
+
+PR #471's first CI run (`43074980815`) exposed a native Windows failure in
+`test_sql_failure_has_no_report_and_releases_scratch`. A simulated decode error retained an active
+SQLite cursor in its traceback. Connection shutdown alone deferred the file-handle release;
+Windows then refused scratch deletion, masking the actionable evaluation error.
+
+The workspace now owns streaming query cursors explicitly. It closes active statements before
+the connection and scratch directory, including when suspended readers or tracebacks remain
+referenced. Query finalization tolerates a workspace that already closed its statements. Generic
+record/key/range reads and specialized host/candidate reads share this lifetime owner; candidate
+request cleanup still runs after its statement closes.
+
+Six added regressions keep each reader family suspended across shutdown. The existing SQL-error
+and interruption contracts remain unchanged. Local affected validation: **588 passed, 3 deselected**;
+Ruff, formatting and whitespace checks pass. Native Windows CI on the PR validates file-sharing
+behavior unavailable on the local macOS host.

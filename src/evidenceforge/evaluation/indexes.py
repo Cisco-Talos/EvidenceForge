@@ -27,12 +27,13 @@ class _HostRecords(Sequence[ParsedRecord]):
     def __iter__(self) -> Iterator[ParsedRecord]:
         workspace = self.owner.workspace
         assert workspace.db is not None
-        for rid, payload in workspace.db.execute(
+        with workspace.query(
             "SELECT r.id,r.payload FROM host_time h JOIN records r ON r.id=h.rid "
             "WHERE h.ns=? AND h.k=? AND h.fmt=? ORDER BY h.ord",
             (self.owner.ns, self.key, self.format_name),
-        ):
-            yield workspace.decode(rid, payload)
+        ) as cursor:
+            for rid, payload in cursor:
+                yield workspace.decode(rid, payload)
 
     def __getitem__(self, index: int | slice) -> Any:
         from itertools import islice
@@ -115,23 +116,22 @@ class HostTimeIndex(Mapping[str, Mapping[str, Sequence[ParsedRecord]]]):
         if not self.workspace.spilled:
             return self.memory[key]
         assert self.workspace.db is not None
-        return {
-            row[0]: _HostRecords(self, key, row[0])
-            for row in self.workspace.db.execute(
-                "SELECT fmt FROM host_time WHERE ns=? AND k=? GROUP BY fmt ORDER BY min(fmt_ord)",
-                (self.ns, key),
-            )
-        }
+        with self.workspace.query(
+            "SELECT fmt FROM host_time WHERE ns=? AND k=? GROUP BY fmt ORDER BY min(fmt_ord)",
+            (self.ns, key),
+        ) as cursor:
+            return {row[0]: _HostRecords(self, key, row[0]) for row in cursor}
 
     def __iter__(self) -> Iterator[str]:
         if not self.workspace.spilled:
             yield from self.memory
         else:
             assert self.workspace.db is not None
-            for row in self.workspace.db.execute(
+            with self.workspace.query(
                 "SELECT DISTINCT k FROM host_time WHERE ns=? ORDER BY k", (self.ns,)
-            ):
-                yield row[0]
+            ) as cursor:
+                for row in cursor:
+                    yield row[0]
 
     def __len__(self) -> int:
         if not self.workspace.spilled:
@@ -177,21 +177,20 @@ class HostTimeIndex(Mapping[str, Mapping[str, Sequence[ParsedRecord]]]):
             "INSERT INTO host_wanted VALUES (?,?,?,?)",
             ((self.ns, request, order, key) for order, key in enumerate(keys)),
         )
-        cursor = db.execute(
-            "SELECT hits.fmt,r.id,r.payload FROM ("
-            " SELECT h.fmt,h.rid,h.fmt_ord,w.ord AS query_ord,h.ord AS source_ord,"
-            " row_number() OVER (PARTITION BY h.rid ORDER BY w.ord,h.fmt_ord,h.ord) AS rank"
-            " FROM host_wanted w JOIN host_time h ON h.ns=w.ns AND h.k=w.k"
-            " WHERE w.ns=? AND w.request=?"
-            ") hits JOIN records r ON r.id=hits.rid WHERE hits.rank=1"
-            " ORDER BY hits.query_ord,hits.fmt_ord,hits.source_ord",
-            (self.ns, request),
-        )
         try:
-            for format_name, identity, payload in cursor:
-                if seen is None or identity not in seen:
-                    yield format_name, workspace.decode(identity, payload)
+            with workspace.query(
+                "SELECT hits.fmt,r.id,r.payload FROM ("
+                " SELECT h.fmt,h.rid,h.fmt_ord,w.ord AS query_ord,h.ord AS source_ord,"
+                " row_number() OVER (PARTITION BY h.rid ORDER BY w.ord,h.fmt_ord,h.ord) AS rank"
+                " FROM host_wanted w JOIN host_time h ON h.ns=w.ns AND h.k=w.k"
+                " WHERE w.ns=? AND w.request=?"
+                ") hits JOIN records r ON r.id=hits.rid WHERE hits.rank=1"
+                " ORDER BY hits.query_ord,hits.fmt_ord,hits.source_ord",
+                (self.ns, request),
+            ) as cursor:
+                for format_name, identity, payload in cursor:
+                    if seen is None or identity not in seen:
+                        yield format_name, workspace.decode(identity, payload)
         finally:
-            cursor.close()
             if not workspace._closed:
                 db.execute("DELETE FROM host_wanted WHERE ns=? AND request=?", (self.ns, request))
