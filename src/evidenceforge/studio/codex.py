@@ -140,6 +140,12 @@ class CodexClient:
         """Stop only the subprocess and tasks owned by this client."""
         process = self.process
         self.process = None
+        if process is not None and process.stdin is not None:
+            process.stdin.close()
+            try:
+                await asyncio.wait_for(process.stdin.wait_closed(), timeout=2)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                pass
         if process is not None and process.returncode is None:
             process.terminate()
             try:
@@ -147,6 +153,12 @@ class CodexClient:
             except TimeoutError:
                 process.kill()
                 await process.wait()
+        readers = [task for task in (self.reader_task, self.stderr_task) if task is not None]
+        if readers:
+            # Let EOF close native pipe transports before cancellation. Windows
+            # Proactor callbacks can outlive process.wait() and otherwise reach
+            # their destructors after the event loop has already closed.
+            await asyncio.wait(readers, timeout=2)
         for task in (self.reader_task, self.stderr_task, self.dispatch_task):
             if task is not None:
                 task.cancel()

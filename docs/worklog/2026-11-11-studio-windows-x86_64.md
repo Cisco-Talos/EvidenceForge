@@ -245,3 +245,18 @@ explicitly supplies `--current-user` for the disposable runner account, alongsid
 its isolated CODEX_HOME. The setup remains elevated; no sandbox fallback or skip
 is introduced. This failure is exposed in six minutes without repeating the
 29-minute installed verifier.
+
+Run `43121562688` provisions elevated Codex successfully, confirms native sandbox
+readiness and resumes the discussion with the required policy. Its first command
+fails launching the sandbox runner with Windows error 267. Pinned upstream code
+launches that runner in the requested CWD before applying its command token;
+pytest creates its entire Windows temporary tree with owner-only 0700 ACLs. The
+next probe uses an ordinary inherited-ACL disposable authored workspace, while
+keeping CODEX_HOME and the actual retained runtime private, and requires a real
+read-only `cmd /c ver` baseline before the packaged CLI. This is a fixture diagnosis
+to verify, not a qualified authoring result.
+
+The failure also exposes unclosed Windows Proactor pipes during transport stop.
+Shutdown now closes/awaits stdin and lets stdout/stderr reach EOF before cancelling
+notification tasks. Forty focused real-process Codex regressions pass locally;
+native warnings remain errors and the permission gate remains required.

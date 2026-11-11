@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -29,12 +31,24 @@ pytestmark = [
 
 
 async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     root = tmp_path.resolve()
-    monkeypatch.setenv("CODEX_HOME", str(root / "codex-home"))
+    codex_home = root / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.delenv("EFORGE_DESKTOP_CODEX_BIN", raising=False)
-    (root / "codex-home").mkdir()
+    codex_home.mkdir(mode=0o700)
+    if sys.platform == "win32":
+        # Pytest's 0700 tree is inaccessible to the legacy sandbox's separate
+        # logon account before its command runner can apply the command policy.
+        # Use inherited workspace ACLs for disposable authored fixtures only;
+        # Codex credentials and the actual retained runtime stay private.
+        parent = Path(os.environ.get("RUNNER_TEMP", str(Path.cwd() / "build")))
+        root = parent / f"eforge sandbox workspace {uuid4().hex}"
+        root.mkdir(parents=True)
+        root = root.resolve()
+        request.addfinalizer(lambda: shutil.rmtree(root))
+        subprocess.run(["icacls", str(root)], check=True)
     workspace = root / "workspace"
     workspace.mkdir()
     published = workspace / "release"
@@ -61,7 +75,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                 "--elevated",
                 "--current-user",
                 "--codex-home",
-                str(root / "codex-home"),
+                str(codex_home),
             ],
             check=True,
             timeout=180,
@@ -93,6 +107,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     )
 
     async def execute(access: ChatAccess, command: list[str]) -> dict[str, Any]:
+        print(f"Native sandbox {access.mode} in {access.directory}: {command!r}", flush=True)
         return await client.call(
             "command/exec",
             {"command": command, "cwd": str(access.directory), "sandboxPolicy": access.sandbox},
@@ -123,6 +138,9 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         )
         verify_chat_permissions(resumed, discussion)
         assert resumed["thread"]["id"] == initial["thread"]["id"]
+        if sys.platform == "win32":
+            baseline = await execute(discussion, ["cmd.exe", "/d", "/c", "ver"])
+            assert baseline["exitCode"] == 0, baseline
         packaged_cli = os.environ.get("EFORGE_NATIVE_STUDIO_CLI")
         if packaged_cli:
             result = await execute(discussion, [packaged_cli, "version"])
