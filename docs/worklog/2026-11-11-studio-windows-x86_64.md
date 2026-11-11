@@ -104,3 +104,11 @@ announced interpreter PID. The harness now accepts only a directly owned native
 Python child with matching creation time, executable and account, and cleans that
 verified process before reaping its launcher. Production ownership checks remain
 unchanged. The slow crash matrix and installer stages had not run at this point.
+
+Run `43101388165` again passed all 69 Windows runtime/process cases, Ruff and
+generated API types. Frontend results were 371 passed, one timeout while typing
+a 300-character identifier with per-key timers. That test now pastes the same
+identifier and retains its exact creation assertions. The source rename test
+compares actual before/after native permission bits rather than requiring POSIX
+0640 on Windows. Retained helper/controller launches also now use isolated Python
+flags, matching the existing retained CLI/macOS launch contract.

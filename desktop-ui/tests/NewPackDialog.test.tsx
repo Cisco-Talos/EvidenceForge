@@ -56,7 +56,8 @@ test("creation accepts a long identifier with a friendly title and no publisher"
   render(<NewPackDialog kind="industry_pack" projects={[]} api={{ request } as unknown as StudioApi} onCreated={vi.fn(async () => undefined)} onClose={vi.fn()} />);
   const user = userEvent.setup();
   const name = "a".repeat(300);
-  await user.type(screen.getByRole("textbox", { name: "Pack Name" }), name);
+  await user.click(screen.getByRole("textbox", { name: "Pack Name" }));
+  await user.paste(name);
   await user.type(screen.getByRole("textbox", { name: "Pack display name" }), "Friendly Pack — Santé");
   await user.type(screen.getByRole("textbox", { name: "Pack description" }), "Test sector");
   await user.click(screen.getByRole("button", { name: "Create pack" }));

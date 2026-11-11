@@ -101,7 +101,13 @@ def start_background_service(paths: StudioPaths) -> None:
         open_regular(paths.logs / "service.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND), "ab"
     ) as log:
         subprocess.Popen(
-            [sys.executable, "-m", "evidenceforge.studio.bootstrap", "--serve"],
+            [
+                sys.executable,
+                *(["-I", "-B"] if runtime_root() is not None else []),
+                "-m",
+                "evidenceforge.studio.bootstrap",
+                "--serve",
+            ],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,

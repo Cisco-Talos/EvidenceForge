@@ -2988,9 +2988,10 @@ def test_rename_scenario_retains_other_yaml_text_and_permissions(
     path = tmp_path / "scenario.yaml"
     path.write_bytes(contents.encode())
     path.chmod(0o640)
+    original_permissions = path.stat().st_mode & 0o777
     rename_scenario(path, "new", sha256(path.read_bytes()).hexdigest())
     assert path.read_bytes() == expected.encode()
-    assert path.stat().st_mode & 0o777 == 0o640
+    assert path.stat().st_mode & 0o777 == original_permissions
     assert list(tmp_path.iterdir()) == [path]
 
 

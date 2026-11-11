@@ -86,7 +86,16 @@ def helper_smoke(app: Path, directory: Path) -> None:
     }
     for name in ("EFORGE_STUDIO_PYTHON", "EFORGE_STUDIO_RUNTIME_ROOT", "PYTHONHOME", "PYTHONPATH"):
         environment.pop(name, None)
-    process = subprocess.Popen([str(app)], env=environment)
+    working = directory / "launch-directory"
+    poison = working / "evidenceforge"
+    poison.mkdir(parents=True)
+    (poison / "__init__.py").write_text(
+        "raise RuntimeError('Studio imported the launch directory instead of its runtime')\n",
+        encoding="utf-8",
+    )
+    environment["PYTHONPATH"] = str(working)
+    environment["PYTHONHOME"] = str(working / "unavailable-python")
+    process = subprocess.Popen([str(app)], env=environment, cwd=working)
     helper: psutil.Process | None = None
     try:
         discovery = directory / "private/state/service.json"
