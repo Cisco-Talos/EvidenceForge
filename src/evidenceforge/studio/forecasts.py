@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from evidenceforge.desktop.jobs import _eforge_command
 from evidenceforge.resources import ResourcePrediction
 from evidenceforge.studio.contexts import context_arguments
 from evidenceforge.studio.jobs import controller_settings
+from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.settings import StudioSettings
 from evidenceforge.studio.store import CatalogItem
 
@@ -92,6 +94,7 @@ def run_prediction(
             text=True,
             check=False,
             timeout=60,
+            **(launch_options() if os.name == "nt" else {}),
         )
         result = ResourcePrediction.model_validate_json(completed.stdout)
         if completed.returncode and result.available:

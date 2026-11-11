@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
+      PYTHONUTF8: '1'
       CI_CHECK_ID: recovery-${{ inputs.runner }}
       CI_CHECK_KIND: recovery
       CI_JOB_NAME: Native recovery (${{ inputs.runner }})

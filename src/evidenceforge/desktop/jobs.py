@@ -262,4 +262,5 @@ def request_suspension(job: GenerationJob, workspace: Path) -> subprocess.Comple
         text=True,
         check=False,
         timeout=30,
+        **(launch_options() if os.name == "nt" else {}),
     )

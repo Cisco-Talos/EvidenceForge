@@ -127,6 +127,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
             destination = root / scope
             command = [str(installer), "/S", f"/{scope}", f"/D={destination}"]
             installed = False
+            retained_database: Path | None = None
+            retained_bytes: bytes | None = None
             try:
                 installer_command(command)
                 installed = True
@@ -141,6 +143,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 assert registry_location(opposite) is None
                 runtime = verify_runtime(destination / "runtime", "x86_64")
                 helper_smoke(destination / "evidenceforge-studio.exe", root / f"launch-{scope}")
+                retained_database = root / f"launch-{scope}/private/data/studio.sqlite"
+                retained_bytes = retained_database.read_bytes()
                 # Use the installed interpreter for every CLI subprocess in the
                 # existing synchronized checkpoint/resume/equivalence contract.
                 resources = destination / "runtime"
@@ -187,7 +191,9 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                     sentinel.read_text(encoding="utf-8")
                     == "preserve authored work and private data"
                 )
-                assert (root / f"launch-{scope}/private/data/runtimes").is_dir()
+                if retained_database is not None:
+                    assert retained_database.read_bytes() == retained_bytes
+                    assert (retained_database.parent / "runtimes").is_dir()
     return report
 
 

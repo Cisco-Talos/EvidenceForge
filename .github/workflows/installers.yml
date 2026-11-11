@@ -224,6 +224,8 @@ jobs:
       force-tests: ${{ inputs.force-tests || false }}
   windows-preview:
     name: Installer (windows-x86_64 preview)
+    env:
+      PYTHONUTF8: '1'
     needs: windows-recovery
     runs-on: windows-2025
     timeout-minutes: 90

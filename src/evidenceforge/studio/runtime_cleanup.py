@@ -233,7 +233,7 @@ class RuntimeCleanup:
             unavailable_reason=(
                 "Automatic runtime cleanup is unavailable in the Windows preview. "
                 "Previous app runtimes are retained."
-                if os.name == "nt" and self.selected is not None
+                if os.name == "nt"
                 else None
             ),
         )

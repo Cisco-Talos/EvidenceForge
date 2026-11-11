@@ -82,3 +82,39 @@ pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
         _lease: lease,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_launch_lease_interoperates_with_python_windows_locks() {
+        let directory =
+            std::env::temp_dir().join(format!("eforge-windows-lease-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runtime.lock");
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        lease.lock_shared().unwrap();
+        let python = std::env::var_os("EFORGE_STUDIO_TEST_PYTHON").unwrap_or("python".into());
+        let script = "import msvcrt,sys\nf=open(sys.argv[1],'r+b')\ntry:\n msvcrt.locking(f.fileno(),msvcrt.LK_NBLCK,1)\n locked=False\nexcept OSError:\n locked=True\nassert locked == (sys.argv[2]=='locked')";
+        let check = |state: &str| {
+            assert!(std::process::Command::new(&python)
+                .args(["-c", script])
+                .arg(&path)
+                .arg(state)
+                .status()
+                .unwrap()
+                .success());
+        };
+        check("locked");
+        drop(lease);
+        check("unlocked");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}

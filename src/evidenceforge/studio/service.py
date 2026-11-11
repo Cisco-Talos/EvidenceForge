@@ -168,6 +168,7 @@ from evidenceforge.studio.pack_lifecycle import (
     review_pack_deletion,
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
+from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanup,
@@ -572,6 +573,7 @@ def _validate_source(settings: StudioSettings, source: Path, workspace: Path) ->
             text=True,
             check=False,
             timeout=180,
+            **(launch_options() if os.name == "nt" else {}),
         )
         try:
             report = json.loads(result.stdout)
