@@ -645,8 +645,11 @@ def replace_child(
     directory: bool = False,
     write_through: bool = False,
     expected_identity: tuple[int, int] | None = None,
+    replace_open_files: bool = False,
 ) -> None:
     """Atomically publish a file using retained source and destination directory handles."""
+    if replace_open_files and (directory or not replace):
+        raise ValueError("Replacing open Windows files requires file replacement semantics")
     _component(target)
     descriptor = _open_native(
         source,
@@ -664,7 +667,9 @@ def replace_child(
         encoded = target.encode("utf-16-le")
         buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
         information = _RenameInformation.from_buffer(buffer)
-        information.Flags = int(replace)
+        # FILE_RENAME_POSIX_SEMANTICS lets current readers retain the old file
+        # while new opens immediately observe the complete replacement.
+        information.Flags = int(replace) | (0x2 if replace_open_files else 0)
         information.RootDirectory = _handle(target_parent)
         information.FileNameLength = len(encoded)
         ctypes.memmove(
@@ -674,7 +679,11 @@ def replace_child(
         # the Win32 wrapper rejects this form on the hosted Windows runner.
         status = _IoStatusBlock()
         result = _nt_set_information(
-            _handle(descriptor), ctypes.byref(status), buffer, len(buffer), 10
+            _handle(descriptor),
+            ctypes.byref(status),
+            buffer,
+            len(buffer),
+            65 if replace_open_files else 10,  # FileRenameInformationEx / FileRenameInformation
         )
         if result < 0:
             raise ctypes.WinError(_nt_error(result))
@@ -866,7 +875,7 @@ def validate_future_file(path: Path) -> None:
         os.close(descriptor)
 
 
-def write_private_atomic(path: Path, content: bytes) -> None:
+def write_private_atomic(path: Path, content: bytes, *, replace_open_files: bool = False) -> None:
     """Publish fully flushed private bytes through one retained parent handle."""
     absolute = Path(os.path.abspath(path))
     parent = open_directory(absolute.parent, create=True)
@@ -895,7 +904,7 @@ def write_private_atomic(path: Path, content: bytes) -> None:
         flush_file(descriptor)
         os.close(descriptor)
         descriptor = None
-        replace_child(parent, name, parent, absolute.name)
+        replace_child(parent, name, parent, absolute.name, replace_open_files=replace_open_files)
         name = None
     finally:
         if descriptor is not None:

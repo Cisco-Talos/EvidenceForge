@@ -152,3 +152,10 @@ boundary. Code review also caught an eager optional-Studio import in ordinary
 `python -m evidenceforge`: runtime leases are imported only for a selected private
 runtime, and a fresh-process CLI test rejects any ordinary Studio import. Fifteen
 focused controller/job regressions and the ordinary CLI probe pass locally.
+
+The new concurrency probe failed at publication in run `43104917047` (73 other
+cases passed): legacy NT rename rejects replacement while readers hold the old
+file. Job-record writes now explicitly opt into FileRenameInformationEx with
+FILE_RENAME_POSIX_SEMANTICS; existing readers retain their old snapshot and new
+opens observe the replacement. All other native storage callers keep their
+previous rename behavior. The same native concurrency probe remains required.

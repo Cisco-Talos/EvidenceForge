@@ -31,7 +31,9 @@ def _write_json(path: Path, value: BaseModel) -> None:
         from evidenceforge.utils.windows_filesystem import mkdir_private, write_private_atomic
 
         mkdir_private(path.parent, parents=True, exist_ok=True)
-        write_private_atomic(path, value.model_dump_json(indent=2).encode())
+        write_private_atomic(
+            path, value.model_dump_json(indent=2).encode(), replace_open_files=True
+        )
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
