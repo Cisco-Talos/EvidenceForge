@@ -371,5 +371,19 @@ def test_native_open_rejects_unsupported_flags_without_mutation(tmp_path: Path) 
     path = tmp_path / "retained"
     path.write_bytes(b"preserve")
     with pytest.raises(ValueError, match="Unsupported"):
-        filesystem.open_file(path, os.O_WRONLY | os.O_APPEND)
+        filesystem.open_file(path, os.O_WRONLY | os.O_TEXT)
     assert path.read_bytes() == b"preserve"
+
+
+def test_native_append_preserves_existing_output_after_seek(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    path = tmp_path / "service.log"
+    path.write_bytes(b"existing\n")
+    descriptor = filesystem.open_file(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.write(descriptor, b"next\n")
+    finally:
+        os.close(descriptor)
+    assert path.read_bytes() == b"existing\nnext\n"

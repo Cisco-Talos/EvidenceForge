@@ -81,3 +81,11 @@ Earlier full runs had no assigned jobs; cancellation attempts reported that the
 runs were already completed. Do not treat those unexecuted/skipped checks as
 platform validation. Before integration, remove the temporary draft-branch guard
 and require the full existing platform matrix.
+
+Native jobs now execute. Run [43099474385](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43099474385)
+passed 42 Windows runtime/process cases (including concurrent runtime installation),
+with one POSIX-only process-group case skipped. Two failures exposed a missing UID
+mock in a Mac launch test and unsupported append access for Windows helper logs.
+The next iteration supplies the mock and native FILE_APPEND_DATA access, with an
+EOF-preservation test included in Windows CI. This failure occurred before the
+installer build; no verified installer is available yet.

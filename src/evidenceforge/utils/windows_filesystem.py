@@ -422,9 +422,12 @@ def _open_native(
         | os.O_TRUNC
         | os.O_BINARY
         | os.O_NOINHERIT
+        | os.O_APPEND
     )
     if flags & ~supported_flags:
         raise ValueError("Unsupported native Windows protected-file flags")
+    if flags & os.O_APPEND and (not flags & (os.O_WRONLY | os.O_RDWR) or flags & os.O_TRUNC):
+        raise ValueError("Windows protected append requires write access without truncation")
     if root is not None:
         _component(name)
     buffer = ctypes.create_unicode_buffer(name)
@@ -442,9 +445,14 @@ def _open_native(
     if directory:
         access |= 0x21  # FILE_LIST_DIRECTORY | FILE_TRAVERSE
     else:
-        access |= 0x2 if flags & os.O_WRONLY else 0x1
-        if flags & os.O_RDWR:
-            access |= 0x3
+        if flags & os.O_APPEND:
+            # FILE_APPEND_DATA without FILE_WRITE_DATA keeps inherited helper
+            # output at EOF, including writes made outside the Python CRT.
+            access |= 0x4 | (0x1 if flags & os.O_RDWR else 0)
+        else:
+            access |= 0x2 if flags & os.O_WRONLY else 0x1
+            if flags & os.O_RDWR:
+                access |= 0x3
     disposition = _FILE_OPEN
     if flags & os.O_CREAT:
         disposition = _FILE_CREATE if flags & os.O_EXCL else _FILE_OPEN_IF

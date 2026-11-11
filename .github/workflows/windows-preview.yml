@@ -76,6 +76,7 @@ jobs:
         run: >-
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
+          tests/unit/test_windows_filesystem.py
           tests/unit/test_studio_runtime.py tests/unit/test_studio_background.py
           tests/unit/test_desktop_jobs.py tests/unit/test_desktop_controller.py
       - name: Test native state and helper recovery

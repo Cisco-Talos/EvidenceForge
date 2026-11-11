@@ -92,6 +92,12 @@ def test_macos_does_not_replace_running_registration_without_descriptor(
     monkeypatch.setattr(
         background, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)
     )
+    monkeypatch.setattr(
+        background.os,
+        "getuid",
+        lambda: os.geteuid() if hasattr(os, "geteuid") else 1000,
+        raising=False,
+    )
     run = Mock(return_value=subprocess.CompletedProcess([], 0, stdout="\tpid = 1234\n"))
     monkeypatch.setattr(background.subprocess, "run", run)
     monkeypatch.setattr(background.psutil, "pid_exists", lambda pid: pid == 1234)
