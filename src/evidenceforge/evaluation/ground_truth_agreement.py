@@ -11,6 +11,7 @@ from bisect import bisect_left, bisect_right
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from email.utils import getaddresses
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -39,6 +40,7 @@ from evidenceforge.generation.intent_ledger import AuthoredIntentLedger
 from evidenceforge.generation.source_deployment_compiler import compile_scenario_source_deployment
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import EvaluationError
+from evidenceforge.models.scenario import EmailDistributionGroup, EmailMessageEventSpec
 
 from .finding_samples import FindingSamples
 from .parsers import ParsedRecord, RecordCorpus
@@ -389,6 +391,27 @@ def _fields_match(record: ParsedRecord, fields: dict) -> bool:
         any(_equal(_field_value(record.fields, alias), expected, alias) for alias in key.split("|"))
         for key, expected in fields.items()
     )
+
+
+def _email_recipients_match(
+    spec: EmailMessageEventSpec, email: dict, groups: list[EmailDistributionGroup]
+) -> bool:
+    """Check requested headers separately from independently expanded mailboxes."""
+    requested: set[str] = set()
+    for channel in ("to", "cc", "bcc"):
+        expected = {address.casefold() for address in getattr(spec, channel)}
+        actual = {address.casefold() for _, address in getaddresses(email.get(channel, []))}
+        if actual != expected:
+            return False
+        requested.update(expected)
+    memberships = {
+        group.address.casefold(): {member.casefold() for member in group.members}
+        for group in groups
+    }
+    expanded: set[str] = set()
+    for address in requested:
+        expanded.update(memberships.get(address, {address}))
+    return expanded == {address.casefold() for address in email.get("expanded_rcptto", [])}
 
 
 def _bounded_facts(fields: dict) -> dict:
@@ -1241,7 +1264,13 @@ def evaluate_ground_truth(
             if (
                 email.get("mail_action") != spec.mail_action
                 or email.get("outcome") != spec.outcome
-                or not set(spec.to + spec.cc + spec.bcc) <= set(email.get("expanded_rcptto", []))
+                or not _email_recipients_match(
+                    spec,
+                    email,
+                    scenario.environment.email.distribution_groups
+                    if scenario.environment.email is not None
+                    else [],
+                )
             ):
                 semantic_errors[row.intent_id].add("authored_email_outcome_disagreement")
         formats = candidate_formats(row.kind, row.facts)

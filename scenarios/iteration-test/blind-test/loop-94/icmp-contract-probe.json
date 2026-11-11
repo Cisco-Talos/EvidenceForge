@@ -1,0 +1,42 @@
+{
+  "checked_expectations": 507,
+  "missing_rows": 0,
+  "field_disagreements": {
+    "id.orig_p": 507
+  },
+  "examples": [
+    {
+      "occurrence_id": "01faf61a-f2a1-4428-94c1-9c9e29dcd06b",
+      "sensor": "zeek-core",
+      "uid": "CcKI1EZ07DDBHrUMtPx",
+      "differences": {
+        "id.orig_p": {
+          "expected": 0,
+          "actual": 8
+        }
+      }
+    },
+    {
+      "occurrence_id": "01faf61a-f2a1-4428-94c1-9c9e29dcd06b",
+      "sensor": "zeek-dmz",
+      "uid": "Ce20DPThALxa0MFYm90",
+      "differences": {
+        "id.orig_p": {
+          "expected": 0,
+          "actual": 8
+        }
+      }
+    },
+    {
+      "occurrence_id": "be96094c-ac2f-44a0-960a-4a99ecc20308",
+      "sensor": "zeek-core",
+      "uid": "CYQfMC8noISkfsoaSK",
+      "differences": {
+        "id.orig_p": {
+          "expected": 0,
+          "actual": 8
+        }
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 505
+current_revision: 509
 history_start_revision: 1
-behavior_surface_sha256: ff13f30722211954b84575a3f152d034766c4f48028f90ddddc611f3338bc548
+behavior_surface_sha256: e1d994159bab8d835bd79b70d4aa74da7310beed351e1382af783f2708e2d503
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5830,3 +5830,48 @@ changes:
   - syslog
   summary: Recognize existing syslog credential-spillage occurrences as valid authored
     consequences without changing their canonical facts or emitted evidence.
+- revision: 506
+  id: retain-pipeline-submission-protocol-intent
+  impact: localized
+  domains:
+  - storyline-pipeline-effects
+  - network-protocol-semantics
+  formats:
+  - zeek_conn
+  - zeek_ssl
+  - zeek_x509
+  - zeek_files
+  summary: Retain the exact parent submission when a typed Linux pipeline child owns
+    a socket, so raw TCP commands cannot inherit TLS handshakes from port defaults.
+- revision: 507
+  id: reconnect-authenticated-unmodeled-rdp-controller
+  impact: localized
+  domains:
+  - rdp-session-lifecycle
+  - storyline-process-admission
+  formats:
+  - windows_event_security
+  - windows_event_sysmon
+  - ecar
+  - zeek_conn
+  summary: Admit an exact disconnected RDP session's original unmodeled controller
+    through the existing reconnect bundle while retaining availability checks for modeled sources.
+- revision: 508
+  id: preserve-message-owned-mail-intent
+  impact: localized
+  domains:
+  - canonical-ground-truth-provenance
+  - email-message-ownership
+  formats: []
+  summary: Retain late mail hops through exact message identity without attributing an
+    independent background message to an authored action through shared client process state.
+- revision: 509
+  id: share-zeek-native-icmp-evidence-semantics
+  impact: none
+  domains:
+  - ground-truth-source-contracts
+  - zeek-native-projection
+  formats:
+  - zeek_conn
+  summary: Share native ICMP type/code and connection-state projection between conn
+    rendering and source requirements, preserving existing packet evidence and TCP/UDP semantics.

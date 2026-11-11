@@ -11,7 +11,10 @@ import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import DnsContext, EmailContext, NatContext, SmtpContext
+from evidenceforge.events.contracts import OccurrenceRole
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.checkpoints.sqlite_spool import SQLiteSpoolParticipant
 from evidenceforge.generation.ground_truth_ledger import GroundTruthLedger
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
@@ -19,6 +22,7 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 from tests.integration.test_ground_truth_reconciliation import _download, _scenario
 from tests.network_factories import network_plan
+from tests.unit.test_dispatcher import _planned_process, _process_start_builder
 
 
 def _journal(root: Path) -> tuple[GroundTruthLedger, EventDispatcher, str]:
@@ -30,6 +34,102 @@ def _journal(root: Path) -> tuple[GroundTruthLedger, EventDispatcher, str]:
     intent_id = authored.intents[0].intent_id
     dispatcher.authored_intent_id = intent_id
     return journal, dispatcher, intent_id
+
+
+@pytest.mark.parametrize("shared_action", [False, True])
+@pytest.mark.parametrize("restore_ownership", [False, True])
+def test_mail_ownership_retains_late_hops_without_borrowing_unrelated_messages(
+    tmp_path: Path, shared_action: bool, restore_ownership: bool
+) -> None:
+    journal, dispatcher, intent_id = _journal(tmp_path)
+    try:
+        process_plan = _planned_process(dispatcher.state_manager)
+        start = _process_start_builder(process_plan)
+        dispatcher.dispatch_builder(start)
+        message = EmailContext(
+            message_id="<authored@example.net>",
+            artifact_id="authored-message",
+            envelope_from="sender@example.net",
+            header_from="sender@example.net",
+            to=["alice@example.org"],
+            expanded_rcptto=["alice@example.org"],
+            storyline_id="action",
+        )
+        for index, (context, explicit) in enumerate(
+            [
+                (message, True),
+                (replace(message, storyline_id=""), False),
+                (
+                    replace(
+                        message,
+                        message_id="<background@example.net>",
+                        artifact_id="background-message",
+                        storyline_id="",
+                    ),
+                    False,
+                ),
+                (
+                    replace(message, message_id="<explicit@example.net>", storyline_id=""),
+                    True,
+                ),
+            ]
+        ):
+            dispatcher.authored_intent_id = intent_id if explicit else None
+            transport = network_plan(
+                src_ip="10.0.10.10",
+                src_port=53000 + index,
+                dst_ip="10.0.20.10",
+                dst_port=25,
+                protocol="tcp",
+                service="smtp",
+                zeek_uid=f"Cmessage{index}",
+                source_visible_start_time=start.timestamp + timedelta(seconds=index + 1),
+            )
+            anchor = ActionAnchor(
+                family="email", stable_id="shared" if shared_action else str(index), source="test"
+            )
+            dispatcher.dispatch_builder(
+                OccurrenceBuilder(
+                    timestamp=transport.started_at,
+                    event_type="connection",
+                    src_host=start.src_host,
+                    process=start.process,
+                    identity_plan=EventIdentityPlan(actor=process_plan.identity),
+                    network=transport,
+                    email=context,
+                    occurrence_key=anchor.occurrence_key(OccurrenceRole.PRIMARY, str(index)),
+                )
+            )
+            if index == 0 and restore_ownership:
+                participant = SQLiteSpoolParticipant(
+                    owner="ground-truth-occurrences",
+                    connection=journal.checkpoint_connection,
+                    tables=journal.tables,
+                )
+                sealed = participant.prepare_checkpoint(0)
+                participant.checkpoint_committed(0)
+                restored, _, _ = _journal(tmp_path / "restored")
+                recovery = SQLiteSpoolParticipant(
+                    owner="ground-truth-occurrences",
+                    connection=restored.checkpoint_connection,
+                    tables=restored.tables,
+                    initialize_tracking=False,
+                )
+                recovery.restore_checkpoint(
+                    sealed.head.payload, tuple(item.payload for item in sealed.segments)
+                )
+                journal.close()
+                journal = restored
+                dispatcher.intent_execution_ledger.ground_truth = restored
+        rows = list(journal.rows())
+        messages = [row.facts["email"]["message_id"] for row in rows if row.facts.get("email")]
+        assert messages.count(message.message_id) == 2
+        assert "<explicit@example.net>" in messages
+        assert "<background@example.net>" not in messages
+        assert journal.background_counts() == {"connection": 1}
+        assert all(row.intent_id == intent_id for row in rows)
+    finally:
+        journal.close()
 
 
 def test_dns_keeps_all_answers_and_marks_used_subset_with_cache_reuse(tmp_path: Path) -> None:

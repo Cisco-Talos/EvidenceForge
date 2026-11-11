@@ -109,3 +109,20 @@ traversal/map refinements, all evaluation/ground-truth tests, and Studio evaluat
 Retained input `iteration-test/blind-test/v2-loop-60/review-data` manifest SHA-256: `5d27e88e7f94963778104d92efb9409035e97e7dd177b3466a41c3d524c8432f`.
 
 Retained input `iteration-test/blind-test/loop-89/bundle` manifest SHA-256: `bb59fd94083f683da1fb3c03bf826107f01cb3f8a9538c54777076322b823fc0`.
+
+## PR integration
+
+User authorized opening the PR into dev, monitoring CI through success, and merging only when
+all checks are green. Current dev advanced to `c44d7a72` with independent assessment-loop repairs.
+Merged it without conflicts, preserving its final-visible process timing and mail-recipient checks.
+The original `f93a25bf` comparisons above describe the feature before that integration; intended
+scoring corrections from dev remain part of the merged implementation.
+
+Post-integration checks: **655 passed, 3 deselected**, covering evaluation, ground truth, Studio
+evaluation, ledger, pipeline/session and ICMP regressions. Ruff, format, whitespace and the
+generation-behavior declaration check pass; generation behavior remains revision 509.
+
+A separate untouched source export of `c44d7a72` evaluated the retained 148,961-record schema-5
+bundle. The merged feature report matched that current-dev report exactly, excluding only
+`evaluated_at` and additive resource diagnostics. Reference and candidate artifacts are under
+`/private/tmp/eforge-eval-benchmark/` with labels `current-dev-c44d7a72` and `merged-dev-c44d7a72`.

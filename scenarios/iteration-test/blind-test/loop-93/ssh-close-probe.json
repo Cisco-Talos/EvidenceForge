@@ -1,0 +1,424 @@
+{
+  "paired_sessions": 46,
+  "unpaired_boundary_or_coverage_sessions": 26,
+  "negative_visible_lifetimes": 0,
+  "tuple_asymmetries": 0,
+  "joined_pairs": 46,
+  "transport_more_than_two_seconds_after_login": 0,
+  "pairs": [
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "711a775f-e19c-45f3-975c-4c04efcae51d",
+      "duration_seconds": 2533.274,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 8.786547183990479,
+      "logout_minus_transport_close_seconds": 1.7115130424499512
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "0be3eabb-8f1b-4018-ba3e-36de560240e4",
+      "duration_seconds": 1756.318,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.289376020431519,
+      "logout_minus_transport_close_seconds": 1.5380427837371826
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "f9a74ae3-a137-4e95-b2eb-8e54556b444f",
+      "duration_seconds": 2864.677,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.460453987121582,
+      "logout_minus_transport_close_seconds": 1.9954228401184082
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "a3c84518-3b9e-429a-b5f7-90481b2893fe",
+      "duration_seconds": 3156.332,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.280920028686523,
+      "logout_minus_transport_close_seconds": 2.0139248371124268
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "31a651c9-7955-4f27-893e-28dcb6075b40",
+      "duration_seconds": 3005.761,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.579777002334595,
+      "logout_minus_transport_close_seconds": 1.0618741512298584
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "session": "27a8a92f-b2d5-4322-b180-4c1ceea9f8d9",
+      "duration_seconds": 2376.89,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 10.039544820785522,
+      "logout_minus_transport_close_seconds": 0.8293318748474121
+    },
+    {
+      "host": "MAC-MROSS-02",
+      "session": "54693d52-e2be-43f8-9650-f2786b2e340b",
+      "duration_seconds": 592.937,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.026596069335938,
+      "logout_minus_transport_close_seconds": 11.432988166809082
+    },
+    {
+      "host": "DB-PROD-01",
+      "session": "60d3e22b-583f-466e-8d0d-dac95dc65e0b",
+      "duration_seconds": 2516.573,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.915964126586914,
+      "logout_minus_transport_close_seconds": 0.7002081871032715
+    },
+    {
+      "host": "DB-PROD-01",
+      "session": "161a22d8-c643-4dd9-9154-40a21bbeb9db",
+      "duration_seconds": 2856.016,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 8.740984201431274,
+      "logout_minus_transport_close_seconds": 2.660367012023926
+    },
+    {
+      "host": "DB-PROD-01",
+      "session": "8076d9f5-1b62-4d2d-a0ce-4fa87c89ef7d",
+      "duration_seconds": 1918.023,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 10.398586988449097,
+      "logout_minus_transport_close_seconds": 1.6189429759979248
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "9984fa2b-5c2c-4463-ac36-7dc2b55d9e86",
+      "duration_seconds": 3183.565,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 8.755954027175903,
+      "logout_minus_transport_close_seconds": 1.1111440658569336
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "6a4a27c4-d996-4902-9602-9e867ff5544c",
+      "duration_seconds": 2062.121,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 8.897447109222412,
+      "logout_minus_transport_close_seconds": -0.17277908325195312
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "cae26fda-1f07-44bf-ab9d-b08af8383d7d",
+      "duration_seconds": 3475.528,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.037362813949585,
+      "logout_minus_transport_close_seconds": 1.5736098289489746
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "20d37bea-69ca-4757-9cab-ad6ca0945d02",
+      "duration_seconds": 1348.166,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.32143497467041,
+      "logout_minus_transport_close_seconds": 1.5689451694488525
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "4ef7bb79-5df3-401e-85f0-b6f78c872f37",
+      "duration_seconds": 3483.959,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.236046075820923,
+      "logout_minus_transport_close_seconds": 1.6125829219818115
+    },
+    {
+      "host": "WEB-EXT-01",
+      "session": "66e50126-3c78-474b-9952-9ea511d4d5aa",
+      "duration_seconds": 219.512,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 6.2271950244903564,
+      "logout_minus_transport_close_seconds": 11.625874042510986
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "8dc3ae65-997f-4d13-bafc-d1ce70aa481a",
+      "duration_seconds": 3419.984,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 6.711513996124268,
+      "logout_minus_transport_close_seconds": 8.190867900848389
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "d87b9095-f445-45e1-b50b-f3dd10ba10d1",
+      "duration_seconds": 947.89,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.116170167922974,
+      "logout_minus_transport_close_seconds": -0.34352993965148926
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "9b144d84-9ceb-4e37-bb87-357abc1c5ced",
+      "duration_seconds": 2629.489,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 8.410533905029297,
+      "logout_minus_transport_close_seconds": 0.1696939468383789
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "86c9f6f3-e8cf-4759-9929-729d78e76af9",
+      "duration_seconds": 2313.548,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 8.724310874938965,
+      "logout_minus_transport_close_seconds": -0.010551929473876953
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "7ccddd45-b7eb-452b-ac1f-ce20d563daaf",
+      "duration_seconds": 2793.159,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.282496929168701,
+      "logout_minus_transport_close_seconds": 0.35845279693603516
+    },
+    {
+      "host": "LOG-MON-01",
+      "session": "e39ec24e-c7fe-4483-b9ac-885822389915",
+      "duration_seconds": 999.831,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 8.428693056106567,
+      "logout_minus_transport_close_seconds": 0.888681173324585
+    },
+    {
+      "host": "PROXY-01",
+      "session": "2e28f980-30b3-408e-aa0d-4e234c7f7ba8",
+      "duration_seconds": 3635.416,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.406219005584717,
+      "logout_minus_transport_close_seconds": 1.3631248474121094
+    },
+    {
+      "host": "PROXY-01",
+      "session": "05836de6-b3e8-4273-8718-e978cabbc17e",
+      "duration_seconds": 1630.465,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.272958993911743,
+      "logout_minus_transport_close_seconds": 0.15889525413513184
+    },
+    {
+      "host": "PROXY-01",
+      "session": "e474ca1a-a0ea-4537-bd24-62e3d32d72f9",
+      "duration_seconds": 1126.881,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.588522911071777,
+      "logout_minus_transport_close_seconds": -0.021908044815063477
+    },
+    {
+      "host": "MAC-MROSS-01",
+      "session": "d28eb4be-7668-4826-879a-374be5039cbd",
+      "duration_seconds": 954.834,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 6.960455894470215,
+      "logout_minus_transport_close_seconds": 12.514899015426636
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "f46dccca-6612-472e-9632-64e9dd1811f6",
+      "duration_seconds": 3338.85,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 8.893775939941406,
+      "logout_minus_transport_close_seconds": 1.3990440368652344
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "702fbbc9-b00c-4218-af8f-1890878050a7",
+      "duration_seconds": 2354.924,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.246117115020752,
+      "logout_minus_transport_close_seconds": 0.15368103981018066
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "08f84943-100b-4fb4-8d17-571ddb14b8c3",
+      "duration_seconds": 2841.292,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 12.271015882492065,
+      "logout_minus_transport_close_seconds": 0.27558302879333496
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "01151e7c-6852-4365-aff5-ac52975a7d96",
+      "duration_seconds": 3453.025,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.027307987213135,
+      "logout_minus_transport_close_seconds": 0.8291521072387695
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "585df626-3205-4732-beed-4d9ccdd9f8c9",
+      "duration_seconds": 2952.696,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 10.541590929031372,
+      "logout_minus_transport_close_seconds": 1.526412010192871
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "session": "24e8b50f-b0ce-4b0f-8cf7-298c41f21516",
+      "duration_seconds": 3284.332,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 9.304080963134766,
+      "logout_minus_transport_close_seconds": 2.5265800952911377
+    },
+    {
+      "host": "FILE-LNX-01",
+      "session": "4c967578-f2c5-4e52-97d8-daac8c2051e6",
+      "duration_seconds": 3316.848,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 15.067179918289185,
+      "logout_minus_transport_close_seconds": 3.543070077896118
+    },
+    {
+      "host": "FILE-LNX-01",
+      "session": "75092743-3b18-4317-960c-91f859c93a08",
+      "duration_seconds": 2413.369,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.657478094100952,
+      "logout_minus_transport_close_seconds": 3.0200071334838867
+    },
+    {
+      "host": "FILE-LNX-01",
+      "session": "ae35e42c-38cc-46d7-8a36-91f96dac8370",
+      "duration_seconds": 1489.263,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.220325946807861,
+      "logout_minus_transport_close_seconds": 3.1309988498687744
+    },
+    {
+      "host": "FILE-LNX-01",
+      "session": "c1a698eb-c9b6-467f-b071-e5dbc41e9faa",
+      "duration_seconds": 808.475,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.22716498374939,
+      "logout_minus_transport_close_seconds": 3.9034972190856934
+    },
+    {
+      "host": "FILE-LNX-01",
+      "session": "7d39ff5d-a453-42f4-a8c3-bb17c757368a",
+      "duration_seconds": 337.587,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 21.363556146621704,
+      "logout_minus_transport_close_seconds": 2.3561220169067383
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "3451c175-9da0-45cb-ba13-aefd36fb3f7b",
+      "duration_seconds": 1571.008,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.261078834533691,
+      "logout_minus_transport_close_seconds": 2.9835500717163086
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "38b92b55-2431-4be1-9a55-58d71aa8cbaf",
+      "duration_seconds": 2488.286,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 11.809067964553833,
+      "logout_minus_transport_close_seconds": 3.329587936401367
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "765d17a4-c224-4b24-a409-d93bddd8b9c9",
+      "duration_seconds": 3347.498,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 10.358240842819214,
+      "logout_minus_transport_close_seconds": 2.5592169761657715
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "1ca7927c-c294-441e-b923-ee85b6ee7f90",
+      "duration_seconds": 13306.699,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.687329053878784,
+      "logout_minus_transport_close_seconds": 12.947677850723267
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "83a8059b-9403-43f3-a372-cca493b30fe1",
+      "duration_seconds": 1575.267,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 12.040878057479858,
+      "logout_minus_transport_close_seconds": 2.7946910858154297
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "904ca319-5325-4b41-b3d7-5b4a316668e2",
+      "duration_seconds": 559.949,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 17.152122974395752,
+      "logout_minus_transport_close_seconds": 2.1460108757019043
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "8b54ab4a-1466-472d-b663-2c2c2ee53582",
+      "duration_seconds": 2384.146,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 12.739398956298828,
+      "logout_minus_transport_close_seconds": 3.381862163543701
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "17fbd734-bf6e-4565-8922-437b914bb610",
+      "duration_seconds": 1686.319,
+      "tuple_symmetric": true,
+      "network_views": 1,
+      "transport_to_login_seconds": 10.468386173248291,
+      "logout_minus_transport_close_seconds": 3.0857551097869873
+    },
+    {
+      "host": "APP-INT-01",
+      "session": "9a87053e-0c07-434b-9654-9750b7c3fcc4",
+      "duration_seconds": 22.243,
+      "tuple_symmetric": true,
+      "network_views": 2,
+      "transport_to_login_seconds": 9.543067932128906,
+      "logout_minus_transport_close_seconds": 12.954164028167725
+    }
+  ]
+}

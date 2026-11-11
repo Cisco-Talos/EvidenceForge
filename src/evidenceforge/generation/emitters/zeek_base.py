@@ -48,6 +48,12 @@ from queue import Empty
 from threading import Condition, Lock, get_ident
 from typing import Any
 
+from evidenceforge.events.evidence_source_rules import (
+    native_zeek_connection_history as native_zeek_connection_history,
+)
+from evidenceforge.events.evidence_source_rules import (
+    native_zeek_connection_state as native_zeek_connection_state,
+)
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import (
@@ -71,16 +77,6 @@ from evidenceforge.models.exceptions import EventContractError
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
-
-
-def native_zeek_connection_state(protocol: str, state: str) -> str:
-    """Project transport outcome into native Conn::conn_state semantics."""
-    return "OTH" if protocol == "icmp" else state
-
-
-def native_zeek_connection_history(protocol: str, history: str) -> str:
-    """Keep TCP/UDP histories without inventing them for native ICMP."""
-    return "" if protocol == "icmp" else history
 
 
 def native_zeek_file_sender_locality(

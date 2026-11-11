@@ -1,0 +1,185 @@
+{
+  "actions": 4,
+  "distinct_misattributed_messages": 8,
+  "examples": {
+    "evt-email-004": [
+      {
+        "occurrence_id": "1ecaa0e7-2309-468b-b2e8-62515363456f",
+        "time": "2026-11-02T14:24:49.603667Z",
+        "action_id": "021c3747-076f-4821-8859-3ec5f9554460",
+        "message_id": "<2467823248.263568.bb2c9e90@meridianhcs.com>",
+        "expected_artifact": "ehr-release-note-msg",
+        "actual_artifact": "email-0000794d3f76.eml",
+        "expected_to": [
+          "ehr-release@research.meridianhcs.com"
+        ],
+        "actual_to": [
+          "<orders@vendorpost.net>"
+        ],
+        "process": {
+          "command_line": "/usr/bin/thunderbird -mail",
+          "concurrency_group_id": "",
+          "image": "/usr/bin/thunderbird",
+          "logon_id": "0x134d082f",
+          "parent_pid": 2914321,
+          "pid": 2914322,
+          "start_time": "2026-11-02T10:53:32.949785+00:00",
+          "username": "lina.nguyen"
+        }
+      }
+    ],
+    "evt-email-003": [
+      {
+        "occurrence_id": "2b328409-b8d7-40b2-bd84-1d06006ee6e0",
+        "time": "2026-11-02T14:38:29.494980Z",
+        "action_id": "73351d7b-37b9-412d-b099-b627322d2f36",
+        "message_id": "<100141ERVI.108A36F.2570@aisha-johnson.meridianhcs.com>",
+        "expected_artifact": "finance-forward-to-it-msg",
+        "actual_artifact": "email-0000a0d58a40.eml",
+        "expected_to": [
+          "it-help@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<team@partnerrelay.io>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0x24a146b",
+          "parent_pid": 4980,
+          "pid": 5308,
+          "start_time": "2026-11-02T11:16:45.312810+00:00",
+          "username": "aisha.johnson"
+        }
+      },
+      {
+        "occurrence_id": "dc69c928-ea67-4ba6-9af4-51c1d547ab00",
+        "time": "2026-11-02T16:14:45.062432Z",
+        "action_id": "81e450c1-e6ad-47d7-8aae-36a3fafbf882",
+        "message_id": "<10000003TITS.10005W4MG3@meridianhcs.com>",
+        "expected_artifact": "finance-forward-to-it-msg",
+        "actual_artifact": "email-00004c00a176.eml",
+        "expected_to": [
+          "it-help@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<marcus.chen@meridianhcs.com>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0x97751e6",
+          "parent_pid": 6648,
+          "pid": 6652,
+          "start_time": "2026-11-02T13:23:39.355724+00:00",
+          "username": "diego.ramirez"
+        }
+      }
+    ],
+    "evt-email-006": [
+      {
+        "occurrence_id": "47ba314c-1edf-42cb-bec6-d024ac30dfa5",
+        "time": "2026-11-02T15:43:15.499411Z",
+        "action_id": "137a15f7-762d-4103-a3e5-c40d2ed061f3",
+        "message_id": "<100000BEC7SZ.1000S92HL9@meridianhcs.com>",
+        "expected_artifact": "docflow-ai-summary-msg",
+        "actual_artifact": "email-0000fedaf4e7.eml",
+        "expected_to": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<diego.ramirez@meridianhcs.com>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0xd934088",
+          "parent_pid": 5896,
+          "pid": 6192,
+          "start_time": "2026-11-02T14:04:41.085483+00:00",
+          "username": "priya.patel"
+        }
+      },
+      {
+        "occurrence_id": "d31b2add-b0ca-42ba-af18-e0b99a59fbe9",
+        "time": "2026-11-02T17:09:53.011143Z",
+        "action_id": "0b0b2a0d-2597-413f-a703-3e561fc482c6",
+        "message_id": "<1000BNEV2O.106EOGP.7921@priya-patel.meridianhcs.com>",
+        "expected_artifact": "docflow-ai-summary-msg",
+        "actual_artifact": "email-0000fbf34957.eml",
+        "expected_to": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<team@vendorpost.net>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0xd934088",
+          "parent_pid": 5896,
+          "pid": 6192,
+          "start_time": "2026-11-02T14:04:41.085483+00:00",
+          "username": "priya.patel"
+        }
+      }
+    ],
+    "evt-email-008": [
+      {
+        "occurrence_id": "0823528a-808f-44a1-b50e-a4c306433436",
+        "time": "2026-11-02T17:45:58.043278Z",
+        "action_id": "b12acc61-5ece-44b4-a35d-a97e13267f44",
+        "message_id": "<A7279A03-EB85-64F7-099F-07A35D9D20DC@meridianhcs.com>",
+        "expected_artifact": "internal-reset-lure-msg",
+        "actual_artifact": "email-0000f524ac21.eml",
+        "expected_to": [
+          "finance@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<orders@customermailhub.com>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0x26db2b9",
+          "parent_pid": 6008,
+          "pid": 6024,
+          "start_time": "2026-11-02T16:01:26.004536+00:00",
+          "username": "aisha.johnson"
+        }
+      },
+      {
+        "occurrence_id": "df331695-53f7-45d6-8b0c-61a6125a67da",
+        "time": "2026-11-02T18:23:19.457840Z",
+        "action_id": "b768fdb6-70ac-4957-a407-355b6f87534c",
+        "message_id": "<100001KRJMYE.10009COUO5@meridianhcs.com>",
+        "expected_artifact": "internal-reset-lure-msg",
+        "actual_artifact": "email-00005a5828ea.eml",
+        "expected_to": [
+          "finance@meridianhcs.com"
+        ],
+        "actual_to": [
+          "<maya.ross@meridianhcs.com>"
+        ],
+        "process": {
+          "command_line": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" /recycle",
+          "concurrency_group_id": "",
+          "image": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+          "logon_id": "0x26db2b9",
+          "parent_pid": 6008,
+          "pid": 6024,
+          "start_time": "2026-11-02T16:01:26.004536+00:00",
+          "username": "aisha.johnson"
+        }
+      }
+    ]
+  },
+  "classification": "new_family",
+  "owner": "GroundTruthLedger record inheritance through shared process/action entities",
+  "decision": "Retain failed gate; repair requires explicit message/action provenance and late-companion/checkpoint controls. No report filtering or scenario changes."
+}

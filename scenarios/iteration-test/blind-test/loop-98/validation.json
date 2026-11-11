@@ -1,0 +1,66 @@
+{
+  "schema_version": "eforge-assess-validation/v1",
+  "focused_routine": {
+    "passed": 255,
+    "deselected": 9,
+    "duration_seconds": 68.14
+  },
+  "targeted_rdp_slow": {
+    "passed": 1,
+    "deselected": 19
+  },
+  "full_routine_sandbox": {
+    "exit_code": 1,
+    "passed": 20179,
+    "failed": 5,
+    "errors": 1,
+    "skipped": 50,
+    "deselected": 2450,
+    "duration_seconds": 2096.9,
+    "failure_scope": "Native Studio helper readiness and OS process census; sandbox denies required native process/socket access."
+  },
+  "native_reruns": [
+    {
+      "tests": [
+        "tests/unit/test_studio_runtime_cleanup.py::test_actual_census_protects_unleased_process_and_reports_access_denial"
+      ],
+      "exit_code": 0,
+      "passed": 1,
+      "duration_seconds": 1.42
+    },
+    {
+      "tests": [
+        "tests/integration/test_studio_helper.py",
+        "tests/integration/test_studio_ownership.py"
+      ],
+      "exit_code": 0,
+      "passed": 6,
+      "duration_seconds": 16.41
+    }
+  ],
+  "unique_routine_tests_validated": 20185,
+  "note": "Six selected native cases failed or could not initialize in the sandbox. They all pass with native capabilities; the six-test helper rerun also repeats one already-passing case. No test/code change, skip or waiver was used to resolve them.",
+  "ruff_check": "PASS",
+  "ruff_format": "PASS",
+  "config_validation": {
+    "files": 102,
+    "errors": 0,
+    "warnings": 0
+  },
+  "generation_behavior": {
+    "revision": 509,
+    "digest": "e1d994159bab8d835bd79b70d4aa74da7310beed351e1382af783f2708e2d503"
+  },
+  "diff_check": "PASS",
+  "report_validation": {
+    "reports": 40,
+    "score_artifacts": 10,
+    "svg_xml_valid": true
+  },
+  "dataset_acceptance": {
+    "status": "FAIL",
+    "overall_score": 94.6124408647299,
+    "ground_truth_agreement": 88.35729131972305,
+    "threshold": 95.0
+  }
+}

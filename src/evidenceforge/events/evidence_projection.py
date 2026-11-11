@@ -194,6 +194,8 @@ def native_requirements(
     """Describe required native evidence from canonical facts; never render it."""
     from evidenceforge.events.evidence_source_rules import (
         native_projection_applicable,
+        native_zeek_connection_ports,
+        native_zeek_connection_state,
         windows_smb_event_ids,
     )
 
@@ -235,12 +237,17 @@ def native_requirements(
     if format_name.startswith("zeek_"):
         selector = {"uid": uid} if uid else {}
         if format_name == "zeek_conn":
+            source_port, destination_port = native_zeek_connection_ports(
+                network.get("protocol", ""), network.get("src_port"), network.get("dst_port")
+            )
             required = {
                 "id.orig_h": network.get("src_ip"),
                 "id.resp_h": network.get("dst_ip"),
-                "id.orig_p": network.get("src_port"),
-                "id.resp_p": network.get("dst_port"),
-                "conn_state": network.get("conn_state"),
+                "id.orig_p": source_port,
+                "id.resp_p": destination_port,
+                "conn_state": native_zeek_connection_state(
+                    network.get("protocol", ""), network.get("conn_state")
+                ),
             }
             if source_view:
                 traffic = source_view["traffic"]

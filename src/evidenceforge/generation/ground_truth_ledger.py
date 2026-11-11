@@ -699,6 +699,13 @@ class GroundTruthLedger:
         key = event.occurrence_key
         assert key is not None
         entities: list[str] = []
+        message_entity = (
+            "email:" + event.email.message_id
+            if event.email is not None and event.email.message_id
+            else None
+        )
+        if message_entity is not None:
+            entities.append(message_entity)
         if event.lifecycle is not None:
             entities.append("lifecycle:" + event.lifecycle.group_id)
             if event.lifecycle.parent_group_id:
@@ -740,12 +747,21 @@ class GroundTruthLedger:
                     ),
                 )
             self._bind_dns_use(event)
-            if intent_id is None:
+            # An independent background message may borrow an authored mail
+            # client's process. Only that same message can inherit its intent;
+            # shared process/action identity alone does not establish causation.
+            independent_mail = event.email is not None and not event.email.storyline_id
+            if intent_id is None and independent_mail and message_entity is not None:
+                owner = self._db.execute(
+                    "SELECT intent FROM ownership WHERE entity=?", (message_entity,)
+                ).fetchone()
+                intent_id = owner[0] if owner else None
+            if intent_id is None and not independent_mail:
                 previous = self._db.execute(
                     "SELECT intent FROM occurrences WHERE action=? LIMIT 1", (key.action_id,)
                 ).fetchone()
                 intent_id = previous[0] if previous else None
-            if intent_id is None:
+            if intent_id is None and not independent_mail:
                 for entity in entities:
                     owner = self._db.execute(
                         "SELECT intent FROM ownership WHERE entity=?", (entity,)

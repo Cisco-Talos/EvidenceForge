@@ -122,7 +122,6 @@ def verify_process_timing(
         else "source.ecar_dependent_after_process_create"
     )
     errors = []
-    delay = float((expectation.provenance.get("window") or {}).get("source_delay_seconds", 0))
     if (
         receipt.phase != row.kind
         or receipt.canonical_time != row.time
@@ -130,7 +129,9 @@ def verify_process_timing(
         or receipt.execution_id != process.get("execution_id")
         or receipt.policy != policy
         or expectation.expected_time is None
-        or abs((expectation.expected_time - receipt.native_time).total_seconds() - delay) > 0.000001
+        # Runtime-owned endpoint receipts name the final visible timestamp,
+        # after observation delay and lifecycle constraints have been applied.
+        or abs((expectation.expected_time - receipt.native_time).total_seconds()) > 0.000001
     ):
         errors.append("process_timing_identity_disagreement")
     rules = load_timing_profiles().get("relationships", {})

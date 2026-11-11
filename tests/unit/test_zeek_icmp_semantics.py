@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.evaluation.ground_truth_agreement import _fields_match
+from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.evidence_projection import native_requirements
 from evidenceforge.events.network import NetworkSensorObservation, NetworkTuple
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -22,13 +25,14 @@ from tests.network_factories import network_plan
 
 @pytest.mark.parametrize("answered", [True, False])
 @pytest.mark.parametrize("planned", [True, False])
+@pytest.mark.parametrize("icmp_type", [0, 8, 3])
 def test_icmp_native_state_and_history_with_optional_sensor_projection(
-    tmp_path: Path, answered: bool, planned: bool
+    tmp_path: Path, answered: bool, planned: bool, icmp_type: int
 ) -> None:
     started = datetime(2026, 11, 2, 13, tzinfo=UTC)
     network = network_plan(
         src_ip="192.0.2.1",
-        src_port=8,
+        src_port=icmp_type,
         dst_ip="192.0.2.2",
         dst_port=0,
         protocol="icmp",
@@ -55,7 +59,7 @@ def test_icmp_native_state_and_history_with_optional_sensor_projection(
                 sensor_identity="tap",
                 path_role="internal",
                 capture_profile="full",
-                tuple_view=NetworkTuple("192.0.2.1", 8, "192.0.2.2", 0, "icmp"),
+                tuple_view=NetworkTuple("192.0.2.1", icmp_type, "192.0.2.2", 0, "icmp"),
                 connection_uid="CIcmpNativeObserved",
                 connection_ids=(),
                 file_ids=(),
@@ -84,12 +88,35 @@ def test_icmp_native_state_and_history_with_optional_sensor_projection(
     assert row["conn_state"] == "OTH" and "history" not in row
     assert row["orig_bytes"] == 56 and row["orig_pkts"] == 1 and row["orig_ip_bytes"] == 84
     assert row["resp_bytes"] == (56 if answered else 0)
-    assert row["id.orig_p"] == 8 and row["id.resp_p"] == 0
+    assert row["id.orig_p"] == (icmp_type or 8) and row["id.resp_p"] == 0
     assert "service" not in row
     if not answered:
         assert "duration" not in row
     assert event.network.conn_state == ("SF" if answered else "S0")
     assert event.network.history == ("Dd" if answered else "D")
+    requirement = native_requirements(
+        "zeek_conn",
+        "connection",
+        {
+            "network": {
+                "protocol": "icmp",
+                "src_ip": network.src_ip,
+                "src_port": network.src_port,
+                "dst_ip": network.dst_ip,
+                "dst_port": network.dst_port,
+                "conn_state": network.conn_state,
+            }
+        },
+        {"zeek_uid": "CIcmpNative"},
+        "sensor",
+    )[0]
+    record = ParsedRecord(source_format="zeek_conn", raw="", fields=row)
+    assert _fields_match(record, requirement.selector)
+    assert _fields_match(record, requirement.required)
+    record.fields = {**row, "id.orig_p": 99}
+    assert not _fields_match(record, requirement.required)
+    record.fields = {**row, "conn_state": network.conn_state}
+    assert not _fields_match(record, requirement.required)
 
 
 @pytest.mark.parametrize(

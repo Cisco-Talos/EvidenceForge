@@ -5376,8 +5376,8 @@ class ActivityGenerator:
         prepared = candidates[0].continuation.prepared
         source_system = prepared.source_system
         if (
-            source_system is None
-            or self._active_user_interactive_windows_session(
+            source_system is not None
+            and self._active_user_interactive_windows_session(
                 prepared.user,
                 source_system,
                 canonical_time,
