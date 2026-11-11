@@ -209,3 +209,10 @@ and ensures the installer creates its known shortcut folders. Verification also
 installs/uninstalls in both default directories before the Unicode-path cases,
 checks that setup has not initialized private state, and explicitly cleans the
 direct uninstaller executable after waiting (required by NSIS `_?=` semantics).
+
+Run `43113459478` passes both default-directory installs, shortcut checks and
+uninstalls, then reports `汉` as `?` in the custom-path shortcut target through
+WScript.Shell. The pinned NSIS/Tauri helpers use IShellLinkW; verification now
+reads the shortcut through that explicit Unicode interface too, avoiding WScript
+codepage conversion. It still compares canonical target paths and rejects any
+different executable; the native result remains required.

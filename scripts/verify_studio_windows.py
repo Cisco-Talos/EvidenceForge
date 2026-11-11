@@ -59,7 +59,30 @@ def verify_shortcuts(scope: str, app: Path) -> list[Path]:
     script = """
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$shell = New-Object -ComObject WScript.Shell
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"),
+ InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IUnicodeShellLink {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file,
+                 int length, IntPtr data, uint flags);
+}
+public static class UnicodeShortcut {
+    public static string ReadTarget(string path) {
+        object link = Activator.CreateInstance(Type.GetTypeFromCLSID(
+            new Guid("00021401-0000-0000-C000-000000000046")));
+        try {
+            ((IPersistFile)link).Load(path, 0);
+            StringBuilder target = new StringBuilder(32768);
+            ((IUnicodeShellLink)link).GetPath(target, target.Capacity, IntPtr.Zero, 4);
+            return target.ToString();
+        } finally { Marshal.FinalReleaseComObject(link); }
+    }
+}
+'@
 $folders = if ($env:EFORGE_VERIFY_SCOPE -eq 'AllUsers') {
     @('CommonPrograms', 'CommonDesktopDirectory')
 } else { @('Programs', 'DesktopDirectory') }
@@ -67,8 +90,8 @@ $links = foreach ($folder in $folders) {
     $root = [Environment]::GetFolderPath($folder)
     $found = @(Get-ChildItem -LiteralPath $root -Filter 'EvidenceForge Studio.lnk' -Recurse)
     if ($found.Count -ne 1) { throw "Expected one Studio shortcut in $root; found $($found.Count)" }
-    $shortcut = $shell.CreateShortcut($found[0].FullName)
-    @{ path = $found[0].FullName; target = $shortcut.TargetPath }
+    $target = [UnicodeShortcut]::ReadTarget($found[0].FullName)
+    @{ path = $found[0].FullName; target = $target }
 }
 ConvertTo-Json -InputObject @($links) -Compress
 """
