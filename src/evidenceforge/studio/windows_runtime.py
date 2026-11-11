@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tarfile
+import time
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from evidenceforge.studio.runtime import RuntimeRelease
 from evidenceforge.studio.state_io import (
     StateLock,
+    StudioStateBusyError,
     StudioStateError,
     atomic_write,
     open_regular,
@@ -83,7 +85,17 @@ def install_runtime(resources: Path, data: Path) -> Path:
     private_directory(data)
     runtimes = data / "runtimes"
     private_directory(runtimes)
-    with StateLock(runtimes / "install.lock"):
+    lock = StateLock(runtimes / "install.lock")
+    deadline = time.monotonic() + 180
+    while True:
+        try:
+            lock.acquire()
+            break
+        except StudioStateBusyError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+    with lock:
         root = runtimes / f"{selected.sha256}-x86_64"
         private_directory(runtimes / "leases")
         with os.fdopen(

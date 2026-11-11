@@ -7,6 +7,7 @@ import io
 import json
 import sys
 import tarfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -84,3 +85,22 @@ def test_checksum_or_traversal_never_publishes_runtime(tmp_path: Path) -> None:
     (source / "runtime-x86_64.tar.gz").write_bytes(b"corrupted")
     with pytest.raises(StudioStateError, match="checksum"):
         install_runtime(source, data)
+
+
+def test_concurrent_first_install_publishes_one_complete_runtime(tmp_path: Path) -> None:
+    from threading import Barrier
+
+    source = resources(tmp_path)
+    data = tmp_path / "concurrent data"
+    start = Barrier(2, timeout=10)
+
+    def install() -> Path:
+        start.wait()
+        return install_runtime(source, data)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.submit(install), pool.submit(install)
+        roots = [first.result(timeout=30), second.result(timeout=30)]
+    assert roots[0] == roots[1]
+    assert (roots[0] / "release.json").is_file()
+    assert len(list((data / "runtimes").glob("*-x86_64"))) == 1
