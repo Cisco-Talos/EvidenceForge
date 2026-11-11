@@ -13377,6 +13377,7 @@ class ActivityGenerator:
             source_ip=auth_source_ip,
             requested_time=time,
             exclusive_end=request.exclusive_end,
+            suppress_near_duplicates=self.dispatcher.authored_intent_id is None,
         )
         if prepared_attempt is None:
             logger.debug(
@@ -13958,6 +13959,7 @@ class ActivityGenerator:
         source_ip: str,
         requested_time: datetime,
         exclusive_end: datetime | None = None,
+        suppress_near_duplicates: bool = True,
     ) -> tuple[datetime, _FailedLogonAttemptReservation] | None:
         """Prepare one bounded cadence marker for a target failed-logon occurrence."""
 
@@ -13981,7 +13983,7 @@ class ActivityGenerator:
             prior_times = self._failed_logon_attempt_runtime_times(
                 self._failed_logon_attempt_times.get(key, ())
             )
-            if any(
+            if suppress_near_duplicates and any(
                 timedelta(0) < abs(current - prior) <= duplicate_window for prior in prior_times
             ):
                 return None

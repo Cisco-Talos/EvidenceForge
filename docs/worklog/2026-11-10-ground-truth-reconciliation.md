@@ -631,3 +631,52 @@ accounting validation remains upstream. These repairs and the golden count pass 
 tests** (8.31 seconds). A pre-existing launchd guard simulation compilation failure occurs only
 on Linux; expose captured compiler stderr in its assertion so CI can identify the actual
 portability defect without dropping strict compiler warnings. Ruff and whitespace checks pass.
+
+#### PR #470 extended-gate repairs
+
+The completed routine CI snapshot passes every Windows shard, seven Linux shards and all
+three native Studio jobs. The sole remaining Linux failure was a pre-existing guard-simulation
+compile error: newer glibc raises `_POSIX_C_SOURCE` to 202405L before the included reference
+source redeclares 200809L. The source now respects an existing definition; strict compiler
+warnings remain enabled and the test exposes captured diagnostics.
+
+The extended tier found two further canonical execution omissions. Failed-authentication
+cadence could suppress a distinct authored attempt near a previously normalized timestamp;
+authored attempts now bypass only the near-duplicate suppression, retaining interactive cadence
+and baseline suppression. Explicit Windows/Linux local logins now request a new occurrence,
+matching the existing Mac behavior instead of silently reusing an implicit session. Incoming
+Mac SSH commands with known short lifetimes could leave completion in the storyline queue
+until the whole group ended, blocking the next command. They now obtain natural completion
+through the shared process timing owner when no canonical close, cross-step reference or
+following connection already owns that close. Unknown command lifetimes remain occupied.
+Focused authentication and guard tests pass **89 tests**; consecutive PTY commands and existing
+shell-occupancy controls pass **24 tests** (nine slow cases deselected). The native evidence
+regression now includes the bounded `find` command's natural exit.
+
+The iteration fixture now explicitly establishes the pre-window Mac sessions its cleanup
+closes. Removed its redundant Type 10 logon described as already-established RDP context: the
+preceding `rdp_session` already creates that connection. The single-desktop RDP owner remains
+unchanged; this fixture repair does not fabricate another concurrent desktop or weaken intent
+accounting. The obsolete four-pillar assertion now expects five. The intentionally occupied
+Mac command fixture now requires failure, retained partial diagnostics and no completion
+manifest rather than accepting silent omission. Its five extended native-command cases pass.
+
+The extended tier also exposed premature ground-truth journal closure after retryable source
+publication failures. Retain the journal through terminal publication or pending aborted cleanup,
+close it when that lifecycle completes, and remove stale failure diagnostics before successful
+bundle publication. Existing lost-footer/artifact-manifest recovery checks now require truth to
+publish after retry without regeneration. Corrected one auxiliary UDP timing fixture's explicit
+IP accounting at its input. The focused recovery/timing selection passes **97 tests**. Failed
+checkpoint-subprocess assertions now drain their owned stdout pipe, exposing the original error
+and avoiding a secondary unclosed-file failure in a later test. Behavior revision **504** records
+these generator-owner corrections; product versions remain unchanged. Final iteration,
+checkpoint equivalence and remote CI verification are still pending at this entry.
+
+The iteration fixture's RDP owner also needed to name the compromised user explicitly.
+Separated the root-owned password spray from the subsequent Aisha-owned RDP login so her
+later logoff pairs with the actual connection, rather than relying on account coercion and a
+redundant context logon to extend it. The full Windows source-finalization file passes **88
+tests**, including the cross-thread retry; the still-running iteration recovery test was the
+only failure in that combined pre-owner-correction selection. All routine CI jobs other than
+the identified glibc compiler error pass, including the three Studio build jobs. Final snapshot
+CI will rerun all gates after these owner and fixture repairs.

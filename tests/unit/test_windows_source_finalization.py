@@ -1528,6 +1528,7 @@ def test_generation_engine_retries_footer_without_reinitializing_or_regenerating
     monkeypatch.setattr(_SingleHostWriter, "write_footer", footer_then_raise)
     with pytest.raises(RuntimeError, match="footer return lost"):
         engine.generate()
+    assert (engine.ground_truth_dir / "GROUND_TRUTH_DIAGNOSTICS.json").is_file()
     retained_coordinator = engine._source_finalization_coordinator
     assert retained_coordinator is not None
     assert retained_coordinator.publication_complete
@@ -1538,6 +1539,8 @@ def test_generation_engine_retries_footer_without_reinitializing_or_regenerating
     assert baseline_calls == 1
     assert engine._source_finalization_coordinator is retained_coordinator
     assert retained_coordinator.complete
+    assert (engine.ground_truth_dir / "GROUND_TRUTH.json").is_file()
+    assert not (engine.ground_truth_dir / "GROUND_TRUTH_DIAGNOSTICS.json").exists()
     path = tmp_path / "output" / "WIN-TEST-01.corp.local" / "windows_event_security.xml"
     assert path.read_text(encoding="utf-8").count("</Events>") == 1
 

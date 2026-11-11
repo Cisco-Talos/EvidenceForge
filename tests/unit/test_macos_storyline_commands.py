@@ -321,10 +321,10 @@ def test_pty_ssh_shell_commands_own_real_forks_and_history(
     assert len(paths) == int(native_mode == "visible")
     if native_mode == "visible":
         records = [json.loads(line) for line in paths[0].read_text().splitlines()]
-        assert len(records) == 29
+        assert len(records) == 30
         assert sum(row["event_type"] == 11 for row in records) == 10
         assert sum(row["event_type"] == 9 for row in records) == 10
-        assert sum(row["event_type"] == 15 for row in records) == 9
+        assert sum(row["event_type"] == 15 for row in records) == 10
         command_pids = {result["pid"] for result in results}
         completed = [
             row
@@ -335,6 +335,7 @@ def test_pty_ssh_shell_commands_own_real_forks_and_history(
             "/usr/bin/id",
             "/usr/bin/sw_vers",
             "/bin/ps",
+            "/usr/bin/find",
         }
         assert all(row["event"]["exit"]["stat"] == 0 for row in completed)
         submissions = {

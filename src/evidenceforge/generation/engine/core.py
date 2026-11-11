@@ -600,7 +600,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             raise
         finally:
             journal = self.intent_execution_ledger.ground_truth
-            if journal is not None:
+            retryable_completion = not self._generation_complete and (
+                self._generation_body_completed
+                or (self._finalization_aborted and not self._finalization_complete)
+            )
+            if journal is not None and not retryable_completion:
                 journal.close()
             self._generate_owner.release()
 
@@ -943,6 +947,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             {"phase": "ground_truth", "description": "Generating ground truth documentation"},
         )
         self._generate_ground_truth()
+        (self.ground_truth_dir / "GROUND_TRUTH_DIAGNOSTICS.json").unlink(missing_ok=True)
         from evidenceforge.composition.artifacts import (
             write_generation_manifest,
             write_resolved_scenario,

@@ -86,6 +86,21 @@ def test_successful_primary_commits_exact_auth_owned_cadence() -> None:
     _assert_no_pending_residue(generator)
 
 
+def test_distinct_authored_attempts_survive_near_duplicate_cadence() -> None:
+    generator, emitters = _generator()
+    for ordinal, milliseconds in enumerate((0, 1800, 2200)):
+        generator.dispatcher.authored_intent_id = f"authored-attempt-{ordinal}"
+        generator.generate_failed_logon(
+            _user(), _workstation(), _START + timedelta(milliseconds=milliseconds), logon_type=2
+        )
+
+    assert len(_failed_events(emitters)) == 3
+    assert generator._failed_logon_attempt_times.get(_FAILED_KEY) == tuple(
+        _START + timedelta(seconds=seconds) for seconds in (0, 2, 4)
+    )
+    _assert_no_pending_residue(generator)
+
+
 def test_pre_primary_failure_cancels_reservation_without_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

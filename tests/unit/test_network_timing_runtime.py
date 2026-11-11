@@ -469,8 +469,8 @@ def _auxiliary_protocol_event(ordinal: int) -> OccurrenceBuilder:
         resp_bytes=420,
         orig_pkts=2,
         resp_pkts=2,
-        orig_ip_bytes=260,
-        resp_ip_bytes=500,
+        orig_ip_bytes=236,
+        resp_ip_bytes=476,
         conn_state="SF",
         history="DdDd",
     )

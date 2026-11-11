@@ -672,6 +672,16 @@ def handle_process(
             canonical_close = self.activity_generator.foreground_process_termination_time(
                 system.hostname, pid
             )
+            if (
+                canonical_close is None
+                and process_ref is None
+                and not self._process_has_following_same_host_connection(system, future_specs)
+            ):
+                canonical_close = (
+                    self.activity_generator._process_foreground().plan_macos_command_completion(
+                        system=system, pid=pid, preferred_at=term_time
+                    )
+                )
             terminate_immediately = (
                 _macos_foreground_lifetime(process_name, process_command_line) is not None
                 and canonical_close is not None

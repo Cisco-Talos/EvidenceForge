@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 503
+current_revision: 504
 history_start_revision: 1
-behavior_surface_sha256: 49bd418924b0b35df00cdfca28940b235156ffa655ddf366b80aa8d69d1a63db
+behavior_surface_sha256: be41b14c7cd58af2b624f2b39d67de984d1a7c927f9d7a73879449bab815fa60
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5807,3 +5807,17 @@ changes:
   - source-timing-provenance
   formats: []
   summary: Retains process transition and timing witnesses, distinguishes target failures from firewall prevention, and finalizes UDP budgets before source projection.
+- revision: 504
+  id: authored-authentication-completion-and-finalization-retry
+  impact: localized
+  domains:
+  - authentication-cadence
+  - authored-intent-reconciliation
+  - process-lifecycle
+  - source-finalization-recovery
+  formats:
+  - windows_event_security
+  - ecar
+  - syslog
+  summary: Preserve explicit authentication occurrences, finalize bounded Mac SSH commands before
+    subsequent queries, and retain the ground-truth journal across retryable terminal publication.

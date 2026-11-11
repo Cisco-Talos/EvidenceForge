@@ -1294,7 +1294,13 @@ class TestGenerateCheckpointResume:
         deadline = time.monotonic() + 30
         while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        if not marker.exists():
+            if process.poll() is None:
+                process.kill()
+            failed_output, _ = process.communicate(timeout=60)
+            pytest.fail(
+                f"checkpoint subprocess exited as {process.returncode} before sync:\n{failed_output}"
+            )
         process.send_signal(interrupt_signal)
         interrupted_output, _ = process.communicate(timeout=30)
         assert process.returncode != 0
@@ -1498,7 +1504,13 @@ class TestGenerateCheckpointResume:
         deadline = time.monotonic() + 600
         while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        if not marker.exists():
+            if process.poll() is None:
+                process.kill()
+            failed_output, _ = process.communicate(timeout=60)
+            pytest.fail(
+                f"checkpoint subprocess exited as {process.returncode} before sync:\n{failed_output}"
+            )
         process.send_signal(signal.SIGINT)
         interrupted_output, _ = process.communicate(timeout=60)
         assert process.returncode == EXIT_SIGINT, interrupted_output
