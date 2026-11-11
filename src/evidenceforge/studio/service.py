@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import secrets
-import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -168,7 +167,7 @@ from evidenceforge.studio.pack_lifecycle import (
     review_pack_deletion,
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
-from evidenceforge.studio.processes import launch_options
+from evidenceforge.studio.processes import launch_options, shell_argument, shell_command
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanup,
@@ -4146,7 +4145,7 @@ def create_app(
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
-            cli_command = shlex.join(_eforge_command(controller_settings(studio.settings)))
+            cli_command = shell_command(_eforge_command(controller_settings(studio.settings)))
             configuration_instructions = (
                 f" The EvidenceForge CLI command prefix selected by Studio is {cli_command}. "
                 "Use that exact command prefix for every EvidenceForge command in this conversation, "
@@ -4174,7 +4173,7 @@ def create_app(
                 )
                 configuration_instructions += (
                     " For authored scenario inspection, validation, resolution, resource forecasting, and generation, "
-                    f"use this explicitly selected configuration: {arguments[0]} {arguments[1]!r}. "
+                    f"use this explicitly selected configuration: {arguments[0]} {shell_argument(arguments[1])}. "
                     f"Use the selected CLI's info {context_field} --json with that selection "
                     "to inspect the active configuration selection. "
                     "Pack management continues to use --project-root for this workspace. "

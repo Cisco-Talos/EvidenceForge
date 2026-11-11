@@ -91,8 +91,9 @@ jobs:
           npm --prefix desktop-ui test
           npm --prefix desktop-ui run build
       - name: Test native Studio service and authoring transport
+        timeout-minutes: 15
         run: >-
-          uv run --no-sync pytest --no-cov
+          uv run --no-sync pytest --no-cov -x
           tests/unit/test_studio_service.py tests/unit/test_studio_chat.py
       - name: Test native state and helper recovery
         run: uv run --no-sync python -m scripts.ci_native_recovery

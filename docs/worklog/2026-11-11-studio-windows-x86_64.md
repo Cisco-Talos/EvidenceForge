@@ -123,3 +123,12 @@ The Windows iteration cache restores by toolchain/lockfile and saves a new
 commit-specific Rust cache even when later packaging/verification fails. Release
 shell tests and NSIS builds share one static-CRT target/profile; frontend assets
 must be built before those release-profile shell tests.
+
+Run `43102142922` passed all 372 frontend tests and 69 native runtime/process
+cases. The service suite was cancelled to inspect slow progress at 65%; its log
+showed steady execution, not a hang. Five failures were a CRLF fixture assertion
+and four scenarios receiving repr-escaped Windows context paths. File serving now
+compares exact source bytes; authoring instructions quote paths and executable
+prefixes for native PowerShell on Windows, with a native argument round-trip
+probe. POSIX prefixes keep shlex behavior. The Windows service step now fails
+fast and has a bounded 15-minute budget for quicker iteration diagnostics.

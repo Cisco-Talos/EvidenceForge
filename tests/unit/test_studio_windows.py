@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -13,6 +14,23 @@ import pytest
 from evidenceforge.studio import processes, runtime
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Native Windows authoring shell")
+def test_authoring_prefix_round_trips_arguments_in_native_powershell() -> None:
+    arguments = [r"C:\space ü\author's scenario.yaml", "literal;$env:USERNAME"]
+    prefix = processes.shell_command(
+        [sys.executable, "-c", "import json,sys;print(json.dumps(sys.argv[1:]))", *arguments]
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", prefix],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={**os.environ, "PYTHONUTF8": "1"},
+    )
+    assert json.loads(result.stdout) == arguments
 
 
 @pytest.mark.parametrize(

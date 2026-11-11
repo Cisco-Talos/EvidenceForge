@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import shlex
 import subprocess
 import sys
 import time
@@ -34,6 +33,7 @@ from evidenceforge.studio.codex import (
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
 from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
+from evidenceforge.studio.processes import shell_command
 from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import Conversation, StudioStore
@@ -211,8 +211,8 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
             "RESOLVED_SCENARIO.yaml",
         }
         assert (
-            client.get(f"/v1/bundles/{bundle['id']}/files/GROUND_TRUTH.md", headers=headers).text
-            == "# Ground truth\n"
+            client.get(f"/v1/bundles/{bundle['id']}/files/GROUND_TRUTH.md", headers=headers).content
+            == (root / "GROUND_TRUTH.md").read_bytes()
         )
         assert client.get(
             f"/v1/bundles/{bundle['id']}/files/../outside", headers=headers
@@ -1715,7 +1715,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
     records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     started = next(record for record in records if record["method"] == "thread/start")
     assert str(scenario) in started["params"]["developerInstructions"]
-    assert shlex.join(selected_cli) in started["params"]["developerInstructions"]
+    assert shell_command(selected_cli) in started["params"]["developerInstructions"]
     if kind == "scenario":
         assert "info project_root --json" in started["params"]["developerInstructions"]
         assert "info configuration_context" not in started["params"]["developerInstructions"]
@@ -1729,7 +1729,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         assert resumed["params"]["threadId"] == "thread-alpha"
         assert "--context" in resumed["params"]["developerInstructions"]
         assert selected_context in resumed["params"]["developerInstructions"]
-        assert shlex.join(selected_cli) in resumed["params"]["developerInstructions"]
+        assert shell_command(selected_cli) in resumed["params"]["developerInstructions"]
         assert "info configuration_context --json" in resumed["params"]["developerInstructions"]
         turns = [record for record in records if record["method"] == "turn/start"]
         assert turns[-1]["params"]["input"] == [

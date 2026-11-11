@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def shell_argument(value: str) -> str:
+    """Quote one argument for native PowerShell on Windows or the POSIX shell."""
+    if os.name == "nt":
+        return "'" + value.replace("'", "''") + "'"
+    return shlex.quote(value)
+
+
+def shell_command(command: list[str]) -> str:
+    """Render an executable command prefix for the native authoring shell."""
+    if os.name == "nt":
+        return "& " + " ".join(shell_argument(argument) for argument in command)
+    return shlex.join(command)
 
 
 def executable_command(command: str | Path) -> list[str]:
