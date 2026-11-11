@@ -5,10 +5,16 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import subprocess
 import sys
 import tarfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from queue import Queue
+from threading import Thread
+from typing import IO
 
 import pytest
 
@@ -20,15 +26,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def resources(root: Path, *, malicious: bool = False) -> Path:
+def resources(root: Path, *, malicious: bool = False, content: bytes = b"fixture") -> Path:
     source = root / "resources"
     source.mkdir()
     archive = source / "runtime-x86_64.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
         for name in ("python.exe", "Scripts/eforge.exe", "Lib/site-packages/fixture.txt"):
             info = tarfile.TarInfo(name)
-            info.size = 7
-            stream.addfile(info, io.BytesIO(b"fixture"))
+            info.size = len(content)
+            stream.addfile(info, io.BytesIO(content))
         if malicious:
             info = tarfile.TarInfo("../escape")
             stream.addfile(info, io.BytesIO())
@@ -104,3 +110,72 @@ def test_concurrent_first_install_publishes_one_complete_runtime(tmp_path: Path)
     assert roots[0] == roots[1]
     assert (roots[0] / "release.json").is_file()
     assert len(list((data / "runtimes").glob("*-x86_64"))) == 1
+
+
+def test_runtime_replacement_preserves_a_live_workers_cross_process_lease(tmp_path: Path) -> None:
+    from evidenceforge.studio.runtime_cleanup import _lease
+
+    first_source = tmp_path / "first"
+    second_source = tmp_path / "second"
+    first_source.mkdir()
+    second_source.mkdir()
+    data = tmp_path / "private data"
+    first = install_runtime(resources(first_source), data)
+    script = (
+        "import os,sys\nfrom pathlib import Path\n"
+        "from evidenceforge.studio.runtime_cleanup import _lease\n"
+        "root=Path(sys.argv[1]); fd=_lease(root,exclusive=False)\n"
+        "print('ready',flush=True); sys.stdin.readline()\n"
+        "assert (root/'Lib/site-packages/fixture.txt').read_bytes()==b'fixture'\n"
+        "os.close(fd)\n"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", script, str(first)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as worker:
+        assert worker.stdout is not None and worker.stdin is not None
+        ready: Queue[str] = Queue()
+        Thread(target=lambda: ready.put(worker.stdout.readline()), daemon=True).start()
+        try:
+            assert ready.get(timeout=15).strip() == "ready"
+            second = install_runtime(resources(second_source, content=b"replacement"), data)
+            assert second != first
+            assert (first / "release.json").is_file()
+            with pytest.raises(BlockingIOError):
+                _lease(first, exclusive=True)
+        finally:
+            worker.stdin.write("finish\n")
+            worker.stdin.flush()
+            assert worker.wait(timeout=15) == 0
+    os.close(_lease(first, exclusive=True))
+
+
+def test_interrupted_extraction_can_retry_without_publishing_partial_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = resources(tmp_path)
+    data = tmp_path / "private"
+    original: Callable[..., IO[bytes] | None] = tarfile.TarFile.extractfile
+    count = 0
+
+    def interrupt(archive: tarfile.TarFile, member: tarfile.TarInfo) -> IO[bytes] | None:
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise OSError("injected extraction interruption")
+        return original(archive, member)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(tarfile.TarFile, "extractfile", interrupt)
+        with pytest.raises(OSError, match="interruption"):
+            install_runtime(source, data)
+    assert not list((data / "runtimes").glob("*-x86_64"))
+    interrupted = list((data / "runtimes").glob(".install-*"))
+    assert len(interrupted) == 1
+    assert (interrupted[0] / "python.exe").is_file()
+    complete = install_runtime(source, data)
+    assert (complete / "Scripts/eforge.exe").is_file()
+    assert (complete / "release.json").is_file()
+    assert interrupted[0].is_dir()

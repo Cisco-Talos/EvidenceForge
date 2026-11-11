@@ -174,6 +174,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
             retained_database: Path | None = None
             retained_bytes: bytes | None = None
             shortcuts: list[Path] = []
+            authored = root / f"launch-{scope}/workspace/scenarios/preserved.yaml"
             try:
                 installer_command(command)
                 installed = True
@@ -191,6 +192,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 helper_smoke(destination / "evidenceforge-studio.exe", root / f"launch-{scope}")
                 retained_database = root / f"launch-{scope}/private/data/studio.sqlite"
                 retained_bytes = retained_database.read_bytes()
+                authored.parent.mkdir(parents=True, exist_ok=True)
+                authored.write_bytes(b"name: preserved authored work\n")
                 # Use the installed interpreter for every CLI subprocess in the
                 # existing synchronized checkpoint/resume/equivalence contract.
                 resources = destination / "runtime"
@@ -242,6 +245,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 if retained_database is not None:
                     assert retained_database.read_bytes() == retained_bytes
                     assert (retained_database.parent / "runtimes").is_dir()
+                    assert authored.read_bytes() == b"name: preserved authored work\n"
     return report
 
 

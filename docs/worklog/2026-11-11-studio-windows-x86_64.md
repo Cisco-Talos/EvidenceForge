@@ -112,3 +112,9 @@ identifier and retains its exact creation assertions. The source rename test
 compares actual before/after native permission bits rather than requiring POSIX
 0640 on Windows. Retained helper/controller launches also now use isolated Python
 flags, matching the existing retained CLI/macOS launch contract.
+
+Additional native acceptance cases exercise a lease held by a separate worker
+while a different payload is installed, and retry after an injected interruption
+after the first archive member. The installed-shell probe uses a deliberately
+hostile current directory/Python environment; uninstall must preserve an authored
+scenario in its actual configured workspace, the private database and runtimes.
