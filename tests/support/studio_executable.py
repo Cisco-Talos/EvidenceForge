@@ -24,6 +24,8 @@ def prepare_script(path: Path, *, codex: bool = False) -> Path:
                 + indent
                 + "if request.get('method') == 'windowsSandbox/readiness':\n"
                 + indent
+                + "    assert request.get('params') is None\n"
+                + indent
                 + "    print(json.dumps({'id': request['id'], 'result': {'status': 'ready'}}), flush=True)\n"
                 + indent
                 + "    continue"

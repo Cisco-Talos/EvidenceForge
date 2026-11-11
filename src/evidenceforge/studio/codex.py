@@ -120,7 +120,7 @@ class CodexClient:
                 )
                 await self._write({"method": "initialized", "params": {}})
                 if sys.platform == "win32":
-                    readiness = await self._request("windowsSandbox/readiness", {}, timeout=15)
+                    readiness = await self._request("windowsSandbox/readiness", None, timeout=15)
                     if readiness.get("status") != "ready":
                         raise CodexUnavailableError(
                             "Codex's Windows sandbox is not ready. Configure the native sandbox "
@@ -172,7 +172,7 @@ class CodexClient:
     ) -> dict[str, Any]:
         """Call one Codex RPC method and return its result object."""
         await self.start()
-        return await self._request(method, params, timeout=timeout)
+        return await self._request(method, params or {}, timeout=timeout)
 
     @property
     def connected(self) -> bool:
@@ -195,7 +195,9 @@ class CodexClient:
         self.next_id += 1
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
-        request: dict[str, Any] = {"id": request_id, "method": method, "params": params or {}}
+        request: dict[str, Any] = {"id": request_id, "method": method}
+        if params is not None:
+            request["params"] = params
 
         async def send_and_wait() -> dict[str, Any]:
             await self._write(request)

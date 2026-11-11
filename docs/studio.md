@@ -30,9 +30,10 @@ The feature-branch preview targets Windows 11 x86_64 on local NTFS. Windows ARM,
 scope. Hosted Windows Server CI is engineering evidence, not Windows 11 acceptance.
 
 The single NSIS setup EXE offers **Just me** and **Everyone**. Both choices require
-administrator approval. Everyone shares the installed application files; settings,
-credentials, helpers, job records, runtime caches and workspace selection remain
-private to each account. Launch Studio normally after setup exits; the installer
+administrator approval. Everyone shares the installed application files. Studio
+stores settings, credentials, helpers, job records, runtime caches and workspace
+selection in per-account private directories; genuine separate-account isolation
+still awaits acceptance. Launch Studio normally after setup exits; the installer
 does not launch it. If changing installation scope, uninstall the existing copy
 first. Uninstall preserves private state, retained runtimes and authored work.
 Automatic runtime cleanup is unavailable in this preview.

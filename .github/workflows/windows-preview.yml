@@ -60,6 +60,8 @@ jobs:
           Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
           $rustVersion = (rustc +stable --version) -replace '[^A-Za-z0-9.-]', '-'
           "rust-version=$rustVersion" >> $env:GITHUB_OUTPUT
+          $sourceSha = git rev-parse HEAD
+          "source-sha=$sourceSha" >> $env:GITHUB_OUTPUT
           rustc +stable --version
           node --version
           uv --version
@@ -71,7 +73,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/studio-windows/target
-          key: windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-${{ github.sha }}
+          key: windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-${{ steps.tools.outputs.source-sha }}
           restore-keys: |
             windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-
             windows-studio-static-${{ steps.tools.outputs.rust-version }}-

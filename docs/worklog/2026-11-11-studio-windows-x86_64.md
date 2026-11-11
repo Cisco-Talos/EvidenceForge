@@ -132,3 +132,9 @@ compares exact source bytes; authoring instructions quote paths and executable
 prefixes for native PowerShell on Windows, with a native argument round-trip
 probe. POSIX prefixes keep shlex behavior. The Windows service step now fails
 fast and has a bounded 15-minute budget for quicker iteration diagnostics.
+
+At `b99cb31e` the expanded native runtime gate (including PowerShell argument
+round-trip, cross-process lease replacement and interrupted extraction) passes.
+Review of the pinned Codex 0.167.0 generated schema found that readiness is a unit
+request: omit params rather than sending `{}`. The transport and fake servers now
+enforce that exact contract before the model-free native sandbox probe.
