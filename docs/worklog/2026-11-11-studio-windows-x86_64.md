@@ -143,3 +143,12 @@ Prioritize NSIS build/installed verification after the short runtime and fronten
 gates, ahead of the longer general service suite, so packaging failures appear
 earlier. Every native source/Codex/recovery gate still precedes qualified artifact
 upload. Failed-run artifacts are diagnostics, not a completed preview claim.
+
+Run `43104275788` passed 71 native cases but found a transient sharing failure
+while the detached controller replaced a job record. Windows JobStore now uses
+private native publication and shared-delete reads together; POSIX IO remains
+unchanged. A concurrent 75-write/300-read native control-record probe covers this
+boundary. Code review also caught an eager optional-Studio import in ordinary
+`python -m evidenceforge`: runtime leases are imported only for a selected private
+runtime, and a fresh-process CLI test rejects any ordinary Studio import. Fifteen
+focused controller/job regressions and the ordinary CLI probe pass locally.

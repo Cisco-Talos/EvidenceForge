@@ -25,10 +25,15 @@
 This module provides the main entry point for the eforge command-line tool.
 """
 
+import os
+
 from evidenceforge.cli.commands import main
 
 if __name__ == "__main__":
-    from evidenceforge.studio.runtime_cleanup import runtime_lease
+    if os.environ.get("EFORGE_STUDIO_RUNTIME_ROOT"):
+        from evidenceforge.studio.runtime_cleanup import runtime_lease
 
-    with runtime_lease():
+        with runtime_lease():
+            main()
+    else:
         main()

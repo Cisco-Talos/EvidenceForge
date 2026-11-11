@@ -16,6 +16,59 @@ from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
 
 
+def test_ordinary_cli_does_not_import_optional_studio_dependencies() -> None:
+    script = """
+import importlib.abc, runpy, sys
+class RejectStudio(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'evidenceforge.studio' or fullname.startswith('evidenceforge.studio.'):
+            raise AssertionError('Ordinary CLI imported optional Studio dependencies')
+sys.meta_path.insert(0, RejectStudio())
+sys.argv = ['eforge', '--help']
+runpy.run_module('evidenceforge', run_name='__main__')
+"""
+    environment = dict(os.environ)
+    environment.pop("EFORGE_STUDIO_RUNTIME_ROOT", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert "Usage" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Native Windows concurrent publication")
+def test_native_job_records_remain_readable_during_controller_replacement(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from evidenceforge.desktop.job_store import ControlIntent, JobStore
+
+    store = JobStore(tmp_path / "private")
+    store.write_control(ControlIntent(id="initial", action="open"))
+    start = Barrier(2, timeout=10)
+    expected = {"initial"} | {f"revision-{index}" for index in range(75)}
+
+    def write() -> None:
+        start.wait()
+        for index in range(75):
+            store.write_control(ControlIntent(id=f"revision-{index}", action="resume"))
+
+    def read() -> None:
+        start.wait()
+        for _ in range(300):
+            assert store.read_control().id in expected
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer, reader = pool.submit(write), pool.submit(read)
+        writer.result(timeout=30)
+        reader.result(timeout=30)
+    assert store.read_control().id == "revision-74"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows authoring shell")
 def test_authoring_prefix_round_trips_arguments_in_native_powershell() -> None:
     arguments = [r"C:\space ü\author's scenario.yaml", "literal;$env:USERNAME"]

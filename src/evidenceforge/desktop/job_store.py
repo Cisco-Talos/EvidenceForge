@@ -27,10 +27,24 @@ class ControlIntent(BaseModel):
 
 
 def _write_json(path: Path, value: BaseModel) -> None:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import mkdir_private, write_private_atomic
+
+        mkdir_private(path.parent, parents=True, exist_ok=True)
+        write_private_atomic(path, value.model_dump_json(indent=2).encode())
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
     temporary.write_text(value.model_dump_json(indent=2), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _read_json(path: Path) -> str | bytes:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import read_private_file
+
+        return read_private_file(path)
+    return path.read_text(encoding="utf-8")
 
 
 class JobStore:
@@ -38,6 +52,11 @@ class JobStore:
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory.resolve()
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import mkdir_private
+
+            mkdir_private(self.directory, parents=True, exist_ok=True)
+            mkdir_private(self.directory / "job-records", exist_ok=True)
         self.generations = self.directory / "job-records" / "generations"
         self.evaluations = self.directory / "job-records" / "evaluations"
         self.control_path = self.directory / "job-records" / "control.json"
@@ -54,14 +73,14 @@ class JobStore:
     def load_generations(self) -> list[GenerationJob]:
         """Load all app-owned generations."""
         return [
-            GenerationJob.model_validate_json(path.read_text(encoding="utf-8"))
+            GenerationJob.model_validate_json(_read_json(path))
             for path in sorted(self.generations.glob("*.json"))
         ]
 
     def load_evaluations(self) -> list[EvaluationJob]:
         """Load all app-owned evaluations."""
         return [
-            EvaluationJob.model_validate_json(path.read_text(encoding="utf-8"))
+            EvaluationJob.model_validate_json(_read_json(path))
             for path in sorted(self.evaluations.glob("*.json"))
         ]
 
@@ -79,7 +98,7 @@ class JobStore:
         """Read the current controller instruction."""
         if not self.control_path.is_file():
             return ControlIntent()
-        return ControlIntent.model_validate_json(self.control_path.read_text(encoding="utf-8"))
+        return ControlIntent.model_validate_json(_read_json(self.control_path))
 
     def acknowledge(self, intent: ControlIntent) -> None:
         """Confirm that a controller has loaded the durable intent."""
@@ -90,7 +109,7 @@ class JobStore:
         if not self.acknowledgement_path.is_file():
             return False
         try:
-            data = json.loads(self.acknowledgement_path.read_text(encoding="utf-8"))
+            data = json.loads(_read_json(self.acknowledgement_path))
         except (OSError, ValueError):
             return False
         return data.get("id") == intent_id
