@@ -1413,8 +1413,8 @@ class TestScenarioValidator:
         assert "sequence" in issues[0].field_path
         assert "must be a list" in issues[0].message
 
-    def test_none_optional_fields_no_issues(self):
-        """Personas/events with None optional fields should produce no issues."""
+    def test_none_optional_fields_no_configuration_issues(self):
+        """None optional fields remain valid alongside informational coverage notes."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -1474,7 +1474,8 @@ class TestScenarioValidator:
 
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
-        assert len(issues) == 0
+        assert all(issue.severity == "info" for issue in issues)
+        assert all(issue.field_path.startswith("storyline.") for issue in issues)
 
     @pytest.mark.parametrize(
         "actor_name", ["SYSTEM", "root", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE"]
@@ -2355,8 +2356,8 @@ class TestProxyOutputTopology:
 class TestSegmentSensorCoverage:
     """Tests for _validate_segment_sensor_coverage."""
 
-    def test_segment_without_sensor_warning(self):
-        """Segment with systems but no sensor monitoring it should warn."""
+    def test_segment_without_sensor_informational(self):
+        """Generic segment coverage without a required action is informational."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -2404,11 +2405,10 @@ class TestSegmentSensorCoverage:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [
-            i for i in issues if i.severity == "warning" and "no sensor" in i.message.lower()
-        ]
-        assert len(warnings) == 1
-        assert "workstations" in warnings[0].message
+        coverage = [i for i in issues if "no sensor" in i.message.lower()]
+        assert len(coverage) == 1
+        assert coverage[0].severity == "info"
+        assert "workstations" in coverage[0].message
 
     def test_segment_with_sensor_no_warning(self):
         """Segment monitored by sensor should produce no coverage warning."""

@@ -609,3 +609,25 @@ the IDS UDP fixture's transport overhead, and condensed the canonical bundle ref
 existing focused-document budget. Regenerated the ignored local skills through the installer.
 The affected config/identity/IDS/firewall/skill controls pass **105 tests**, 93 slow cases
 deselected (16.67 seconds); checks and rule thresholds were not relaxed.
+
+The same explicit-session setup repair now covers both terminal CLI variants, the packaged
+native/filesystem smoke inputs and the thirty-minute acceptance fixture. The latter retains
+its activity requirements and measurement rules; only the previously assumed cleanup owners
+are now authored, with their startup in warmup and cleanup safely inside collection. Terminal
+generation/filtering, exact checkpoint recovery and filesystem recovery pass **five tests**
+(94.54 seconds). The native smoke and thirty-minute acceptance fixture generate successfully;
+native-smoke agreement is **100%** with 25 correct checks. The user's captured MacOS-test input
+and its comparison bundles remain unchanged.
+
+The completed Ubuntu routine shard found one further golden-fixture count mismatch: the new
+semantic contract adds one packaged config document. Updated its expected file count from
+101 to 102, preserving the exact 14 expected validation errors, their order and deduplication.
+
+The Windows and Ubuntu routine shards also exposed stale assertions that generic segment
+coverage must warn and that a valid action cannot have informational alternative-source
+coverage notes. Updated those assertions while retaining configuration-error checks. The raw
+Zeek emitter regression now requires supplied UDP accounting to remain unchanged; canonical
+accounting validation remains upstream. These repairs and the golden count pass **151 focused
+tests** (8.31 seconds). A pre-existing launchd guard simulation compilation failure occurs only
+on Linux; expose captured compiler stderr in its assertion so CI can identify the actual
+portability defect without dropping strict compiler warnings. Ruff and whitespace checks pass.

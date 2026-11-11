@@ -31,11 +31,19 @@ def test_terminal_public_cli_is_complete_native_ingestible_and_filter_independen
     raw["output"]["logs"] = [{"format": "ecar"}, {"format": "macos_endpoint_security"}]
     raw["storyline"] = [
         {
-            "id": "close-warmup-session",
-            "time": "+5s",
+            "id": "cleanup-owner-login",
+            "time": "+0s",
             "actor": "alex",
             "system": "MAC-01",
-            "activity": "Close the warmup desktop session before the fresh-start workload",
+            "activity": "Establish the explicit GUI session owned by fixture cleanup",
+            "events": [{"type": "logon", "logon_type": 2}],
+        },
+        {
+            "id": "close-warmup-session",
+            "time": "+30s",
+            "actor": "alex",
+            "system": "MAC-01",
+            "activity": "Close the explicit setup desktop before the fresh-start workload",
             "events": [{"type": "logoff"}],
         },
         {

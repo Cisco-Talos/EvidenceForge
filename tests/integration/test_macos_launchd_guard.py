@@ -19,12 +19,14 @@ def test_launchd_guard_cancellation_deadlines_recovery_and_fixed_root_scope(tmp_
         pytest.skip("C unit simulation requires Clang")
     source = Path(__file__).parents[1] / "fixtures/macos_launchd_guard_simulation.c"
     executable = tmp_path / "guard-simulation"
-    subprocess.run(
+    compilation = subprocess.run(
         [compiler, "-Wall", "-Wextra", "-Werror", str(source), "-o", str(executable)],
-        check=True,
+        check=False,
         capture_output=True,
+        text=True,
         timeout=20,
     )
+    assert compilation.returncode == 0, compilation.stdout + compilation.stderr
     result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
     assert result.stdout == b"launchd guard simulations passed\n"
     assert result.stderr == b""

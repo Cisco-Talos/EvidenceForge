@@ -1,4 +1,4 @@
-# Synthetic recovery companion. The thirty-minute acceptance source is unchanged.
+# Synthetic recovery companion to the thirty-minute acceptance workload.
 name: macos-workstation-recovery
 description: Three-hour companion to the fixed two-Mac acceptance workload; live Chrome
   and SSH work across exact recovery, with an app-policy refusal negative control
