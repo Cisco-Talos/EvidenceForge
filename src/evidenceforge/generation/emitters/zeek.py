@@ -25,6 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.evidence_source_rules import native_zeek_connection_ports
 from evidenceforge.events.network import normalize_zeek_history
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
@@ -105,9 +106,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
         history = native_zeek_connection_history(
             net.protocol, self._normalize_history_for_state(conn_state, net.history)
         )
-        if net.protocol == "icmp":
-            src_port = net.src_port if net.src_port else 8
-            dst_port = net.dst_port if net.dst_port else 0
+        src_port, dst_port = native_zeek_connection_ports(net.protocol, src_port, dst_port)
         if event.event_type == "dhcp_lease" and event.dhcp is not None:
             msg_types = set(event.dhcp.msg_types)
             if "DISCOVER" in msg_types:

@@ -24,7 +24,12 @@ class ResolutionCompleteError(RuntimeError):
     """Stop a typed event after session selection, before process generation."""
 
 
-def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -> None:
+@pytest.mark.parametrize(
+    "modeled_source,source_available", [(True, True), (False, False), (True, False)]
+)
+def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process(
+    modeled_source: bool, source_available: bool
+) -> None:
     """Fresh desktop work consumes the exact reconnect path before process admission."""
 
     source = System(
@@ -55,7 +60,8 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
             affinity=SimpleNamespace(source_address=source.ip),
         ),
     )
-    prepared = SimpleNamespace(source_system=source, user=user)
+    source_system = source if modeled_source else None
+    prepared = SimpleNamespace(source_system=source_system, user=user)
     entry = SimpleNamespace(
         continuation=SimpleNamespace(
             session=SimpleNamespace(
@@ -78,7 +84,9 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
         _pending_rdp_lifecycle_continuations={"entry": entry},
         _rdp_session_lifecycle_frontier=lambda: activity_time - timedelta(seconds=1),
         advance_rdp_session_lifecycle_watermark=lambda cutoff: None,
-        _active_user_interactive_windows_session=lambda actor, system, at_time: object(),
+        _active_user_interactive_windows_session=Mock(
+            return_value=object() if source_available else None
+        ),
         _execute_rdp_session_bundle=lambda **kwargs: reconnect_calls.append(kwargs),
     )
 
@@ -89,6 +97,12 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
         activity_time=activity_time,
     )
 
+    if modeled_source and not source_available:
+        assert admitted_at is None
+        assert reconnect_calls == []
+        return
+    if not modeled_source:
+        owner._active_user_interactive_windows_session.assert_not_called()
     assert admitted_at == ready_time + timedelta(milliseconds=1)
     assert reconnect_calls == [
         {
@@ -96,7 +110,7 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
             "target_system": target,
             "time": activity_time,
             "source_ip": source.ip,
-            "source_system": source,
+            "source_system": source_system,
             "logon_id": "0xabc",
             "preserve_explicit_source": True,
         }

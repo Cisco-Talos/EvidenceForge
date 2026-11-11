@@ -83,6 +83,21 @@ exact instances and independent restrictions. Validation and comparison evidence
   per-record input protections; verify score equivalence and memory use on large
   datasets. See the [Studio evaluation diagnosis](docs/worklog/2026-11-10-ground-truth-reconciliation.md#live-studio-evaluation-failure-diagnosis).
 
+- [ ] **P1 — Reconcile full mixed-fleet ground-truth acceptance:** The unchanged
+  canonical iteration benchmark fails schema-v5 agreement despite strong blind
+  source reviews. Qualify remaining native projection requirements, missing or
+  duplicate evidence, capability/filter decisions and timing dependencies against
+  exact records; repair their owners without lowering the 95% gate or changing
+  the workload. Current repairs and residual evidence are in the
+  [assessment worklog](docs/worklog/2026-11-11-iteration-test-loops89-98.md).
+
+- [ ] **P2 — Remove the shared Linux PID churn floor:** Ten hosts share a
+  940-PID ten-minute mode caused by clipping hidden churn to temporal reorder
+  capacity. Model workload and allocation headroom together while preserving
+  chronological allocation, out-of-order reservations, uniqueness and exact
+  recovery; do not jitter rendered PIDs or cron schedules. See the same
+  [assessment worklog](docs/worklog/2026-11-11-iteration-test-loops89-98.md).
+
 - [ ] **P2 — Explicit story-role labels:** Add reviewed typed labels such as
   `EXFILTRATION` and `TOOL_DOWNLOAD` to authored actions and preserve them
   deterministically in ground truth. Keep role authoring separate from factual

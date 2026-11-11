@@ -6,12 +6,41 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.evaluation.engine import EvaluationEngine
-from evidenceforge.evaluation.ground_truth_agreement import _fields_match, _RecordIndex
+from evidenceforge.evaluation.ground_truth_agreement import (
+    _email_recipients_match,
+    _fields_match,
+    _RecordIndex,
+)
 from evidenceforge.evaluation.parsers import ParsedRecord, get_parser
 from evidenceforge.evaluation.process_commands import process_commands_agree
 from evidenceforge.events.contexts import NetworkTransactionDraft
 from evidenceforge.events.evidence_projection import candidate_formats, native_requirements
+from evidenceforge.models.scenario import EmailDistributionGroup, EmailMessageEventSpec
 from tests.integration.test_ground_truth_reconciliation import _scenario
+
+
+@pytest.mark.parametrize("group_address", ["finance@example.org", "alice@example.org"])
+def test_email_requested_headers_and_expanded_mailboxes_remain_distinct(group_address: str) -> None:
+    group = EmailDistributionGroup(address=group_address, members=["alice@example.org"])
+    spec = EmailMessageEventSpec(to=[group_address], bcc=["security@example.org"])
+    email = {
+        "to": [f"Finance <{group_address}>"],
+        "cc": [],
+        "bcc": ["security@example.org"],
+        "expanded_rcptto": ["alice@example.org", "security@example.org"],
+    }
+    assert _email_recipients_match(spec, email, [group])
+    assert not _email_recipients_match(
+        spec, {**email, "expanded_rcptto": ["alice@example.org"]}, [group]
+    )
+    assert not _email_recipients_match(spec, {**email, "to": ["other@example.org"]}, [group])
+    assert not _email_recipients_match(
+        spec, {**email, "to": [group_address, "security@example.org"], "bcc": []}, [group]
+    )
+    if group_address != "alice@example.org":
+        assert not _email_recipients_match(spec, email, [])
+    else:
+        assert _email_recipients_match(spec, email, [])
 
 
 @pytest.mark.parametrize(
@@ -127,7 +156,19 @@ def test_ssh_logoff_contract_does_not_require_syslog_without_its_context() -> No
     assert "syslog" in candidate_formats("logoff", {**facts, "syslog": {"app_name": "sshd"}})
 
 
-def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(tmp_path: Path) -> None:
+@pytest.mark.parametrize("observation_delay", [0.0, 0.353186])
+@pytest.mark.parametrize(
+    "phase,policy",
+    [
+        ("process_fork", "source.ecar_process_create"),
+        ("process_create", "source.ecar_process_create"),
+        ("process_exec", "source.ecar_dependent_after_process_create"),
+        ("process_terminate", "source.ecar_process_terminate"),
+    ],
+)
+def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(
+    tmp_path: Path, phase: str, policy: str, observation_delay: float
+) -> None:
     from evidenceforge.evaluation.source_timing_proof import verify_process_timing
     from evidenceforge.events.ground_truth_occurrence import (
         GroundTruthOccurrence,
@@ -147,18 +188,18 @@ def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(tmp_path: 
         intent_id="intent",
         storyline_id="story",
         section="storyline",
-        kind="process_fork",
+        kind=phase,
         time=at,
         facts=facts,
     )
     proof = {
         "version": 1,
-        "phase": "process_fork",
+        "phase": phase,
         "object_id": "child",
         "execution_id": "child-exec",
         "canonical_time": at.isoformat(),
         "native_time": native.isoformat(),
-        "policy": "source.ecar_process_create",
+        "policy": policy,
         "anchors": [
             {"kind": "parent_create", "identity": "parent", "time": parent_time.isoformat()}
         ],
@@ -170,10 +211,13 @@ def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(tmp_path: 
         family="ecar",
         format="ecar",
         role="host",
-        phase="process_fork",
+        phase=phase,
         expected="present",
         expected_time=native,
-        provenance={"timing": proof},
+        provenance={
+            "timing": proof,
+            "window": {"source_delay_seconds": observation_delay},
+        },
     )
     parent = ParsedRecord(
         source_format="ecar",
@@ -184,6 +228,8 @@ def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(tmp_path: 
     )
     index = _RecordIndex({"ecar": [parent]}, _scenario(tmp_path, []))
     assert verify_process_timing(row, exp, index, {}) == []
+    altered = exp.model_copy(update={"expected_time": native + timedelta(seconds=1)})
+    assert "process_timing_identity_disagreement" in verify_process_timing(row, altered, index, {})
     proof = exp.provenance["timing"]
     assert "unverifiable_timing_dependency" in verify_process_timing(
         row, exp, _RecordIndex({}, _scenario(tmp_path, [])), {}

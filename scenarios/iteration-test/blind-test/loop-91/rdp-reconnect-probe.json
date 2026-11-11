@@ -1,0 +1,38 @@
+[
+  {
+    "event_id": "4779",
+    "time": "2026-11-02T16:39:41.0813185Z",
+    "fields": {
+      "AccountName": "aisha.johnson",
+      "AccountDomain": "MERIDIANHCS",
+      "LogonID": "0x26db2b9",
+      "SessionName": "RDP-Tcp#3",
+      "ClientName": "-",
+      "ClientAddress": "10.10.1.99"
+    }
+  },
+  {
+    "event_id": "4778",
+    "time": "2026-11-02T16:44:38.3885890Z",
+    "fields": {
+      "AccountName": "aisha.johnson",
+      "AccountDomain": "MERIDIANHCS",
+      "LogonID": "0x26db2b9",
+      "SessionName": "RDP-Tcp#3",
+      "ClientName": "-",
+      "ClientAddress": "10.10.1.99"
+    }
+  },
+  {
+    "event_id": "4779",
+    "time": "2026-11-02T17:14:16.6542118Z",
+    "fields": {
+      "AccountName": "aisha.johnson",
+      "AccountDomain": "MERIDIANHCS",
+      "LogonID": "0x26db2b9",
+      "SessionName": "RDP-Tcp#3",
+      "ClientName": "-",
+      "ClientAddress": "10.10.1.99"
+    }
+  }
+]

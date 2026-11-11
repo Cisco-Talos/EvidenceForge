@@ -263,8 +263,16 @@ def handle_connection(
                 )
                 upload_read_emitted = True
     if story_pid > 0 and src_sys is not None and service in {"ssl", "https"}:
+        from .process_pipeline import linux_pipeline_submission_command
+
+        protocol_command = linux_pipeline_submission_command(
+            self,
+            system=src_sys,
+            pid=story_pid,
+            command_line=story_command,
+        )
         if self._command_contains_raw_tcp_endpoint(
-            story_command,
+            protocol_command,
             effective_dst_ip,
             dst_port,
         ):

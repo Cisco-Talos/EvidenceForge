@@ -1,0 +1,104 @@
+{
+  "score": 88.35729131972305,
+  "correct": 17398,
+  "incorrect": 2831,
+  "coverage_gaps": 4467,
+  "total_findings": 4854,
+  "displayed_findings": 100,
+  "failure_counts": {
+    "authored_authentication_disagreement": 1,
+    "authored_enforcement_disagreement": 1,
+    "authored_typed_facts_disagreement": 13,
+    "canonical_relationship_disagreement": 1,
+    "factual_disagreement": 325,
+    "invalid_capability_decision": 55,
+    "invalid_loss_decision": 3,
+    "invalid_timing_dependency_identity": 2,
+    "missing_evidence": 2007,
+    "missing_or_duplicate_evidence": 2306,
+    "raw_evidence_disagreement": 1,
+    "unexpected_evidence": 6,
+    "unexpected_source_expectation": 51,
+    "unjustified_source_time": 2,
+    "unverifiable_timing_dependency": 80
+  },
+  "sample_formats_only": {
+    "authored_authentication_disagreement": [
+      "canonical"
+    ],
+    "authored_enforcement_disagreement": [
+      "canonical"
+    ],
+    "authored_typed_facts_disagreement": [
+      "canonical"
+    ],
+    "canonical_relationship_disagreement": [
+      "canonical"
+    ],
+    "factual_disagreement": [
+      "snort_alert",
+      "syslog",
+      "windows_event_sysmon",
+      "zeek_dns",
+      "zeek_smtp"
+    ],
+    "invalid_capability_decision": [
+      "syslog",
+      "zeek_files"
+    ],
+    "invalid_loss_decision": [
+      "zeek_conn",
+      "zeek_ssl"
+    ],
+    "invalid_timing_dependency_identity": [
+      "ecar"
+    ],
+    "missing_evidence": [
+      "bash_history",
+      "cisco_asa",
+      "ecar",
+      "snort_alert",
+      "windows_event_security",
+      "windows_event_sysmon",
+      "zeek_dhcp",
+      "zeek_ocsp"
+    ],
+    "missing_or_duplicate_evidence": [
+      "bash_history",
+      "cisco_asa",
+      "ecar",
+      "proxy_access",
+      "snort_alert",
+      "windows_event_security",
+      "windows_event_sysmon",
+      "zeek_dhcp",
+      "zeek_ocsp"
+    ],
+    "raw_evidence_disagreement": [
+      "canonical"
+    ],
+    "unexpected_evidence": [
+      "ecar"
+    ],
+    "unexpected_source_expectation": [
+      "syslog",
+      "zeek_ocsp"
+    ],
+    "unjustified_source_time": [
+      "ecar",
+      "windows_event_security"
+    ],
+    "unverifiable_timing_dependency": [
+      "ecar"
+    ]
+  },
+  "classification": "mixed unresolved contracts; counts alone do not establish raw-log defects",
+  "owner_inventory": [
+    "GroundTruthExpectationPlanner.capture",
+    "events.evidence_projection native requirements",
+    "exact-source admission/observation predicates",
+    "source timing receipts and record identity index",
+    "canonical authored intent/outcome reconciliation"
+  ],
+  "required_next_step": "Qualify exact source-native row/UID/process/action evidence per family before modifying generation or verification. Preserve hard acceptance and failed diagnostics."
+}

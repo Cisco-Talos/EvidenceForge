@@ -1,0 +1,91 @@
+{
+  "hosts": 10,
+  "intervals": 350,
+  "exact_940": 67,
+  "source_minimum_per_minute": 94,
+  "ten_minute_floor": 940,
+  "per_host": {
+    "MAIL-EDGE-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 5,
+      "mode": 940,
+      "min": 940,
+      "max": 5545
+    },
+    "LT-MRIVERA-02.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 12,
+      "mode": 940,
+      "min": 940,
+      "max": 2687
+    },
+    "WEB-EXT-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 6,
+      "mode": 940,
+      "min": 940,
+      "max": 3684
+    },
+    "LOG-MON-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 8,
+      "mode": 940,
+      "min": 940,
+      "max": 3597
+    },
+    "PROXY-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 6,
+      "mode": 940,
+      "min": 940,
+      "max": 4441
+    },
+    "MAIL-CLIN-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 6,
+      "mode": 940,
+      "min": 940,
+      "max": 4550
+    },
+    "WS-LNGUYEN-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 5,
+      "mode": 940,
+      "min": 940,
+      "max": 3711
+    },
+    "WS-OHADDAD-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 6,
+      "mode": 940,
+      "min": 940,
+      "max": 4385
+    },
+    "FILE-LNX-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 8,
+      "mode": 940,
+      "min": 940,
+      "max": 5202
+    },
+    "APP-INT-01.meridianhcs.local": {
+      "jobs": 36,
+      "intervals": 35,
+      "exact_940": 5,
+      "mode": 940,
+      "min": 940,
+      "max": 3730
+    }
+  },
+  "owner": "StateManager._build_linux_pid_weekly_churn_prefix capacity clamp and temporal reorder lanes",
+  "decision": "Confirmed distribution_texture; defer stochastic-capacity redesign until chronological, out-of-order allocation and recovery contracts are verified. Do not jitter rendered PIDs or cron times."
+}

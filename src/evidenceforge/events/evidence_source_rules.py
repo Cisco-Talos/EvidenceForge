@@ -5,6 +5,25 @@ from __future__ import annotations
 import hashlib
 
 
+def native_zeek_connection_state(protocol: str, state: str | None) -> str | None:
+    """Project transport outcome into native Conn::conn_state semantics."""
+    return "OTH" if protocol == "icmp" else state
+
+
+def native_zeek_connection_history(protocol: str, history: str) -> str:
+    """Keep TCP/UDP histories without inventing them for native ICMP."""
+    return "" if protocol == "icmp" else history
+
+
+def native_zeek_connection_ports(
+    protocol: str, source_port: int | None, destination_port: int | None
+) -> tuple[int | None, int | None]:
+    """Project ICMP type/code into Zeek tuple slots, preserving TCP/UDP ports."""
+    if protocol == "icmp":
+        return source_port or 8, destination_port or 0
+    return source_port, destination_port
+
+
 def _seed(key: str, generation_seed: int) -> int:
     if generation_seed != 42:
         key = f"seed:{generation_seed}:{key}"

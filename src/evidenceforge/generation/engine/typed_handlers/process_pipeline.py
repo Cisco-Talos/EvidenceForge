@@ -34,6 +34,20 @@ class LinuxPipelineChild:
     lifetime: tuple[float, float] | None
 
 
+def linux_pipeline_submission_command(
+    runtime: StorylineMixin, *, system: System, pid: int, command_line: str
+) -> str:
+    """Retain submission semantics when a pipeline stage owns a later effect."""
+    process = runtime.state_manager.get_process(system.hostname, pid)
+    if process is None:
+        return command_line
+    prefix = f"storyline-linux-pipeline:{system.hostname}:{process.parent_pid}:"
+    if not process.concurrency_group_id.startswith(prefix):
+        return command_line
+    parent = runtime.state_manager.get_process(system.hostname, process.parent_pid)
+    return parent.command_line if parent is not None else command_line
+
+
 def _nested_shell_pipeline_groups(
     process_name: str,
     command_line: str,

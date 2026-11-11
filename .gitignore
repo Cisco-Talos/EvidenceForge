@@ -121,6 +121,7 @@ scenarios/iteration-test/blind-test/*
 !scenarios/iteration-test/blind-test/deliberation.md
 !scenarios/iteration-test/blind-test/*-report.md
 !scenarios/iteration-test/blind-test/assessment-effectiveness-dashboard-mac-series-last-20-loops.svg
+!scenarios/iteration-test/blind-test/assessment-effectiveness-dashboard-last-20-loops.svg
 !scenarios/iteration-test/blind-test/loop-*/
 scenarios/iteration-test/blind-test/loop-*/*
 !scenarios/iteration-test/blind-test/loop-*/*.md
