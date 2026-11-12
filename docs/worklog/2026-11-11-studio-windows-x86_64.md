@@ -588,3 +588,11 @@ Windows skips), all 110 slow syslog exact-publication cases, version consistency
 Ruff and formatting. Windows CI now explicitly includes the stream/import
 regressions. Native checks, new installer qualification and Windows 11 upgrade
 acceptance remain pending for this implementation.
+
+The first correction build (`18fbee49`, run `43322084893`) stopped at the
+existing generation-behavior manifest safeguard before packaging. The syslog
+import change needs an explicit tracked-surface revision even though publication
+semantics are unchanged. Revision 510 records impact `none` and the matching
+surface digest; the 110 exact-publication regressions pass. No product or storage
+schema version changes are needed. The rebuilt snapshot must pass fresh Windows
+qualification before its installer is offered for laptop upgrade testing.

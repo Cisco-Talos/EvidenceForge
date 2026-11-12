@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 509
+current_revision: 510
 history_start_revision: 1
-behavior_surface_sha256: e1d994159bab8d835bd79b70d4aa74da7310beed351e1382af783f2708e2d503
+behavior_surface_sha256: fb98dded6e2d9907e5bc6a5526a10028da84aeca4f5f3018dbc321057ecab186
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5875,3 +5875,13 @@ changes:
   - zeek_conn
   summary: Share native ICMP type/code and connection-state projection between conn
     rendering and source requirements, preserving existing packet evidence and TCP/UDP semantics.
+- revision: 510
+  id: avoid-windows-syslog-import-temporary-file
+  impact: none
+  domains:
+  - syslog-publication
+  - windows-cli-startup
+  formats:
+  - syslog
+  summary: Inspect the known Windows temporary-stream type without allocating a file
+    during import, preserving exact publication and generated evidence semantics.
