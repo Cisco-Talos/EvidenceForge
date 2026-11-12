@@ -637,3 +637,20 @@ UAC/alternate-admin, genuine separate-account and final Mac/Linux integration
 acceptance remain open. Remove the temporary draft iteration guard before merge.
 This follow-up records documentation only with `[skip ci]`; executable evidence
 remains bound to `aa5b1f15`. Versions, release tags and publication are unchanged.
+
+### Laptop upgrade and packaged Codex connection accepted
+
+The user reports that the `aa5b1f15` installer upgraded the existing Everyone
+installation successfully on the Windows 11 Pro 25H2 x86_64 laptop. Startup
+checked then installed the updated runtime and reached Scenarios. Codex now
+reports connected. Packaged Windows emits that connected state only after native
+sandbox readiness and the read-only private `eforge.exe version` probe succeed;
+this closes the reproduced startup/private-CLI connection failure on this host.
+The observation is user-reported; no new global Codex configuration or manual ACL
+change was requested for this upgrade. Actual discussion/draft permission probes,
+authoring, restart after authoring, data continuity and generation/evaluation on
+the laptop remain to be exercised, alongside the other pending desktop/UAC,
+separate-account and final Mac/Linux integration gates. The next useful GUI test
+is a small disposable scenario draft with one bounded authoring edit, validation,
+and close/reopen. Artifact evidence remains bound to `aa5b1f15`; no rebuild is
+needed to record this acceptance.
