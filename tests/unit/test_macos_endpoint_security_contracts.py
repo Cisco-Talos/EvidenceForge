@@ -186,11 +186,29 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
 def test_versioned_native_record_roundtrips_without_new_fields(version: int, family: str) -> None:
     fields = _record(version, family)
     record = decode_endpoint_security_record(json.dumps(fields))
-    assert json.loads(record.to_ndjson()) == fields
+    raw = record.to_ndjson()
+    assert json.loads(raw) == fields
+    assert "\\/" in raw and "/" not in raw.replace("\\/", "")
     assert record.time.endswith("123456789Z")
     assert record.action_type == 1  # Observation, not an authorization callback stream.
     with pytest.raises(ValidationError):
         record.version = 10
+
+
+def test_native_slash_escaping_preserves_strings_and_entitlement_member_order() -> None:
+    fields = _record(11, "exec")
+    fields["event"]["exec"]["args"] = ["id", "literal\\/value", "é/終"]
+    fields["event"]["exec"]["entitlements"] = {
+        "invented/z": "literal\\/value",
+        "invented/a": {"nested/key": "é/終"},
+    }
+    record = decode_endpoint_security_record(json.dumps(fields))
+    raw = record.to_ndjson()
+    decoded = json.loads(raw)
+    assert decoded == fields
+    assert list(decoded["event"]["exec"]["entitlements"]) == ["invented/z", "invented/a"]
+    assert decode_endpoint_security_record(raw).to_ndjson() == raw
+    assert raw.endswith("\n") and raw.count("\n") == 1
 
 
 def test_exec_preserves_pre_and_post_identity_and_cpu_metadata() -> None:

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 509
+current_revision: 510
 history_start_revision: 1
-behavior_surface_sha256: e1d994159bab8d835bd79b70d4aa74da7310beed351e1382af783f2708e2d503
+behavior_surface_sha256: 7734119f3617e429bdf83971be0eafa42c7594a197138879d73e0ba2582b83b1
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5875,3 +5875,12 @@ changes:
   - zeek_conn
   summary: Share native ICMP type/code and connection-state projection between conn
     rendering and source requirements, preserving existing packet evidence and TCP/UDP semantics.
+- revision: 510
+  id: macos-es-escaped-solidus
+  impact: localized
+  domains:
+  - native-process-observation
+  formats:
+  - macos_endpoint_security
+  summary: Escape solidus characters in native Endpoint Security NDJSON to match
+    eslogger's Foundation spelling while preserving field values and object and array order.
