@@ -73,6 +73,61 @@ only after the checks pass. Preserve history when merging so the original
 Dependabot commits reach `dev`; close #479 after its slash portion is integrated.
 Issue #478 remains open for the separately scoped work.
 
+### Contributor replies after publication
+
+The contributor [accepted slash-only integration](https://github.com/Cisco-Talos/EvidenceForge/pull/479#issuecomment-6830248577)
+and agreed that per-record shuffling overshoots the observed native variation.
+The [issue reply](https://github.com/Cisco-Talos/EvidenceForge/issues/478#issuecomment-6830249186)
+provides a new reproducer, not yet investigated: bundled `macos-workstation-example`
+from 2.2.0a6 (`bbcf9cd6`), seed 42, no overrides, output
+`MAC-01.example.test/macos_endpoint_security.ndjson`. Three of nine forks are
+zsh -> zsh at `2026-10-19T14:16:17Z`, `14:17:31Z`, and `15:27:22Z`, with child
+PIDs 11031, 11166, and 18758 and whole-second event/birth times. The persistence
+example with partial process coverage reportedly shares the middle case.
+The contributor's shell-history-granularity explanation is a hypothesis.
+
+Reported global sequence starts at 23, with gaps at 28, 31 and 37; per-family
+fork/exec sequences remain consecutive. The contributor agrees this fits
+filtering and warmup, subject to accounting for those exact omitted deliveries.
+They plan one stat PR for flags/package timestamps and directory link counts,
+using canonical metadata owners, and proposed models before device/identity code.
+Do not treat this new reproducer as confirmed by the earlier, different probes.
+
+Combined-dependency local verification passes: 192 native-contract/manifest/Studio
+service tests, 52 v11 contracts, and both slow filesystem/workstation exact-recovery
+tests (77.80 seconds). Full default collection succeeds with pytest 9.2.0:
+20,283 selected of 22,736 collected. Ruff and the behavior manifest remain current.
+
+### Final CI result and explicit user waiver
+
+[Combined routine/Studio CI](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43265383233)
+passed on `154c0f6a`, including all Linux/Windows routine shards, macOS/Linux
+Studio checks, native recovery and Windows durability.
+[Slow/portability CI](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43265418143)
+passed three slow shards and Python 3.12 -> 3.13 checkpoint portability. Its only
+failing test was
+`tests/unit/test_evaluation_storage.py::test_full_evaluation_exceeds_old_record_cap_and_detects_last_failure`:
+all functional assertions passed, but measured peak RSS was 734,343,168 bytes
+against the unchanged 512 MiB threshold. The failing shard reported 1 failed,
+532 passed and 2 skipped; the aggregate release check failed consequently.
+
+The user explicitly authorized accepting this sole failure and integrating anyway.
+This overrides the earlier all-green merge plan for this integration only. The
+assertion checks peak memory, not dataset-size limits, and is retained unchanged.
+Whether it reflects evaluator growth or inherited Linux pre-exec RSS remains
+unresolved; do not label it obsolete or confirmed unrelated to dependencies.
+The Linux manual documents resource accounting across exec; a macOS 160 MiB
+parent probe does not reproduce inheritance there. No production/test fix is
+included and no gate or threshold is weakened. Follow-up should reproduce on
+Linux with a clean launch and compare the reported peak against evaluator usage.
+
+An optional Linux diagnostic was started from the isolated, temporary branch
+`codex/diagnose-eval-memory` (run 43273429102); it is not part of the integration.
+The user-waiver decision ends that detour. The final additional changes are only
+this worklog; verify the same tested-input digest before merging #480 with history
+preserved. Close #479 after its slash portion reaches `dev`; retain #478 for the
+separately scoped features and new reproducer follow-up.
+
 ## Reference Mac: two finite process captures
 
 The existing authorized second Mac is macOS 27.0.1 build 26A434, arm64.
