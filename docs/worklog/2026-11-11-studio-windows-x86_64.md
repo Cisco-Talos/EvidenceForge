@@ -304,3 +304,17 @@ four native Windows skips, 34 shared Codex transport regressions pass, and Ruff/
 actionlint pass. Service CI collects up to five failures per pass; independent
 state/helper recovery still executes after service-test failure, while the native
 job and final qualification remain failed if either gate fails.
+
+Run `43127078103` passes all 135 native service/chat/job cases and 213 routine
+durability/migration/runtime cases (one existing POSIX-only skip). Native packaged
+authoring now correctly rejects the incompatible legacy sandbox before connection.
+Its next protection probe is genuinely denied by Windows, but the pinned provider
+reports that denial as an RPC sandbox error rather than an exit-result object.
+Only expected-denial commands now accept the specific nonzero `sandbox denied
+exec error` response; launch/setup/protocol failures and every positive read/write
+probe still fail. The remaining native helper suite passes 55 cases, skips twelve
+existing POSIX-only checks, and catches three harness expectations of exit 0:
+Windows psutil terminates the authenticated idle helper with exit SIGTERM (15).
+The harness now requires that native status and still asserts stale-PID rejection
+and instance-lock reacquisition. Product replacement behavior is unchanged. The
+145 slow Windows recovery cases still await execution after that correction.

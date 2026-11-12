@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from evidenceforge.studio.chat_permissions import (
     isolated_chat_config,
     verify_chat_permissions,
 )
-from evidenceforge.studio.codex import CodexClient, CodexDisconnectedError
+from evidenceforge.studio.codex import CodexClient, CodexDisconnectedError, CodexUnavailableError
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -170,12 +171,24 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             finally:
                 await guarded.stop()
 
-    async def execute(access: ChatAccess, command: list[str]) -> dict[str, Any]:
+    async def execute(
+        access: ChatAccess, command: list[str], *, denial_expected: bool = False
+    ) -> dict[str, Any]:
         print(f"Native sandbox {access.mode} in {access.directory}: {command!r}", flush=True)
-        return await client.call(
-            "command/exec",
-            {"command": command, "cwd": str(access.directory), "sandboxPolicy": access.sandbox},
-        )
+        try:
+            return await client.call(
+                "command/exec",
+                {"command": command, "cwd": str(access.directory), "sandboxPolicy": access.sandbox},
+            )
+        except CodexUnavailableError as error:
+            # The Windows provider promotes a denied command's nonzero result
+            # to an RPC sandbox error. Only that explicit denial is equivalent
+            # to a nonzero result in an expected-denial probe. Launch, setup,
+            # protocol and all positive-command failures must still fail.
+            denied = re.search(r"sandbox denied exec error, exit code: ([1-9]\d*),", str(error))
+            if not denial_expected or denied is None:
+                raise
+            return {"exitCode": int(denied[1]), "sandboxDenial": True, "stderr": str(error)}
 
     try:
         # An old session starts with access to the whole workspace. Resume must tighten
@@ -227,7 +240,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                 ],
             ]
             for command in commands:
-                result = await execute(discussion, command)
+                result = await execute(discussion, command, denial_expected=True)
                 assert result["exitCode"] != 0, (command, result)
         read = await execute(
             discussion,
@@ -275,7 +288,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                     str(target),
                 ],
             ):
-                result = await execute(access, command)
+                result = await execute(access, command, denial_expected=True)
                 assert result["exitCode"] != 0, (command, result)
             alias = revision / (target.stem + "-alias")
             alias.symlink_to(target)
@@ -287,6 +300,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                     "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('changed')",
                     str(alias),
                 ],
+                denial_expected=True,
             )
             assert result["exitCode"] != 0, result
             alias.unlink()
@@ -299,6 +313,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                     str(target),
                     str(alias),
                 ],
+                denial_expected=True,
             )
             assert result["exitCode"] != 0, result
         assert source.read_text() == "published bytes" and source.stat().st_mode == original_mode

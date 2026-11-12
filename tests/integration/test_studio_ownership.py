@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -82,7 +83,10 @@ def test_native_windows_share_one_verified_helper_and_instance_lock(
             error.value.close()
             # Exercises both native owner checks around authenticated replacement.
             bootstrap._replace_idle(ready)
-            assert child.wait(timeout=8) == 0
+            # On Windows psutil uses TerminateProcess with SIGTERM's exit code;
+            # the virtualenv launcher propagates that verified child's status.
+            expected_exit = int(signal.SIGTERM) if os.name == "nt" else 0
+            assert child.wait(timeout=8) == expected_exit
             # Uvicorn may replay SIGTERM after lifespan shutdown, leaving stale discovery.
             # The next launch must reject its exited identity, never attach to a recycled PID.
             assert bootstrap._verified_process(ready) is None
