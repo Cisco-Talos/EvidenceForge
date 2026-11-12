@@ -365,3 +365,52 @@ an accepted preview. Local follow-up: 120 focused regressions pass, with two new
 Windows import cases and 26 native filesystem cases deferred to native Windows;
 Ruff and workflow actionlint pass. The CI ownership contract now executes the
 portable discovery driver to ensure recovery cases remain assigned to one gate.
+
+### Corrected snapshot: `1126d388`
+
+Windows-only run `43134184144` passes its complete native source/recovery job:
+469 Studio cases pass (31 existing conditional skips), 213 routine state/migration
+cases pass (one skip), 58 helper/runtime cases pass (twelve existing POSIX-only
+skips), and all 145 slow crash/recovery cases pass. All 27 broad-suite failures
+from `5bfafe23` are corrected. Both new native cross-volume fallback cases pass;
+the separate packaging job also passes cross-parent no-overwrite publication.
+
+The source count is lower than the earlier broad invocation because explicit test
+paths bypassed its intended `--ignore` exclusions. Comparing actual collected
+node IDs finds exactly 87 transferred cases, all from the five recovery-owned
+modules (ownership 37, sessions 19, state contracts 17, runtime 8, durability 6).
+Every one remains covered by the shared recovery commands above. The discovery
+driver now implements the existing single-owner intent without losing coverage.
+
+After that full Windows source pass, final integration checks are started once on
+this corrected snapshot: full CI `43136120936`, macOS package `43136120690`, Linux
+ARM64 package `43136123038`, and Linux x86_64 package `43136121885`. Automatic
+feature-branch iteration remains Windows-only. No further source changes are made
+while these exact-commit gates and installed verification run.
+
+Windows run `43134184144` completes all three jobs successfully. The corrected
+installer passes both scopes, installed CLI/resources, helper startup, Unicode
+paths, scope-switch refusal, checkpoint/resume equivalence, reinstall/uninstall
+preservation, 372 frontend tests, and eleven native Rust tests. Downloaded final
+bytes independently match the report and checksum:
+`aef3ab34d36709899395a2a3fb6d397fb61217a876d0880f05718e82528c471a`.
+Qualified artifact: [installer, checksum and report](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43134184144/artifacts/13908930553).
+The report binds source `1126d38879efdf88f29d335bb3b3b4563c384f67`, runner image
+`20261103.298.1`, Python 3.12.16, rustc 1.99.1, Node 22.23.4 and uv 0.13.7.
+Payload Python remains the separately pinned 3.12.12 distribution.
+
+All three final POSIX package runs listed above pass on the same corrected
+snapshot. Full CI `43136120936` finishes successfully, including Required CI aggregation,
+every routine shard, all four native Studio/recovery platforms, generated types,
+frontend, native permissions, debug Rust tests and native window builds, plus the
+isolated macOS packaged runtime. Windows full CI independently repeats the 469
+source cases (31 existing skips) and passes all eleven debug Rust tests. Successful MXC authoring,
+Windows 11 GUI/UAC and genuine separate-account acceptance remain unclaimed.
+
+The CI preview milestone is complete on the tested code snapshot. TODO now retains
+Windows 11 desktop/UAC/alternate-admin ownership, successful MXC authoring and
+genuine separate-account isolation as durable pending acceptance. The draft PR
+stays targeted at dev; remove its temporary iteration guard before integration.
+No version, release tags or publication changed, and the older readiness branch
+was untouched. Final handoff changes only TODO and this worklog; verified installer
+bytes remain bound to their actual code commit rather than being relabeled.

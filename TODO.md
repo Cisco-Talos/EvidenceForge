@@ -72,11 +72,18 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1 — Windows x86_64 Studio preview:** Build an unsigned dual-scope NSIS
-  installer from `dev`, with native Windows Studio/recovery CI and installed-payload
-  verification. Preserve Mac/Linux behavior and published-release requirements.
-  Windows 11 interactive and genuine separate-account acceptance remain separate;
-  no ARM support, signing or automatic runtime pruning. See the
+- [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
+  NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
+  on `codex/studio-windows-x86_64` (draft PR #477). Installed verification and native
+  Mac/Linux regression/package gates pass; release publication remains separate. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
+  setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
+  ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
+  Genuine separate-account isolation remains required before claiming that capability.
+  Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
+  This preview excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
 Source-aware ground truth, deterministic agreement scoring and action-specific visibility
