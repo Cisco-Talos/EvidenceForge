@@ -103,6 +103,17 @@ Before/after logs are `issue478-before-tests.txt` and `issue478-regression-tests
 in scratch. Full-repository Ruff lint/format, diff whitespace and behavior-manifest
 checks pass; these test-only additions require no behavior revision change.
 
+### PR 481 integration
+
+Opened [PR #481](https://github.com/Cisco-Talos/EvidenceForge/pull/481) against
+`dev` at `6e486fec`. Routine CI run 43293829828 exposed a cadence regression test
+that used Mock storyline IDs and controlled only the retired placement RNG. Its
+fixture now supplies real IDs and fixes the shared planner's placement at nominal
+time to retain the original cadence-collision assertion. All 25 LogonID scoping
+and storyline timing controls pass locally. No production behavior was changed by
+this fixture correction. The slow/portability workflow is explicitly dispatched
+for the PR because the new scenario regression cases belong to that tier.
+
 ## Fresh reproduction of the contributor's supplied cases
 
 The user requested reproduction/diagnosis only: no GitHub replies and no fixes.
