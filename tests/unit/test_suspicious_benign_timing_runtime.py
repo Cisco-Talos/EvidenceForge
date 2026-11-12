@@ -19,7 +19,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import evidenceforge.generation.activity.suspicious_benign as suspicious_benign
+import evidenceforge.generation.engine.baseline as baseline_module
 from evidenceforge.generation.activity.suspicious_benign import (
     _HOURLY_PLACEMENT_MAX_SECONDS,
     _sample_hourly_placement_seconds,
@@ -31,9 +34,49 @@ from evidenceforge.generation.timing import (
     uniform_distribution,
 )
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import generation_seed_scope
 
 _PATTERNS = tuple(_HOURLY_PLACEMENT_MAX_SECONDS)
 _HOUR = datetime(2026, 2, 3, 14, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("interleave", [False, True])
+def test_macos_noise_drains_authored_work_before_materializing_its_future_shell(
+    monkeypatch: pytest.MonkeyPatch, interleave: bool
+) -> None:
+    user = User(username="alex", full_name="Alex Example", email="alex@example.test")
+    system = System(hostname="MAC-01", ip="192.0.2.10", os="macOS 27", type="workstation")
+    baseline = BaselineMixin()
+    baseline.scenario = SimpleNamespace(
+        baseline_activity=SimpleNamespace(suspicious_noise="low"),
+        environment=SimpleNamespace(users=[user], systems=[system], domain="example.test"),
+        personas=[],
+    )
+    calls: list[tuple[str, datetime]] = []
+    baseline.activity_generator = SimpleNamespace(
+        timing_runtime=TimingRuntime(reference_time=_HOUR, namespace="noise-authored-frontier"),
+        generate_process=lambda **kwargs: calls.append(("process", kwargs["time"])) or 1234,
+    )
+    baseline._baseline_pass_end = lambda _hour: _HOUR + timedelta(hours=1)
+    baseline._baseline_pass_is_terminal = lambda _hour: False
+    baseline._baseline_pass_admits = lambda *_args, **_kwargs: True
+    baseline._align_rsat_with_future_workstation_session = lambda _user, _system, at, *_args: at
+    baseline._ensure_session_on_system = lambda *_args, **_kwargs: "session-test"
+    baseline._schedule_foreground_process_termination = lambda **_kwargs: None
+    baseline._execute_authored_events_for_hour = lambda _hour, through: calls.append(
+        ("authored", through)
+    )
+    monkeypatch.setattr(baseline_module, "get_suspicious_event_count", lambda *_args: 1)
+    monkeypatch.setattr(
+        baseline_module, "pick_suspicious_pattern", lambda *_args: {"type": "suspicious_cli"}
+    )
+    with generation_seed_scope(42):
+        baseline._generate_suspicious_noise(_HOUR, interleave_authored=interleave)
+    assert [name for name, _time in calls] == (
+        ["authored", "process"] if interleave else ["process"]
+    )
+    if interleave:
+        assert calls[0][1] == calls[1][1]
 
 
 def _environment() -> tuple[list[User], list[System]]:

@@ -121,6 +121,65 @@ test factory discarded the real timing runtime supplied by initialization and
 explicitly replaced it with `None`. It now retains the supplied runtime. All 44
 slow engine tests pass locally; this correction also changes no production code.
 
+### Full slow-CI findings and owner corrections
+
+Full routine/Studio CI also passes on `ddabc361` (run 43300340011). Full slow
+run 43300344207 completed all four shards and exposed additional interactions
+under the changed schedules, beyond the two mock-fixture corrections:
+
+- A future Terminal shell was selected as the existing parent for an earlier
+  mounted SMB helper. Existing-only parent lookup now rejects that future shell;
+  deferred process creation retains its separate readiness behavior. The original
+  checkpoint regression still requires both mounted file reads and exact bytes.
+- Optional baseline editors with no modeled release could occupy a shell needed
+  by authored work. A derived host/user index reserves pending authored shell use;
+  optional foreground commands are admitted only when their declared lifetime fits.
+  Unknown releases are not invented. The index is rebuilt from scenario intent and
+  is explicitly classified as reconstructible checkpoint state. It retains only
+  authored entries, with binary-search lookup, not a whole-run baseline queue.
+- User startup pacing and suspicious background noise could materialize future
+  process parents before pending authored activity. Those paths now drain the
+  same authored frontier before publishing their Mac activity. Tracing reproduced
+  an SSH source requiring a shell at 10:49 after background noise had already
+  reserved its first shell at 10:57; the original SSH checkpoint case passes after
+  fixing the noise execution boundary.
+- Terminal settlement considered outstanding work but could forget an already
+  advanced RDP lifecycle watermark once its journal emptied. The terminal frontier
+  now includes that committed watermark; the backward-movement guard remains intact.
+
+The occupied-local-shell negative fixture now authors an SSH close after collection
+instead of relying on a sampled duration. A separate released-local case verifies
+native commands occur after the SSH client's actual exit. Finder GUI startup is
+not required to produce incidental shell history; its exact recovery, launcher/app
+execs and credentials remain asserted. The legacy temporal census shrank from
+195 selectors / 358 calls to 192 / 355 and its fixed totals now match that removal.
+No new legacy sampler allowance or weakened inventory guard was introduced.
+
+The same pre-existing evaluator peak-RSS assertion failed again (872,206,336 bytes
+against 512 MiB); functional evaluator assertions passed. That test and threshold
+remain unchanged. The user's earlier conditional exception is applicable only if
+this is the sole remaining failure after the functional corrections are validated.
+
+Behavior revision 512 records the additional scheduling, prepared-parent and
+terminal-frontier changes. Five focused foreground/parent/frontier controls, the
+background-noise order controls, and related baseline tests pass (33 checks).
+The explicit temporal census tier passes, and the previously failing benchmark,
+SMB recovery, SSH recovery and mixed-platform browser-helper cases pass locally.
+The complete affected slow regression group and broader routine owner checks are
+being rerun before final integration.
+
+The affected slow group now passes all 15 cases (291.62 seconds), including the
+original examples, workstation/filesystem exact recovery, nested commands, Finder,
+Mac SSH receiver recovery and Windows SMB recovery. The mixed-platform browser
+helper case also passes separately after the terminal-frontier correction.
+An expanded 5,575-test routine owner run passed 5,572 with one skip and found two
+incomplete SimpleNamespace fixtures; adding their missing empty authored lists
+preserves their terminal-admission assertions. All 80 focused baseline/foreground/
+noise contracts pass after that setup correction. Prepared-parent controls also
+exercise the interval after fork but before shell exec, and preserve the ordinary
+deferred-start path. Whole-repository Ruff, format, whitespace and behavior-manifest
+checks pass before the CI follow-up push.
+
 ## Fresh reproduction of the contributor's supplied cases
 
 The user requested reproduction/diagnosis only: no GitHub replies and no fixes.

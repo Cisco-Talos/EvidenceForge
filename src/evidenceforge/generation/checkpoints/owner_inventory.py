@@ -1062,6 +1062,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_source_finalization_authority",
         "_source_finalization_coordinator",
         "_storyline_by_hour",
+        "_authored_macos_foreground_deadlines",
         "_storyline_account_lifecycle_cache",
         "_storyline_authored_ip_by_hostname",
         "_storyline_dhcp_times_by_host",

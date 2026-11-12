@@ -322,7 +322,7 @@ def test_generation_has_no_remaining_legacy_timing_helper_calls() -> None:
 
 
 def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
-    """The exact 358-call compatibility census cannot gain selectors or calls."""
+    """The exact 355-call compatibility census cannot gain selectors or calls."""
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
@@ -330,8 +330,8 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     assert not sizes - _NON_TEMPORAL_SIZE_CALLS
     observed -= sizes
 
-    assert len(caps) == 195
-    assert sum(caps.values()) == 358
+    assert len(caps) == 192
+    assert sum(caps.values()) == 355
     assert not observed - caps
     assert len(observed) <= len(caps)
     assert sum(observed.values()) <= sum(caps.values())
