@@ -180,6 +180,22 @@ exercise the interval after fork but before shell exec, and preserve the ordinar
 deferred-start path. Whole-repository Ruff, format, whitespace and behavior-manifest
 checks pass before the CI follow-up push.
 
+### Packaged Mac evaluation boundary
+
+On `8404cfcd`, all 16 routine shards, Linux Studio jobs and native recovery checks
+pass. The packaged Mac smoke exposed an evaluator boundary defect: three valid
+warmup-process exits were rejected because their pre-collection create rows were
+unavailable as independent timing witnesses. Fresh source generation reproduces
+the same three `unverifiable_timing_dependency` findings (87.5 agreement).
+
+The timing verifier now accepts an exit's own canonical pre-collection birth only
+when the create anchor also precedes collection and its nonnegative latency fits
+the configured create-source bound. In-window missing predecessors, mismatched
+identity, negative latency and excessive latency remain failures. The normal
+canonical/observed predecessor paths remain unchanged. Seven positive/negative
+controls pass; the shared installed-CLI Mac smoke also passes locally. This is an
+evaluation-only correction, with no generation behavior or version change.
+
 ## Fresh reproduction of the contributor's supplied cases
 
 The user requested reproduction/diagnosis only: no GitHub replies and no fixes.
