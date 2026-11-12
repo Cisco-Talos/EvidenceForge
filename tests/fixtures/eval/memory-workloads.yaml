@@ -1,0 +1,10 @@
+# Calibration candidate. The existing 512 MiB envelope is retained until native
+# measurements establish the platform-specific limits and growth allowance.
+version: 1
+memory_budget_mib: 16
+records: [24000, 72000, 216000]
+limits:
+  linux-x86_64: {peak_mib: 512, growth_mib: 64}
+  linux-aarch64: {peak_mib: 512, growth_mib: 64}
+  darwin-arm64: {peak_mib: 512, growth_mib: 64}
+  win32-amd64: {peak_mib: 512, growth_mib: 64}

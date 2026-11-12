@@ -166,16 +166,26 @@ jobs:
     concurrency:
       group: eforge-${{ needs.inputs.outputs.digest }}-portability-ubuntu-latest
       queue: max
+  evaluation-memory:
+    uses: ./.github/workflows/evaluation-memory.yml
+    with:
+      source-ref: ${{ inputs.source-ref || github.sha }}
   release-required:
     name: Required Release CI
     runs-on: ubuntu-latest
     needs:
       - slow-comprehensive
       - checkpoint-portability
+      - evaluation-memory
     if: always()
     steps:
       - name: Check release jobs
         run: |
+          if [ "${{ needs['evaluation-memory'].result }}" != "success" ]; then
+            echo "Evaluation memory checks finished with result: ${{ needs['evaluation-memory'].result }}"
+            exit 1
+          fi
+
           if [ "${{ needs['slow-comprehensive'].result }}" != "success" ]; then
             echo "Slow comprehensive tests finished with result: ${{ needs['slow-comprehensive'].result }}"
             exit 1

@@ -114,6 +114,35 @@ def test_embedded_installer_matrix_selector_is_valid_python() -> None:
     assert "has_linux=" in script
 
 
+def test_memory_gate_runs_outside_pytest_and_is_required_for_release() -> None:
+    memory = workflow("evaluation-memory.yml")
+    assert memory["permissions"] == {"contents": "read"}
+    job = memory["jobs"]["memory"]
+    assert set(job["strategy"]["matrix"]["os"]) == {
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm",
+        "macos-latest",
+        "windows-latest",
+    }
+    command = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Measure fixed evaluation workloads"
+    )
+    assert "scripts.check_evaluation_memory" in command
+    assert "pytest" not in command and "--cov" not in command
+    assert "github.event_name == 'workflow_dispatch' && inputs.calibrate" in command
+    assert "calibrate" not in memory[True]["workflow_call"].get("inputs", {})
+    upload = job["steps"][-1]
+    assert upload["if"] == "always()"
+    assert "measurements.json" in upload["with"]["path"]
+    release = workflow("release-slow.yml")["jobs"]
+    assert release["evaluation-memory"]["uses"] == "./.github/workflows/evaluation-memory.yml"
+    required = release["release-required"]
+    assert "evaluation-memory" in required["needs"]
+    assert "needs['evaluation-memory'].result" in required["steps"][0]["run"]
+
+
 def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -> None:
     jobs = workflow("release.yml")["jobs"]
     assert jobs["build-installers"]["needs"] == ["release-scope", "validate-release-version"]
