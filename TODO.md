@@ -72,6 +72,14 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1 — Evaluate Mac ES JSON key-order variation internally:** Prototype simple,
+  reproducible collector-scoped ordering generated and cached from schema keys.
+  Measure serialization and end-to-end performance against its raw-log training
+  value, then decide whether to adopt it. Avoid a maintained native-permutation
+  catalog; preserve values, array/entitlement order, filtering and exact recovery.
+  This evaluation is separate from slash escaping; no contributor ordering PR is needed.
+  See the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
+
 Source-aware ground truth, deterministic agreement scoring and action-specific visibility
 validation are implemented on `codex/ground-truth-reconciliation`; source exclusions now retain
 exact instances and independent restrictions. Validation and comparison evidence are in the
@@ -508,6 +516,27 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P2 — Native Mac filesystem stat realism:** Qualify protected-file flags and
+  package timestamp provenance, initial directory populations and link-count changes,
+  and required volume/device relationships through canonical filesystem providers.
+  Split small metadata/state fixes from broader sealed/data-volume modeling. User
+  wants bounded contributions; see the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
+- [ ] **P2 — Define Mac audit-version host-history requirements:** Internal investigation
+  confirms that PID allocation includes hidden boot/activity churn while published
+  audit versions count only explicit modeled allocations. Discuss the shared-history
+  model with the contributor before implementation. Preserve chronological fork/exec
+  identity, parent/responsible references, filtering and exact recovery; avoid numerical
+  PID/version invariants or emitter offsets. Ask for a reproducing scenario for the
+  unreproduced fork-time rounding. See the same Issue 478 review.
+- [ ] **P2 — Bounded Mac ES open/write coverage:** Define canonical file/descriptor
+  producers, mutations, timing and observation scope before adding native open/write
+  projections. Opening does not establish a read; notifications do not supply byte
+  counts. User wants a scoped contribution; see the same Issue 478 review.
+- [ ] **P2 — Mac ES BTM and session-event projections:** Scope independent BTM,
+  OpenSSH connection-level login/logout and graphical loginwindow session slices
+  over their canonical owners, with version-qualified native references and
+  correlation/recovery gates. User wants contributor PRs; see the same Issue 478 review.
+
 - [ ] **P2 — Revamp OS-family modeling and classification:** Evaluate an explicit typed
   OS-family field in the scenario/system schema, retaining OS name/version/build as
   descriptive metadata and an intentional category for network appliances/other systems.
@@ -807,6 +836,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   analyze-output.
 - [ ] Example scenario collection for ransomware, credential stuffing, and
   insider threat.
+- [ ] Design easier delivery and discovery of example scenarios, including Studio.
+  Contributed exercises belong under the existing `scenarios/` directory for now;
+  repository examples are not a bundled installer library. See the
+  [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
 - [ ] Config file inheritance/templating.
 - [ ] Overlay `_replace: true` recursive propagation for nested lists.
 - [ ] Overlay `_delete: true` for removing built-in entries.

@@ -447,8 +447,8 @@ class EndpointSecurityRecord(_Record):
         return self
 
     def to_ndjson(self) -> str:
-        """Serialize only the observed fields; never synthesize identities or defaults."""
-        return self.model_dump_json(exclude_unset=True) + "\n"
+        """Serialize observed fields with Foundation's default escaped solidus spelling."""
+        return self.model_dump_json(exclude_unset=True).replace("/", "\\/") + "\n"
 
 
 def decode_endpoint_security_record(raw: str) -> EndpointSecurityRecord:
