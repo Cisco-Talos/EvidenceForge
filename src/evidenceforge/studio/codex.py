@@ -166,6 +166,12 @@ class CodexClient:
             *(task for task in (self.reader_task, self.stderr_task, self.dispatch_task) if task),
             return_exceptions=True,
         )
+        if process is not None and sys.platform == "win32":
+            # CPython exposes no public Process API to close read pipes still
+            # retained by native descendants. This transport belongs exclusively
+            # to our reaped server; closing it releases pending Proactor reads.
+            process._transport.close()
+            await asyncio.sleep(0)
         for future in self.pending.values():
             if not future.done():
                 future.set_exception(CodexDisconnectedError("Codex connection closed"))

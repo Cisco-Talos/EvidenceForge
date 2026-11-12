@@ -260,3 +260,21 @@ The failure also exposes unclosed Windows Proactor pipes during transport stop.
 Shutdown now closes/awaits stdin and lets stdout/stderr reach EOF before cancelling
 notification tasks. Forty focused real-process Codex regressions pass locally;
 native warnings remain errors and the permission gate remains required.
+
+Run `43123156494` confirms the fixture correction: real read-only `cmd /c ver`
+passes. The packaged CLI instead fails with error 5 at CreateProcessAsUserW:
+Codex's legacy elevated backend runs under its separate sandbox account and cannot
+execute the account-private retained runtime. Runtime ACLs have not been widened.
+The probe now tests the documented explicit MXC compatibility command first and
+uses MXC only if the native command actually succeeds; otherwise it retains the
+required elevated test and its failure. No unelevated fallback or Windows skip
+has been added. See [upstream compatibility guidance](https://learn.chatgpt.com/docs/windows/windows-sandbox).
+
+Native service/recovery checks now run in parallel with packaging, independently
+of this authoring failure. Only a final qualification job can upload
+`preview-installer-windows-x86_64`, after both jobs succeed, agree on their actual
+checked-out commit, and match the installer/report/checksum bytes. Intermediate
+`windows-installer-candidate-x86_64` artifacts are explicitly unqualified. Eighty
+CI/release contract tests and actionlint pass locally. Remaining Windows Proactor
+read handles require explicit closure of the owned CPython transport after the
+bounded EOF wait; stdin-only closure reduced but did not eliminate the warnings.

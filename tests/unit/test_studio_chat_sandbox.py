@@ -67,19 +67,49 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
 
         binary = discover_codex(Path(os.environ["EFORGE_NATIVE_CODEX_BIN"]))
         assert binary is not None
-        subprocess.run(
+        mxc = subprocess.run(
             [
                 binary,
+                "-c",
+                'windows.sandbox="mxc"',
                 "sandbox",
-                "setup",
-                "--elevated",
-                "--current-user",
-                "--codex-home",
-                str(codex_home),
+                "--include-managed-config",
+                "--permission-profile",
+                ":workspace",
+                "-C",
+                str(workspace),
+                "--",
+                "cmd.exe",
+                "/d",
+                "/c",
+                "echo",
+                "MXC_OK",
             ],
-            check=True,
-            timeout=180,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
         )
+        print(f"Native MXC compatibility: {mxc.returncode}: {mxc.stdout} {mxc.stderr}")
+        if mxc.returncode == 0:
+            assert "MXC_OK" in mxc.stdout
+            (codex_home / "config.toml").write_text('[windows]\nsandbox = "mxc"\n')
+        else:
+            subprocess.run(
+                [
+                    binary,
+                    "sandbox",
+                    "setup",
+                    "--elevated",
+                    "--current-user",
+                    "--codex-home",
+                    str(codex_home),
+                ],
+                check=True,
+                timeout=180,
+            )
 
     def protect_command(target: Path) -> list[str]:
         return (

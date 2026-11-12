@@ -129,9 +129,34 @@ def test_windows_draft_iteration_defers_full_gates_until_ready_for_review() -> N
     assert preview["jobs"]["preview"]["runs-on"] == "windows-2025"
     assert preview["concurrency"]["cancel-in-progress"] is True
     commands = "\n".join(step.get("run", "") for step in preview["jobs"]["preview"]["steps"])
-    assert "scripts.ci_native_recovery" in commands
     assert "verify_studio_windows.py" in commands
     assert "package_studio_windows.py" in commands
+    native = preview["jobs"]["native-tests"]
+    assert native["runs-on"] == "windows-2025"
+    assert "needs" not in native and "needs" not in preview["jobs"]["preview"]
+    native_commands = "\n".join(step.get("run", "") for step in native["steps"])
+    assert "scripts.ci_native_recovery" in native_commands
+    assert "test_studio_service.py" in native_commands
+
+
+def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -> None:
+    jobs = workflow("windows-preview.yml")["jobs"]
+    qualified = jobs["qualify"]
+    assert set(qualified["needs"]) == {"preview", "native-tests"}
+    assert not qualified.get("if")  # Default success dependency semantics must remain.
+    for name in ("preview", "native-tests"):
+        assert "source-sha" in jobs[name]["outputs"]
+        for step in jobs[name]["steps"]:
+            assert step.get("with", {}).get("name") != "preview-installer-windows-x86_64"
+    script = "\n".join(step.get("run", "") for step in qualified["steps"])
+    assert "$env:PACKAGE_SOURCE -ne $env:NATIVE_SOURCE" in script
+    assert "$report.source_sha -ne $env:PACKAGE_SOURCE" in script
+    assert "Get-FileHash" in script and "$report.sha256 -ne $hash" in script
+    uploads = [
+        step for step in qualified["steps"] if "actions/upload-artifact@" in step.get("uses", "")
+    ]
+    assert uploads[0]["with"]["name"] == "preview-installer-windows-x86_64"
+    assert uploads[0]["with"]["if-no-files-found"] == "error"
 
 
 def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -> None:
