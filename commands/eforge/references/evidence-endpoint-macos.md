@@ -69,9 +69,14 @@ becomes success. A process surviving collection has no in-window exit obligation
 The current frozen ordinary-close policy selects completed orderly app quits, terminal
 server/login/shell returns, and independent normal SSH worker/receiver/client returns.
 Unfinished supported queries are cancelled with signal 15 rather than reported successful.
-Natural query results require the exact invocation and an untruncated completion after
-owned work. Explicit failed database connections supply their nonzero query result through
-the same canonical process/network owner; nominal success cannot override that failure.
+Natural query results require an untruncated completion after owned work. Exact
+invocation policies take precedence; the current profile's temporary
+`assume_unlisted_command_success` flag supplies zero for otherwise eligible unlisted
+natural completions. This assumption does not expand shell commands, qualify unknown
+executable metadata or change teardown/cancellation policy. Older frozen profiles
+without the flag retain unknown results. Explicit failed database connections supply
+their nonzero query result through the same canonical process/network owner;
+nominal success cannot override that failure.
 These are explicit simulation choices, not measured universal macOS logoff
 behavior. Unsupported images/results and older profiles stay unknown. See the repository's
 `docs/design/macos-workstation-feasibility/exit-completeness.md` for scope and acceptance.

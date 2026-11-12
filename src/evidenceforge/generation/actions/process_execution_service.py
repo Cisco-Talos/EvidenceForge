@@ -2828,4 +2828,4 @@ class ProcessTerminationService:
             or any(ensure_utc(at) >= ensure_utc(end) for end in deadlines if end is not None)
         ):
             return None
-        return provider.command_completion(process, at)
+        return provider.command_completion(process, at, allow_unlisted_success=True)

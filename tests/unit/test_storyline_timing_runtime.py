@@ -17,10 +17,41 @@ from types import SimpleNamespace
 import pytest
 
 from evidenceforge.generation.engine.storyline import _storyline_session_required_until
-from evidenceforge.generation.storyline_timing import StorylineTimingPlanner
+from evidenceforge.generation.storyline_timing import (
+    STORYLINE_EVENT_JITTER_SECONDS,
+    StorylineTimingPlanner,
+)
 from evidenceforge.generation.timing import TimingRuntime
 
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+
+def test_authored_placement_preserves_windows_and_identity_across_execution_order() -> None:
+    runtime = TimingRuntime(reference_time=T0, namespace="authored-placement")
+    planner = StorylineTimingPlanner(runtime)
+
+    def place(index: int) -> datetime:
+        return planner.place_event(
+            T0, event_id=f"event-{index}", host="MAC-01", section="storyline"
+        )
+
+    ordered = {index: place(index) for index in range(256)}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        reversed_values = dict(
+            zip(reversed(range(256)), executor.map(place, reversed(range(256))), strict=True)
+        )
+    assert ordered == reversed_values
+    assert all(
+        -STORYLINE_EVENT_JITTER_SECONDS
+        < (value - T0).total_seconds()
+        < STORYLINE_EVENT_JITTER_SECONDS + 1
+        for value in ordered.values()
+    )
+    assert sum(value.microsecond == 0 for value in ordered.values()) < 3
+    assert (
+        planner.place_event(T0, event_id="event-0", host="MAC-01", section="red_herring")
+        != (ordered[0])
+    )
 
 
 def test_storyline_session_lifetime_covers_remaining_child_cadence() -> None:

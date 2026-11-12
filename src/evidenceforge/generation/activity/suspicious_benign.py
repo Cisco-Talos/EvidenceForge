@@ -45,12 +45,10 @@ from evidenceforge.generation.activity.host_activity_profiles import (
     generate_encoded_powershell_command,
 )
 from evidenceforge.generation.timing import (
-    MixtureDistribution,
     TimingRuntime,
     TimingSampler,
     TimingScope,
-    TriangularDistribution,
-    WeightedDistribution,
+    uniform_distribution,
 )
 from evidenceforge.models.scenario import Persona, System, User
 from evidenceforge.utils.platforms import platform_for_os
@@ -130,25 +128,6 @@ _HOURLY_PLACEMENT_MAX_SECONDS: dict[str, int] = {
 }
 
 
-def _inclusive_integer_distribution(minimum: int, maximum: int) -> MixtureDistribution:
-    """Return a continuous mixture that rounds to an inclusive uniform integer support."""
-
-    lower = float(minimum) - 0.5
-    upper = float(maximum) + 0.5
-    return MixtureDistribution(
-        components=(
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
-            ),
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
-            ),
-        )
-    )
-
-
 def _sample_hourly_placement_seconds(
     *,
     pattern: str,
@@ -156,13 +135,13 @@ def _sample_hourly_placement_seconds(
     current_hour: datetime,
     timing_runtime: _SuspiciousBenignTimingRuntime | None,
     timing_ordinal: int,
-) -> int:
-    """Return one owner-audited, order-independent offset inside the current hour."""
+) -> float:
+    """Place activity within the former second buckets at shared microsecond precision."""
 
     maximum = _HOURLY_PLACEMENT_MAX_SECONDS[pattern]
     runtime = timing_runtime or TimingRuntime.compatibility_default()
-    sampled = runtime.sampler.sample_value(
-        _inclusive_integer_distribution(0, maximum),
+    offset = runtime.sampler.sample_timedelta(
+        uniform_distribution(0, (maximum + 1) * 1_000_000),
         relationship_key=f"suspicious_benign.{pattern}.hourly_placement",
         scope=TimingScope(
             stable_id=pattern,
@@ -173,7 +152,7 @@ def _sample_hourly_placement_seconds(
         ),
         sample_key="offset_seconds",
     )
-    return int(sampled + 0.5)
+    return offset.total_seconds()
 
 
 def _domain_to_dn(domain: str) -> str:

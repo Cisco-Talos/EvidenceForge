@@ -214,6 +214,10 @@ ordinary_close:
   login_image: /usr/bin/login
   ssh_client_images: [/usr/bin/ssh, /opt/homebrew/bin/ssh]
   ssh_receiver_image: /usr/libexec/sshd-session
+# Temporary model assumption, pending canonical shell execution/result propagation.
+# Only a proven natural completion may use this; matching rules and explicit results win.
+# Frozen profiles without this field retain unknown outcomes for unlisted commands.
+assume_unlisted_command_success: true
 command_completions:
   # OpenSSH ssh.c -V prints the release and exits zero without opening a session.
   - arguments: ["/opt/homebrew/bin/ssh", "-V"]

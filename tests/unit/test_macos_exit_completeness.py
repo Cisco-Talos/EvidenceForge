@@ -107,6 +107,35 @@ def test_natural_completion_plans_owned_hold_before_certifying_result(
     assert len(_native_exits(tmp_path, process.pid)) == 1
 
 
+@pytest.mark.parametrize("held", [False, True])
+def test_baseline_completion_reuses_the_process_owner_instead_of_resampling_its_exit(
+    tmp_path: Path, scenarios_dir: Path, held: bool
+) -> None:
+    with _engine(tmp_path, scenarios_dir, chronological=True) as fixture:
+        engine, target, user, session = fixture
+        process, planned = _launch(fixture, "/bin/zsh -c 'id; groups'")
+        minimum = planned
+        if held:
+            minimum += timedelta(seconds=3)
+            engine.activity_generator._process_connection_hold_until[
+                target.hostname, process.pid, process.started_at
+            ] = minimum
+        engine._schedule_foreground_process_termination(
+            user=user,
+            system=target,
+            start_time=process.started_at,
+            pid=process.pid,
+            process_name=process.image,
+            command_line=process.command_line,
+            logon_id=session.logon_id,
+            rng=random.Random(42),
+        )
+        ended = engine.state_manager._ended_processes_by_object_id[process.object_id]
+        assert ended.end_time >= minimum
+        assert ended.exit_outcome == PosixProcessExit(exit_code=0)
+    assert len(_native_exits(tmp_path, process.pid)) == 1
+
+
 @pytest.mark.parametrize("pty", [False, True])
 @pytest.mark.parametrize("ordinary", [False, True])
 def test_ssh_terminal_phases_are_all_accounted_without_inventing_results(
