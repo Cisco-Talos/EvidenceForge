@@ -14,6 +14,7 @@ import os
 import re
 import tarfile
 import time
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -68,7 +69,11 @@ def payload_path(name: str) -> Path:
     return Path(*path.parts)
 
 
-def install_runtime(resources: Path, data: Path) -> Path:
+def install_runtime(
+    resources: Path,
+    data: Path,
+    progress: Callable[[str, str, int | None], None] = lambda _title, _detail, _percent: None,
+) -> Path:
     """Verify/extract privately and publish a complete content-addressed runtime."""
     if os.name != "nt":
         raise StudioStateError("Windows runtimes must be installed on native Windows x86_64")
@@ -86,6 +91,7 @@ def install_runtime(resources: Path, data: Path) -> Path:
     runtimes = data / "runtimes"
     private_directory(runtimes)
     lock = StateLock(runtimes / "install.lock")
+    progress("Starting Studio", "Waiting for the private runtime…", None)
     deadline = time.monotonic() + 180
     while True:
         try:
@@ -104,6 +110,7 @@ def install_runtime(resources: Path, data: Path) -> Path:
             pass
         safe_path(root)
         if root.exists():
+            progress("Starting Studio", "Checking your installed runtime…", None)
             actual = RuntimeRelease.model_validate_json(read_bytes(root / "release.json", 16384))
             if actual != release:
                 raise StudioStateError("Installed runtime receipt does not match this app")
@@ -112,6 +119,10 @@ def install_runtime(resources: Path, data: Path) -> Path:
                     pass
             return root
         archive_path = resources / selected.archive
+        title = (
+            "Updating Studio" if any(runtimes.glob("*/release.json")) else "Doing first-time setup"
+        )
+        progress(title, "Verifying the bundled runtime…", None)
         # Keep the verified file open during extraction; replacing its name cannot
         # substitute different bytes after the checksum has been checked.
         with archive_path.open("rb") as source:
@@ -122,7 +133,13 @@ def install_runtime(resources: Path, data: Path) -> Path:
             private_directory(temporary)
             seen: set[str] = set()
             with tarfile.open(fileobj=source, mode="r:gz") as archive:
-                for member in archive:
+                progress(title, "Preparing your private runtime…", None)
+                members = archive.getmembers()
+                for index, member in enumerate(members):
+                    if index % 25 == 0:
+                        progress(
+                            title, "Installing your private runtime…", index * 100 // len(members)
+                        )
                     relative = payload_path(member.name)
                     key = relative.as_posix().casefold()
                     if key in seen or not (member.isdir() or member.isfile()):
@@ -153,10 +170,12 @@ def install_runtime(resources: Path, data: Path) -> Path:
             ):
                 raise StudioStateError("The bundled Windows runtime is incomplete")
             atomic_write(temporary / "release.json", release.model_dump_json().encode())
+            progress(title, "Finishing runtime setup…", None)
             # Windows pruning is disabled. Do not advertise the POSIX cleanup contract.
             from evidenceforge.utils.windows_filesystem import publish_new_directory
 
             publish_new_directory(temporary, root)
+        progress(title, "Your private runtime is ready", 100)
         return root
 
 
@@ -165,9 +184,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
+    parser.add_argument("--progress", action="store_true")
     arguments = parser.parse_args()
     try:
-        root = install_runtime(arguments.resources.absolute(), arguments.data.absolute())
+
+        def progress(title: str, detail: str, percent: int | None) -> None:
+            if arguments.progress:
+                print(
+                    json.dumps({"title": title, "detail": detail, "percent": percent}), flush=True
+                )
+
+        root = install_runtime(arguments.resources.absolute(), arguments.data.absolute(), progress)
     except (OSError, ValueError, tarfile.TarError, StudioStateError) as error:
         parser.exit(1, f"Could not install Studio's private runtime: {error}\n")
     print(json.dumps(str(root)))

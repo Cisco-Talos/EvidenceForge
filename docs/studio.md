@@ -44,6 +44,23 @@ installed and signed in; configure its native sandbox before reconnecting Studio
 WSL integration is not included. Windows npm shims are resolved to Codex's native
 executable rather than executed through a shell.
 
+Automatic discovery first respects the executable override in Settings and the
+launch environment, then searches PATH. Windows also checks the current account's
+standalone CLI directory (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`),
+`%USERPROFILE%\.local\bin`, npm's usual `%APPDATA%\npm` directory, and the
+registered `OpenAI.Codex` desktop package. Custom install locations can be set in
+**Settings → Authoring & tools → Codex executable**. Discovery does not install
+Codex or change its sandbox configuration.
+
+First launch shows runtime verification and installation progress. A changed
+payload shows **Updating Studio**; extracting a private runtime is separate from
+upgrading saved data. An ordinary storage/ownership startup failure offers
+**Retry startup**, without implying that saved schemas need an upgrade.
+Studio can remove outside read-only permissions from its own account-owned
+`.eforge\studio` metadata directory. Foreign owners, outside write access and
+unsafe paths are refused. Authored workspace permissions and private file ACLs
+remain protected.
+
 Studio checks that Codex's selected sandbox can run the private CLI before it
 connects authoring. The legacy elevated sandbox uses a separate account and cannot
 execute this preview's private runtime; Studio rejects that configuration with a
@@ -89,6 +106,30 @@ Windows 11 interactive testing must still cover downloaded-file trust controls,
 both scopes, cancelled UAC, separate administrator credentials and intended-user
 ownership, normal-user launch, authoring/sign-in, dialogs, scaling and imports/
 exports. Genuine separate-account isolation remains a separate acceptance gate.
+
+### Reset the Windows preview for a fresh installation test
+
+The normal uninstaller preserves authored work and private state. For a deliberate
+test reset, first quit Studio with no active/background work and preserve anything
+you want to keep. Uninstall **EvidenceForge Studio** through Windows Settings;
+the all-users installation requires administrator approval. Then remove these
+account-specific locations if present:
+
+- `%LOCALAPPDATA%\EvidenceForge` — private state, logs, caches and retained runtimes.
+- `%LOCALAPPDATA%\org.evidenceforge.studio` — Studio's WebView profile/cache.
+- The selected test workspace — the default is the account's Documents directory
+  plus `EvidenceForge`. Redirected Documents can be under OneDrive; deleting that
+  folder also syncs the deletion. This removes authored scenarios, packs and runs.
+- `%USERPROFILE%\.eforge\publisher.yaml` — the optional global publisher identity.
+- The nine EvidenceForge-owned `eforge-*` skill directories installed under
+  `%USERPROFILE%\.agents\skills`; preserve other skills and any custom work.
+- `%USERPROFILE%\.claude\commands\eforge`, if Claude skills were also installed.
+
+Remove the old installer/download folder to avoid testing the wrong snapshot.
+Reboot before installing the replacement if a retained process still owns files.
+Do not remove Codex, its account/configuration/history, sandbox accounts or
+WebView2 as part of this Studio reset. Windows uninstall/history records and
+OneDrive's recovery history are outside this application-state reset.
 
 ## Install and open Studio
 

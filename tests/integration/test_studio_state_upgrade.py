@@ -24,6 +24,56 @@ from evidenceforge.studio.state_upgrade import StateCoordinator
 from evidenceforge.studio.store import StudioStore
 from tests.support.studio_state import inventory, legacy, paths
 
+
+def test_workspace_owner_failure_is_startup_retry_without_an_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected = paths(tmp_path)
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    first = create_app(selected, "secret")
+    assert first.state.studio is not None
+    first.state.studio.store.close()
+    first.state.studio.workspace_coordinator.close()
+    first.state.studio.coordinator.close()
+    before = selected.settings_file.read_bytes()
+    acquire = StateLock.acquire
+    fail = True
+
+    def denied(lock: StateLock) -> None:
+        if fail and lock.path.name == "owner.lock":
+            raise PermissionError("Workspace metadata is not private")
+        acquire(lock)
+
+    async def quiet_start(self: service_module.StudioService) -> None:
+        return None
+
+    monkeypatch.setattr(StateLock, "acquire", denied)
+    monkeypatch.setattr(service_module.StudioService, "start", quiet_start)
+    headers = {"X-EForge-Token": "secret"}
+    app = create_app(selected, "secret")
+    with TestClient(app) as client:
+        status = client.get("/v1/state/status", headers=headers).json()
+        assert status["state"] == "failed" and status["operation"] == "startup"
+        assert status["scope"] == "workspace"
+        assert status["phase"] == "Could not open workspace storage"
+        assert not status["can_restore"] and status["can_retry"]
+        assert status["versions"] == status["target_versions"]
+        assert client.get("/v1/bootstrap", headers=headers).status_code == 503
+        fail = False
+        response = client.post(
+            "/v1/state/upgrade", headers=headers, json={"operation_id": status["operation_id"]}
+        )
+        assert response.status_code == 200
+        import time
+
+        deadline = time.monotonic() + 5
+        while client.get("/v1/state/status", headers=headers).json()["state"] != "ready":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert selected.settings_file.read_bytes() == before
+
+
 BOUNDARIES = [
     "backup.before_create",
     "backup.after_create",

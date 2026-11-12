@@ -860,7 +860,7 @@ class StudioService:
         ):
             self.workspace_coordinator.apply(self.workspace_coordinator.status.operation_id)
         if self.workspace_coordinator.status.state == "ready":
-            self.workspace_coordinator.owner.acquire()
+            self.workspace_coordinator.acquire_ready()
         if initializing_default:
             coordinator.journal.workspace_initialized = True
             coordinator.persist()
@@ -1815,10 +1815,7 @@ def create_app(
             try:
                 service = StudioService(app_paths, secret, coordinator, new_install)
             except (OSError, StudioStateError) as error:
-                coordinator.status.state = "failed"
-                coordinator.status.error = str(error)
-                coordinator.status.can_retry = True
-                coordinator.status.can_restore = False
+                coordinator.fail_startup(error)
     operation_lock = asyncio.Lock()
     operation_task: asyncio.Task[None] | None = None
     operation_restore: bool | None = None
@@ -1913,12 +1910,7 @@ def create_app(
                 await service.start()
             except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
                 if coordinator:
-                    coordinator.status.state = "failed"
-                    coordinator.status.error = (
-                        f"Studio initialization failed: {type(error).__name__}"
-                    )
-                    coordinator.status.can_retry = True
-                    coordinator.status.can_restore = False
+                    coordinator.fail_startup(error)
                 await service.stop()
                 service = None
                 app.state.studio = None
@@ -2048,7 +2040,14 @@ def create_app(
     def state_status() -> UpgradeStatus:
         status = active_coordinator().status
         if (initializing or service and service.preparing_workspace) and status.state == "ready":
-            return status.model_copy(update={"state": "running", "phase": "Starting Studio"})
+            return status.model_copy(
+                update={
+                    "state": "running",
+                    "operation": "startup",
+                    "phase": "Starting Studio",
+                    "completed_steps": 0,
+                }
+            )
         return status
 
     async def run_operation(target: StateCoordinator, identity: str, restore: bool) -> None:
@@ -2056,7 +2055,27 @@ def create_app(
         async with operation_lock:
             initializing = True
             try:
-                await asyncio.to_thread(target.apply, identity, restore)
+                if target.status.operation == "startup" and not restore:
+                    if service and target.scope == "workspace":
+                        target.close()
+                        refreshed = StateCoordinator(app_paths, target.workspace)
+                        service.workspace_coordinator = refreshed
+                        refreshed.prepare()
+                        if (
+                            refreshed.status.state == "pending"
+                            and not refreshed.status.error
+                            and not refreshed.status.incompatible
+                        ):
+                            await asyncio.to_thread(refreshed.apply, refreshed.status.operation_id)
+                        refreshed.acquire_ready()
+                        target = refreshed
+                    else:
+                        target.status.error = None
+                        target.inspect()
+                        target.prepare()
+                        target.acquire_ready()
+                else:
+                    await asyncio.to_thread(target.apply, identity, restore)
                 if coordinator and coordinator.status.state == "ready" and not service:
                     service = StudioService(app_paths, secret, coordinator, new_install)
                     app.state.studio = service
@@ -2073,10 +2092,7 @@ def create_app(
             except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
                 # Validated migration completion does not imply service initialization succeeded.
                 # Keep normal endpoints gated and surface a retry, without later rollback.
-                target.status.state = "failed"
-                target.status.error = f"Studio initialization failed: {type(error).__name__}"
-                target.status.can_retry = True
-                target.status.can_restore = False
+                target.fail_startup(error)
                 if service and target.scope == "private":
                     await service.stop()
                     service = None

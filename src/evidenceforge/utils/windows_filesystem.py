@@ -251,6 +251,31 @@ _get_ace = _bind(
     wintypes.BOOL,
     [wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID)],
 )
+_get_dacl = _bind(
+    _advapi,
+    "GetSecurityDescriptorDacl",
+    wintypes.BOOL,
+    [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ],
+)
+_set_security = _bind(
+    _advapi,
+    "SetSecurityInfo",
+    wintypes.DWORD,
+    [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ],
+)
 _drive_type = _bind(_kernel, "GetDriveTypeW", wintypes.UINT, [wintypes.LPCWSTR])
 _volume_info = _bind(
     _kernel,
@@ -332,7 +357,9 @@ def _private_security_descriptor() -> wintypes.LPVOID:
     return descriptor
 
 
-def require_private(descriptor: int, *, ancestry: bool = False) -> None:
+def require_private(
+    descriptor: int, *, ancestry: bool = False, allow_read_access: bool = False
+) -> None:
     """Validate native token ownership and private access rights on an opened object."""
     owner = wintypes.LPVOID()
     dacl = wintypes.LPVOID()
@@ -369,7 +396,7 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
         acl = ctypes.cast(dacl, ctypes.POINTER(_Acl)).contents
         # An ancestor may allow creating new children, but not replacing existing
         # children or changing its security. Private leaves permit no outside access.
-        mutation = 0x500D0040 if ancestry else 0xFFFFFFFF
+        mutation = 0x500D0040 if ancestry else 0x500D0156 if allow_read_access else 0xFFFFFFFF
         for index in range(acl.AceCount):
             pointer = wintypes.LPVOID()
             _require(_get_ace(dacl, index, ctypes.byref(pointer)))
@@ -388,6 +415,70 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
                 )
     finally:
         _local_free(security)
+
+
+def protect_owned_directory(path: Path) -> None:
+    """Restore a Studio-owned directory's DACL after inherited read-only grants.
+
+    This is deliberately opt-in for Studio metadata, never general storage. Refuse
+    foreign owners, write grants, reparse points and unsafe ancestry before mutation.
+    Protected child ACLs and authored workspace permissions are preserved.
+    """
+    absolute = Path(os.path.abspath(path))
+    for ancestor in absolute.parents:
+        if ancestor.exists():
+            descriptor = open_directory(ancestor)
+            try:
+                require_private(descriptor, ancestry=True)
+            finally:
+                os.close(descriptor)
+    parent = open_directory(absolute.parent, create=True)
+    descriptor: int | None = None
+    try:
+        try:
+            mkdir_child(parent, absolute.name)
+        except FileExistsError:
+            pass
+        descriptor = _open_native(
+            absolute.name,
+            root=_handle(parent),
+            flags=os.O_RDONLY,
+            directory=True,
+            extra_access=0x00040000,  # WRITE_DAC on the pinned object.
+        )
+        try:
+            require_private(descriptor)
+            return
+        except PermissionError:
+            pass
+        require_private(descriptor, allow_read_access=True)
+        security = _private_security_descriptor()
+        try:
+            present, defaulted = wintypes.BOOL(), wintypes.BOOL()
+            dacl = wintypes.LPVOID()
+            _require(
+                _get_dacl(
+                    security, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
+                )
+            )
+            result = _set_security(
+                _handle(descriptor),
+                _SE_FILE_OBJECT,
+                _DACL_SECURITY_INFORMATION | 0x80000000,  # PROTECTED_DACL_SECURITY_INFORMATION
+                None,
+                None,
+                dacl,
+                None,
+            )
+            if result:
+                raise ctypes.WinError(result)
+        finally:
+            _local_free(security)
+        require_private(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
 
 
 def _component(name: str) -> None:

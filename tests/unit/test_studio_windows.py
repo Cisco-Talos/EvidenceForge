@@ -231,6 +231,62 @@ def test_npm_discovery_uses_native_binary_without_executing_a_shim(
     assert runtime.discover_codex() is None
 
 
+@pytest.mark.parametrize("install", ["standalone", "user-bin", "npm", "desktop"])
+def test_windows_discovery_handles_explorer_path_and_registered_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, install: str
+) -> None:
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    monkeypatch.delenv("EFORGE_DESKTOP_CODEX_BIN", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(runtime.shutil, "which", lambda *args, **kwargs: None)
+    native = {
+        "standalone": tmp_path / "local/Programs/OpenAI/Codex/bin/codex.exe",
+        "user-bin": tmp_path / ".local/bin/codex.exe",
+        "npm": tmp_path
+        / "roaming/npm/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+        "desktop": tmp_path / "ChatGPT ü/app/resources/codex.exe",
+    }[install]
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"native fixture")
+    if install == "npm":
+        (tmp_path / "roaming/npm/codex.cmd").write_text("fixture")
+    queries: list[list[str]] = []
+
+    def query(command: list[str], **kwargs: Any) -> Any:
+        queries.append(command)
+        assert "-NoProfile" in command and "-NonInteractive" in command
+        assert kwargs["creationflags"] == 0x08000000
+        return SimpleNamespace(returncode=0, stdout=str(tmp_path / "ChatGPT ü").encode())
+
+    monkeypatch.setattr(runtime.subprocess, "run", query)
+    assert runtime.discover_codex() == str(native)
+    assert len(queries) == (1 if install == "desktop" else 0)
+    explicit = tmp_path / "explicit.exe"
+    assert runtime.discover_codex(explicit) == str(explicit)
+
+
+def test_windows_discovery_keeps_path_precedence_and_bounds_missing_package_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    monkeypatch.delenv("EFORGE_DESKTOP_CODEX_BIN", raising=False)
+    monkeypatch.setattr(runtime.shutil, "which", lambda *args, **kwargs: "selected.exe")
+    assert runtime.discover_codex() == "selected.exe"
+    monkeypatch.setattr(runtime.shutil, "which", lambda *args, **kwargs: None)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def timeout(*args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(runtime.subprocess, "run", timeout)
+    assert runtime.discover_codex() is None
+
+
 def test_explicit_python_command_preserves_arguments_without_shell_associations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

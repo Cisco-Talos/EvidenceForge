@@ -15,9 +15,11 @@ import {
   StudioSnapshot,
   ValidationResult,
   UpgradeStatus,
+  StartupProgress,
 } from "./api";
 
 export interface StudioState {
+  startup?: StartupProgress;
   maintenance: UpgradeStatus | null;
   upgradeNotice: string | null;
   clearUpgradeNotice: () => void;
@@ -100,6 +102,7 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
 }
 
 export function useStudio(): StudioState {
+  const [startup, setStartup] = useState<StartupProgress>({ title: "Starting Studio", detail: "Connecting to the local service…", percent: null });
   const [maintenance, setMaintenance] = useState<UpgradeStatus | null>(null);
   const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
   const [recoveryRevision, setRecoveryRevision] = useState(0);
@@ -134,7 +137,7 @@ export function useStudio(): StudioState {
     const previous = maintenance;
     acceptedOperations.current.add(maintenance.operation_id);
     setError(null);
-    setMaintenance({ ...maintenance, state: "running", phase: restore ? "Starting restoration" : "Starting upgrade" });
+    setMaintenance({ ...maintenance, state: "running", phase: restore ? "Starting restoration" : maintenance.operation === "startup" ? "Starting Studio" : "Starting upgrade" });
     try {
       await apiRef.current.request(`/v1/state/${restore ? "restore" : "upgrade"}`, "POST", { operation_id: maintenance.operation_id });
       setRecoveryRevision((current) => current + 1);
@@ -159,7 +162,7 @@ export function useStudio(): StudioState {
 
     async function attach() {
       try {
-        const client = await connectStudio();
+        const client = await connectStudio((progress) => { if (!disposed) setStartup(progress); });
         if (disposed) return;
         apiRef.current = client;
         setApi(client);
@@ -249,5 +252,5 @@ export function useStudio(): StudioState {
     return () => clearInterval(timer);
   }, [api]);
 
-  return { api, snapshot, error, liveState, validations, subscribeEvents, reload, maintenance, upgradeNotice, clearUpgradeNotice, recoverState, selectRecoveryWorkspace };
+  return { api, snapshot, error, liveState, validations, subscribeEvents, reload, maintenance, upgradeNotice, clearUpgradeNotice, recoverState, selectRecoveryWorkspace, startup };
 }

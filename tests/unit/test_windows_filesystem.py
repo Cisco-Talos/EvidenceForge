@@ -147,6 +147,69 @@ def test_private_directory_rejects_external_access_acl(tmp_path: Path, rights: s
         os.close(parent)
 
 
+@pytest.mark.parametrize("rights", ["RX", "W", "M", "F"])
+def test_workspace_privacy_repairs_read_grants_but_refuses_external_writers(
+    tmp_path: Path, rights: str
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    metadata = tmp_path / ".eforge/studio"
+    filesystem.mkdir_private(metadata, parents=True)
+    marker = metadata / "layout.json"
+    filesystem.write_private_atomic(marker, b"preserve this exact layout")
+    before = marker.read_bytes()
+    subprocess.run(
+        ["icacls", str(metadata), "/grant", f"*S-1-1-0:({rights})"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    if rights == "RX":
+        filesystem.protect_owned_directory(metadata)
+        descriptor = filesystem.open_directory(metadata)
+        try:
+            filesystem.require_private(descriptor)
+        finally:
+            os.close(descriptor)
+        filesystem.protect_owned_directory(metadata)
+    else:
+        with pytest.raises(PermissionError, match="another principal"):
+            filesystem.protect_owned_directory(metadata)
+    assert marker.read_bytes() == before
+
+
+def test_workspace_inheritance_repair_preserves_private_files_and_authored_siblings(
+    tmp_path: Path,
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    parent = tmp_path / ".eforge"
+    metadata = parent / "studio"
+    filesystem.mkdir_private(metadata, parents=True)
+    filesystem.write_private_atomic(metadata / "layout.json", b"private layout")
+    sibling = parent / "publisher.yaml"
+    sibling.write_bytes(b"authored identity")
+    subprocess.run(
+        ["icacls", str(parent), "/grant", "*S-1-1-0:(OI)(CI)(RX)"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    subprocess.run(
+        ["icacls", str(metadata), "/inheritance:e"], check=True, capture_output=True, timeout=10
+    )
+    parent_acl = subprocess.check_output(["icacls", str(parent)])
+    filesystem.protect_owned_directory(metadata)
+    descriptor = filesystem.open_directory(metadata)
+    try:
+        filesystem.require_private(descriptor)
+    finally:
+        os.close(descriptor)
+    assert filesystem.read_private_file(metadata / "layout.json") == b"private layout"
+    assert sibling.read_bytes() == b"authored identity"
+    assert subprocess.check_output(["icacls", str(parent)]) == parent_acl
+
+
 def test_handle_relative_unicode_names_preserve_bytes(tmp_path: Path) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 

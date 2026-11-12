@@ -85,7 +85,11 @@ class CodexClient:
                 await self.on_event("codex/linuxSandboxReset", {})
             command = discover_codex(self.binary)
             if not command:
-                raise CodexDisconnectedError("Codex CLI was not found; set its path in Settings")
+                raise CodexDisconnectedError(
+                    "Codex CLI was not found in PATH or the supported install locations. "
+                    "Install native Codex for your account, or set its full executable path "
+                    "in Settings → Authoring & tools, then reconnect."
+                )
             try:
                 self.process = await asyncio.create_subprocess_exec(
                     *executable_command(command),

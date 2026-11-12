@@ -1229,6 +1229,7 @@ html[data-platform="linux"] select optgroup { color: var(--text); background-col
 
 .state-maintenance { max-width: 760px; margin: auto; padding: 36px; text-align: left; }
 .state-maintenance details { margin-top: 20px; overflow-wrap: anywhere; }
+.boot-screen progress { width: min(320px, 100%); height: 12px; margin-top: 12px; accent-color: var(--accent); }
 .state-maintenance input { width: 100%; margin: 10px 0; }
 .upgrade-warning { padding: 14px 20px; border: 1px solid #bba260; border-radius: 8px; background: #302b20; color: #f1d897; overflow-wrap: anywhere; }
 

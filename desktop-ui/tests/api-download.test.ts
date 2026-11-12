@@ -1,12 +1,25 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { StudioApi } from "../src/api";
+import { connectStudio, StudioApi } from "../src/api";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+test("startup progress is subscribed before native setup and released on failure", async () => {
+  const unlisten = vi.fn();
+  const progress = vi.fn();
+  vi.mocked(listen).mockImplementation(async (_event, listener) => {
+    listener({ payload: { title: "Doing first-time setup", detail: "Verifying…", percent: null } } as Parameters<typeof listener>[0]);
+    return unlisten;
+  });
+  vi.mocked(invoke).mockRejectedValueOnce(new Error("Setup failed"));
+  await expect(connectStudio(progress)).rejects.toThrow("Setup failed");
+  expect(progress).toHaveBeenCalledWith({ title: "Doing first-time setup", detail: "Verifying…", percent: null });
+  expect(unlisten).toHaveBeenCalledOnce();
+});
 
 test("window identity survives API reconnects and is attached to lifecycle requests", async () => {
   const fetch = vi.fn(async (_url: string, _options: RequestInit) => Response.json({ status: "ok" }));

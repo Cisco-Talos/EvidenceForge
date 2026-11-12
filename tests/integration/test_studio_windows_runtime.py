@@ -81,6 +81,33 @@ def test_install_is_private_repeatable_and_preserves_interrupted_staging(tmp_pat
         install_runtime(source, data)
 
 
+def test_runtime_progress_distinguishes_first_setup_update_and_repeat_launch(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "first"
+    second_source = tmp_path / "second"
+    first_source.mkdir()
+    second_source.mkdir()
+    data = tmp_path / "private"
+    events: list[tuple[str, str, int | None]] = []
+
+    def progress(title: str, detail: str, percent: int | None) -> None:
+        events.append((title, detail, percent))
+
+    source = resources(first_source)
+    first = install_runtime(source, data, progress)
+    assert any(title == "Doing first-time setup" for title, _, _ in events)
+    assert events[-1][-1] == 100
+    events.clear()
+    assert install_runtime(source, data, progress) == first
+    assert {title for title, _, _ in events} == {"Starting Studio"}
+    events.clear()
+    second = install_runtime(resources(second_source, content=b"new payload"), data, progress)
+    assert second != first and first.is_dir()
+    assert any(title == "Updating Studio" for title, _, _ in events)
+    assert events[-1][-1] == 100
+
+
 def test_checksum_or_traversal_never_publishes_runtime(tmp_path: Path) -> None:
     source = resources(tmp_path, malicious=True)
     data = tmp_path / "data"

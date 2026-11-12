@@ -11,6 +11,7 @@ mod standalone;
 #[cfg(target_os = "windows")]
 #[path = "standalone_windows.rs"]
 mod standalone;
+mod startup_progress;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -51,10 +52,16 @@ async fn studio_connection(app: tauri::AppHandle) -> Result<serde_json::Value, S
 fn connect_helper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let lifecycle = app.state::<helper_lifecycle::HelperConnection>();
     let _startup = lifecycle.startup()?;
+    startup_progress::report(&app, "Starting Studio", "Checking the application runtime…");
     let runtime = standalone::selected(&app)?;
     // Runtime installation may take time. Closing during that work should not
     // start a helper afterward; an already-started bootstrap is handed off below.
     lifecycle.ensure_open()?;
+    startup_progress::report(
+        &app,
+        "Starting Studio",
+        "Opening your workspace and local service…",
+    );
     let mut command = std::process::Command::new(studio_python());
     #[cfg(target_os = "windows")]
     {

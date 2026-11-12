@@ -71,6 +71,7 @@ export interface StudioEvent {
 
 export interface TextPreview { text: string; truncated: boolean; binary: boolean }
 export interface ExportProgress { id: string; bytes: number; total: number | null }
+export interface StartupProgress { title: string; detail: string; percent: number | null }
 export type DownloadResult = { status: "saved"; path: string } | { status: "cancelled" } | { status: "browser" };
 
 export type ValidationResult = Required<Schema["ValidationResult"]>;
@@ -262,12 +263,17 @@ export class StudioApi {
   }
 }
 
-export async function connectStudio(): Promise<StudioApi> {
+export async function connectStudio(onProgress?: (progress: StartupProgress) => void): Promise<StudioApi> {
   const devUrl = import.meta.env.VITE_STUDIO_URL as string | undefined;
   const devToken = import.meta.env.VITE_STUDIO_TOKEN as string | undefined;
   if (devUrl && devToken) {
     return new StudioApi({ url: devUrl, token: devToken });
   }
-  const connection = await invoke<Connection>("studio_connection");
-  return new StudioApi(connection);
+  const unlisten = onProgress && isTauri()
+    ? await listen<StartupProgress>("studio-startup-progress", (event) => onProgress(event.payload))
+    : () => {};
+  try {
+    const connection = await invoke<Connection>("studio_connection");
+    return new StudioApi(connection);
+  } finally { unlisten(); }
 }

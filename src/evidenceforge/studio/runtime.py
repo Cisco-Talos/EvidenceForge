@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from hashlib import sha256
 from pathlib import Path
@@ -103,6 +104,52 @@ def _windows_codex(command: str | None) -> str | None:
     return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
 
 
+def _windows_codex_fallback() -> str | None:
+    """Find current-account CLI installs even when Explorer has an older PATH."""
+    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+    roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+    candidates = (
+        local / "Programs/OpenAI/Codex/bin/codex.exe",
+        Path.home() / ".local/bin/codex.exe",
+        roaming / "npm/codex.cmd",
+    )
+    for candidate in candidates:
+        if candidate.is_file() and (command := _windows_codex(str(candidate))):
+            return command
+    # Query this account's registered package; never enumerate protected WindowsApps
+    # directories, request elevation, or start a login/profile script.
+    powershell = Path(os.environ.get("SystemRoot", "C:/Windows")) / (
+        "System32/WindowsPowerShell/v1.0/powershell.exe"
+    )
+    try:
+        result = subprocess.run(
+            [
+                str(powershell),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+                "Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | "
+                "Select-Object -First 1 -ExpandProperty InstallLocation",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=10,
+            creationflags=0x08000000,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0:
+        location = Path(result.stdout.decode("utf-8-sig", errors="replace").strip())
+        if location.is_absolute():
+            for relative in ("app/resources/codex.exe", "resources/codex.exe"):
+                native = location / relative
+                if native.is_file():
+                    return str(native)
+    return None
+
+
 def discover_codex(explicit: Path | None = None) -> str | None:
     """Locate separately installed Codex without requiring a login shell."""
     configured = os.environ.get("EFORGE_DESKTOP_CODEX_BIN")
@@ -111,8 +158,12 @@ def discover_codex(explicit: Path | None = None) -> str | None:
     if explicit is not None:
         return _windows_codex(str(explicit.expanduser().resolve()))
     found = shutil.which("codex", path=command_environment().get("PATH"))
-    if found or sys.platform != "darwin":
-        return _windows_codex(found)
+    if found and (command := _windows_codex(found)):
+        return command
+    if sys.platform == "win32":
+        return _windows_codex_fallback()
+    if sys.platform != "darwin":
+        return None
     # Finder has a minimal PATH. Prefer the standalone CLI there too so a
     # separate Codex.app installation does not hide the CLI's model catalog.
     candidates = [

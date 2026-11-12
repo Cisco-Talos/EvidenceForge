@@ -5151,6 +5151,12 @@ export interface components {
              */
             state: "ready" | "pending" | "running" | "failed" | "restored" | "blocked";
             /**
+             * Operation
+             * @default upgrade
+             * @enum {string}
+             */
+            operation: "upgrade" | "startup";
+            /**
              * Scope
              * @default private
              * @enum {string}

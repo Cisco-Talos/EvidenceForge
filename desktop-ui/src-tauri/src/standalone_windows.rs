@@ -1,8 +1,10 @@
 //! Windows installation uses the bundled interpreter and native Python ACL adapter.
 use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
+use tauri::Emitter;
 use tauri::Manager;
 
 pub struct Runtime {
@@ -29,7 +31,7 @@ pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
         PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is unavailable")?)
             .join("EvidenceForge")
     };
-    let output = std::process::Command::new(resources.join("bootstrap/python.exe"))
+    let mut child = std::process::Command::new(resources.join("bootstrap/python.exe"))
         .args([
             "-I",
             "-B",
@@ -42,15 +44,57 @@ pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
         .arg(&resources)
         .arg("--data")
         .arg(&data)
+        .arg("--progress")
         .env_remove("PYTHONHOME")
         .env_remove("PYTHONPATH")
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Could not start the bundled Windows runtime: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Missing runtime diagnostics pipe")?;
+    let diagnostics = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.take(65536).read_to_string(&mut text);
+        text
+    });
+    let stdout = child.stdout.take().ok_or("Missing runtime progress pipe")?;
+    let mut root = None;
+    let mut protocol_error = None;
+    for line in BufReader::new(stdout).lines() {
+        match line {
+            Ok(line) => {
+                if let Ok(path) = serde_json::from_str::<String>(&line) {
+                    root = Some(PathBuf::from(path));
+                } else if let Ok(progress) =
+                    serde_json::from_str::<crate::startup_progress::Progress>(&line)
+                {
+                    let _ = app.emit("studio-startup-progress", progress);
+                } else {
+                    protocol_error =
+                        Some("The runtime returned invalid startup progress".to_string());
+                }
+            }
+            Err(error) => {
+                protocol_error = Some(error.to_string());
+                break;
+            }
+        }
     }
-    let root: PathBuf = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let detail = diagnostics
+        .join()
+        .map_err(|_| "Runtime diagnostics did not complete")?;
+    if !status.success() {
+        return Err(detail.trim().into());
+    }
+    if let Some(error) = protocol_error {
+        return Err(error);
+    }
+    let root = root.ok_or("The runtime did not return its installation location")?;
     if root.parent() != Some(data.join("runtimes").as_path()) {
         return Err("The private runtime is outside its selected cache".into());
     }

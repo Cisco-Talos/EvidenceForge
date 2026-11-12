@@ -414,3 +414,40 @@ stays targeted at dev; remove its temporary iteration guard before integration.
 No version, release tags or publication changed, and the older readiness branch
 was untouched. Final handoff changes only TODO and this worklog; verified installer
 bytes remain bound to their actual code commit rather than being relabeled.
+
+## Windows 11 laptop follow-up (November 12)
+
+The user installed the qualified EXE as their normal account using Everyone on
+Windows 11 Pro 25H2, Intel Core Ultra 7 155H. First launch eventually reached
+Scenarios; publisher setup and global skill installation completed. Restart failed
+on `.eforge/studio` in the OneDrive-redirected Documents workspace: its directory
+had inherited read/execute access for `CodexSandboxUsers` (SID ending 1008).
+`layout.json`, `owner.lock` and private LocalAppData state retained private ACLs.
+Saved/target schema versions matched; the upgrade label was misleading. No cause
+for the inheritance change is established. With Studio stopped, a user-authorized
+manual repair removed inherited directory ACEs, retaining the three explicit
+account/SYSTEM/Administrators entries. An ACL backup was retained in the private
+cache. Two normal launches reached Scenarios after repair, including close/reopen.
+This was a workaround, not clean-installer acceptance.
+
+Automatic Codex connection then failed discovery. The preview only searched PATH
+and resolved npm shims on Windows, unlike its additional Mac/Linux locations.
+The user authorized batching fixes and building a replacement installer. Work is
+isolated in `/tmp/eforge-windows-preview-fixes` on the existing Windows feature
+branch; the primary worktree remains on the unrelated issue-478 branch.
+
+The follow-up adds real Windows runtime stage/extraction progress, first-setup vs
+payload-update labels, narrow owned-metadata ACL tightening that refuses outside
+writers, startup-specific maintenance/retry, and current-account native/npm/desktop
+Codex discovery. The shared workspace lock/layout contracts remain in place;
+there is no implicit scenario sharing, weakened private-file check or sandbox
+fallback. Private schema/product versions are unchanged. The Windows reset guide
+also identifies the separate WebView profile and global publisher/skills.
+
+Initial local validation: 125 focused Python/state cases pass (four native Windows
+skips), 374 frontend cases pass and production build succeeds; the additional
+startup-listener regression passes with the focused UI suite. Native ACL,
+inheritance and first/update runtime progress checks await Windows CI. Local Rust
+compilation succeeds and eleven tests pass; the HTTP export test needs sandbox
+permission to bind loopback and is being rerun with that access. No replacement
+installer is yet claimed.
