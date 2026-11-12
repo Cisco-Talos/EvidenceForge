@@ -1,5 +1,6 @@
 """Native NTFS storage contracts; POSIX retains its existing implementation/tests."""
 
+import ctypes
 import os
 import subprocess
 from pathlib import Path
@@ -7,6 +8,31 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native Windows handle and ACL contracts")
+
+
+def test_native_pinned_walk_needs_no_ancestor_listing_or_acl_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    original = filesystem._nt_create_file
+    seen: list[str] = []
+
+    def restricted(*args: object) -> int:
+        attributes = ctypes.cast(args[2], ctypes.POINTER(filesystem._ObjectAttributes)).contents
+        name = attributes.ObjectName.contents.Buffer
+        seen.append(name)
+        if int(args[1]) & 0x20 or (name != tmp_path.name and int(args[1]) & 0x20001):
+            return ctypes.c_int32(0xC0000022).value  # STATUS_ACCESS_DENIED
+        return original(*args)
+
+    monkeypatch.setattr(filesystem, "_nt_create_file", restricted)
+    descriptor = filesystem.open_directory(tmp_path)
+    try:
+        assert filesystem.list_directory(descriptor) == []
+    finally:
+        os.close(descriptor)
+    assert seen[-1] == tmp_path.name and len(seen) == len(tmp_path.parts)
 
 
 def test_private_binary_file_and_handle_relative_publication(tmp_path: Path) -> None:

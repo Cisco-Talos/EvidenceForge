@@ -12,10 +12,18 @@ from typing import Any
 
 import pytest
 
-from evidenceforge.studio import processes, runtime
+from evidenceforge.studio import codex, processes, runtime
 from evidenceforge.studio.codex import CodexClient, CodexUnavailableError
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
+
+
+async def _quiet_event(method: str, params: dict[str, Any]) -> None:
+    return None
+
+
+async def _reject_approval(request_id: int | str, method: str, params: dict[str, Any]) -> None:
+    raise AssertionError("The Windows preflight must not ask for approval")
 
 
 @pytest.mark.asyncio
@@ -44,7 +52,7 @@ async def test_windows_authoring_preflight_requires_read_only_private_cli_access
     if exit_code == 0:
         await client._check_windows_runtime()
     else:
-        with pytest.raises(CodexUnavailableError, match="Configure MXC.*No authoring message"):
+        with pytest.raises(CodexUnavailableError, match="read-only Windows startup.*No authoring"):
             await client._check_windows_runtime()
     assert requests == [
         (
@@ -57,6 +65,49 @@ async def test_windows_authoring_preflight_requires_read_only_private_cli_access
             30,
         )
     ]
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+@pytest.mark.parametrize("packaged", [False, True])
+def test_only_packaged_windows_child_selects_mxc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, packaged: bool
+) -> None:
+    monkeypatch.setattr(codex, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(codex, "runtime_root", lambda: tmp_path if packaged else None)
+    overrides = ("features.apps=false",)
+    client = CodexClient(None, _quiet_event, _reject_approval, config_overrides=overrides)
+    expected = (
+        (*overrides, 'windows.sandbox="mxc"') if platform == "win32" and packaged else overrides
+    )
+    assert client._launch_config() == expected
+    assert client.config_overrides == overrides
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rpc_error", [False, True])
+async def test_windows_preflight_preserves_startup_exception_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rpc_error: bool
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_RUNTIME_ROOT", str(tmp_path))
+    diagnostic = (
+        'Traceback (most recent call last):\n  File "internal.py", line 20\n'
+        "PermissionError: [WinError 5] Access is denied."
+    )
+
+    async def rpc(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        if rpc_error:
+            raise CodexUnavailableError("Codex command/exec: " + diagnostic)
+        return {"exitCode": 1, "stderr": diagnostic}
+
+    client = CodexClient(None, _quiet_event, _reject_approval)
+    monkeypatch.setattr(client, "_request", rpc)
+    with pytest.raises(CodexUnavailableError) as raised:
+        await client._check_windows_runtime()
+    message = str(raised.value)
+    assert "PermissionError: [WinError 5] Access is denied." in message
+    assert "No authoring message was sent" in message
+    assert "Traceback" not in message and "internal.py" not in message
+    assert "Configure MXC" not in message
 
 
 def test_cli_lease_preserves_a_read_only_runtime_cache(

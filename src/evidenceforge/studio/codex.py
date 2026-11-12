@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Awaitable, Callable
@@ -22,6 +23,17 @@ MAX_PROTOCOL_LINE_BYTES = 64 * 1024 * 1024
 
 CodexEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 CodexRequest = Callable[[int | str, str, dict[str, Any]], Awaitable[None]]
+
+
+def _windows_probe_detail(text: str) -> str:
+    """Keep a bounded cause from the version probe without exposing a traceback."""
+    lines = text.replace("\\n", "\n").splitlines()
+    errors = [line.strip() for line in lines if re.match(r"^\w+(?:Error|Exception):", line)]
+    if errors:
+        return errors[-1][:300]
+    if "Traceback (most recent call last)" in text:
+        return "The private CLI raised an exception during startup."
+    return " ".join(text.split())[:300] or "Codex returned no diagnostic detail."
 
 
 class CodexUnavailableError(RuntimeError):
@@ -68,6 +80,12 @@ class CodexClient:
         self.start_lock = asyncio.Lock()
         self.stderr_tail = ""
 
+    def _launch_config(self) -> tuple[str, ...]:
+        """Select MXC for the packaged Windows child without changing user settings."""
+        if sys.platform == "win32" and runtime_root() is not None:
+            return (*self.config_overrides, 'windows.sandbox="mxc"')
+        return self.config_overrides
+
     async def start(self) -> None:
         """Start and initialize Codex lazily, or reuse a healthy connection."""
         async with self.start_lock:
@@ -94,7 +112,7 @@ class CodexClient:
                 self.process = await asyncio.create_subprocess_exec(
                     *executable_command(command),
                     "app-server",
-                    *(arg for override in self.config_overrides for arg in ("-c", override)),
+                    *(arg for override in self._launch_config() for arg in ("-c", override)),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -128,8 +146,9 @@ class CodexClient:
                     readiness = await self._request("windowsSandbox/readiness", None, timeout=15)
                     if readiness.get("status") != "ready":
                         raise CodexUnavailableError(
-                            "Codex's Windows sandbox is not ready. Configure the native sandbox "
-                            "in Codex CLI, then reconnect Studio. No authoring message was sent."
+                            "Codex's Windows sandbox is not ready. Packaged Windows authoring "
+                            "requires MXC support and permitting Codex policy. Update Windows "
+                            "and Codex, then reconnect Studio. No authoring message was sent."
                         )
                     await self._check_windows_runtime()
                 await self.on_event("codex/connected", {})
@@ -142,10 +161,12 @@ class CodexClient:
         root = runtime_root()
         if root is None:
             return
-        failure = (
-            "Codex's current Windows sandbox cannot run Studio's private CLI. "
-            "Configure MXC in Codex on a compatible Windows 11 device, then reconnect Studio. "
-            "Studio's deterministic tools remain available. No authoring message was sent."
+        failure = "Studio's private CLI failed its read-only Windows startup check. "
+        guidance = (
+            " Install the latest Studio preview; if this persists, report this diagnostic "
+            "with the build version. Windows authoring requires compatible MXC support and "
+            "permitting Codex policy. Studio's deterministic tools remain available. "
+            "No authoring message was sent."
         )
         try:
             result = await self._request(
@@ -158,9 +179,14 @@ class CodexClient:
                 timeout=30,
             )
         except CodexUnavailableError as error:
-            raise CodexUnavailableError(failure) from error
+            raise CodexUnavailableError(
+                failure + _windows_probe_detail(str(error)) + guidance
+            ) from error
         if result.get("exitCode") != 0:
-            raise CodexUnavailableError(failure)
+            detail = _windows_probe_detail(str(result.get("stderr") or result.get("stdout") or ""))
+            raise CodexUnavailableError(
+                f"{failure}Exit code: {result.get('exitCode')!r}. {detail}{guidance}"
+            )
 
     async def stop(self) -> None:
         """Close the owned transport during service shutdown."""

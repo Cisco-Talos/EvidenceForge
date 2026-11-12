@@ -556,3 +556,35 @@ before claiming discussion/draft compatibility. Any Windows-only MXC selection
 adapter alone is insufficient to fix the reproduced failure. A new installer will
 be necessary to deliver those code fixes; the laptop needs no further OS changes
 based on the successful basic MXC probe.
+
+### Windows sandbox startup correction
+
+The next iteration keeps the Windows temporary-stream class inspection free of
+file allocation; POSIX retains its existing prototype path. Fresh Windows CLI
+tests reject any temporary-descriptor allocation during `version`, schema help
+and validation help. Native Windows directory walks now pin ancestors with only
+metadata access and retain listing/ACL access on the target. No directory handle
+requests explicit `FILE_TRAVERSE`; no-follow/reparse checks, pinned ancestry,
+target ownership/ACL checks and runtime leases remain enforced.
+
+A model-free in-memory laptop probe verifies that the original root access mask
+`0x1200a1` fails under MXC, as do `0x1000a0` and `0x100020`; metadata-only
+`0x100080` succeeds. A follow-up confirms that the original directory access also
+fails on the private runtime root. An in-memory CLI/lease experiment stopped at
+that original target-directory open, before exercising the lease. A revised
+target-mask experiment was not executed because of stale remote clipboard
+contents. Installed files, global Codex configuration and ACLs remain unchanged;
+the actual rebuilt CLI still requires laptop acceptance.
+
+Packaged Windows Studio now selects `windows.sandbox="mxc"` in the owned
+app-server command only. Source-only legacy permission probes remain available
+on hosted Server CI; unsupported packaged execution must still fail before a
+connected event or authoring turn. Mac/Linux launch overrides remain unchanged.
+Startup failures preserve a bounded exception/exit diagnostic without displaying
+the Python traceback, and no longer prescribe configuring MXC as the sole cause.
+
+Local validation passes 83 focused Studio/runtime/permission cases (seven native
+Windows skips), all 110 slow syslog exact-publication cases, version consistency,
+Ruff and formatting. Windows CI now explicitly includes the stream/import
+regressions. Native checks, new installer qualification and Windows 11 upgrade
+acceptance remain pending for this implementation.

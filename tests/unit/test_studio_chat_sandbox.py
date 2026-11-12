@@ -165,7 +165,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
                     # A configured legacy sandbox runs as a different account.
                     # The real packaged transport must reject that incompatibility
                     # before declaring a connection or sending an authoring turn.
-                    with pytest.raises(CodexDisconnectedError, match="private CLI"):
+                    with pytest.raises(CodexDisconnectedError, match="(?i)MXC|private CLI"):
                         await guarded.start()
                     assert "codex/connected" not in connected
             finally:
@@ -219,8 +219,9 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             baseline = await execute(discussion, ["cmd.exe", "/d", "/c", "ver"])
             assert baseline["exitCode"] == 0, baseline
         if packaged_cli and (sys.platform != "win32" or native_mxc):
-            result = await execute(discussion, [packaged_cli, "version"])
-            assert result["exitCode"] == 0, result
+            for arguments in (["version"], ["schema", "--help"], ["validate", "--help"]):
+                result = await execute(discussion, [packaged_cli, *arguments])
+                assert result["exitCode"] == 0, result
         for target in (source, completed):
             commands = [
                 protect_command(target),

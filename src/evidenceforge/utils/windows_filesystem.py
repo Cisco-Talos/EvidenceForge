@@ -503,6 +503,7 @@ def _open_native(
     extra_access: int = 0,
     temporary: bool = False,
     write_through: bool = False,
+    ancestry: bool = False,
 ) -> int:
     supported_flags = (
         os.O_RDONLY
@@ -531,11 +532,21 @@ def _open_native(
         ctypes.sizeof(_ObjectAttributes), root, ctypes.pointer(unicode_name), 0x40, security, None
     )
     access = _READ_CONTROL | _SYNCHRONIZE | _FILE_READ_ATTRIBUTES | extra_access
+    if ancestry:
+        if not directory or flags != os.O_RDONLY or extra_access or temporary:
+            raise ValueError("Ancestry handles permit directory metadata access only")
+        # Pin and inspect each ancestor without listing it or reading its ACL.
+        # MXC permits metadata on ancestors of allowed paths, but correctly denies
+        # broader directory access (even explicit FILE_TRAVERSE on a drive root).
+        access = _SYNCHRONIZE | _FILE_READ_ATTRIBUTES
     if temporary:
         access |= _DELETE
-    if directory:
-        access |= 0x21  # FILE_LIST_DIRECTORY | FILE_TRAVERSE
-    else:
+    if directory and not ancestry:
+        # Listing belongs to the target directory. Explicit FILE_TRAVERSE is
+        # unnecessary for these handle-relative opens and denied by MXC even on
+        # an otherwise readable directory.
+        access |= 0x1  # FILE_LIST_DIRECTORY
+    elif not directory:
         if flags & os.O_APPEND:
             # FILE_APPEND_DATA without FILE_WRITE_DATA keeps inherited helper
             # output at EOF, including writes made outside the Python CRT.
@@ -599,7 +610,11 @@ def open_directory(path: Path, *, create: bool = False) -> int:
     if _drive_type(absolute.anchor) != 3:  # DRIVE_FIXED; mapped shares are DRIVE_REMOTE.
         raise OSError("Native Windows protected storage requires a fixed local NTFS drive")
     descriptor = _open_native(
-        "\\??\\" + absolute.anchor, root=None, flags=os.O_RDONLY, directory=True
+        "\\??\\" + absolute.anchor,
+        root=None,
+        flags=os.O_RDONLY,
+        directory=True,
+        ancestry=bool(absolute.parts[1:]),
     )
     try:
         filesystem = ctypes.create_unicode_buffer(32)
@@ -610,13 +625,21 @@ def open_directory(path: Path, *, create: bool = False) -> int:
         )
         if filesystem.value.upper() != "NTFS":
             raise OSError("Native Windows protected storage requires an NTFS volume")
-        for component in absolute.parts[1:]:
-            next_descriptor = _open_native(
-                component,
-                root=_handle(descriptor),
-                flags=os.O_CREAT if create else os.O_RDONLY,
-                directory=True,
-            )
+        for index, component in enumerate(absolute.parts[1:], start=1):
+            try:
+                next_descriptor = _open_native(
+                    component,
+                    root=_handle(descriptor),
+                    flags=os.O_RDONLY,
+                    directory=True,
+                    ancestry=index < len(absolute.parts) - 1,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                next_descriptor = _open_native(
+                    component, root=_handle(descriptor), flags=os.O_CREAT, directory=True
+                )
             os.close(descriptor)
             descriptor = next_descriptor
         return descriptor

@@ -463,19 +463,24 @@ def _make_security_registry() -> tuple[
     if os.name == "nt":
         # Windows TemporaryFile delegates fileno/flush/closed through an instance
         # wrapper. Keep its cleanup owner alive behind explicit registry methods.
-        from evidenceforge.utils.windows_streams import temporary_stream
+        from evidenceforge.utils.windows_streams import WindowsTemporaryStream, temporary_stream
 
         trusted_factory = temporary_stream
+        # The explicit Windows wrapper has a known class. Inspecting it must not
+        # allocate storage during read-only CLI startup (including `version`).
+        stream_type = WindowsTemporaryStream
+    else:
+        prototype = trusted_factory(mode="w+b")
+        stream_type = type(prototype)
     trusted_factory_code = trusted_factory.__code__
     trusted_mkstemp_inner = tempfile._mkstemp_inner
-    prototype = trusted_factory(mode="w+b")
-    stream_type = type(prototype)
     stream_fileno = stream_type.fileno
     stream_close = stream_type.close
     stream_flush = stream_type.flush
     stream_closed = stream_type.closed
     stream_namespace = tuple(vars(stream_type).items())
-    stream_close(prototype)
+    if os.name != "nt":
+        stream_close(prototype)
 
     owner_type = _SyslogDescriptorOwner
     owner_namespace = tuple(vars(owner_type).items())

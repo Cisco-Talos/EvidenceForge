@@ -1,6 +1,8 @@
 """Regressions for Windows' delegated temporary-file interface."""
 
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +10,44 @@ from types import SimpleNamespace
 import pytest
 
 from evidenceforge.utils import windows_streams
+
+
+def test_windows_registry_inspection_does_not_allocate_temporary_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.emitters import syslog
+
+    def forbidden(self: object, **kwargs: object) -> None:
+        raise PermissionError("Read-only authoring cannot allocate temporary storage")
+
+    monkeypatch.setattr(syslog, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(windows_streams.WindowsTemporaryStream, "__init__", forbidden)
+    registry, _attest = syslog._make_security_registry()
+    assert registry.stream_type is windows_streams.WindowsTemporaryStream
+    assert registry.temporary_file is windows_streams.temporary_stream
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows CLI startup contract")
+@pytest.mark.parametrize("arguments", [["version"], ["schema", "--help"], ["validate", "--help"]])
+def test_windows_cli_startup_never_allocates_temporary_storage(arguments: list[str]) -> None:
+    script = """
+import sys
+from evidenceforge.utils import windows_filesystem
+def forbidden():
+    raise PermissionError('Read-only CLI startup attempted temporary storage')
+windows_filesystem.temporary_descriptor = forbidden
+from evidenceforge.cli.commands import main
+main()
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout
 
 
 def test_temporary_stream_retains_wrapper_owner_and_removes_file(

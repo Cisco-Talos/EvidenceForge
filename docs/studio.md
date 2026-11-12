@@ -40,7 +40,8 @@ Automatic runtime cleanup is unavailable in this preview.
 
 WebView2 is downloaded during setup only when needed. No development tools or
 separately installed Python are required. Native Windows Codex is separately
-installed and signed in; configure its native sandbox before reconnecting Studio.
+installed and signed in; Windows authoring requires native MXC support and
+permitting Codex policy.
 WSL integration is not included. Windows npm shims are resolved to Codex's native
 executable rather than executed through a shell.
 
@@ -50,7 +51,8 @@ standalone CLI directory (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`),
 `%USERPROFILE%\.local\bin`, npm's usual `%APPDATA%\npm` directory, and the
 registered `OpenAI.Codex` desktop package. Custom install locations can be set in
 **Settings → Authoring & tools → Codex executable**. Discovery does not install
-Codex or change its sandbox configuration.
+Codex or edit its saved configuration. Packaged Windows Studio selects MXC for its
+own child process; other Codex sessions retain their saved sandbox selection.
 
 First launch shows runtime verification and installation progress. A changed
 payload shows **Updating Studio**; extracting a private runtime is separate from
@@ -61,16 +63,13 @@ Studio can remove outside read-only permissions from its own account-owned
 unsafe paths are refused. Authored workspace permissions and private file ACLs
 remain protected.
 
-Studio checks that Codex's selected sandbox can run the private CLI before it
-connects authoring. The legacy elevated sandbox uses a separate account and cannot
-execute this preview's private runtime; Studio rejects that configuration with a
-setup message. For Windows 11 authoring acceptance, select MXC in Codex's
-`config.toml` on a [compatible device](https://learn.chatgpt.com/docs/windows/windows-sandbox):
-
-```toml
-[windows]
-sandbox = "mxc"
-```
+Studio selects MXC for its packaged Windows Codex process and checks that it can
+run the private CLI read-only before connecting authoring. This requires a
+[compatible device and permitting policy](https://learn.chatgpt.com/docs/windows/windows-sandbox#mxc-compatibility).
+The legacy elevated sandbox uses a separate account and cannot execute this
+preview's private runtime. Studio does not fall back to that account or broaden
+runtime ACLs. Startup failures retain a bounded underlying diagnostic; a CLI
+exception does not establish that Windows lacks MXC.
 
 Successful packaged authoring with MXC remains pending Windows 11 acceptance.
 Hosted Server CI cannot provide that evidence: it tests native legacy filesystem
