@@ -278,3 +278,29 @@ checked-out commit, and match the installer/report/checksum bytes. Intermediate
 CI/release contract tests and actionlint pass locally. Remaining Windows Proactor
 read handles require explicit closure of the owned CPython transport after the
 bounded EOF wait; stdin-only closure reduced but did not eliminate the warnings.
+
+Run `43124847952` confirms MXC is unavailable on the hosted executor. The legacy
+sandbox's ordinary read-only command succeeds but executing the private CLI fails
+with native error 5; explicit Proactor transport closure eliminates the unraisable
+pipe warnings. The independent service job catches a second hard-coded LF
+expectation in ZIP output. Its assertion now compares the entry with exact source
+bytes, including Windows CRLF; the product already preserves those bytes.
+
+The Windows 11 preview now checks actual private-CLI execution before reporting
+Codex connected. Incompatible sandbox configuration fails with actionable MXC
+guidance before any authoring message. Native tests require the real packaged
+transport to reject the legacy account mismatch, then exercise every discussion/
+draft filesystem boundary without a model or broad Windows skips. On a host with
+MXC, the same gate requires successful private-CLI preflight and execution in both
+policies. Reports explicitly distinguish that success from legacy rejection and
+retain pending Windows 11 desktop authoring acceptance. Runtime ACLs are unchanged.
+User preference about additionally supporting the legacy backend was requested;
+the current isolation-preserving implementation follows the Windows 11/MXC scope
+while other Windows validation continues. Do not claim successful MXC authoring
+or legacy backend support from hosted Server CI.
+
+Local evidence for the follow-up: 47 runtime/preflight/CI/bundle cases pass with
+four native Windows skips, 34 shared Codex transport regressions pass, and Ruff/
+actionlint pass. Service CI collects up to five failures per pass; independent
+state/helper recovery still executes after service-test failure, while the native
+job and final qualification remain failed if either gate fails.

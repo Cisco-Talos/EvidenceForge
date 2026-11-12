@@ -44,6 +44,22 @@ installed and signed in; configure its native sandbox before reconnecting Studio
 WSL integration is not included. Windows npm shims are resolved to Codex's native
 executable rather than executed through a shell.
 
+Studio checks that Codex's selected sandbox can run the private CLI before it
+connects authoring. The legacy elevated sandbox uses a separate account and cannot
+execute this preview's private runtime; Studio rejects that configuration with a
+setup message. For Windows 11 authoring acceptance, select MXC in Codex's
+`config.toml` on a [compatible device](https://learn.chatgpt.com/docs/windows/windows-sandbox):
+
+```toml
+[windows]
+sandbox = "mxc"
+```
+
+Successful packaged authoring with MXC remains pending Windows 11 acceptance.
+Hosted Server CI cannot provide that evidence: it tests native legacy filesystem
+restrictions and the real packaged transport's rejection before authoring. The
+verification report records this limitation. Deterministic tools remain usable.
+
 The app and installer are unsigned. Browser downloads may show SmartScreen's
 unrecognized-app warning; enterprise policy can prevent bypass. Smart App Control
 can block unknown unsigned executables without a per-app exception. A checksum

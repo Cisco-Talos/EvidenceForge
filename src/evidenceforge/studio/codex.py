@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import sys
 from collections.abc import Awaitable, Callable
@@ -13,7 +14,7 @@ from typing import Any
 
 from evidenceforge.studio.linux_sandbox import linux_sandbox_notice
 from evidenceforge.studio.processes import executable_command, launch_options
-from evidenceforge.studio.runtime import command_environment, discover_codex
+from evidenceforge.studio.runtime import command_environment, discover_codex, runtime_root
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +127,36 @@ class CodexClient:
                             "Codex's Windows sandbox is not ready. Configure the native sandbox "
                             "in Codex CLI, then reconnect Studio. No authoring message was sent."
                         )
+                    await self._check_windows_runtime()
                 await self.on_event("codex/connected", {})
             except (CodexUnavailableError, OSError) as error:
                 await self._stop_transport()
                 raise CodexDisconnectedError(str(error)) from error
+
+    async def _check_windows_runtime(self) -> None:
+        """Require the configured native sandbox to execute the private CLI read-only."""
+        root = runtime_root()
+        if root is None:
+            return
+        failure = (
+            "Codex's current Windows sandbox cannot run Studio's private CLI. "
+            "Configure MXC in Codex on a compatible Windows 11 device, then reconnect Studio. "
+            "Studio's deterministic tools remain available. No authoring message was sent."
+        )
+        try:
+            result = await self._request(
+                "command/exec",
+                {
+                    "command": [str(root / "Scripts/eforge.exe"), "version"],
+                    "cwd": str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"),
+                    "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
+                },
+                timeout=30,
+            )
+        except CodexUnavailableError as error:
+            raise CodexUnavailableError(failure) from error
+        if result.get("exitCode") != 0:
+            raise CodexUnavailableError(failure)
 
     async def stop(self) -> None:
         """Close the owned transport during service shutdown."""

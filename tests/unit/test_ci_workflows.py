@@ -152,6 +152,8 @@ def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -
     assert "$env:PACKAGE_SOURCE -ne $env:NATIVE_SOURCE" in script
     assert "$report.source_sha -ne $env:PACKAGE_SOURCE" in script
     assert "Get-FileHash" in script and "$report.sha256 -ne $hash" in script
+    assert "$report.authoring.filesystem_permissions -ne 'passed'" in script
+    assert "$report.authoring.packaged_cli_guard -ne 'passed'" in script
     uploads = [
         step for step in qualified["steps"] if "actions/upload-artifact@" in step.get("uses", "")
     ]

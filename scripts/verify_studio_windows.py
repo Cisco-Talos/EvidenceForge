@@ -361,10 +361,21 @@ def main() -> None:
     """Write exact-artifact verification evidence beside the installer."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("installer", type=Path)
+    parser.add_argument("--authoring-report", type=Path)
     arguments = parser.parse_args()
     installer = arguments.installer.resolve()
+    authoring: dict[str, Any] | None = None
+    if arguments.authoring_report is not None:
+        authoring = json.loads(arguments.authoring_report.read_bytes())
+        if (
+            authoring.get("filesystem_permissions") != "passed"
+            or authoring.get("packaged_cli_guard") != "passed"
+        ):
+            raise RuntimeError("Native authoring permission/compatibility checks did not pass")
     faulthandler.dump_traceback_later(300, repeat=True)
     report = verify_installer(installer)
+    if authoring is not None:
+        report["authoring"] = authoring
     faulthandler.cancel_dump_traceback_later()
     output = installer.with_suffix(".verification.json")
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

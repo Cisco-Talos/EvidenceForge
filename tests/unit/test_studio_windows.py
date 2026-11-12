@@ -8,12 +8,55 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from evidenceforge.studio import processes, runtime
+from evidenceforge.studio.codex import CodexClient, CodexUnavailableError
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_runtime import WindowsManifest, payload_path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [0, 1, None, "rpc_error"])
+async def test_windows_authoring_preflight_requires_read_only_private_cli_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int | str | None
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))
+    requests: list[tuple[str, dict[str, Any], float]] = []
+
+    async def event(method: str, params: dict[str, Any]) -> None:
+        raise AssertionError("Preflight must not publish a connected event")
+
+    async def request(request_id: int | str, method: str, params: dict[str, Any]) -> None:
+        raise AssertionError("Preflight must not ask for approval")
+
+    async def rpc(method: str, params: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        requests.append((method, params, timeout))
+        if exit_code == "rpc_error":
+            raise CodexUnavailableError("Access denied by the selected sandbox")
+        return {"exitCode": exit_code}
+
+    client = CodexClient(None, event, request)
+    monkeypatch.setattr(client, "_request", rpc)
+    if exit_code == 0:
+        await client._check_windows_runtime()
+    else:
+        with pytest.raises(CodexUnavailableError, match="Configure MXC.*No authoring message"):
+            await client._check_windows_runtime()
+    assert requests == [
+        (
+            "command/exec",
+            {
+                "command": [str(tmp_path / "Scripts/eforge.exe"), "version"],
+                "cwd": str(tmp_path / "Windows/System32"),
+                "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
+            },
+            30,
+        )
+    ]
 
 
 def test_cli_lease_preserves_a_read_only_runtime_cache(

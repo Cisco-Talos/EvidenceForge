@@ -220,7 +220,7 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
         archive = client.get(f"/v1/bundles/{bundle['id']}/bundle.zip", headers=headers)
         assert archive.status_code == 200
         with zipfile.ZipFile(io.BytesIO(archive.content)) as contents:
-            assert contents.read("run/GROUND_TRUTH.md") == b"# Ground truth\n"
+            assert contents.read("run/GROUND_TRUTH.md") == (root / "GROUND_TRUTH.md").read_bytes()
         again = client.post("/v1/bundles/import", headers=headers, json={"path": str(root)}).json()
         assert again["id"] == bundle["id"]
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other)})

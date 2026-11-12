@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from evidenceforge.studio.chat_permissions import (
     isolated_chat_config,
     verify_chat_permissions,
 )
-from evidenceforge.studio.codex import CodexClient
+from evidenceforge.studio.codex import CodexClient, CodexDisconnectedError
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -37,6 +38,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     codex_home = root / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.delenv("EFORGE_DESKTOP_CODEX_BIN", raising=False)
+    monkeypatch.delenv("EFORGE_STUDIO_RUNTIME_ROOT", raising=False)
     codex_home.mkdir(mode=0o700)
     if sys.platform == "win32":
         # Pytest's 0700 tree is inaccessible to the legacy sandbox's separate
@@ -62,6 +64,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     replacement = root / "replacement.yaml"
     replacement.write_text("replacement bytes")
     original_mode = source.stat().st_mode
+    native_mxc = False
     if sys.platform == "win32":
         from evidenceforge.studio.runtime import discover_codex
 
@@ -94,6 +97,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         )
         print(f"Native MXC compatibility: {mxc.returncode}: {mxc.stdout} {mxc.stderr}")
         if mxc.returncode == 0:
+            native_mxc = True
             assert "MXC_OK" in mxc.stdout
             (codex_home / "config.toml").write_text('[windows]\nsandbox = "mxc"\n')
         else:
@@ -135,6 +139,36 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     client = CodexClient(
         Path(os.environ["EFORGE_NATIVE_CODEX_BIN"]), event, request, config_overrides=CHAT_CONFIG
     )
+    packaged_cli = os.environ.get("EFORGE_NATIVE_STUDIO_CLI")
+    if packaged_cli and sys.platform == "win32":
+        connected: list[str] = []
+
+        async def guarded_event(method: str, params: dict[str, Any]) -> None:
+            connected.append(method)
+
+        guarded = CodexClient(
+            Path(os.environ["EFORGE_NATIVE_CODEX_BIN"]),
+            guarded_event,
+            request,
+            config_overrides=CHAT_CONFIG,
+        )
+        with monkeypatch.context() as selected_runtime:
+            selected_runtime.setenv(
+                "EFORGE_STUDIO_RUNTIME_ROOT", str(Path(packaged_cli).parents[1])
+            )
+            try:
+                if native_mxc:
+                    await guarded.start()
+                    assert "codex/connected" in connected
+                else:
+                    # A configured legacy sandbox runs as a different account.
+                    # The real packaged transport must reject that incompatibility
+                    # before declaring a connection or sending an authoring turn.
+                    with pytest.raises(CodexDisconnectedError, match="private CLI"):
+                        await guarded.start()
+                    assert "codex/connected" not in connected
+            finally:
+                await guarded.stop()
 
     async def execute(access: ChatAccess, command: list[str]) -> dict[str, Any]:
         print(f"Native sandbox {access.mode} in {access.directory}: {command!r}", flush=True)
@@ -171,8 +205,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         if sys.platform == "win32":
             baseline = await execute(discussion, ["cmd.exe", "/d", "/c", "ver"])
             assert baseline["exitCode"] == 0, baseline
-        packaged_cli = os.environ.get("EFORGE_NATIVE_STUDIO_CLI")
-        if packaged_cli:
+        if packaged_cli and (sys.platform != "win32" or native_mxc):
             result = await execute(discussion, [packaged_cli, "version"])
             assert result["exitCode"] == 0, result
         for target in (source, completed):
@@ -218,7 +251,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             },
         )
         verify_chat_permissions(created, access)
-        if packaged_cli:
+        if packaged_cli and (sys.platform != "win32" or native_mxc):
             result = await execute(access, [packaged_cli, "version"])
             assert result["exitCode"] == 0, result
         result = await execute(
@@ -272,3 +305,30 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         assert completed.read_text() == "historical draft bytes"
     finally:
         await client.stop()
+    report = os.environ.get("EFORGE_NATIVE_AUTHORING_REPORT")
+    if report:
+        backend = sys.platform
+        execution = "not requested"
+        if sys.platform == "win32":
+            backend = "mxc" if native_mxc else "legacy-elevated"
+        if packaged_cli:
+            execution = (
+                "unavailable under the legacy separate-account sandbox"
+                if sys.platform == "win32" and not native_mxc
+                else "passed"
+            )
+        Path(report).write_text(
+            json.dumps(
+                {
+                    "backend": backend,
+                    "filesystem_permissions": "passed",
+                    "packaged_cli_guard": "passed" if packaged_cli else "not requested",
+                    "packaged_cli_execution": execution,
+                    "windows11_desktop_authoring_acceptance": "pending"
+                    if sys.platform == "win32"
+                    else "not applicable",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
