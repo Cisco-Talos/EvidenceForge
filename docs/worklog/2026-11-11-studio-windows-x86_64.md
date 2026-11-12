@@ -444,10 +444,41 @@ there is no implicit scenario sharing, weakened private-file check or sandbox
 fallback. Private schema/product versions are unchanged. The Windows reset guide
 also identifies the separate WebView profile and global publisher/skills.
 
-Initial local validation: 125 focused Python/state cases pass (four native Windows
-skips), 374 frontend cases pass and production build succeeds; the additional
-startup-listener regression passes with the focused UI suite. Native ACL,
-inheritance and first/update runtime progress checks await Windows CI. Local Rust
-compilation succeeds and eleven tests pass; the HTTP export test needs sandbox
-permission to bind loopback and is being rerun with that access. No replacement
-installer is yet claimed.
+Local validation: 125 focused Python/state cases pass (four native Windows skips),
+191 service/chat/state-upgrade cases pass, 374 frontend cases pass and production
+build succeeds; the additional startup-listener regression passes with the focused
+UI suite. All twelve local Rust tests pass with loopback access for the HTTP export
+case. Generated API types, Ruff checks and formatting pass.
+
+Follow-up implementation snapshot `7e3cf9511394bbc519c9901ba506e5e1d532696c`
+starts Windows-only run `43301434961`. Its short native runtime/process/ACL gate
+passes the actual inheritance-repair and outside-writer refusal regressions, plus
+first-setup/reuse/update progress. The unsigned dual-scope NSIS build and model-free
+native authoring probes pass. The complete native source/recovery job passes:
+474 Studio cases (31 existing conditional skips), 220 routine state/migration
+cases (one skip), 58 helper/runtime cases (twelve existing POSIX-only skips), and
+all 145 slow recovery cases. Both installation scopes pass installed CLI/resource
+isolation, native shell/helper startup, checkpoint/resume equivalence, reinstall,
+scope-switch refusal, shortcuts and uninstall preservation. All 375 frontend tests
+and eleven Windows release Rust tests pass. Artifact qualification succeeds on
+the same exact implementation commit.
+
+The downloaded replacement EXE independently matches its checksum and qualified
+report: `d1ae394ac8dfec92a731d72c8ef3089afa990c94a4dc6f550deb4059898b1cbc`.
+[Qualified installer, checksum and report](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43301434961/artifacts/13986225725).
+The report records runner image `20261103.298.1`, host Python 3.12.16, rustc
+1.100.0 (`0ef1bc386`, November 9), Node 22.23.4 and uv 0.13.8. Payload Python
+remains the separately pinned 3.12.12 distribution. Versions/tags/publication remain
+unchanged. Windows 11 clean-install/restart/Codex acceptance and broader final
+Mac/Linux integration checks remain pending on these shared startup changes.
+
+The final follow-up commit records documentation only and skips a redundant CI
+build; all installer and executable evidence stays bound to `7e3cf951`. Remove the
+temporary draft iteration guard and run the normal required integration checks
+before merging this effort into dev.
+
+Read-only laptop checks confirm that `codex` is absent from PATH and the standalone
+CLI default directory, while the current account has the registered x64
+`OpenAI.Codex` desktop package (version `26.1106.6628.0`, status Ok). This establishes
+the missing discovery route, not successful authoring or sandbox compatibility.
+The desktop package executable itself still needs normal-laptop acceptance.
