@@ -654,3 +654,37 @@ separate-account and final Mac/Linux integration gates. The next useful GUI test
 is a small disposable scenario draft with one bounded authoring edit, validation,
 and close/reopen. Artifact evidence remains bound to `aa5b1f15`; no rebuild is
 needed to record this acceptance.
+
+### Scenario authoring follow-up: telemetry and validation receipts
+
+During a new scenario authoring session, the user reports chat saying Windows
+performance-counter access failed during validation and validation provenance
+could not be saved outside the draft's writable folder. Chat subsequently seemed
+to recover. Exact failed/successful commands and tool output have been requested;
+no later validation pass, generation or evaluation result is established yet.
+
+Source tracing identifies a likely telemetry failure path: `eforge validate`
+also computes a resource forecast; `snapshot_resources()` calls psutil swap
+telemetry and catches only OSError. Locked psutil 7.2.2 uses Windows paging-file
+performance counters and raises RuntimeError on failed PDH calls. Injecting that
+RuntimeError locally reproduces propagation from `snapshot_resources()`, and the
+CLI forecast wrapper does not catch it either. This establishes a robustness gap,
+not proof of the laptop's exact exception or whether sandbox policy versus host
+counter configuration caused the underlying failure. Optional forecast telemetry
+must degrade conservatively without bypassing actual scenario validation.
+
+A separate shared integration mismatch is visible in source: managed chat permits
+writes only inside its current draft container, while `remember_validation()`
+writes `.eforge/artifacts/validations/<digest>.json` at project scope. Chat denial
+there is expected protection. Plain `validate` treats receipt persistence errors
+as warnings, whereas `scenario check` propagates them; command details determine
+which occurred. This mismatch can affect Mac/Linux authoring too. Studio's own
+Validate action runs `check_artifact()` in the trusted helper and can retain the
+receipt without broadening chat permissions. Any fix must preserve this boundary
+and exact-input provenance. Do not request elevation, change laptop ACLs or treat
+an agent workaround as resolution. No runtime code or installer changes are made
+by this investigation; both findings remain follow-up items for this preview.
+
+Upstream source checked at the locked version:
+[Windows swap telemetry](https://github.com/giampaolo/psutil/blob/release-7.2.2/psutil/arch/windows/mem.c)
+and [RuntimeError helper](https://github.com/giampaolo/psutil/blob/release-7.2.2/psutil/arch/all/errors.c).
