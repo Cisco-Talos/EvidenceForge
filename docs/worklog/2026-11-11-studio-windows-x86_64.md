@@ -688,3 +688,18 @@ by this investigation; both findings remain follow-up items for this preview.
 Upstream source checked at the locked version:
 [Windows swap telemetry](https://github.com/giampaolo/psutil/blob/release-7.2.2/psutil/arch/windows/mem.c)
 and [RuntimeError helper](https://github.com/giampaolo/psutil/blob/release-7.2.2/psutil/arch/all/errors.c).
+
+The user supplied the actual failed invocation: native Windows PowerShell runs
+the private runtime's `python.exe -I -B -X utf8 -m evidenceforge validate
+<managed-draft>/source/scenario.yaml --json --project-root <workspace>`, with the
+managed draft container as cwd. Output first warns `Validation record was not
+retained: [WinError 5] Access is denied` for the project's
+`.eforge/artifacts/validations`, then reports `Fatal error:
+PdhAddEnglishCounterW failed. Performance counters may be disabled.` This confirms
+the receipt-write warning and the locked psutil counter failure in this invocation.
+The CLI attempts receipt retention only after core validation has no error
+findings; the later optional forecast failure prevents a successful JSON result.
+Its top-level fatal handler exits 21. Actual host-vs-sandbox cause and the later
+successful command/result remain unverified. Generic psutil wording does not
+establish disabled or corrupt host counters. Keep both integration defects open;
+use Studio's trusted Validate action for the current draft's authoritative result.
