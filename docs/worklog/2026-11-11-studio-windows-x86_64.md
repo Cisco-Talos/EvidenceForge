@@ -596,3 +596,44 @@ semantics are unchanged. Revision 510 records impact `none` and the matching
 surface digest; the 110 exact-publication regressions pass. No product or storage
 schema version changes are needed. The rebuilt snapshot must pass fresh Windows
 qualification before its installer is offered for laptop upgrade testing.
+
+### Qualified MXC startup correction installer
+
+Implementation snapshot `aa5b1f15fd26b14c67e0d373e123af032e6064c3` passes all
+three jobs in [Windows-only run 43322830528](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43322830528). The short native gate passes
+97 runtime/process/ACL/import cases (one POSIX-only skip), including real kernel
+ancestor access and all three allocation-free CLI startup commands. The full
+native service job passes 482 Studio cases (31 existing conditional skips),
+228 routine state/migration cases (one skip), 58 helper/runtime cases (twelve
+POSIX-only skips), and all 145 slow recovery cases. All 375 Windows frontend tests
+and eleven release Rust shell tests pass. Ruff, formatting, generated API types
+and the production build pass. Local behavior validation additionally passes all
+23 cases and the base-ref revision check; the earlier 83 focused and 110
+exact-publication results remain applicable.
+
+Both CurrentUser and AllUsers pass installed CLI/resource isolation, generation
+and evaluation, native shell/helper startup, packaged checkpoint/resume
+equivalence, same-version reinstall, scope-switch refusal, shortcut ownership and
+uninstall preservation. Hosted Server CI's model-free filesystem probes pass;
+the packaged guard correctly refuses unsupported private CLI execution there.
+The report explicitly records the legacy-elevated probe backend and leaves
+Windows 11 MXC authoring pending. This does not establish the rebuilt private CLI's
+actual MXC execution, discussion/draft permissions or desktop acceptance.
+
+[Qualified EXE, checksum and verification report](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43322830528/artifacts/13994970643). Downloaded EXE:
+`EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe` (71,667,472 bytes). Independent hashing matches both
+its checksum file and report: `c8cc0e5729a317ea266fdc7353548011722a1d296f5347c81345e77ca9faec36`. Qualification binds native/package source,
+run ID and passing gates to the exact implementation snapshot. Runner image is
+`20261103.298.1`; host Python 3.12.16, rustc 1.100.0
+(`0ef1bc386`, November 9), Node 22.23.4 and uv 0.13.8. Payload CPython remains
+pinned to 3.12.12. The verified local download is retained at
+`/tmp/eforge-windows-qualified-aa5b1f15/`.
+
+The user has closed Studio and retained the Everyone installation on the Windows
+11 laptop. Next acceptance is an in-place Everyone upgrade preserving current
+private data, ordinary desktop launch, and reconnecting Codex in Authoring & tools.
+No laptop configuration or ACL changes are needed for that test. Broader desktop,
+UAC/alternate-admin, genuine separate-account and final Mac/Linux integration
+acceptance remain open. Remove the temporary draft iteration guard before merge.
+This follow-up records documentation only with `[skip ci]`; executable evidence
+remains bound to `aa5b1f15`. Versions, release tags and publication are unchanged.
