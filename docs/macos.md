@@ -148,6 +148,13 @@ start; one surviving collection has no in-window exit obligation. An unknown
 terminal result stays unknown and omits a native exit. Selected ordinary-close
 outcomes are explicit model policy, not universal measured shutdown behavior.
 
+The current profile temporarily assumes exit code 0 for eligible unlisted commands
+only after their owner establishes an untruncated natural completion. Explicit and
+configured results take precedence. Teardown classification, cancellation, incomplete
+executable facts and older frozen profiles retain their existing behavior. The
+`assume_unlisted_command_success` profile flag records this simulation assumption;
+it does not interpret shell strings or supply missing child-process evidence.
+
 The process census counts process starts/exits; file records do not become process
 births or prove complete filesystem capture. A passing quality evaluation proves
 its declared checks, not full native fidelity or a complete population of real

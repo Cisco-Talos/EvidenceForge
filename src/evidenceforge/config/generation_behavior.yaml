@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 510
+current_revision: 512
 history_start_revision: 1
-behavior_surface_sha256: 7734119f3617e429bdf83971be0eafa42c7594a197138879d73e0ba2582b83b1
+behavior_surface_sha256: ae5300534e2aa3b4ee88ffea804d8ff610a8a0c0e260fae4d26a0a208479b8ee
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5884,3 +5884,26 @@ changes:
   - macos_endpoint_security
   summary: Escape solidus characters in native Endpoint Security NDJSON to match
     eslogger's Foundation spelling while preserving field values and object and array order.
+- revision: 511
+  id: shared-subsecond-placement-and-natural-exit-default
+  impact: material
+  domains:
+  - authored-event-placement
+  - suspicious-benign-placement
+  - natural-command-completion
+  formats: []
+  summary: Share scoped microsecond placement for baseline and authored activity and
+    supply configured default success only for eligible unlisted natural Mac command completions.
+- revision: 512
+  id: authored-foreground-admission-and-paced-frontiers
+  impact: material
+  domains:
+  - baseline-foreground-admission
+  - authored-shell-reservations
+  - paced-baseline-authored-frontiers
+  - prepared-process-parent-readiness
+  - terminal-lifecycle-frontier
+  formats: []
+  summary: Admit optional Mac foreground work only when it fits before authored shell use,
+    interleave authored work before background activity, reject future prepared parents,
+    and retain committed lifecycle watermarks during terminal settlement.

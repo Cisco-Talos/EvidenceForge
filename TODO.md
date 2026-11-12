@@ -516,6 +516,18 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1 — Canonical shell execution and completion model:** Replace the temporary
+  unlisted natural-completion success assumption with canonical shell outcomes.
+  Implement bounded parsing with correct quoting/escaping,
+  command-list/conditional/pipeline execution, canonical
+  process outcomes and shell-result propagation. Use overlay-capable YAML behavior
+  overrides over declared default outcomes and varied durations, respecting known
+  failures, builtins, persistent processes, source qualification and exact recovery.
+  A conservative simple-command fast path may share the tokenizer. Apply the same
+  contracts to baseline and authored producers; avoid command-specific completion
+  patches for the reproduced missing ES exits. User accepted the direction; detailed
+  grammar scope is in the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
+
 - [ ] **P2 — Native Mac filesystem stat realism:** Qualify protected-file flags and
   package timestamp provenance, initial directory populations and link-count changes,
   and required volume/device relationships through canonical filesystem providers.
@@ -526,8 +538,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   audit versions count only explicit modeled allocations. Discuss the shared-history
   model with the contributor before implementation. Preserve chronological fork/exec
   identity, parent/responsible references, filtering and exact recovery; avoid numerical
-  PID/version invariants or emitter offsets. Ask for a reproducing scenario for the
-  unreproduced fork-time rounding. See the same Issue 478 review.
+  PID/version invariants or emitter offsets. The separately reproduced fork-time
+  artifact was repaired in the shared timing path. See the same Issue 478 review.
 - [ ] **P2 — Bounded Mac ES open/write coverage:** Define canonical file/descriptor
   producers, mutations, timing and observation scope before adding native open/write
   projections. Opening does not establish a read; notifications do not supply byte

@@ -221,11 +221,11 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         item.activity_supported and item.census_complete and item.background_native_execs > 0
         for item in measurements
     ), measurements
-    # Background command selection may add other unqualified outcomes. Require
-    # unknown results, reconcile every host below, and independently verify the
-    # exact compound-command negative control rather than freeze a sampled total.
+    # Eligible unlisted natural completions now receive the declared default.
+    # Reconcile every host below and verify the exact compound command rather
+    # than freeze a sampled event total.
     assert all(
-        item.native_exit_rows > 0 and item.exit_outcomes_unknown >= 1 for item in measurements
+        item.native_exit_rows > 0 and item.exit_outcomes_unknown == 0 for item in measurements
     )
     for host in measurements[0].coverage.hosts:
         census = host.process_census
@@ -260,10 +260,15 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
     compound_path, compound_token = compound_occurrences[0]
     records = [json.loads(line) for line in compound_path.read_text().splitlines()]
     compound = [compound_token]
-    assert not any(
-        record["event_type"] == 15 and record["process"]["audit_token"] == compound[0]
+    # The historical compound-unknown fixture now receives the configured natural
+    # completion assumption. Its inner commands remain outside this model.
+    compound_exits = [
+        record
         for record in records
-    )
+        if record["event_type"] == 15 and record["process"]["audit_token"] == compound[0]
+    ]
+    assert len(compound_exits) == 1
+    assert compound_exits[0]["event"]["exit"]["stat"] == 0
     endpoints = [
         json.loads(line) for line in (compound_path.parent / "ecar.json").read_text().splitlines()
     ]

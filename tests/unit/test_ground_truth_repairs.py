@@ -258,6 +258,86 @@ def test_representative_diagnostics_include_later_failure_families() -> None:
     assert examples == samples.examples()
 
 
+@pytest.mark.parametrize(
+    "birth_offset,anchor_delay,anchor_identity,verified",
+    [
+        (-300, 0.6, "process", True),
+        (0, 0.6, "process", False),
+        (10, 0.6, "process", False),
+        (-0.2, 0.6, "process", False),
+        (-300, 2.0, "process", False),
+        (-300, -0.1, "process", False),
+        (-300, 0.6, "other", False),
+    ],
+)
+def test_precollection_process_birth_proof_is_bounded(
+    tmp_path: Path,
+    birth_offset: float,
+    anchor_delay: float,
+    anchor_identity: str,
+    verified: bool,
+) -> None:
+    from evidenceforge.evaluation.source_timing_proof import verify_process_timing
+    from evidenceforge.events.ground_truth_occurrence import (
+        GroundTruthOccurrence,
+        GroundTruthSourceExpectation,
+    )
+
+    collection_start = datetime(2026, 10, 20, tzinfo=UTC)
+    birth = collection_start + timedelta(seconds=birth_offset)
+    at = collection_start + timedelta(seconds=30)
+    native = at + timedelta(milliseconds=600)
+    row = GroundTruthOccurrence(
+        occurrence_id="exit",
+        action_id="action",
+        intent_id="intent",
+        storyline_id="story",
+        section="storyline",
+        kind="process_terminate",
+        time=at,
+        facts={
+            "process": {
+                "object_id": "process",
+                "execution_id": "execution",
+                "start_time": birth.isoformat(),
+            }
+        },
+    )
+    expectation = GroundTruthSourceExpectation(
+        expectation_id="expectation",
+        source_instance="ecar:client-01",
+        source_host="CLIENT-01",
+        family="ecar",
+        format="ecar",
+        role="host",
+        phase="process_terminate",
+        expected="present",
+        expected_time=native,
+        provenance={
+            "timing": {
+                "version": 1,
+                "phase": "process_terminate",
+                "object_id": "process",
+                "execution_id": "execution",
+                "canonical_time": at.isoformat(),
+                "native_time": native.isoformat(),
+                "policy": "source.ecar_process_terminate",
+                "anchors": [
+                    {
+                        "kind": "process_create",
+                        "identity": anchor_identity,
+                        "time": (birth + timedelta(seconds=anchor_delay)).isoformat(),
+                    }
+                ],
+            }
+        },
+    )
+    index = _RecordIndex({}, _scenario(tmp_path, []))
+    assert verify_process_timing(row, expectation, index, {})
+    errors = verify_process_timing(row, expectation, index, {}, collection_start=collection_start)
+    assert (errors == []) is verified
+
+
 def test_multiple_history_commands_are_not_duplicates(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path, [])
     at = datetime(2026, 10, 20, tzinfo=UTC)

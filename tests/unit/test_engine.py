@@ -73,7 +73,6 @@ from tests.network_factories import network_plan
 def _mock_activity_generator_factory(mock_instance: Mock):
     """Publish canonical mock occurrences and preserve the session postcondition."""
 
-    mock_instance.timing_runtime = None
     mock_instance.generate_process.return_value = 4321
     mock_instance._resolve_parent.return_value = 0
     mock_instance._get_system_pid.return_value = 0
@@ -82,6 +81,7 @@ def _mock_activity_generator_factory(mock_instance: Mock):
     def factory(**kwargs):
         state_manager = kwargs["state_manager"]
         dispatcher = kwargs["dispatcher"]
+        mock_instance.timing_runtime = kwargs["timing_runtime"]
 
         def host(system):
             return HostContext(

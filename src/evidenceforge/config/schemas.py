@@ -4834,6 +4834,14 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )
+    assume_unlisted_command_success: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Temporary success assumption for eligible unlisted natural command completions; "
+            "does not qualify termination causes, executable metadata or shutdown policy"
+        ),
+    )
     ordinary_close: MacosOrdinaryClosePolicy | None = None
     filesystem_workload: MacosFilesystemWorkloadProfile | None = None
 

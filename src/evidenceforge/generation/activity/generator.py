@@ -4355,6 +4355,7 @@ class ActivityGenerator:
                     candidates.append(ensure_utc(item[0]))
 
         with self._rdp_lifecycle_journal_lock:
+            candidates.append(self._rdp_lifecycle_watermark)
             candidates.extend(
                 entry.continuation.prepared.hard_deadline
                 for entry in self._pending_rdp_lifecycle_continuations.values()
@@ -29102,7 +29103,13 @@ class ActivityGenerator:
         return tuple(created)
 
     def execute_baseline_activity(
-        self, user: User, system: System, time: datetime, activity_type: str
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        activity_type: str,
+        *,
+        foreground_deadline: datetime | None = None,
     ) -> None:
         """Execute a specific baseline activity type.
 
@@ -29111,6 +29118,7 @@ class ActivityGenerator:
             system: System where activity occurs
             time: Activity timestamp
             activity_type: Type of activity to execute
+            foreground_deadline: Earliest pending authored use of this host/user shell.
         """
         # Logon activity (10% chance of failure — bad password)
         if activity_type == "logon":
@@ -29547,6 +29555,21 @@ class ActivityGenerator:
                         username=user.username,
                         system=system,
                     )
+                    if (
+                        os_category == "macos"
+                        and foreground_deadline is not None
+                        and _posix_shell_process_reserves_foreground(
+                            "macos", process_name, command_line
+                        )
+                    ):
+                        lifetime = _posix_foreground_lifetime("macos", process_name, command_line)
+                        if lifetime is None or time + timedelta(seconds=lifetime[1]) >= (
+                            foreground_deadline
+                        ):
+                            # Optional background work must fit before authored
+                            # shell use. Do not invent a close for an editor or
+                            # other unbounded foreground process to make it fit.
+                            return
                     process_time = time
                     shell_command_line = command_line
                     source_process_groups = [[(process_name, command_line)]]

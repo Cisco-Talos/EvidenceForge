@@ -1,6 +1,341 @@
 # Issue 478: macOS ES contribution review and bounded checks
 
-## Scope and decisions
+## Authorized implementation: shared timing and temporary natural-exit policy
+
+The user authorized the focused scheduling repair, a temporary default-success
+assumption for eligible unlisted natural completions, and a P1 backlog item for
+the full shell execution model. This supersedes the earlier reproduction-only
+restriction for local changes. The user subsequently authorized creating the PR,
+monitoring CI, merging into `dev`, and then posting the agreed issue update.
+Changes are on
+`codex/issue478-timing-exit-fallback`, based on `dfa7fe61`.
+
+Baseline suspicious-benign placement now uses the shared timing sampler at
+microsecond resolution rather than rounding to integer seconds. Authored actions
+and authored red herrings use that same scoped sampler for their existing jitter
+policy, in both batch and interleaved paths. Distinct placement policies remain;
+there is no whole-run scheduling queue or change to baseline event volume.
+
+The current frozen Mac execution profile explicitly enables
+`assume_unlisted_command_success`. Only the natural-completion owner opts into
+that assumption, after verifying untruncated completion and execution eligibility.
+Exact configured results and explicit failures/signals win. Teardown classification,
+query cancellation, missing metadata and older frozen profiles retain their existing
+behavior. No new command-specific completion entries or shell parsing were added.
+
+Final scenario tracing exposed an additional owner conflict: baseline termination
+resampled a duration independently of the existing canonical completion plan,
+allowing a purported natural close before that plan. Baseline Mac foreground
+completion now delegates to the existing bounded completion helper, including its
+lifecycle holds and session deadlines; the eligibility guard was not weakened.
+
+Generation behavior revision 511 records the material placement and exit-policy
+changes. Product versions remain unchanged. The full quoting-aware shell execution
+and result-propagation model remains P1 in `TODO.md`. The earlier day estimates
+were rejected by the user and are withdrawn; they are not planning inputs.
+
+### Implementation verification
+
+Fresh authoritative bundles, seed 42 and the previously qualified temporary
+ES-enabled inputs, are `final-workstation` and `final-persistence` under the scratch
+directory below. All outputs were written to new roots. Workstation has 32 native
+rows, 11 forks and zero whole-second fork times. Its five in-window expected exits
+are all known/published, including the `id; groups` and LaunchAgents shell commands.
+Read-only tracing reconciles all 55 deliveries: 0-22 precede collection and 23-54
+are consecutive public rows. Native bytes equal both the traced replay and the
+ES-only filtered run. Placement/RNG changes mean this is not a count-preserving
+comparison to the old scenario run.
+
+Persistence has six native rows, one fractional fork and the remaining declared
+`executable_version_unknown` exit omissions for invented workers. Its explicit
+partial coverage remains partial. Neither the timing repair nor the temporary
+outcome assumption supplies missing executable metadata. Both bundles evaluate
+successfully without overrides (935 records / 97.7920 and 122 / 93.8559 respectively).
+Scores do not prove full native realism.
+
+Focused exit/placement controls pass (80 tests). Both slow Mac filesystem and
+workstation recovery cases pass, including exact resumed and native-filtered bytes.
+The broader affected engine, timing, Mac metadata/lifecycle and behavior-manifest
+unit checks also pass (178 tests; 258 unit checks total). Whole-repository Ruff
+lint/format, diff whitespace and the behavior-manifest check pass. The full routine
+and full slow suites were not run for this focused repair.
+The workstation assertion was updated to require zero unknown outcomes under this
+qualified workload and the declared fallback, while independently checking its
+compound shell's exit. Unknown metadata, deadline, hold, teardown, legacy policy,
+explicit failure/signal and source-publication recovery controls remain covered.
+
+A bounded, same-process microbenchmark (five rounds of 2,000 placements) measures
+baseline placement at 12.44 -> 12.94 microseconds/sample. Authored placement costs
+0.58 -> 25.05 microseconds/sample after replacing the legacy mutable RNG with two
+scoped/audited samples. The latter is a real per-authored-action CPU increase;
+it is not applied to every rendered log row. Baseline tracing retains about 0.9 KiB
+after the sample loop versus 3.8 KiB before; these allocator-sensitive figures are
+diagnostic, not an end-to-end memory/performance guarantee. Shared timing audit
+counters remain bounded and no whole-run event queue was introduced. Measurements
+are in `placement-cost.json` and `authored-placement-cost.json` in scratch.
+
+### Scenario-derived regression tests
+
+The user requested specific regression tests guided by the contributor's examples.
+Existing focused tests already cover placement precision, both reported shell
+commands, natural-completion ownership, configured/explicit outcome precedence,
+unknown metadata, truncation, legacy policy and exact recovery. Added
+`tests/integration/test_issue478_macos_regressions.py` to retain the previously
+manual full-pipeline checks as three slow tests:
+
+- The workstation example's background `zsh -c 'id; groups'` fork and process birth
+  retain fractional precision and precede exec, correlated by full audit identity.
+- Both reported compound commands publish exactly one successful natural exit;
+  the qualified workstation stream has contiguous global and per-family sequences
+  within the exported range and complete independent exit accounting. Pre-window
+  sequence consumption is allowed; sampled PIDs, timestamps and totals are not frozen.
+- The persistence example retains fractional forks while its invented executables'
+  missing-metadata exits remain unpublished and explicitly accounted as partial.
+
+The tests use the checked-in example workloads unchanged except for enabling ES
+and selecting the previously qualified persistence partial policy. Seed is 42;
+project roots are isolated temporary directories. The workstation bundle is shared
+by its two tests. All three pass in 14.95 seconds. Copied the new tests into an
+isolated `git archive HEAD` pre-fix source tree: all three fail in 16.16 seconds,
+at the original 14:16:17 whole-second fork, the missing global 28, and persistence's
+whole-second fork respectively. No production files were changed for this check.
+Before/after logs are `issue478-before-tests.txt` and `issue478-regression-tests.txt`
+in scratch. Full-repository Ruff lint/format, diff whitespace and behavior-manifest
+checks pass; these test-only additions require no behavior revision change.
+
+### PR 481 integration
+
+Opened [PR #481](https://github.com/Cisco-Talos/EvidenceForge/pull/481) against
+`dev` at `6e486fec`. Routine CI run 43293829828 exposed a cadence regression test
+that used Mock storyline IDs and controlled only the retired placement RNG. Its
+fixture now supplies real IDs and fixes the shared planner's placement at nominal
+time to retain the original cadence-collision assertion. All 25 LogonID scoping
+and storyline timing controls pass locally. No production behavior was changed by
+this fixture correction. The slow/portability workflow is explicitly dispatched
+for the PR because the new scenario regression cases belong to that tier.
+
+On corrected head `30fcd084`, full routine/Studio CI run 43295247118 passes,
+including all 16 Linux/Windows shards, native recovery, durability and packaged
+Studio checks. Slow run 43295251434 exposed a second fixture issue: the engine
+test factory discarded the real timing runtime supplied by initialization and
+explicitly replaced it with `None`. It now retains the supplied runtime. All 44
+slow engine tests pass locally; this correction also changes no production code.
+
+### Full slow-CI findings and owner corrections
+
+Full routine/Studio CI also passes on `ddabc361` (run 43300340011). Full slow
+run 43300344207 completed all four shards and exposed additional interactions
+under the changed schedules, beyond the two mock-fixture corrections:
+
+- A future Terminal shell was selected as the existing parent for an earlier
+  mounted SMB helper. Existing-only parent lookup now rejects that future shell;
+  deferred process creation retains its separate readiness behavior. The original
+  checkpoint regression still requires both mounted file reads and exact bytes.
+- Optional baseline editors with no modeled release could occupy a shell needed
+  by authored work. A derived host/user index reserves pending authored shell use;
+  optional foreground commands are admitted only when their declared lifetime fits.
+  Unknown releases are not invented. The index is rebuilt from scenario intent and
+  is explicitly classified as reconstructible checkpoint state. It retains only
+  authored entries, with binary-search lookup, not a whole-run baseline queue.
+- User startup pacing and suspicious background noise could materialize future
+  process parents before pending authored activity. Those paths now drain the
+  same authored frontier before publishing their Mac activity. Tracing reproduced
+  an SSH source requiring a shell at 10:49 after background noise had already
+  reserved its first shell at 10:57; the original SSH checkpoint case passes after
+  fixing the noise execution boundary.
+- Terminal settlement considered outstanding work but could forget an already
+  advanced RDP lifecycle watermark once its journal emptied. The terminal frontier
+  now includes that committed watermark; the backward-movement guard remains intact.
+
+The occupied-local-shell negative fixture now authors an SSH close after collection
+instead of relying on a sampled duration. A separate released-local case verifies
+native commands occur after the SSH client's actual exit. Finder GUI startup is
+not required to produce incidental shell history; its exact recovery, launcher/app
+execs and credentials remain asserted. The legacy temporal census shrank from
+195 selectors / 358 calls to 192 / 355 and its fixed totals now match that removal.
+No new legacy sampler allowance or weakened inventory guard was introduced.
+
+The same pre-existing evaluator peak-RSS assertion failed again (872,206,336 bytes
+against 512 MiB); functional evaluator assertions passed. That test and threshold
+remain unchanged. The user's earlier conditional exception is applicable only if
+this is the sole remaining failure after the functional corrections are validated.
+
+Behavior revision 512 records the additional scheduling, prepared-parent and
+terminal-frontier changes. Five focused foreground/parent/frontier controls, the
+background-noise order controls, and related baseline tests pass (33 checks).
+The explicit temporal census tier passes, and the previously failing benchmark,
+SMB recovery, SSH recovery and mixed-platform browser-helper cases pass locally.
+The complete affected slow regression group and broader routine owner checks are
+being rerun before final integration.
+
+The affected slow group now passes all 15 cases (291.62 seconds), including the
+original examples, workstation/filesystem exact recovery, nested commands, Finder,
+Mac SSH receiver recovery and Windows SMB recovery. The mixed-platform browser
+helper case also passes separately after the terminal-frontier correction.
+An expanded 5,575-test routine owner run passed 5,572 with one skip and found two
+incomplete SimpleNamespace fixtures; adding their missing empty authored lists
+preserves their terminal-admission assertions. All 80 focused baseline/foreground/
+noise contracts pass after that setup correction. Prepared-parent controls also
+exercise the interval after fork but before shell exec, and preserve the ordinary
+deferred-start path. Whole-repository Ruff, format, whitespace and behavior-manifest
+checks pass before the CI follow-up push.
+
+### Packaged Mac evaluation boundary
+
+On `8404cfcd`, all 16 routine shards, Linux Studio jobs and native recovery checks
+pass. The packaged Mac smoke exposed an evaluator boundary defect: three valid
+warmup-process exits were rejected because their pre-collection create rows were
+unavailable as independent timing witnesses. Fresh source generation reproduces
+the same three `unverifiable_timing_dependency` findings (87.5 agreement).
+
+The timing verifier now accepts an exit's own canonical pre-collection birth only
+when the create anchor also precedes collection and its nonnegative latency fits
+the configured create-source bound. In-window missing predecessors, mismatched
+identity, negative latency and excessive latency remain failures. The normal
+canonical/observed predecessor paths remain unchanged. Seven positive/negative
+controls pass; the shared installed-CLI Mac smoke also passes locally. This is an
+evaluation-only correction, with no generation behavior or version change.
+
+## Fresh reproduction of the contributor's supplied cases
+
+The user requested reproduction/diagnosis only: no GitHub replies and no fixes.
+Checked exact release `bbcf9cd6619c38529501c2089d49ebf0444b7e90` (2.2.0a6,
+its own locked environment) and current `dfa7fe61` (3.0.0rc1). Seed 42, default
+target/cadence, current project directory with no `.eforge/config` overlay. All
+generated material and diagnostic wrappers are under
+`/private/tmp/eforge-478-repro.oQQ9hC`; source/scenario files were not changed.
+Machine summary: `reproduction-summary.json` in that directory.
+
+Important reproduction qualification: the two checked-in `scenario.yaml` files
+are identical between those revisions and do **not** select Endpoint Security.
+Four unchanged runs (two scenarios, two runtimes) succeed without creating an ES
+file. Temporary diagnostic copies add `macos_endpoint_security`; persistence also
+uses top-level `macos_process_coverage: partial`, as the contributor described.
+An initial temporary persistence probe put that field under `output`, where it
+was ignored, and failed complete coverage; it is excluded from the reproduction
+results. Corrected partial inputs pass validation/generation. No failed output
+was overwritten or treated as an authoritative bundle.
+
+### Whole-second forks: exact reproduction, upstream scheduling cause
+
+Both runtimes reproduce 29 workstation ES rows, nine forks, and exactly these
+three whole-second fork/birth timestamps (zsh -> zsh):
+
+| UTC on 2026-10-19 | Child PID | Subsequent command |
+| --- | ---: | --- |
+| 14:16:17.000000000 | 11031 | `/bin/zsh -c 'id; groups'` |
+| 14:17:31.000000000 | 11166 | `/bin/zsh -c 'id; groups'` |
+| 15:27:22.000000000 | 18758 | `/bin/zsh -c 'id; groups'` |
+
+Persistence reproduces two forks, one whole-second case: PID 11166 at 14:17:31.
+These results supersede the earlier failure to reproduce using other fixtures.
+
+Read-only process-local tracing proves the canonical fork and birth are already
+whole-second before rendering. All three stacks enter
+`BaselineMixin._generate_suspicious_noise` -> `generate_suspicious_cli` ->
+`ProcessExecutionService._prepare_macos_shell_root` -> canonical `fork_process`.
+`activity/suspicious_benign.py::_sample_hourly_placement_seconds` returns
+`int(sampled + 0.5)` (line 176); `generate_suspicious_cli` adds that integer-second
+offset to the hour. The shell producer uses `forked_at = ensure_utc(launch.time)`
+(line 1746) and adds its qualified positive fork-to-exec gap afterward. The three
+exec times have fractional offsets 5.182, 11.555 and 6.615 ms respectively.
+The remaining six workstation forks have fractional times.
+
+This is a discrete upstream placement artifact, not zsh-history timestamp
+reconstruction or an ES serializer precision defect. The generated workstation
+bundle contains no zsh-history file. Any future realism correction belongs to the
+owning suspicious-benign timing plan; no timing, renderer or history fix was made.
+
+### Sequence gaps: every workstation delivery reconciled
+
+Both traced runtimes contain 56 collector deliveries numbered exactly 0-55;
+each event family's complete internal sequence is consecutive. Public ES bytes
+are identical between each traced replay and its uninstrumented same-runtime run.
+
+- Deliveries 0-22 are before collection: nine forks, eleven execs, three exits.
+  They are explicitly `out_of_window`, explaining the first exported global 23.
+- Globals 28, 31 and 37 are exits of PIDs 11031, 11166 and 18758 respectively,
+  at 14:16:17.283362, 14:17:31.120445 and 15:27:22.080719 UTC.
+- Those exits are `filtered` with `exit_outcome_unknown` and no native body.
+  Their exact compound-shell argv has no admitted command-completion outcome in
+  the current profile; source publication declines to fabricate an exit status.
+- Global 55 is a fourth withheld unknown-result exit, after the final exported
+  row 54: PID 31832, `/bin/zsh -c 'ls -la ~/Library/LaunchAgents'`, at
+  16:56:21.081718 UTC.
+- Thus 56 = 23 pre-window + 29 exported + 4 withheld. No unexplained gap remains.
+
+`macos_es_publication.py` classifies an absent canonical exit outcome at line 429
+and maps that unavailable phase to `filtered` at lines 445-450. Final ingress
+allocates collector counters before testing native-body/export eligibility.
+This is an intentional projection/coverage omission, not configured kernel loss,
+random collection loss, or a counter-allocation defect. It remains a native exit
+coverage limitation: ground truth reports twelve expected/observed exits, eight
+known/published exits, and `exit_complete: false` even though process starts are
+complete. Do not equate the broad `complete` observation profile with known exit
+outcomes or claim that a lossless actual eslogger export must have these gaps.
+
+The partial persistence stream similarly starts at 17. Its internal gap 19 is a
+filtered exit with `executable_version_unknown`; trailing 26 is the unknown-result
+exit of PID 11166. Its traced replay preserves public ES bytes exactly. Broader
+invented-worker startup/metadata omissions are declared by its partial coverage.
+
+### Verification and limitations
+
+The four ES-enabled uninstrumented authoritative bundles all generate and evaluate
+successfully (exit 0), with integrity accepted and no failed hard gates:
+
+| Runtime | Workstation score / records | Persistence score / records |
+| --- | --- | --- |
+| 2.2.0a6 | 95.6611 / 912 | 94.1090 / 128 |
+| current dev | 96.1649 / 912 | 93.8322 / 128 |
+
+These scores do not refute the diagnosed timing artifact or establish complete
+exit coverage. Evaluations were run once per uninstrumented ES-enabled bundle;
+no scenario mismatch/size overrides were used. Diagnostic wrappers only observe
+existing calls and immutable ingress, with native-byte comparison against plain
+runs. No tests/product files were edited and no GitHub comment was posted.
+
+## Earlier scope and decisions (superseded by implementation above)
+
+Latest decision: the user accepted shared scheduling mechanics with distinct
+placement policies, and the canonical shell-plan/default-policy/overlay approach
+with corrected shell control flow. Quoting/escaping must preserve literal argument
+content such as `echo "hi; there"`; an optional conservative fast path must not miss
+real shell syntax. The immediate request is a complexity estimate; implementation
+has not started in this turn. These decisions supersede earlier proposal-only and
+no-implementation-authorization wording below.
+
+The agreed shell scope includes quoted/escaped
+simple commands, `-c`, lists/conditionals/pipelines, modeled default/override
+outcomes and durations, relevant builtins/options, canonical child/FD lifecycles,
+baseline/authored parity, native source qualification and exact resume/filtering.
+Arbitrary shell-language interpretation and Windows cmd/PowerShell semantics are
+outside that scope. Existing bounded Linux pipeline helpers provide reusable
+pieces, not a complete Mac-native pipeline implementation. A whole-engine global
+scheduler rewrite is outside the focused scheduling change.
+
+Latest user guidance rejects adding command-specific shell completion entries just
+to close the native exit gaps. Further design work must address command execution
+and terminal-outcome ownership rather than expand that lookup as the fix. Read-only
+tracing confirms that baseline placement and authored nominal-time/jitter planning
+are distinct upstream paths, while the examined process intents converge through
+`ActivityGenerator.generate_process`, the shared execution service and the shared
+termination service. Natural command completion currently uses explicit results or
+exact argv/template completion policy; session/SSH ordinary-close policy is separate.
+There is no general Mac compound-shell execution/result-propagation model behind
+the quoted `-c` text. No implementation change is authorized by this discussion.
+
+Subsequent design discussion (proposal only): the user asked about shared scheduling
+and proposed parsing shell command lists/pipelines with YAML overlay behavior overrides
+and default successful outcomes/variable runtimes. Assessment should retain distinct
+baseline versus authored placement policies over common timing/lifecycle mechanics;
+avoid forcing baseline volume into a whole-run retained queue. Shell evaluation must
+retain parsed control flow: `&&` executes its right side on success, `||` on failure,
+`;` continues independently, and pipelines have connected overlapping lifetimes and
+option-dependent status. Default success can be a declared simulation policy but
+must respect explicit outcomes and known canonical failures. Builtins, shell options,
+unsupported grammar, persistent processes and resource/recovery bounds need defined
+scope. No implementation or new roadmap commitment is selected by this discussion.
 
 Reviewed issue #478 and PR #479 at `18373e34981e70d26e743bd510aa0cbf2795cb56`
 against dev `4df3c2ae`. The user requested bounded reference-Mac ordering tests,

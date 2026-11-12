@@ -102,6 +102,8 @@ def verify_process_timing(
     expectation: GroundTruthSourceExpectation,
     index: _RecordIndex,
     points: CanonicalTimingPoints,
+    *,
+    collection_start: datetime | None = None,
 ) -> list[str]:
     """Verify identity, predecessor existence, acyclic ordering and policy bounds."""
     payload = expectation.provenance.get("timing")
@@ -237,6 +239,26 @@ def verify_process_timing(
                 entity_start.tzinfo is not None
                 and -2 <= (anchor.time - entity_start).total_seconds() <= 2
                 and entity_start < row.time
+            )
+        elif (
+            anchor.kind == "process_create"
+            and row.kind == "process_terminate"
+            and collection_start is not None
+            and anchor.time < collection_start
+            and process.get("start_time")
+        ):
+            # A warmup process can exit during collection without an exported
+            # create row. Qualify only its own pre-window birth and bounded
+            # source-create latency; an in-window missing predecessor still fails.
+            entity_start = datetime.fromisoformat(str(process["start_time"]))
+            create_maximum = (
+                float(rules.get("source.ecar_process_create", {}).get("max_ms", 100)) / 1000 + 0.008
+            )
+            inherited_entity = (
+                entity_start.tzinfo is not None
+                and entity_start < collection_start
+                and entity_start < row.time
+                and 0 <= (anchor.time - entity_start).total_seconds() <= create_maximum
             )
         if not canonical and not observed and not inherited_entity:
             errors.append("unverifiable_timing_dependency")
