@@ -482,3 +482,36 @@ CLI default directory, while the current account has the registered x64
 `OpenAI.Codex` desktop package (version `26.1106.6628.0`, status Ok). This establishes
 the missing discovery route, not successful authoring or sandbox compatibility.
 The desktop package executable itself still needs normal-laptop acceptance.
+
+### Replacement laptop acceptance and MXC prerequisite review
+
+The user installed the replacement and reports that the first-time setup screen
+is useful and quitting/relaunching works. Codex discovery now progresses through
+app-server initialization and Windows readiness to the private CLI execution
+probe, which fails with the MXC setup message. This confirms the discovery route,
+not successful sandboxed authoring. The current probe maps RPC/command failures
+to the same message; it does not establish the selected backend or prove that the
+host lacks MXC. Preserve the underlying cause in a future diagnostic improvement.
+
+A read-only `winver` check confirms Windows 11 Pro 25H2 build `26200.9711`.
+The [official Codex Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox#mxc-compatibility)
+requires native MXC capability and permitting policy, with documented process
+isolation floors `26100.9278` (24H2) and `26200.9278` (25H2). CLI 0.162.0+ provides
+a one-command explicit-MXC compatibility probe. A suitable build alone is not
+proof of launch or policy compatibility. The remote input relay did not reliably
+forward command punctuation/paste; the model-free MXC probe was not executed and
+no Codex configuration was changed.
+
+Microsoft's [process-container version matrix](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/os-version-support.md)
+and [native networking contract](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/networking.md)
+identify PSEC/BaseContainer process isolation and per-request host capability
+checks. Windows supplies native process-security environment creation/query/close,
+filesystem policy enforcement and WFP network enforcement. Capabilities such as
+deny-read, enumeration and loopback depend on the requested policy and OS support;
+learning-mode capture is a separate optional capability, not a Studio requirement.
+Codex additionally documents permitting managed policy and effective
+`allow_local_binding = true` for managed MXC networking. This is an OS update and
+policy compatibility boundary, not a special AI-PC hardware baseline. The laptop's
+build exceeds the published process and loopback milestones, but actual configured
+MXC execution, private runtime access and discussion/draft permissions remain
+pending. Broad Windows 11 authoring support is not yet established.
