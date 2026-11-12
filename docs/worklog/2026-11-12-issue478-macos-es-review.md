@@ -114,6 +114,13 @@ and storyline timing controls pass locally. No production behavior was changed b
 this fixture correction. The slow/portability workflow is explicitly dispatched
 for the PR because the new scenario regression cases belong to that tier.
 
+On corrected head `30fcd084`, full routine/Studio CI run 43295247118 passes,
+including all 16 Linux/Windows shards, native recovery, durability and packaged
+Studio checks. Slow run 43295251434 exposed a second fixture issue: the engine
+test factory discarded the real timing runtime supplied by initialization and
+explicitly replaced it with `None`. It now retains the supplied runtime. All 44
+slow engine tests pass locally; this correction also changes no production code.
+
 ## Fresh reproduction of the contributor's supplied cases
 
 The user requested reproduction/diagnosis only: no GitHub replies and no fixes.
