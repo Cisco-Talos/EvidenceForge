@@ -12,6 +12,8 @@ macOS 26 fidelity. Unsupported combinations fail closed. A notification result
 is not an authorization callback or a synthetic policy decision.
 """
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
@@ -447,8 +449,42 @@ class EndpointSecurityRecord(_Record):
         return self
 
     def to_ndjson(self) -> str:
-        """Serialize only the observed fields; never synthesize identities or defaults."""
-        return self.model_dump_json(exclude_unset=True) + "\n"
+        """Serialize only the observed fields in eslogger's own JSON spelling.
+
+        eslogger encodes through Foundation's JSON writer: every ``/`` is
+        written as ``\\/`` and object keys follow dictionary hash order rather
+        than a fixed schema order, so key order differs between objects and
+        between records. Both are reproduced deterministically (the order is
+        seeded from the record's own content), so identical records still
+        serialize identically. Array order is data and is preserved, and an
+        entitlements object keeps its frozen native member order.
+        """
+        observed = json.loads(self.model_dump_json(exclude_unset=True))
+        seed = hashlib.sha256(
+            json.dumps(observed, sort_keys=True, separators=(",", ":")).encode()
+        ).digest()
+        native = json.dumps(
+            _native_key_order(observed, seed, ""), ensure_ascii=False, separators=(",", ":")
+        )
+        return native.replace("/", "\\/") + "\n"
+
+
+def _native_key_order(value: object, seed: bytes, path: str) -> object:
+    """Return ``value`` with each object's keys in a seeded, non-schema order."""
+    if isinstance(value, dict) and not path.endswith("/entitlements"):
+        rank = {
+            key: hashlib.blake2b(f"{path}/{key}".encode(), key=seed[:32], digest_size=8).digest()
+            for key in value
+        }
+        return {
+            key: _native_key_order(value[key], seed, f"{path}/{key}")
+            for key in sorted(value, key=rank.__getitem__)
+        }
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return [_native_key_order(item, seed, f"{path}[{i}]") for i, item in enumerate(value)]
+    return value
 
 
 def decode_endpoint_security_record(raw: str) -> EndpointSecurityRecord:

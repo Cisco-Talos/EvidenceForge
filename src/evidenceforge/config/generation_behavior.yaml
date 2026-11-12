@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 509
+current_revision: 510
 history_start_revision: 1
-behavior_surface_sha256: e1d994159bab8d835bd79b70d4aa74da7310beed351e1382af783f2708e2d503
+behavior_surface_sha256: 51a5f4fa915f3aaee87bcc75b3b51c74cc6e23c1cdd175899c023907e958592e
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5875,3 +5875,13 @@ changes:
   - zeek_conn
   summary: Share native ICMP type/code and connection-state projection between conn
     rendering and source requirements, preserving existing packet evidence and TCP/UDP semantics.
+- revision: 510
+  id: macos-es-native-json-spelling
+  impact: localized
+  domains:
+  - native-process-observation
+  formats:
+  - macos_endpoint_security
+  summary: Serialize exported ES records in eslogger's Foundation JSON spelling, escaping
+    every solidus and using a content-seeded non-schema object key order, while preserving
+    field values, array order and native entitlement member order.
