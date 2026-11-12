@@ -515,3 +515,44 @@ policy compatibility boundary, not a special AI-PC hardware baseline. The laptop
 build exceeds the published process and loopback milestones, but actual configured
 MXC execution, private runtime access and discussion/draft permissions remain
 pending. Broad Windows 11 authoring support is not yet established.
+
+### Native laptop MXC compatibility probe
+
+On November 12, the registered desktop package's native CLI reports
+`codex-cli 0.167.0-alpha.4.1`. In a newly created disposable workspace, the
+official model-free probe with the command-only override
+`-c 'windows.sandbox="mxc"' sandbox --include-managed-config --permission-profile
+:workspace -- cmd.exe /d /c echo MXC_OK` prints `MXC_OK` and exits zero. No global
+Codex configuration was changed and no authoring message was sent. This establishes
+basic native MXC execution on the laptop; it does not yet establish Studio's
+private runtime access or discussion/draft permission contracts.
+
+The user had uninstalled Studio and cleaned its private state before this probe.
+The downloaded replacement installer on the laptop independently matches the
+qualified `d1ae394a…b1cbc` SHA256 above. The user approved SmartScreen and completed
+the Everyone-scope reinstall; normal launch reaches Scenarios. No new build was
+required for these diagnostics.
+
+The reinstalled private `Scripts/eforge.exe version` runs normally and reports
+`EvidenceForge v3.0.0rc1`. Running that same absolute executable with explicit MXC
+in the disposable workspace exits one. The traceback establishes that MXC can
+launch and read the private runtime: CLI startup imports the syslog emitter, whose
+module-level `_make_security_registry()` creates a prototype temporary stream.
+`WindowsTemporaryStream.__init__()` calls `temporary_descriptor()`, which calls
+`open_directory(Path(tempfile.gettempdir()))`. The latter fails at its initial
+native volume-root open (`windows_filesystem.py:611`) with
+`PermissionError: [WinError 5] Access is denied`. This is an EvidenceForge startup
+and native filesystem compatibility failure, not proof of missing MXC capability.
+No global Codex configuration, runtime ACLs or installed code were changed.
+
+Opening Studio's Authoring & tools panel reproduces the broad private-CLI/MXC
+message after checking Codex. A separate default-versus-explicit-MXC app-server
+comparison was prepared but not executed because remote clipboard transfer
+remained unreliable; the currently selected default backend is still unverified.
+No authoring message was sent. The next code iteration must remove unnecessary
+temporary-file allocation from read-only CLI startup, preserve useful underlying
+probe diagnostics, and test native storage against the actual sandbox boundaries
+before claiming discussion/draft compatibility. Any Windows-only MXC selection
+adapter alone is insufficient to fix the reproduced failure. A new installer will
+be necessary to deliver those code fixes; the laptop needs no further OS changes
+based on the successful basic MXC probe.
