@@ -41,9 +41,37 @@ checks pass: 213 tests. Both slow filesystem/workstation recovery checks pass
 (84.29 seconds), including exact resumed and filtered output. Additional process
 identity investigation checks pass (133 tests). Whole-repository Ruff lint/format
 checks and the generation-behavior manifest check pass. Full routine and slow
-suites are running before integration; their results will be recorded with the
-integration evidence. The tests cover slash spelling, decoded equality, literal
+suites were started, then canceled when the user expanded integration to include
+all open Dependabot PRs; final broad checks run on the combined inputs. The tests
+cover slash spelling, decoded equality, literal
 backslashes, Unicode, entitlement member order, repeatability and NDJSON framing.
+
+## Combined dependency integration
+
+The user subsequently requested all open Dependabot updates in `dev` and asked
+whether to validate them together. Review found five PRs, all targeting `dev` and
+changing only `uv.lock`: #472 Pydantic 2.14.1 -> 2.14.3 (core 2.50.1 -> 2.50.4),
+#473 websockets 17.2 -> 17.4, #474 pytest 9.1.1 -> 9.2.0, #475 platformdirs
+4.9.4 -> 4.14.5, and #476 python-dotenv 1.2.3 -> 1.2.4. Parsed package-level
+comparisons confirm there are no other dependency changes. All original bot
+commits are retained in integration merge `4bfe750a`; there were no conflicts.
+`uv sync --locked --all-extras` installs all six changed packages successfully.
+
+Reviewed release notes and the upstream websockets/platformdirs changelogs.
+Pydantic includes serialization/schema/security fixes, so wire and recovery tests
+remain relevant. Pytest introduces keyword-only parametrization options, checked
+through full collection. Platformdirs changes XDG/media/runtime handling, checked
+through Studio workspace tests. Websockets adds a fragmented-message limit and
+connection fixes; Studio service tests cover its application integration. Dotenv
+fixes empty-value parsing and CLI expansion precedence. No product version bump.
+
+PR #480 is the combined maintainer integration vehicle. Canceled the earlier
+slash-only CI runs 43264948230 and 43264949744 and local full suites before
+starting the final combined CI inputs. Full routine checks run on Linux/Windows;
+the slow/portability workflow is dispatched on the same combined branch. Merge
+only after the checks pass. Preserve history when merging so the original
+Dependabot commits reach `dev`; close #479 after its slash portion is integrated.
+Issue #478 remains open for the separately scoped work.
 
 ## Reference Mac: two finite process captures
 
