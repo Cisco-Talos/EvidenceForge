@@ -50,6 +50,25 @@ logger = logging.getLogger(__name__)
 MAX_IMPORT_BYTES = 64 * 1024**2
 
 
+def _publish_windows_directory(source: Path, target: Path) -> None:
+    """Publish without overwriting, staging beside the target across NTFS volumes."""
+    from evidenceforge.utils.windows_filesystem import publish_new_directory
+
+    try:
+        publish_new_directory(source, target)
+        return
+    except OSError as error:
+        if getattr(error, "winerror", None) != 17:  # ERROR_NOT_SAME_DEVICE only.
+            raise
+    staging = Path(tempfile.mkdtemp(prefix=".studio-import-", dir=target.parent))
+    try:
+        shutil.copytree(source, staging, dirs_exist_ok=True)
+        publish_new_directory(staging, target)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
 class ScenarioImportRequest(BaseModel):
     """Explicit source locations and destination choices for one scenario."""
 
@@ -662,6 +681,12 @@ class PreparedImport:
                     if current.is_symlink():
                         raise ValueError("Import destination must not contain links")
                     current.mkdir(exist_ok=True)
+                if os.name == "nt" and (self.stage / relative).is_dir():
+                    # Windows cannot replace an empty directory. Native publication
+                    # atomically refuses a competing target without a placeholder.
+                    _publish_windows_directory(self.stage / relative, target)
+                    published.append(target)
+                    continue
                 # Reserve without overwriting even an empty directory created concurrently.
                 if (self.stage / relative).is_file():
                     target.touch(exist_ok=False)

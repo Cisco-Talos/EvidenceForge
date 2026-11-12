@@ -283,8 +283,7 @@ jobs:
         run: uv run python scripts/sync_studio_version.py --check
         if: steps.evidence.outputs.reused != 'true'
       - name: Test local service and job lifecycle
-        run: uv run pytest --no-cov tests/unit/test_studio_*.py tests/unit/test_resource_prediction.py tests/unit/test_desktop_*.py --ignore=tests/unit/test_studio_runtime.py --ignore=tests/unit/test_studio_state_durability.py
-          --ignore=tests/unit/test_studio_sessions.py --ignore=tests/unit/test_studio_ownership.py --ignore=tests/unit/test_studio_state_contracts.py
+        run: uv run --no-sync python -m scripts.ci_studio
         if: steps.evidence.outputs.reused != 'true'
       - name: Install Codex for model-free native permission checks
         run: npm install --global @openai/codex@${{ runner.os == 'Windows' && '0.167.0' || '0.162.1' }}

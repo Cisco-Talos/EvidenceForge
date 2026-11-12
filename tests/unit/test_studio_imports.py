@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 
@@ -326,6 +327,7 @@ def test_failed_publish_rolls_back_only_new_roots(
         raise OSError("disk full")
 
     monkeypatch.setattr(import_module.os, "replace", fail_replace)
+    monkeypatch.setattr(import_module, "_publish_windows_directory", fail_replace)
     try:
         with pytest.raises(OSError, match="disk full"):
             plan.commit(workspace, [])
@@ -333,6 +335,45 @@ def test_failed_publish_rolls_back_only_new_roots(
         assert retained.is_file()
     finally:
         plan.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows no-overwrite directory publication")
+@pytest.mark.parametrize("competing_target", [False, True])
+def test_windows_cross_volume_import_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, competing_target: bool
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "scenario.yaml").write_bytes(b"reviewed bytes\r\n")
+    target = tmp_path / "imported"
+    publish = filesystem.publish_new_directory
+    calls = 0
+
+    def cross_volume_then_publish(staged: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            error = OSError("different volumes")
+            error.winerror = 17
+            raise error
+        if competing_target:
+            target.mkdir()
+            (target / "keep").write_bytes(b"competing import")
+        publish(staged, destination)
+
+    monkeypatch.setattr(filesystem, "publish_new_directory", cross_volume_then_publish)
+    if competing_target:
+        with pytest.raises(FileExistsError):
+            import_module._publish_windows_directory(source, target)
+        assert (target / "keep").read_bytes() == b"competing import"
+        assert not (target / "scenario.yaml").exists()
+    else:
+        import_module._publish_windows_directory(source, target)
+        assert (target / "scenario.yaml").read_bytes() == b"reviewed bytes\r\n"
+    assert (source / "scenario.yaml").is_file()
+    assert not list(tmp_path.glob(".studio-import-*"))
 
 
 @pytest.mark.parametrize("unsafe", ["link", "corpus_escape", "include_cycle"])

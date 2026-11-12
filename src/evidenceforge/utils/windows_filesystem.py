@@ -719,14 +719,18 @@ def directory_entries(path: Path) -> list[tuple[str, os.stat_result]]:
 
 
 def publish_new_directory(source: Path, target: Path) -> None:
-    """Atomically rename a staged directory only if its sibling target is absent."""
+    """Atomically move a staged directory on one volume only if the target is absent."""
     source = Path(os.path.abspath(source))
     target = Path(os.path.abspath(target))
-    if source.parent != target.parent:
-        raise ValueError("Windows staged directory publication requires sibling paths")
     parent = open_directory(source.parent)
     try:
-        replace_child(parent, source.name, parent, target.name, replace=False, directory=True)
+        destination = open_directory(target.parent)
+        try:
+            replace_child(
+                parent, source.name, destination, target.name, replace=False, directory=True
+            )
+        finally:
+            os.close(destination)
     finally:
         os.close(parent)
 

@@ -318,3 +318,50 @@ Windows psutil terminates the authenticated idle helper with exit SIGTERM (15).
 The harness now requires that native status and still asserts stale-PID rejection
 and instance-lock reacquisition. Product replacement behavior is unchanged. The
 145 slow Windows recovery cases still await execution after that correction.
+
+### Broader source acceptance and native import publication
+
+At `5bfafe23`, Windows preview run `43128783222` passes native service (134 passed,
+one existing POSIX-only skip), routine state (213 passed, one skip), helper/runtime
+(58 passed, twelve existing POSIX-only skips), and all 145 slow crash/recovery cases.
+The packaged native model-free permission probes pass and correctly reject the
+legacy sandbox/private-runtime mismatch before connection. The installed verifier
+passes both scopes again, followed by frontend and native Rust checks.
+
+One final full CI run `43130441861` at that snapshot passes every routine shard,
+all native recovery gates, and Studio on macOS and both Linux architectures. Its
+Windows Studio gate exposes 27 failures (515 passed, 43 skipped), so Required CI
+correctly fails. Native package runs `43130589973` (macOS), `43130590246` (Linux
+ARM64), and `43130590425` (Linux x86_64) all pass actual packaged verification.
+These are exact `5bfafe23` results; they do not certify subsequent source changes.
+The temporary draft-branch Windows-only iteration policy remains in place.
+
+The main product defect is Windows refusing `os.replace` of a staged directory
+onto an existing empty reservation directory. Windows imports now use the native
+no-overwrite directory publisher across pinned parents. Only a successful publish
+enters rollback tracking, preserving a competing destination. Different-volume
+imports copy to a temporary destination sibling and then use the same atomic
+no-overwrite publication. Native regressions cover cross-parent exclusivity and
+cross-volume fallback, including a competing target and staging cleanup. Existing
+Mac/Linux publication remains unchanged. Search result relative file identifiers
+now use portable forward slashes.
+
+The other failures are harness portability: captured declaration bytes preserve
+CRLF; Windows chmod cannot express POSIX execute/mode bits; native reparse-point
+errors are equivalent to symlink rejection; actual queued generation has a bounded
+120-second Windows budget instead of an unrelated 30-second functional-test limit.
+Byte, integrity, rollback, link rejection, and output assertions remain required.
+The preview native source gate now discovers the full Studio/desktop suite through
+`scripts.ci_studio`, matching full CI on every platform, before artifact qualification.
+
+Run `43128783222` finishes all three jobs successfully and uploads its qualified
+artifact. Downloaded bytes match SHA256
+`d5d22de96bdbaaaf0b03eedfb45700732b2f602e467be75b8cce81e2d9b69a90`.
+The report records runner image `20261103.298.1`, Python 3.12.16, rustc 1.99.1,
+Node 22.23.4 and uv 0.13.7. This earlier artifact passed its then-focused source
+gate; the independent broader Windows failures above still block completion.
+The new full source gate must pass on the corrected snapshot before handing over
+an accepted preview. Local follow-up: 120 focused regressions pass, with two new
+Windows import cases and 26 native filesystem cases deferred to native Windows;
+Ruff and workflow actionlint pass. The CI ownership contract now executes the
+portable discovery driver to ensure recovery cases remain assigned to one gate.

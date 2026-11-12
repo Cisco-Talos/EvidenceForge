@@ -51,11 +51,8 @@ jobs:
           uv run --no-sync python --version
           uv --version
       - name: Test native Studio service and authoring transport
-        timeout-minutes: 15
-        run: >-
-          uv run --no-sync pytest --no-cov --maxfail=5
-          tests/unit/test_studio_service.py tests/unit/test_studio_chat.py
-          tests/unit/test_desktop_jobs.py tests/unit/test_desktop_controller.py
+        timeout-minutes: 30
+        run: uv run --no-sync python -m scripts.ci_studio
       - name: Test native state and helper recovery
         if: ${{ !cancelled() && steps.native-tools.outcome == 'success' }}
         run: uv run --no-sync python -m scripts.ci_native_recovery

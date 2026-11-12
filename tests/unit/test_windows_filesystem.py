@@ -227,11 +227,14 @@ def test_native_temporary_storage_survives_duplication_and_positioned_reads() ->
                 os.close(retained)
 
 
-def test_native_directory_publication_is_exclusive(tmp_path: Path) -> None:
+@pytest.mark.parametrize("separate_parents", [False, True])
+def test_native_directory_publication_is_exclusive(tmp_path: Path, separate_parents: bool) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 
     source = tmp_path / "source"
-    target = tmp_path / "target"
+    destination = tmp_path / "destination" if separate_parents else tmp_path
+    destination.mkdir(exist_ok=True)
+    target = destination / "target"
     source.mkdir()
     (source / "evidence").write_bytes(b"original")
     filesystem.publish_new_directory(source, target)

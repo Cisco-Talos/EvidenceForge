@@ -333,7 +333,7 @@ def test_corrupt_catalog_can_be_removed_but_unknown_consumers_and_links_refuse(
     external = tmp_path / "external"
     external.write_text("keep")
     (source.parent / "link").symlink_to(external)
-    with pytest.raises(PackError, match="symlink"):
+    with pytest.raises(PackError, match="symlink|reparse point"):
         review_pack_deletion(source, tmp_path)
     assert external.read_text() == "keep"
 

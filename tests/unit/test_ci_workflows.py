@@ -86,7 +86,11 @@ def test_every_reusable_job_records_only_after_its_execution_and_uploads_proof()
             assert steps[upload]["with"]["if-no-files-found"] == "error"
 
 
-def test_native_recovery_has_one_shared_owner_and_retains_platform_variants() -> None:
+def test_native_recovery_has_one_shared_owner_and_retains_platform_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import ci_studio
+
     ci = workflow("ci.yml")["jobs"]
     native = ci["studio-state-recovery"]
     assert native["uses"] == "./.github/workflows/ci-recovery.yml"
@@ -98,8 +102,19 @@ def test_native_recovery_has_one_shared_owner_and_retains_platform_variants() ->
     ]
     assert workflow("installers.yml")["jobs"]["native-recovery"]["uses"] == native["uses"]
     commands = "\n".join(step.get("run", "") for step in ci["studio"]["steps"])
+    assert "scripts.ci_studio" in commands
+    selected: list[str] = []
+
+    def record(command: list[str], *, check: bool) -> None:
+        assert check
+        selected.extend(Path(argument).as_posix() for argument in command)
+
+    monkeypatch.setattr(ci_studio.subprocess, "run", record)
+    ci_studio.main()
+    assert "tests/unit/test_studio_service.py" in selected
+    assert "tests/unit/test_desktop_jobs.py" in selected
     for name in ("runtime", "ownership", "sessions", "state_contracts", "state_durability"):
-        assert f"--ignore=tests/unit/test_studio_{name}.py" in commands
+        assert f"tests/unit/test_studio_{name}.py" not in selected
     # Ubuntu-latest's slow cases remain: its image differs from native Ubuntu 24.04.
     slow = workflow("release-slow.yml")["jobs"]["slow-comprehensive"]
     command = next(step["run"] for step in slow["steps"] if step.get("name") == "Run slow shard")
@@ -136,7 +151,7 @@ def test_windows_draft_iteration_defers_full_gates_until_ready_for_review() -> N
     assert "needs" not in native and "needs" not in preview["jobs"]["preview"]
     native_commands = "\n".join(step.get("run", "") for step in native["steps"])
     assert "scripts.ci_native_recovery" in native_commands
-    assert "test_studio_service.py" in native_commands
+    assert "scripts.ci_studio" in native_commands
 
 
 def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -> None:
