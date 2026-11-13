@@ -16,6 +16,7 @@ def test_each_native_page_advances_once_while_controls_change() -> None:
 def test_unknown_or_initializing_scope_page_never_advances() -> None:
     navigation = _MaintenanceNavigation()
     assert not navigation.advance(101, [], "next >")
+    assert not navigation.advance(101, [], "i agree")
     assert not navigation.advance(101, ["Choose what you want to do."], "next >")
     assert navigation.advance(101, ["Install / Reinstall (preserve user data)"], "next >")
     assert navigation.maintenance_seen

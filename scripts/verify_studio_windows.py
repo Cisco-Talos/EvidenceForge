@@ -130,7 +130,10 @@ class _MaintenanceNavigation:
         recognized = (
             maintenance
             or any("welcome to" in value.lower() for value in visible_text)
-            or next_caption == "i agree"
+            or (
+                next_caption == "i agree"
+                and any("license" in value.lower() for value in visible_text)
+            )
         )
         if (
             not recognized
