@@ -1851,3 +1851,31 @@ cleanup-specific native ACL check remains on that same verified descriptor.
 This small follow-up will be included in the delivered installer. Remote input was
 interrupted before any retained chat error could be recovered; no laptop data,
 permissions or installation was changed by that diagnostic attempt.
+
+Final build-only run 43518282745 succeeds from exact source
+ac14928ce2aa65b81f474b70aa57924acc6dd8c1:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43518282745
+All 45 focused native Windows uninstall/dialog/checkpoint regressions pass; the
+full native Studio/service, installed-scope verification, authoring qualification,
+Rust/frontend acceptance and qualify jobs remain skipped. This is explicitly an
+unqualified unsigned test preview, not a release or completed desktop acceptance.
+
+Delivery identity:
+
+- EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe
+- Size: 72,067,135 bytes.
+- SHA256: b9f333fbec21f7875900232bd748cd5548b02bdf38b077d51a9f34378da2a1c0
+- Runtime ID: 202b6b44bd797e519b89cdec91be2e9a3593a35a0280d8bb6c7d9c0a4fba8401
+- Bundled CPython 3.12.12; build Python 3.12.16; rustc 1.100.0
+  (0ef1bc386, 2026-11-09); Node 22.23.4; uv 0.13.8 (3d97a6aad).
+- windows-2025 runner image 20261103.298.1, x86_64-pc-windows-msvc.
+
+Download, build receipt source/run identity, checksum and MZ header are checked;
+the EXE, .exe.sha256 and .build.json are copied and independently byte-verified in
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-ac14928c/.
+This includes the earlier d2a5b12e workspace-opening feedback. Install this build
+before retesting its uninstall review: launching an older installed uninstaller
+still runs that older version's cleanup implementation. The precise old chat
+WinError 6, the laptop's cleanup ACL path/principal, genuine Windows 11 dual-scope/
+UAC/alternate-account acceptance and P0 evidence-disagreement repairs remain open.
+No PR, release, tag or version bump is created; full CI remains deferred as requested.
