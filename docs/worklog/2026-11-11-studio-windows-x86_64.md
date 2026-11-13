@@ -1483,3 +1483,33 @@ without caching file bytes, and existing inspection limits (64 MiB captured sour
 avoiding repeated YAML/JSON parsing; generated log data is never scanned. Requalify
 the shared implementation on all supported native CI platforms. The separate scratch
 cleanup repair remains Windows-specific, and the P1 scratch-design review is shared.
+
+### Laptop reaches Windows XML publication; file open denied (November 13)
+
+PR #484 merges as c1186030 with the exact tracked tree of tested head 2d75947a.
+Feature source CI 43469489502 passes all 33 jobs; Windows qualification 43469510340
+passes all three. Qualified feature artifact 14062506620 has EXE SHA256
+2913f146eaa4906d467ea4009110f964d8ab9437d79246753676783da62d9f37 and passes
+both installed scopes, maintenance order, native helpers, checkpoint equivalence,
+cleanup inventories and preservation checks. Exact-dev CI 43475917382 passes all
+33 jobs; Installer Builds 43475916983 passes all 11, including all four native
+installer targets. Windows 11 cloud-provider and genuine separate-account
+acceptance remain manual; hosted Server CI is not that acceptance.
+
+Using the delivered local installer, the laptop now completes all five hours but
+fails at Windows Security source-finalization publication. _SingleHostWriter's
+exact row commit cannot open an existing staged windows_event_security.xml with
+r+b (PermissionError/errno 13). The file is under MG-FS-01.maplegrove.example in
+the OneDrive-backed run 20261113-132548-f50ee199. This is distinct from the earlier
+empty ES sorting-directory deletion; an access-denied error alone establishes
+neither ReadOnly attributes, file sharing, nor the responsible process/provider.
+The runtime receipt identifies f0528eb39ed140bd101ba91ddfecb581bac2d1b290a9fd1aad5d93cb5a7d79d6,
+Python 3.12.12, x86_64, EvidenceForge 3.0.0rc1. The product version alone does not
+distinguish preview commits. File-attribute inspection is requested without
+modifying the failed run; diagnosis is pending.
+
+On codex/windows-output-file-access, change the maintenance action to
+Install / Upgrade (preserve user data), including the native navigation driver
+and its transition tests. Same-version reinstallation still uses this action.
+The Windows runtime is a tar.gz extracted by the bundled native bootstrap Python
+through tarfile.open(mode=r:gz); it requires neither WSL nor external tar/gzip.

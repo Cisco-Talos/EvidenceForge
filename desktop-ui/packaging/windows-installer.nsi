@@ -278,7 +278,7 @@ Function PageReinstall
   ${IfNot} ${Silent}
   ${AndIf} $PassiveMode <> 1
     StrCpy $R1 "Studio is already installed. Choose an action before selecting the installation scope."
-    StrCpy $R2 "Install / Reinstall (preserve user data)"
+    StrCpy $R2 "Install / Upgrade (preserve user data)"
     StrCpy $R3 "Uninstall"
     !insertmacro MUI_HEADER_TEXT "EvidenceForge Studio maintenance" "Choose what you want to do."
   ${EndIf}
