@@ -216,8 +216,8 @@ def _run_roots(parent: Path) -> tuple[list[Path], list[str]]:
 def _read_cleanup_settings(path: Path) -> dict[str, object]:
     """Read owned settings for deletion review, allowing read-only grants, never writers.
 
-    Cleanup does not reopen the running private service. Its owner/mutation policy
-    matches the cleanup inventory; ordinary Studio settings reads remain private.
+    Cleanup does not reopen the running private service. This explicit owner/mutation
+    policy matches the cleanup inventory without changing ordinary settings reads.
     """
     safe_path(filesystem_path(path))
     if os.name == "nt":

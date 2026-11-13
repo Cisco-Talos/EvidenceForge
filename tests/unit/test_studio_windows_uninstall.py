@@ -399,7 +399,7 @@ def test_cleanup_settings_allow_read_grants_without_mutating_them(locations: Use
     import subprocess
 
     from evidenceforge.studio.state_io import atomic_write
-    from evidenceforge.studio.state_upgrade import settings_document
+    from evidenceforge.utils import windows_filesystem as fs
 
     private_directory(locations.private)
     settings = locations.private / "settings.json"
@@ -416,8 +416,17 @@ def test_cleanup_settings_allow_read_grants_without_mutating_them(locations: Use
         ["icacls", str(settings), "/grant", "*S-1-1-0:(R)"], check=True, capture_output=True
     )
     before = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
-    with pytest.raises(PermissionError, match="another principal"):
-        settings_document(settings)
+    descriptor = fs.open_file(settings, os.O_RDONLY)
+    try:
+        with pytest.raises(PermissionError, match="another principal"):
+            fs.require_private(descriptor)
+    finally:
+        os.close(descriptor)
     assert build_plan(locations, {"work"}).locations == locations
     after = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
     assert before == after
+    subprocess.run(
+        ["icacls", str(settings), "/grant", "*S-1-1-0:(W)"], check=True, capture_output=True
+    )
+    with pytest.raises(StudioStateError, match="Cannot inspect workspace settings"):
+        build_plan(locations, {"work"})

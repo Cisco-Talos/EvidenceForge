@@ -1808,10 +1808,10 @@ Open an unchecked review first, inventory only selected categories, show the exa
 blocked path, and allow deselection/cancellation without deletion. Move the NSIS
 broker invocation to the confirmation-page leave hook, before uninstall progress
 or application-file deletion. Silent/passive/upgrading paths still preserve data.
-Cleanup settings reads now use the same owner/no-external-writer policy as cleanup
-inventory, allowing read-only grants without modifying ACLs; ordinary Studio settings
-reads retain their strict privacy requirements. This resolves an inconsistent read
-policy, but does not identify the laptop's exact blocked principal/path: no whitelist
+Cleanup settings reads now explicitly enforce the same owner/no-external-writer
+policy as cleanup inventory, allowing read-only grants without modifying ACLs;
+ordinary Studio settings reads are unchanged. This does not identify the laptop's
+exact blocked principal/path: no whitelist
 or external-write exception is introduced. Native regressions exercise the lazy
 review, a blocked category, default preservation and unchanged read-only ACLs.
 
@@ -1833,3 +1833,12 @@ native evidence will be appended after execution, with the new build's exact ide
 Combined local regression: 103 passed, 3 platform/data skips in 57.71 seconds across
 uninstall, workflow guards, state contracts, imports and artifact lifecycle. The
 three focused frontend files pass 28 tests again. No full acceptance matrix started.
+
+Native attempt 43516727155 passes 44 of 45 focused checks, including all five real
+dialog actions and checkpoint write-through/recovery tests. One new test incorrectly
+expects settings_document itself to reject a read-only grant; state_io's Windows
+reader delegates root/privacy enforcement to its surrounding ownership boundary.
+Correct the test to contrast strict require_private with cleanup's explicit
+allow-read policy, verify unchanged ACLs and require refusal of a newly added outside
+write grant. Do not attribute the laptop failure to the settings reader or claim an
+inconsistent preexisting ACL policy based on that disproven assumption.
