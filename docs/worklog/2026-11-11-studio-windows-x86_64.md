@@ -1911,3 +1911,30 @@ full acceptance disabled. The local focused state/search/source-recovery/pack-id
 and contract gate passes 128 tests with one native skip in 36.78 seconds; subsequent
 added edge/startup cases and native results are recorded with the next build below.
 Ruff and formatting checks pass. No laptop database or ACL is edited remotely.
+
+Startup-fix build-only run 43524419801 succeeds from exact source
+e021a95f59ad9a5735c0429beb11ef62e9e77dde:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43524419801
+Native diagnostics pass 59 tests in 16.81 seconds, including unchanged authoritative
+record digests after inspection/reopen, strict refusal of a different record ID,
+and actual Studio create_app restart with legacy lowercase-drive item/chat payloads.
+The final local record-path/workflow gate also passes 45 tests with two native skips.
+Full CI, installed-scope qualification and Windows 11 desktop acceptance stay deferred.
+
+Delivery identity:
+
+- EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe
+- Size: 72,078,234 bytes.
+- SHA256: 891e1a441c6dd70f548d6198133ce261675fa3c82d6c3d07c3e976eb37075f06
+- Runtime ID: b5c5e26397a10f889c9bbca28f98d2542265d663ea4dc0556cb1d0a89b7b6a25
+- Bundled CPython 3.12.12; build Python 3.12.16; rustc 1.100.0
+  (0ef1bc386, 2026-11-09); Node 22.23.4; uv 0.13.8 (3d97a6aad).
+- windows-2025 runner image 20261103.298.1; x86_64-pc-windows-msvc; unsigned;
+  build receipt qualification remains not_run, distinct from the focused regressions.
+
+Verify the source/run identity, SHA256 and MZ header, then copy and independently
+hash-check the EXE, .exe.sha256 and .build.json under
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-e021a95f/.
+The user should install/upgrade over the current copy while preserving existing
+state. No cleanup/reset, state schema migration or laptop database edit is required
+for this confirmed drive-letter mismatch. Publication/version/tag/PR remain unchanged.
