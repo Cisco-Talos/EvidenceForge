@@ -133,7 +133,8 @@ unchecked removes only the application:
   plus `.eforge/publisher.yaml`. This also affects standalone CLI/agent integrations.
   Listed skill files include local edits; unrelated files and skill parents stay.
 - **Authored scenarios/packs and generated output:** exact app-managed folders,
-  recognized scenario files and run bundles in known workspaces. The workspace
+  recognized scenario files and run bundles in known workspaces, plus the account's
+  imported pack-release library. The workspace
   root, unrelated files, other accounts and external/custom output parents stay.
 
 The review shows the account and exact paths before a separate irreversible-delete

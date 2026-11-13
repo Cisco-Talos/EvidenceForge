@@ -243,3 +243,14 @@ def test_directory_root_identity_is_independent_of_child_sort_order(
     assert plan.targets[0].directory
     execute(plan, {"private"})
     assert not locations.private.exists()
+
+
+def test_ordinary_lock_named_data_and_directories_are_included(locations: UserLocations) -> None:
+    ordinary = write(locations.private / "cache/run.lock")
+    nested = write(locations.private / "cache/install.lock/notes.txt")
+    plan = build_plan(locations)
+    selected_files = {entry.relative for target in plan.targets for entry in target.entries}
+    assert "cache/run.lock" in selected_files
+    assert "cache/install.lock" in selected_files
+    execute(plan, {"private"})
+    assert not ordinary.exists() and not nested.exists() and not locations.private.exists()

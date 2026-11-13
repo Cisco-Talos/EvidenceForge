@@ -222,6 +222,12 @@ jobs:
           if ($report.source_sha -ne $env:PACKAGE_SOURCE) { throw 'Report source mismatch' }
           if ($report.authoring.filesystem_permissions -ne 'passed' -or
               $report.authoring.packaged_cli_guard -ne 'passed') { throw 'Missing authoring evidence' }
+          foreach ($scope in @('CurrentUser', 'AllUsers')) {
+            if ($report.maintenance_navigation.$scope -ne 'passed' -or
+                $report.scopes.$scope.packaged_cleanup_inventory -ne 'passed') {
+              throw "Missing uninstall/maintenance evidence for $scope"
+            }
+          }
           if ($report.sha256 -ne $hash) { throw 'Report checksum mismatch' }
           if ($checksum -ne "$hash  $($installer.Name)") { throw 'Checksum file mismatch' }
           $report | Add-Member -NotePropertyName ci_gates -NotePropertyValue @{

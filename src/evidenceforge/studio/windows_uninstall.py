@@ -78,15 +78,30 @@ class CleanupPlan(BaseModel):
 
 
 def _ownership_lock(path: Path) -> bool:
-    return path.name in {
-        "service-start.lock",
-        "service-instance.lock",
-        "studio-data.lock",
-        "install.lock",
-        "publication.lock",
-        "owner.lock",
-        "run.lock",
-    } or (path.parent.name == "leases" and path.suffix == ".lock")
+    """Recognize reserved protocol files, not arbitrary authored .lock files."""
+    return (
+        (
+            path.parent.name == "EvidenceForge"
+            and path.name in {"service-start.lock", "service-instance.lock", "studio-data.lock"}
+        )
+        or (path.parent.name == "runtimes" and path.name == "install.lock")
+        or (
+            path.parent.name == "leases"
+            and path.parent.parent.name == "runtimes"
+            and path.suffix == ".lock"
+        )
+        or (
+            path.parent.name == "artifacts"
+            and path.parent.parent.name == ".eforge"
+            and path.name == "publication.lock"
+        )
+        or (
+            path.parent.name == "studio"
+            and path.parent.parent.name == ".eforge"
+            and path.name == "owner.lock"
+        )
+        or (path.parent.name == ".eforge-generation" and path.name == "run.lock")
+    )
 
 
 def _inventory(path: Path) -> tuple[FileIdentity, ...]:
@@ -115,7 +130,7 @@ def _inventory(path: Path) -> tuple[FileIdentity, ...]:
                 os.close(descriptor)
         # Ownership locks may be acquired after review. They contain no user data;
         # inspect their safety but exclude volatile contents from the snapshot.
-        if not _ownership_lock(current):
+        if directory or not _ownership_lock(current):
             entries.append(
                 FileIdentity(
                     relative=current.relative_to(path).as_posix(),

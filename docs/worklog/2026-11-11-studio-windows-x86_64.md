@@ -1290,3 +1290,20 @@ of a >300-character runtime resource; policy-enabled runner success alone is not
 evidence for an ordinary Windows laptop. Retain logical review paths and preserve
 an unrelated profile file. Reject dot-dot workspace spellings before containment.
 Native UI/ownership gate for ce9c8802 passes all 21 cases; the package build continues.
+
+Add installed GUI maintenance navigation in both scopes: open the actual setup,
+visit maintenance before the scope radios, verify the registered scope is selected,
+and cancel before any Install action. Require registration/app files to remain.
+This complements static template ordering with real NSIS navigation on the hosted
+runner, while retaining Windows 11 desktop/UAC acceptance separately. Only owned
+installer windows/descendants are automated. Ordinary data named run.lock or a
+.lock directory remains in the inventory; exclusions are reserved protocol paths.
+Local safety cases now pass sixteen tests.
+
+PR #477 merges into dev as 990372efe6dcbefb2a3f20281935835e948f0ba1 on November 12
+(04:31 UTC November 13). Current-head routine/native CI 43362249936 passes.
+Complete slow/portability/native memory run 43360464067 and all four installed
+platforms in 43360461241 pass on integrated 19c7e0a4. The only later foundation
+changes are the exact-byte test-spy removal and evidence notes, with identical
+production/dependency/behavior inputs. No release, version bump or tag is made.
+Follow-up #483 must still pass current-head CI and actual new installer verification.
