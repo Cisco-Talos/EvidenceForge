@@ -10,6 +10,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from evidenceforge._windows_paths import package_resource_path
 from evidenceforge.config import get_config_directory
 from evidenceforge.models.exceptions import ConfigurationError
 
@@ -92,10 +93,12 @@ def _surface_paths(package_root: Path) -> tuple[Path, ...]:
         package_root / "generation",
     )
     explicit = (
+        package_root / "_windows_paths.py",
         package_root / "models" / "scenario.py",
         package_root / "output_targets.py",
         package_root / "utils" / "ids.py",
         package_root / "utils" / "platforms.py",
+        package_root / "utils" / "paths.py",
         package_root / "utils" / "rng.py",
         package_root / "utils" / "time.py",
         package_root / "utils" / "timing.py",
@@ -146,6 +149,7 @@ def generation_behavior_surface_digest(package_root: Path | None = None) -> str:
     """Hash files that can change resolved or rendered generation behavior."""
 
     root = Path(__file__).resolve().parents[2] if package_root is None else package_root
+    root = package_resource_path(root)
     digest = hashlib.sha256()
     for path in _surface_paths(root):
         relative = path.relative_to(root).as_posix().encode("utf-8")

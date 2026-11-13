@@ -1,0 +1,166 @@
+//! Windows installation uses the bundled interpreter and native Python ACL adapter.
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read};
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
+use tauri::Emitter;
+use tauri::Manager;
+
+pub struct Runtime {
+    pub python: PathBuf,
+    pub root: PathBuf,
+    _lease: File,
+}
+
+pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("runtime");
+    if !resources.exists() {
+        return Ok(None); // Source-run builds have no packaged resources.
+    }
+    if std::env::consts::ARCH != "x86_64" {
+        return Err("This Studio preview requires Windows x86_64".into());
+    }
+    let data = if let Some(home) = std::env::var_os("EFORGE_STUDIO_HOME") {
+        PathBuf::from(home).join("data")
+    } else {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is unavailable")?)
+            .join("EvidenceForge")
+    };
+    let mut child = std::process::Command::new(resources.join("bootstrap/python.exe"))
+        .args([
+            "-I",
+            "-B",
+            "-X",
+            "utf8",
+            "-m",
+            "evidenceforge.studio.windows_runtime",
+            "--resources",
+        ])
+        .arg(&resources)
+        .arg("--data")
+        .arg(&data)
+        .arg("--progress")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start the bundled Windows runtime: {e}"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Missing runtime diagnostics pipe")?;
+    let diagnostics = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.take(65536).read_to_string(&mut text);
+        text
+    });
+    let stdout = child.stdout.take().ok_or("Missing runtime progress pipe")?;
+    let mut root = None;
+    let mut protocol_error = None;
+    for line in BufReader::new(stdout).lines() {
+        match line {
+            Ok(line) => {
+                if let Ok(path) = serde_json::from_str::<String>(&line) {
+                    root = Some(PathBuf::from(path));
+                } else if let Ok(progress) =
+                    serde_json::from_str::<crate::startup_progress::Progress>(&line)
+                {
+                    let _ = app.emit("studio-startup-progress", progress);
+                } else {
+                    protocol_error =
+                        Some("The runtime returned invalid startup progress".to_string());
+                }
+            }
+            Err(error) => {
+                protocol_error = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let detail = diagnostics
+        .join()
+        .map_err(|_| "Runtime diagnostics did not complete")?;
+    if !status.success() {
+        return Err(detail.trim().into());
+    }
+    if let Some(error) = protocol_error {
+        return Err(error);
+    }
+    let root = root.ok_or("The runtime did not return its installation location")?;
+    if root.parent() != Some(data.join("runtimes").as_path()) {
+        return Err("The private runtime is outside its selected cache".into());
+    }
+    let leases = data.join("runtimes/leases");
+    // The installer creates this private directory through the native ACL adapter.
+    let lease = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(0x00200000) // FILE_FLAG_OPEN_REPARSE_POINT
+        .open(leases.join(format!(
+            "{}.lock",
+            root.file_name().unwrap().to_string_lossy()
+        )))
+        .map_err(|e| e.to_string())?;
+    if !lease.metadata().map_err(|e| e.to_string())?.is_file()
+        || lease
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .file_attributes()
+            & 0x400
+            != 0
+    {
+        return Err("The Windows runtime lease is not a regular file".into());
+    }
+    lease.lock_shared().map_err(|e| e.to_string())?;
+    Ok(Some(Runtime {
+        python: root.join("python.exe"),
+        root,
+        _lease: lease,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_launch_lease_interoperates_with_python_windows_locks() {
+        let directory =
+            std::env::temp_dir().join(format!("eforge-windows-lease-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("runtime.lock");
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        lease.lock_shared().unwrap();
+        let python = std::env::var_os("EFORGE_STUDIO_TEST_PYTHON").unwrap_or("python".into());
+        let script = "import msvcrt,sys\nf=open(sys.argv[1],'r+b')\ntry:\n msvcrt.locking(f.fileno(),msvcrt.LK_NBLCK,1)\n locked=False\nexcept OSError:\n locked=True\nassert locked == (sys.argv[2]=='locked')";
+        let check = |state: &str| {
+            assert!(std::process::Command::new(&python)
+                .args(["-c", script])
+                .arg(&path)
+                .arg(state)
+                .status()
+                .unwrap()
+                .success());
+        };
+        check("locked");
+        drop(lease);
+        check("unlocked");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}

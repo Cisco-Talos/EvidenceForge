@@ -18,7 +18,6 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.activity.generator import _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
 from evidenceforge.generation.activity.process_network import (
@@ -1572,6 +1571,9 @@ class WorldPlanner:
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
+        Process execution owns bounded lifetimes, including shell-delayed launches;
+        the network request timestamp must not replace an admitted process close.
+
         Args:
             effective_persona: Override persona for catalog filtering. When set
                 (e.g. ``"_server_admin"``), restricts executables to those
@@ -1813,7 +1815,6 @@ class WorldPlanner:
                 username=user.username,
                 system=system,
             )
-            target_exe = selected_descriptor.executable
 
             singleton_key = None
             if selected_descriptor.singleton_per_session:
@@ -1856,17 +1857,6 @@ class WorldPlanner:
                 command_line=command_line,
                 parent_pid=parent_pid,
             )
-            if target_exe.casefold() == "ldapsearch":
-                lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
-                termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
-                self.activity_generator._remember_foreground_process_finalizer(
-                    system=system,
-                    user=user,
-                    pid=pid,
-                    process_name=image,
-                    logon_id=session.logon_id,
-                    termination_time=termination_time,
-                )
             self.activity_generator._record_user_process(system, user, pid, image)
             return pid
 
@@ -2136,17 +2126,6 @@ class WorldPlanner:
             command_line=command_line,
             parent_pid=parent_pid,
         )
-        if target_exe.lower() == "ldapsearch":
-            lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
-            termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
-            self.activity_generator._remember_foreground_process_finalizer(
-                system=system,
-                user=user,
-                pid=pid,
-                process_name=image,
-                logon_id=session.logon_id,
-                termination_time=termination_time,
-            )
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 

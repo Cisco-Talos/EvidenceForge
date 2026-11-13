@@ -1,0 +1,234 @@
+name: Windows Studio Preview
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source-ref:
+        type: string
+        default: ''
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: windows-studio-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-tests:
+    name: Studio service and recovery (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+    outputs:
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Preserve repository bytes
+        run: git config --global core.autocrlf false
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+      - name: Record native source snapshot
+        id: source
+        run: '"sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT'
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked native tools
+        id: native-tools
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv sync --locked --extra studio --extra dev
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
+          uv run --no-sync python --version
+          uv --version
+      - name: Test native Studio service and authoring transport
+        timeout-minutes: 30
+        run: uv run --no-sync python -m scripts.ci_studio
+      - name: Test native state and helper recovery
+        if: ${{ !cancelled() && steps.native-tools.outcome == 'success' }}
+        run: uv run --no-sync python -m scripts.ci_native_recovery
+  preview:
+    name: Installer (windows-x86_64 preview)
+    env:
+      PYTHONUTF8: '1'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build/studio-windows/target
+      CARGO_BUILD_JOBS: '2'
+      RUSTUP_TOOLCHAIN: stable
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    outputs:
+      source-sha: ${{ steps.tools.outputs.source-sha }}
+    steps:
+      - name: Preserve repository bytes
+        run: git config --global core.autocrlf false
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+      - name: Install locked tools and record host
+        id: tools
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Native Windows x86_64 is required' }
+          uv sync --locked --extra studio --extra dev
+          npm --prefix desktop-ui ci
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc --toolchain stable
+          uv run --no-sync python scripts/sync_studio_version.py --check
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
+          $rustVersion = (rustc +stable --version) -replace '[^A-Za-z0-9.-]', '-'
+          "rust-version=$rustVersion" >> $env:GITHUB_OUTPUT
+          $sourceSha = git rev-parse HEAD
+          "source-sha=$sourceSha" >> $env:GITHUB_OUTPUT
+          rustc +stable --version
+          node --version
+          uv --version
+      - name: Cache Windows Rust dependencies and build artifacts
+        id: rust-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/studio-windows/target
+          key: windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-${{ steps.tools.outputs.source-sha }}
+          restore-keys: |
+            windows-studio-static-${{ steps.tools.outputs.rust-version }}-${{ hashFiles('desktop-ui/src-tauri/Cargo.lock', 'desktop-ui/src-tauri/Cargo.toml') }}-
+            windows-studio-static-${{ steps.tools.outputs.rust-version }}-
+      - name: Test Windows runtime and process contracts
+        run: >-
+          uv run --no-sync pytest --no-cov
+          tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
+          tests/unit/test_windows_filesystem.py
+          tests/unit/test_windows_streams.py
+          tests/unit/test_windows_resource_paths.py tests/unit/test_windows_output_paths.py
+          tests/unit/test_external_sorted_writer.py
+          tests/unit/test_world_model.py tests/unit/test_process_lifetimes.py
+          tests/unit/test_resource_forecast.py tests/unit/test_artifact_properties.py
+          tests/unit/test_studio_runtime.py tests/unit/test_studio_background.py
+          tests/unit/test_studio_startup.py tests/unit/test_studio_event_socket.py
+      - name: Check Python and frontend contracts
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          npm --prefix desktop-ui run types:check
+          npm --prefix desktop-ui run build
+      - name: Build unsigned dual-scope NSIS preview
+        id: package-build
+        run: uv run --no-sync python scripts/package_studio_windows.py
+      - name: Install pinned native Codex
+        run: npm install --global @openai/codex@0.167.0
+      - name: Verify native authoring permissions without a model
+        run: >-
+          uv run --no-sync python scripts/check_studio_sandbox.py
+          --studio-resources build/studio-windows/resources
+          --report build/studio-windows/authoring-probe.json
+      - name: Verify installed scopes, runtime and recovery
+        timeout-minutes: 45
+        run: |
+          $installer = Get-ChildItem dist/windows/*-setup.exe
+          if ($installer.Count -ne 1) { throw 'Expected exactly one preview installer' }
+          uv run --no-sync python scripts/verify_studio_windows.py $installer.FullName `
+            --authoring-report build/studio-windows/authoring-probe.json
+      - name: Test Windows frontend contracts
+        run: npm --prefix desktop-ui test
+      - name: Test Windows native shell contracts
+        working-directory: desktop-ui/src-tauri
+        run: >-
+          cargo +stable test --locked --target x86_64-pc-windows-msvc
+          --features tauri/custom-protocol --release
+      - name: Upload installer candidate pending native service checks
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-installer-candidate-x86_64
+          path: dist/windows/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve compiled dependencies after packaging failures
+        if: >-
+          ${{ always() && !cancelled() && steps.package-build.outcome != '' &&
+              steps.package-build.outcome != 'skipped' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/studio-windows/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Upload Windows failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-preview-failure
+          path: |
+            dist/windows/
+            build/studio-windows/tauri-standalone.json
+            build/studio-windows/authoring-probe.json
+          if-no-files-found: warn
+          retention-days: 14
+  qualify:
+    name: Qualify Windows preview
+    needs: [preview, native-tests]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Download this run's installer candidate
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: windows-installer-candidate-x86_64
+          path: dist/windows
+      - name: Require matching source and artifact evidence
+        env:
+          PACKAGE_SOURCE: ${{ needs.preview.outputs.source-sha }}
+          NATIVE_SOURCE: ${{ needs.native-tests.outputs.source-sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PACKAGE_SOURCE -notmatch '^[0-9a-f]{40}$') { throw 'Missing source snapshot' }
+          if ($env:PACKAGE_SOURCE -ne $env:NATIVE_SOURCE) { throw 'Native/package source mismatch' }
+          $installer = Get-ChildItem dist/windows/*-setup.exe
+          if ($installer.Count -ne 1) { throw 'Expected one verified installer' }
+          $reportPath = [IO.Path]::ChangeExtension($installer.FullName, 'verification.json')
+          $report = Get-Content -Raw $reportPath | ConvertFrom-Json
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = (Get-Content -Raw ($installer.FullName + '.sha256')).Trim()
+          if ($report.source_sha -ne $env:PACKAGE_SOURCE) { throw 'Report source mismatch' }
+          if ($report.authoring.filesystem_permissions -ne 'passed' -or
+              $report.authoring.packaged_cli_guard -ne 'passed') { throw 'Missing authoring evidence' }
+          if ($report.sha256 -ne $hash) { throw 'Report checksum mismatch' }
+          if ($checksum -ne "$hash  $($installer.Name)") { throw 'Checksum file mismatch' }
+          $report | Add-Member -NotePropertyName ci_gates -NotePropertyValue @{
+            run_id = $env:GITHUB_RUN_ID
+            package = 'passed'
+            native_service_recovery = 'passed'
+          }
+          $report | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $reportPath
+      - name: Upload verified Windows preview
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: preview-installer-windows-x86_64
+          path: dist/windows/*
+          if-no-files-found: error
+          retention-days: 14

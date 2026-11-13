@@ -40,6 +40,7 @@ def test_split_name_edits_restore_originals_if_one_replacement_fails(
     title = draft.parent / "title.yaml"
     title.write_text("# retain title\ndisplay_name: Original # retain comment\n")
     title.chmod(0o640)
+    original_mode = title.stat().st_mode & 0o777
     original = {path: path.read_bytes() for path in (draft, title)}
     replace = os.replace
     calls = 0
@@ -58,14 +59,14 @@ def test_split_name_edits_restore_originals_if_one_replacement_fails(
             draft, "new-id", "New Title", project_root=workspace, expected_digest=digest
         )
     assert {path: path.read_bytes() for path in original} == original
-    assert title.stat().st_mode & 0o777 == 0o640
+    assert title.stat().st_mode & 0o777 == original_mode
     assert not list(draft.parent.glob(".*.names*"))
     monkeypatch.setattr(os, "replace", replace)
     set_artifact_names(draft, "new-id", "New Title", project_root=workspace, expected_digest=digest)
     assert "# retain root" in draft.read_text()
     assert "# retain title" in title.read_text() and "# retain comment" in title.read_text()
     assert inspect_artifact(draft)["name"] == "new-id"
-    assert title.stat().st_mode & 0o777 == 0o640
+    assert title.stat().st_mode & 0o777 == original_mode
 
 
 def test_pack_rename_remaps_catalog_namespaces_and_lists_exact_consumers(

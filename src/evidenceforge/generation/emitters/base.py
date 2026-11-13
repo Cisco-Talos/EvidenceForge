@@ -43,6 +43,7 @@ from weakref import ReferenceType, ref
 
 from jinja2.sandbox import SandboxedEnvironment
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.verification_resources import VerificationResources
@@ -1732,8 +1733,10 @@ class LogEmitter(ABC):
             header = header_template.render()
 
             # Write header to file
-            self.output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.output_path, "w", encoding=self.format_def.output.encoding) as f:
+            filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
+            with open(
+                filesystem_path(self.output_path), "w", encoding=self.format_def.output.encoding
+            ) as f:
                 f.write(header)
                 if not header.endswith("\n"):
                     f.write("\n")
@@ -1804,17 +1807,21 @@ class LogEmitter(ABC):
                 if not self._header_written:
                     self._write_header_unlocked()
                     self._header_written = True
-                self.output_path.parent.mkdir(parents=True, exist_ok=True)
+                filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
                 pending = self._exact_file_pending.get(key)
                 if pending is None:
-                    offset = self.output_path.stat().st_size if self.output_path.exists() else 0
+                    offset = (
+                        filesystem_path(self.output_path).stat().st_size
+                        if filesystem_path(self.output_path).exists()
+                        else 0
+                    )
                     pending = (digest, offset, len(payload))
                     self._exact_file_pending[key] = pending
                 pending_digest, offset, payload_length = pending
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Exact direct-file admission changed on retry")
-                mode = "r+b" if self.output_path.exists() else "w+b"
-                with open(self.output_path, mode) as output:
+                mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
+                with open(filesystem_path(self.output_path), mode) as output:
                     output.seek(offset)
                     retained_payload = output.read(payload_length)
                     if retained_payload == payload:
@@ -1918,11 +1925,13 @@ class LogEmitter(ABC):
             self._header_written = True
 
         # Ensure output directory exists
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
 
         # Append buffered events to file
         mode = "a" if self._header_written else "w"
-        with open(self.output_path, mode, encoding=self.format_def.output.encoding) as f:
+        with open(
+            filesystem_path(self.output_path), mode, encoding=self.format_def.output.encoding
+        ) as f:
             for event in self.buffer:
                 f.write(event)
                 if not event.endswith("\n"):
@@ -1966,12 +1975,12 @@ class LogEmitter(ABC):
                 if self._footer_written:
                     return
                 if self._footer_pending is None:
-                    offset = self.output_path.stat().st_size
+                    offset = filesystem_path(self.output_path).stat().st_size
                     self._footer_pending = (digest, offset, len(payload))
                 pending_digest, offset, payload_length = self._footer_pending
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Emitter footer changed during retry")
-                with self.output_path.open("r+b") as output:
+                with filesystem_path(self.output_path).open("r+b") as output:
                     output.seek(offset)
                     retained = output.read(payload_length)
                     if retained == payload:

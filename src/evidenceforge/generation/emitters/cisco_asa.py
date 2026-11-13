@@ -45,6 +45,7 @@ from threading import RLock
 from typing import Any, cast
 from weakref import ReferenceType, ref
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.network import (
     NatSensorObservation,
@@ -528,7 +529,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
         builds: dict[str, list[tuple[int, Any, int, int]]] = {}
         for writer in self._writers.values():
-            path = writer.output_path
+            path = filesystem_path(writer.output_path)
             if not path.exists():
                 continue
             year = self._source_year(path)
@@ -561,11 +562,12 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if self._connection_ids_finalized or self._final_connection_id_replacements is not None:
             raise RuntimeError("Cisco ASA checkpoint restore requires unfinalized emitter state")
         for path in paths:
+            path = filesystem_path(path)
             lines = path.read_text(encoding="utf-8").splitlines()
             ordered = sorted(lines, key=_cisco_asa_sort_key)
             if lines != ordered:
                 descriptor, raw_pending = tempfile.mkstemp(
-                    prefix=f".{path.name}.",
+                    prefix=".efasa-",
                     suffix=".asa-order",
                     dir=path.parent,
                 )
@@ -601,7 +603,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             self._final_connection_id_replacements = self._build_final_connection_id_replacements()
         replacements = self._final_connection_id_replacements
         for writer in self._writers.values():
-            path = writer.output_path
+            path = filesystem_path(writer.output_path)
             if not path.exists():
                 continue
             changed = False
@@ -625,7 +627,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             if not changed:
                 continue
             descriptor, raw_pending = tempfile.mkstemp(
-                prefix=f".{path.name}.",
+                prefix=".efasa-",
                 suffix=".connection-ids",
                 dir=path.parent,
             )

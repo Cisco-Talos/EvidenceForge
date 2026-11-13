@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -19,6 +20,7 @@ import pytest
 from evidenceforge.studio import bootstrap
 from evidenceforge.studio.ownership import current_account, process_account
 from evidenceforge.studio.state_io import StateLock, StudioStateError
+from tests.support.studio_process import stop_helper_child, verified_helper_child
 from tests.support.studio_state import paths
 
 
@@ -40,6 +42,7 @@ def test_native_windows_share_one_verified_helper_and_instance_lock(
             stderr=log,
             env=environment,
         )
+        native: psutil.Process | None = None
         try:
             deadline = time.monotonic() + 15
             ready: bootstrap.ServiceDescriptor | None = None
@@ -52,7 +55,7 @@ def test_native_windows_share_one_verified_helper_and_instance_lock(
                     break
                 pause.wait(0.05)  # Bounded readiness polling, not crash-boundary synchronization.
             assert ready is not None, "Native helper readiness deadline failed"
-            assert ready.pid == child.pid
+            native = verified_helper_child(child.pid, ready)
             assert ready.schema_version == 1 and ready.owner == current_account()
             assert process_account(psutil.Process(child.pid)) == current_account()
             assert bootstrap._verified_process(ready) is not None
@@ -80,7 +83,10 @@ def test_native_windows_share_one_verified_helper_and_instance_lock(
             error.value.close()
             # Exercises both native owner checks around authenticated replacement.
             bootstrap._replace_idle(ready)
-            assert child.wait(timeout=8) == 0
+            # On Windows psutil uses TerminateProcess with SIGTERM's exit code;
+            # the virtualenv launcher propagates that verified child's status.
+            expected_exit = int(signal.SIGTERM) if os.name == "nt" else 0
+            assert child.wait(timeout=8) == expected_exit
             # Uvicorn may replay SIGTERM after lifespan shutdown, leaving stale discovery.
             # The next launch must reject its exited identity, never attach to a recycled PID.
             assert bootstrap._verified_process(ready) is None
@@ -88,7 +94,8 @@ def test_native_windows_share_one_verified_helper_and_instance_lock(
             with StateLock(selected.state / "service-instance.lock"):
                 pass
         finally:
-            # Only the exact unreaped child created by this harness is signalled.
+            stop_helper_child(native)
+            # Reap the virtualenv launcher as well as its verified interpreter.
             if child.poll() is None:
                 child.terminate()
                 try:

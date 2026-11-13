@@ -76,7 +76,9 @@ def test_environment_resolves_real_exact_pack_and_include_origins_without_writin
     assert declaration.source == "description.yaml"
     assert declaration.line == 3
     assert declaration.source_key
-    assert report.declaration_content(declaration.source_key) == include.read_text()
+    assert report.declaration_content(declaration.source_key) == include.read_bytes().decode(
+        "utf-8"
+    )
     catalogs = [entry for entry in report.declarations if entry.layer == "Pack catalog"]
     assert catalogs
     assert all(entry.value_found and entry.source_key and entry.line for entry in catalogs)
@@ -190,7 +192,7 @@ def test_declaration_viewing_requires_auth_exact_revision_and_known_captured_fil
         base = f"/v1/environment/{item['id']}/declarations/files/{report['compiled_sha256']}/"
         endpoint = base + entry["source_key"]
         assert client.get(endpoint).status_code == 401
-        assert client.get(endpoint, headers=headers).text == include.read_text()
+        assert client.get(endpoint, headers=headers).text == include.read_bytes().decode("utf-8")
         assert client.get(base + "sources/unknown.yaml", headers=headers).status_code == 404
         assert client.get(base + "%2e%2e/outside.yaml", headers=headers).status_code == 404
         assert client.get(base + "%2Fetc%2Fpasswd", headers=headers).status_code == 404
@@ -255,10 +257,9 @@ def test_environment_routes_require_auth_and_active_workspace_and_only_known_ove
         assert client.get(endpoint).status_code == 401
         files_endpoint = f"/v1/environment/{item['id']}/files/"
         assert client.get(files_endpoint + "personas/analyst.yaml").status_code == 401
-        assert (
-            client.get(files_endpoint + "personas/analyst.yaml", headers=headers).text
-            == overlay.read_text()
-        )
+        assert client.get(
+            files_endpoint + "personas/analyst.yaml", headers=headers
+        ).text == overlay.read_bytes().decode("utf-8")
         assert (
             client.get(files_endpoint + "personas/linked.yaml", headers=headers).status_code == 404
         )

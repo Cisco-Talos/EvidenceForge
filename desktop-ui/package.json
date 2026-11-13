@@ -14,8 +14,8 @@
     "build": "tsc && vite build",
     "build:native": "node scripts/build-native.mjs",
     "test": "vitest run",
-    "types:generate": "../.venv/bin/python scripts/generate-types.py",
-    "types:check": "../.venv/bin/python scripts/generate-types.py --check",
+    "types:generate": "uv run --project .. python scripts/generate-types.py",
+    "types:check": "uv run --project .. python scripts/generate-types.py --check",
     "preview": "vite preview",
     "tauri": "tauri"
   },

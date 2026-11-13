@@ -24,6 +24,7 @@ on:
           - macos-aarch64
           - linux-aarch64
           - linux-x86_64
+          - windows-x86_64
         default: linux-x86_64
       force-tests:
         type: boolean
@@ -50,6 +51,7 @@ jobs:
       digest: ${{ steps.identity.outputs.digest }}
       linux: ${{ steps.matrix.outputs.linux }}
       has-linux: ${{ steps.matrix.outputs.has_linux }}
+      has-posix: ${{ steps.matrix.outputs.has_posix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -82,9 +84,12 @@ jobs:
           ]
           selected = os.environ["SELECTED_PLATFORM"]
           matrix = [target for target in targets if selected in ("all", target["platform"])]
-          if not matrix:
+          if not matrix and selected != "windows-x86_64":
               raise SystemExit("Unknown installer platform")
+          has_posix = bool(matrix)
+          matrix = matrix or [targets[0]]
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("has_posix=" + str(has_posix).lower(), file=output)
               print("matrix=" + json.dumps({"include": matrix}), file=output)
               linux = [row for row in matrix if row["os"] == "linux"]
               print("linux=" + json.dumps({"include": linux or [targets[1]]}), file=output)
@@ -194,7 +199,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
-    if: always() && needs.plan.result == 'success' && (needs.native-recovery.result == 'success' || needs.native-recovery.result == 'skipped')
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has-posix == 'true' && (needs.native-recovery.result == 'success' || needs.native-recovery.result == 'skipped')
   native-recovery:
     name: Installer source recovery (${{ matrix.platform }})
     needs:
@@ -208,3 +213,10 @@ jobs:
       runner: ${{ matrix.runner }}
       source-ref: ${{ inputs.source-ref || github.sha }}
       force-tests: ${{ inputs.force-tests || false }}
+
+  windows-preview:
+    name: Installer (windows-x86_64 preview)
+    if: ${{ !inputs.release && (inputs.platform == 'windows-x86_64' || inputs.platform == 'all' || inputs.platform == '') }}
+    uses: ./.github/workflows/windows-preview.yml
+    with:
+      source-ref: ${{ inputs.source-ref || github.sha }}

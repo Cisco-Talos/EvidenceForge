@@ -50,13 +50,18 @@ class ChatAccess(BaseModel):
     @property
     def instructions(self) -> str:
         """Explain the enforced boundary and the manual new-draft workflow."""
+        validation = (
+            " Run scenario checks with eforge validate --no-record so validation does not "
+            "write project-level receipts outside this conversation's writable scope. "
+            "Studio's Validate action retains validation provenance through its helper."
+        )
         if self.mode == "discussion":
             return (
                 " This is a read-only discussion of this exact source. Read and explain it; "
                 "do not edit it, its original draft, dependencies or configuration. If the user "
                 "requests changes, explain that they must select New draft in Studio and open "
                 "a new conversation on that draft. Do not create a draft, continue an earlier "
-                "draft, change file permissions or request broader write access."
+                "draft, change file permissions or request broader write access." + validation
             )
         return (
             f" Edit only the active draft at {str(self.source)!r} and companions inside "
@@ -64,7 +69,7 @@ class ChatAccess(BaseModel):
             "Never edit published releases, completed drafts or other library items. "
             "Use the current absolute source path rather than a path copied from history."
             " Do not run new-draft again, allocate another draft_id, or move only its YAML; "
-            "retain draft.json and all companion files."
+            "retain draft.json and all companion files." + validation
         )
 
 

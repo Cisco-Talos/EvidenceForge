@@ -92,6 +92,12 @@ def test_macos_does_not_replace_running_registration_without_descriptor(
     monkeypatch.setattr(
         background, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)
     )
+    monkeypatch.setattr(
+        background.os,
+        "getuid",
+        lambda: os.geteuid() if hasattr(os, "geteuid") else 1000,
+        raising=False,
+    )
     run = Mock(return_value=subprocess.CompletedProcess([], 0, stdout="\tpid = 1234\n"))
     monkeypatch.setattr(background.subprocess, "run", run)
     monkeypatch.setattr(background.psutil, "pid_exists", lambda pid: pid == 1234)
@@ -137,7 +143,10 @@ def test_linux_helper_keeps_detached_process_contract(
     run = Mock()
     monkeypatch.setattr(background.subprocess, "run", run)
     background.start_background_service(paths)
-    assert popen.call_args.kwargs["start_new_session"] is True
+    if sys.platform == "win32":
+        assert popen.call_args.kwargs["creationflags"] & 0x08000000
+    else:
+        assert popen.call_args.kwargs["start_new_session"] is True
     assert popen.call_args.kwargs["env"]["EFORGE_STUDIO_DAEMON"] == "1"
     assert popen.call_args.kwargs["stdin"] == subprocess.DEVNULL
     run.assert_not_called()

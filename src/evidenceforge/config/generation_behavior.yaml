@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 512
+current_revision: 517
 history_start_revision: 1
-behavior_surface_sha256: ae5300534e2aa3b4ee88ffea804d8ff610a8a0c0e260fae4d26a0a208479b8ee
+behavior_surface_sha256: 45b45f516bb490fb7e1d4ddb8def0108e56f04175acc97828fe265d3b2c252d8
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5907,3 +5907,48 @@ changes:
   summary: Admit optional Mac foreground work only when it fits before authored shell use,
     interleave authored work before background activity, reject future prepared parents,
     and retain committed lifecycle watermarks during terminal settlement.
+- revision: 513
+  id: avoid-windows-syslog-import-temporary-file
+  impact: none
+  domains:
+  - syslog-publication
+  - windows-cli-startup
+  formats:
+  - syslog
+  summary: Inspect the known Windows temporary-stream type without allocating a file
+    during import, preserving exact publication and generated evidence semantics.
+- revision: 514
+  id: preserve-windows-bundled-resource-and-forecast-access
+  impact: none
+  domains:
+  - packaged-resource-integrity
+  - resource-forecasting
+  formats: []
+  summary: Read long Windows bundled paths without legacy path truncation and budget
+    zero swap when optional paging counters are unavailable; generated evidence is unchanged.
+- revision: 515
+  id: preserve-windows-nested-output-filesystem-access
+  impact: none
+  domains:
+  - output-publication
+  - checkpoint-storage
+  formats: []
+  summary: Use long-path Windows I/O spelling and bounded temporary names while retaining
+    logical output paths, exact publication, deterministic bytes and checkpoint identity.
+- revision: 516
+  id: resolve-long-windows-checkpoint-roots
+  impact: none
+  domains:
+  - checkpoint-storage
+  formats: []
+  summary: Resolve checkpoint roots through long-path Windows I/O while retaining their
+    logical namespace and rejecting all unprefixed long-path probes in native tests.
+- revision: 517
+  id: retain-execution-owned-ldap-process-lifetimes
+  impact: localized
+  domains:
+  - process-lifecycle
+  - baseline-traffic
+  formats: []
+  summary: Keep LDAP client closure owned by process execution instead of replacing it
+    with an earlier network-request timestamp when shell scheduling delays launch.

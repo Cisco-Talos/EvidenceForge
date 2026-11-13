@@ -10,10 +10,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import psutil
-import uvicorn
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.studio.background import start_background_service
@@ -28,7 +29,7 @@ from evidenceforge.studio.ownership import (
 from evidenceforge.studio.paths import StudioPaths, studio_paths
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import runtime_lease
-from evidenceforge.studio.service import create_app
+from evidenceforge.studio.startup_diagnostics import lifecycle_log, startup_phase
 from evidenceforge.studio.state_io import (
     StateLock,
     StudioStateError,
@@ -36,6 +37,21 @@ from evidenceforge.studio.state_io import (
     durable_remove,
     open_regular,
 )
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def create_app(paths: StudioPaths, token: str, *, shutdown: Callable[[], None]) -> FastAPI:
+    """Load the application only in the service process, not every attachment attempt."""
+    from evidenceforge.studio.service import create_app as build_app
+
+    startup_phase("application_imported")
+    return build_app(paths, token, shutdown=shutdown)
+
+
+def _startup_timeout() -> float:
+    return 60.0 if sys.platform == "win32" else 12.0
 
 
 class ServiceDescriptor(BaseModel):
@@ -192,16 +208,25 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
     """Return the existing service or launch a detached one and await readiness."""
     app_paths = paths or studio_paths()
     validate_private_paths(app_paths)
+    selected_runtime = runtime_id()
+    with lifecycle_log(app_paths, "launcher", selected_runtime):
+        return _connect_or_start(app_paths, selected_runtime)
+
+
+def _connect_or_start(app_paths: StudioPaths, selected_runtime: str) -> ServiceDescriptor:
     lock_path = app_paths.state / "service-start.lock"
     lock = StateLock(lock_path)
-    ownership_deadline = time.monotonic() + 12
+    timeout = _startup_timeout()
+    ownership_deadline = time.monotonic() + timeout
+    startup_phase("waiting_launch_lock")
     while True:
         try:
             lock.acquire()
             break
         except StudioStateError:
             descriptor = _read_descriptor(app_paths.service_file)
-            if descriptor and descriptor.runtime_id == runtime_id() and _is_live(descriptor):
+            if descriptor and descriptor.runtime_id == selected_runtime and _is_live(descriptor):
+                startup_phase("ready")
                 return descriptor
             if time.monotonic() >= ownership_deadline:
                 raise RuntimeError(
@@ -209,22 +234,58 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
                 ) from None
             time.sleep(0.1)
     with lock:
-        selected_runtime = runtime_id()
         descriptor = _read_descriptor(app_paths.service_file)
         if descriptor and _is_live(descriptor):
             if descriptor.runtime_id == selected_runtime:
+                startup_phase("ready")
                 return descriptor
             _replace_idle(descriptor)
         # An authenticated probe may fail while a verified helper is starting. Never
         # spawn a second writer merely because its HTTP listener is not ready yet.
-        if descriptor is None or _verified_process(descriptor) is None:
-            start_background_service(app_paths)
-        deadline = time.monotonic() + 12
+        launched = None
+        verified = _verified_process(descriptor) if descriptor is not None else None
+        observed = (
+            descriptor
+            if descriptor is not None
+            and verified is not None
+            and descriptor.runtime_id == selected_runtime
+            else None
+        )
+        if verified is None:
+            startup_phase("launching_helper")
+            launched = start_background_service(app_paths)
+        startup_phase("waiting_readiness")
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             descriptor = _read_descriptor(app_paths.service_file)
             if descriptor and descriptor.runtime_id == selected_runtime and _is_live(descriptor):
+                startup_phase("ready")
                 return descriptor
+            if (
+                descriptor is not None
+                and descriptor.runtime_id == selected_runtime
+                and _verified_process(descriptor) is not None
+            ):
+                observed = descriptor
+            if observed is not None and _verified_process(observed) is None:
+                startup_phase("helper_exited")
+                raise RuntimeError(
+                    "Studio service exited while becoming ready; "
+                    f"see {app_paths.logs / 'service.log'}"
+                )
+            if launched is not None and (exit_code := launched.poll()) is not None:
+                if (
+                    descriptor is None
+                    or descriptor.runtime_id != selected_runtime
+                    or _verified_process(descriptor) is None
+                ):
+                    startup_phase("helper_exited")
+                    raise RuntimeError(
+                        f"Studio service exited before becoming ready (exit code {exit_code}); "
+                        f"see {app_paths.logs / 'service.log'}"
+                    )
             time.sleep(0.1)
+    startup_phase("readiness_timeout")
     raise RuntimeError(f"Studio service did not become ready; see {app_paths.logs / 'service.log'}")
 
 
@@ -232,12 +293,19 @@ def serve(paths: StudioPaths | None = None) -> None:
     """Bind a private loopback socket and run the background service."""
     app_paths = paths or studio_paths()
     validate_private_paths(app_paths)
-    with runtime_lease(), StateLock(app_paths.state / "service-instance.lock"):
+    with (
+        runtime_lease(),
+        lifecycle_log(app_paths, "helper", runtime_id()),
+        StateLock(app_paths.state / "service-instance.lock"),
+    ):
+        startup_phase("instance_owned")
         _serve(app_paths)
 
 
 def _serve(app_paths: StudioPaths) -> None:
     """Publish discovery while holding exclusive helper-instance ownership."""
+    import uvicorn
+
     existing = _read_descriptor(app_paths.service_file)
     if existing and _verified_process(existing) is not None:
         return
@@ -256,12 +324,15 @@ def _serve(app_paths: StudioPaths) -> None:
             executable=str(Path(process.exe()).resolve()),
         )
         atomic_write(app_paths.service_file, descriptor.model_dump_json().encode())
+        startup_phase("discovery_published")
         try:
 
             def request_shutdown() -> None:
                 server.should_exit = True
 
+            startup_phase("application_import")
             app = create_app(app_paths, descriptor.token, shutdown=request_shutdown)
+            startup_phase("application_created")
             config = uvicorn.Config(
                 app,
                 host="127.0.0.1",
@@ -274,6 +345,7 @@ def _serve(app_paths: StudioPaths) -> None:
 
             asyncio.run(server.serve(sockets=[listener]))
         finally:
+            startup_phase("service_stopped")
             current = _read_descriptor(app_paths.service_file)
             if current == descriptor:
                 durable_remove(app_paths.service_file)

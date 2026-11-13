@@ -12,6 +12,7 @@ publication through the dispatcher before this adapter can produce evidence.
 from pathlib import Path
 from typing import Any
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
@@ -72,7 +73,7 @@ class MacosEndpointSecurityEmitter(HostMultiplexEmitter):
 
     def _writer_path_for_key(self, safe_writer_key: str) -> Path:
         path = super()._writer_path_for_key(safe_writer_key)
-        if path.exists():
+        if filesystem_path(path).exists():
             raise FileExistsError("Native ES output requires a fresh output path")
         return path
 

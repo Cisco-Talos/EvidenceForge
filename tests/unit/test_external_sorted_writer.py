@@ -13,6 +13,7 @@ from threading import Event, Thread
 
 import pytest
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.generation.emitters.base import (
     ExactPublicationAuthority,
     ExactPublicationError,
@@ -64,8 +65,8 @@ def test_external_writer_hierarchically_merges_more_than_fan_in_runs(tmp_path: P
 
     lines = output.read_text(encoding="utf-8").splitlines()
     assert lines == sorted(lines, key=_key)
-    assert not list(tmp_path.glob(".zeek.json.sort-*"))
-    assert not list(tmp_path.glob(".zeek.json.*.merging"))
+    assert not list(tmp_path.glob(".efsort-*"))
+    assert not list(tmp_path.glob(".efmerge-*.merging"))
 
 
 def test_external_writer_flushes_at_byte_cap(tmp_path: Path) -> None:
@@ -198,7 +199,7 @@ def test_checkpoint_close_balances_many_immutable_runs(tmp_path: Path) -> None:
 
     lines = output.read_text(encoding="utf-8").splitlines()
     assert lines == sorted(lines, key=_key)
-    assert not list(tmp_path.glob(".balanced.json.sort-*"))
+    assert not list(tmp_path.glob(".efsort-*"))
 
 
 def test_checkpoint_balanced_close_preserves_runs_for_retry(
@@ -277,14 +278,14 @@ def test_external_writer_preserves_prior_output_on_merge_failure(
         writer.close()
 
     assert output.read_text(encoding="utf-8") == "previous\n"
-    assert list(tmp_path.glob(".zeek.json.sort-*"))
-    assert not list(tmp_path.glob(".zeek.json.*.merging"))
+    assert list(tmp_path.glob(".efsort-*"))
+    assert not list(tmp_path.glob(".efmerge-*.merging"))
 
     writer.close()
 
     assert output.read_text(encoding="utf-8").splitlines() == ["1|new", "2|new"]
-    assert not list(tmp_path.glob(".zeek.json.sort-*"))
-    assert not list(tmp_path.glob(".zeek.json.*.merging"))
+    assert not list(tmp_path.glob(".efsort-*"))
+    assert not list(tmp_path.glob(".efmerge-*.merging"))
 
 
 def test_exact_sorted_admission_reconciles_lost_return_and_export_retry(
@@ -511,7 +512,7 @@ def test_exact_sorted_atomic_rename_lost_return_is_idempotent(
     def replace_then_raise(source: str | Path, destination: str | Path) -> None:
         nonlocal fail_after_destination
         original_replace(source, destination)
-        if Path(destination) == output and fail_after_destination:
+        if Path(destination) == filesystem_path(output) and fail_after_destination:
             fail_after_destination = False
             raise OSError("rename completed before lost return")
 
@@ -561,3 +562,15 @@ writer.close()
         )
         outputs.append(output.read_bytes())
     assert outputs[0] == outputs[1]
+
+
+def test_valid_long_output_component_does_not_expand_temporary_names(tmp_path: Path) -> None:
+    output = tmp_path / ("source-" + "a" * 220 + ".ndjson")
+    writer = ExternalSortedLineWriter(output, sort_key=_key, buffer_size=1)
+    writer.write("2|second")
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.publish(lambda: writer.write("1|first"))
+    batch.release_no_fail()
+    writer.close()
+    assert filesystem_path(output).read_text().splitlines() == ["1|first", "2|second"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [output.name]

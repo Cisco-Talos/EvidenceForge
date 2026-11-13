@@ -16,6 +16,8 @@ def main() -> None:
             "tests/integration/test_studio_state_migrations.py",
             "tests/unit/test_studio_state_durability.py",
             "tests/unit/test_studio_state_contracts.py",
+            "tests/integration/test_studio_windows_runtime.py",
+            "tests/unit/test_studio_windows.py",
         ],
         [
             "tests/unit/test_studio_sessions.py",

@@ -118,3 +118,19 @@ test("jobs explain automatic evaluation storage without a size override", async 
   expect(screen.queryByRole("checkbox", { name: "Allow large evaluations" })).toBeNull();
   expect(screen.getByText(/Evaluations automatically use temporary disk storage when needed/)).toBeTruthy();
 });
+
+test("Windows preview explains retained runtimes and disables unsupported cleanup", async () => {
+  const settings = {
+    workspace: "/tmp/EvidenceForge", recent_workspaces: [], output_parents: {},
+    max_concurrent_generations: 2, checkpoint_hours: 24,
+    quit: { action: "continue", continue_queued_generations: true, continue_evaluations: "continue", pause_close_timing: "handoff", pause_evaluations: "finish", kill_incomplete_bundles: "preserve", authoring_turns: "stop" },
+    skill_install_scope: "global", skill_install_agent: "all", codex_path: null, eforge_path: null,
+  } as StudioSettings;
+  const reason = "Automatic runtime cleanup is unavailable in the Windows preview. Previous app runtimes are retained.";
+  const request = vi.fn(async () => ({}));
+  render(<Tooltip.Provider><SettingsView settings={settings} paths={{ data: "/tmp/data", logs: "/tmp/logs" }} runtimeCleanup={{ available: false, unavailable_reason: reason }} api={{ request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi} onSaved={async () => undefined} onError={vi.fn()} /></Tooltip.Provider>);
+  expect(screen.getByText(reason)).toBeTruthy();
+  expect(screen.getByRole("spinbutton", { name: "Keep previous app runtime (days)" })).toHaveProperty("disabled", true);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save settings" })).toHaveProperty("disabled", true));
+  expect(request).not.toHaveBeenCalledWith("/v1/runtime/cleanup-settings", expect.anything(), expect.anything());
+});

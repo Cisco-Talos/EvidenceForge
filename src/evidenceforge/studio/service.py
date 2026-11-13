@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import secrets
-import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -168,6 +167,7 @@ from evidenceforge.studio.pack_lifecycle import (
     review_pack_deletion,
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
+from evidenceforge.studio.processes import launch_options, shell_argument, shell_command
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanup,
@@ -176,6 +176,7 @@ from evidenceforge.studio.runtime_cleanup import (
 )
 from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
+from evidenceforge.studio.startup_diagnostics import startup_phase
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.state_records_v3 import ChatInput, ChatPreference, ChatViewState
 from evidenceforge.studio.state_upgrade import (
@@ -572,6 +573,7 @@ def _validate_source(settings: StudioSettings, source: Path, workspace: Path) ->
             text=True,
             check=False,
             timeout=180,
+            **(launch_options() if os.name == "nt" else {}),
         )
         try:
             report = json.loads(result.stdout)
@@ -847,6 +849,7 @@ class StudioService:
             and not coordinator.journal.workspace_initialized
         )
         created_workspace = initializing_default and not self.settings.workspace.exists()
+        startup_phase("workspace_prepare")
         if initializing_default:
             self.settings.workspace = ensure_workspace(self.settings.workspace)
         self.workspace_coordinator = StateCoordinator(paths, self.settings.workspace)
@@ -859,11 +862,12 @@ class StudioService:
         ):
             self.workspace_coordinator.apply(self.workspace_coordinator.status.operation_id)
         if self.workspace_coordinator.status.state == "ready":
-            self.workspace_coordinator.owner.acquire()
+            self.workspace_coordinator.acquire_ready()
         if initializing_default:
             coordinator.journal.workspace_initialized = True
             coordinator.persist()
         self.store = StudioStore(paths.database_file)
+        startup_phase("workspace_prepared")
         if self.workspace_coordinator.status.state == "ready":
             self.store.record_workspace_migrations(self.workspace_coordinator.layout)
         self.jobs = StudioJobStore(self.store, paths.state)
@@ -920,12 +924,16 @@ class StudioService:
             "Studio restarted before this Codex turn finished. Review its history before continuing."
         )
         if self.workspace_coordinator and self.workspace_coordinator.status.state == "ready":
+            startup_phase("workspace_scan")
             await self.scan(resolve_drafts=False)
+            startup_phase("workspace_indexed")
         await asyncio.to_thread(self.runtime_cleanup.successful_launch)
         await self.clean_runtimes()
+        startup_phase("runtime_retention_checked")
         self.prediction_task = asyncio.create_task(self._prediction_loop())
         self.job_task = asyncio.create_task(self._job_loop())
         self.codex_task = asyncio.create_task(self._monitor_codex())
+        startup_phase("application_ready")
 
     async def stop(self) -> None:
         """Stop service polling without touching detached CLI processes."""
@@ -1802,6 +1810,7 @@ def create_app(
     coordinator = None if schema_only else StateCoordinator(app_paths)
     service: StudioService | None = None
     if coordinator:
+        startup_phase("state_prepare")
         coordinator.initialize_if_fresh()
         coordinator.prepare()
         if (
@@ -1811,13 +1820,11 @@ def create_app(
         ):
             coordinator.apply(coordinator.status.operation_id)
         if coordinator.status.state == "ready":
+            startup_phase("state_prepared")
             try:
                 service = StudioService(app_paths, secret, coordinator, new_install)
             except (OSError, StudioStateError) as error:
-                coordinator.status.state = "failed"
-                coordinator.status.error = str(error)
-                coordinator.status.can_retry = True
-                coordinator.status.can_restore = False
+                coordinator.fail_startup(error)
     operation_lock = asyncio.Lock()
     operation_task: asyncio.Task[None] | None = None
     operation_restore: bool | None = None
@@ -1912,12 +1919,7 @@ def create_app(
                 await service.start()
             except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
                 if coordinator:
-                    coordinator.status.state = "failed"
-                    coordinator.status.error = (
-                        f"Studio initialization failed: {type(error).__name__}"
-                    )
-                    coordinator.status.can_retry = True
-                    coordinator.status.can_restore = False
+                    coordinator.fail_startup(error)
                 await service.stop()
                 service = None
                 app.state.studio = None
@@ -2047,7 +2049,14 @@ def create_app(
     def state_status() -> UpgradeStatus:
         status = active_coordinator().status
         if (initializing or service and service.preparing_workspace) and status.state == "ready":
-            return status.model_copy(update={"state": "running", "phase": "Starting Studio"})
+            return status.model_copy(
+                update={
+                    "state": "running",
+                    "operation": "startup",
+                    "phase": "Starting Studio",
+                    "completed_steps": 0,
+                }
+            )
         return status
 
     async def run_operation(target: StateCoordinator, identity: str, restore: bool) -> None:
@@ -2055,7 +2064,27 @@ def create_app(
         async with operation_lock:
             initializing = True
             try:
-                await asyncio.to_thread(target.apply, identity, restore)
+                if target.status.operation == "startup" and not restore:
+                    if service and target.scope == "workspace":
+                        target.close()
+                        refreshed = StateCoordinator(app_paths, target.workspace)
+                        service.workspace_coordinator = refreshed
+                        refreshed.prepare()
+                        if (
+                            refreshed.status.state == "pending"
+                            and not refreshed.status.error
+                            and not refreshed.status.incompatible
+                        ):
+                            await asyncio.to_thread(refreshed.apply, refreshed.status.operation_id)
+                        refreshed.acquire_ready()
+                        target = refreshed
+                    else:
+                        target.status.error = None
+                        target.inspect()
+                        target.prepare()
+                        target.acquire_ready()
+                else:
+                    await asyncio.to_thread(target.apply, identity, restore)
                 if coordinator and coordinator.status.state == "ready" and not service:
                     service = StudioService(app_paths, secret, coordinator, new_install)
                     app.state.studio = service
@@ -2072,10 +2101,7 @@ def create_app(
             except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
                 # Validated migration completion does not imply service initialization succeeded.
                 # Keep normal endpoints gated and surface a retry, without later rollback.
-                target.status.state = "failed"
-                target.status.error = f"Studio initialization failed: {type(error).__name__}"
-                target.status.can_retry = True
-                target.status.can_restore = False
+                target.fail_startup(error)
                 if service and target.scope == "private":
                     await service.stop()
                     service = None
@@ -2177,6 +2203,15 @@ def create_app(
             return
         service.subscribers.add(queue)
         await websocket.accept()
+
+        async def disconnected() -> None:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+
+        disconnect = asyncio.create_task(disconnected())
+        pending: asyncio.Task[StudioEvent] | None = None
         try:
             cursor = int(websocket.query_params.get("after", "0"))
             while True:
@@ -2187,7 +2222,15 @@ def create_app(
                     await websocket.send_text(event.model_dump_json())
                     cursor = event.seq
             while True:
-                event = await queue.get()
+                pending = asyncio.create_task(queue.get())
+                completed, _ = await asyncio.wait(
+                    (pending, disconnect), return_when=asyncio.FIRST_COMPLETED
+                )
+                if disconnect in completed:
+                    disconnect.result()
+                    break
+                event = pending.result()
+                pending = None
                 if event.seq > cursor:
                     await websocket.send_text(event.model_dump_json())
                     cursor = event.seq
@@ -2195,6 +2238,10 @@ def create_app(
             pass
         finally:
             service.subscribers.discard(queue)
+            tasks = [disconnect] if pending is None else [disconnect, pending]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @app.post("/v1/library/refresh")
     async def refresh(studio: StudioService = Depends(authorized)) -> list[CatalogItem]:
@@ -4144,7 +4191,7 @@ def create_app(
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
-            cli_command = shlex.join(_eforge_command(controller_settings(studio.settings)))
+            cli_command = shell_command(_eforge_command(controller_settings(studio.settings)))
             configuration_instructions = (
                 f" The EvidenceForge CLI command prefix selected by Studio is {cli_command}. "
                 "Use that exact command prefix for every EvidenceForge command in this conversation, "
@@ -4172,7 +4219,7 @@ def create_app(
                 )
                 configuration_instructions += (
                     " For authored scenario inspection, validation, resolution, resource forecasting, and generation, "
-                    f"use this explicitly selected configuration: {arguments[0]} {arguments[1]!r}. "
+                    f"use this explicitly selected configuration: {arguments[0]} {shell_argument(arguments[1])}. "
                     f"Use the selected CLI's info {context_field} --json with that selection "
                     "to inspect the active configuration selection. "
                     "Pack management continues to use --project-root for this workspace. "

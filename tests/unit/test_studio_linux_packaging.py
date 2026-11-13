@@ -1,5 +1,6 @@
 """Native Tauri bundle discovery and public Linux installer naming contracts."""
 
+import os
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -41,7 +42,8 @@ def test_native_tauri_bundles_become_versioned_installer_checksum_pairs(
     suffix = "" if release else "-test"
     assert installer.name == f"EvidenceForge-Studio-2.2.0a2-{architecture}{suffix}.AppImage"
     assert installer.read_bytes() == image.read_bytes()
-    assert installer.stat().st_mode & 0o111 == 0o111
+    if os.name != "nt":  # Windows chmod does not represent POSIX executable bits.
+        assert installer.stat().st_mode & 0o111 == 0o111
     assert installer.with_suffix(".AppImage.sha256").read_text() == (
         f"{packaging.digest(image)}  {installer.name}\n"
     )

@@ -42,7 +42,11 @@ def read_job_diagnostics(path: Path, directory: Path, job_id: str) -> JobDiagnos
             payload = stream.read(_TAIL_BYTES)
     except OSError:
         return JobDiagnostics(log_path=expected)
-    tail = _ANSI_ESCAPE.sub("", payload.decode("utf-8", errors="replace")).replace("\r", "\n")
+    tail = (
+        _ANSI_ESCAPE.sub("", payload.decode("utf-8", errors="replace"))
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
     # Rich wraps CLI errors onto multiple lines. Retain their paragraph, not an
     # arbitrary last line (which may be a resource warning or progress update).
     lines = tail.splitlines()

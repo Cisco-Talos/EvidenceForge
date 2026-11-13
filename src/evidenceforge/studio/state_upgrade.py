@@ -91,6 +91,7 @@ class UpgradeStatus(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     state: Literal["ready", "pending", "running", "failed", "restored", "blocked"]
+    operation: Literal["upgrade", "startup"] = "upgrade"
     scope: Literal["private", "workspace"] = "private"
     operation_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     phase: str = "Inspecting saved state"
@@ -328,8 +329,18 @@ class StateCoordinator:
         self.journal = OperationJournal(status=self.status)
         self.prepared_inputs: dict[str, str | None] | None = None
         if ownership_error:
+            self.status.operation = "startup"
+            self.status.phase = "Could not open private Studio storage"
             self.status.error = ownership_error
             return
+        if self.workspace and self.workspace.is_dir() and os.name == "nt":
+            try:
+                from evidenceforge.utils.windows_filesystem import protect_owned_directory
+
+                protect_owned_directory(self.layout.parent)
+            except (OSError, StudioStateError) as error:
+                self.fail_startup(error)
+                return
         self.inspect()
         if self.status.state == "pending" and not self.pointer.exists():
             try:
@@ -361,6 +372,25 @@ class StateCoordinator:
             self.status.state = "failed"
             self.status.error = state_error(error)
             self.status.can_retry = True
+
+    def fail_startup(self, error: BaseException) -> None:
+        """Keep ordinary opening/ownership failures distinct from state migrations."""
+        self.status.state = "failed"
+        self.status.operation = "startup"
+        self.status.phase = (
+            "Could not open workspace storage" if self.workspace else "Could not start Studio"
+        )
+        self.status.error = state_error(error)
+        self.status.can_retry = True
+        self.status.can_restore = False
+
+    def acquire_ready(self) -> None:
+        """Report failed ownership as startup maintenance on the correct scope."""
+        if self.status.state == "ready":
+            try:
+                self.owner.acquire()
+            except (OSError, StudioStateError) as error:
+                self.fail_startup(error)
 
     def destinations(self) -> dict[str, Path]:
         """Return code-owned file bindings for this scope."""

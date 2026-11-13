@@ -14,8 +14,12 @@ from uuid import uuid4
 import psutil
 
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
+from evidenceforge.studio.processes import (
+    executable_command,
+    isolated_python_options,
+    launch_options,
+)
 from evidenceforge.studio.runtime import command_environment, runtime_root
-from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 _detached_processes: list[subprocess.Popen[bytes]] = []
 
@@ -24,15 +28,15 @@ def _eforge_command(settings: AppSettings | None = None) -> list[str]:
     """Use the installed interpreter during development or an explicit packaged CLI."""
     configured = os.environ.get("EFORGE_DESKTOP_EFORGE_BIN")
     if configured:
-        return [str(Path(configured).expanduser().resolve())]
+        return executable_command(Path(configured).expanduser().resolve())
     if settings is not None and settings.eforge_path is not None:
-        return [str(settings.eforge_path.expanduser().resolve())]
+        return executable_command(settings.eforge_path.expanduser().resolve())
     if getattr(sys, "frozen", False):
         executable = shutil.which("eforge")
         if executable is None:
             raise FileNotFoundError("Set EFORGE_DESKTOP_EFORGE_BIN to a packaged eforge CLI")
         return [executable]
-    options = ["-I", "-B"] if runtime_root() is not None else []
+    options = isolated_python_options() if runtime_root() is not None else []
     return [sys.executable, *options, "-m", "evidenceforge"]
 
 
@@ -46,9 +50,8 @@ def _start_process(command: list[str], *, cwd: Path, log_file: Path) -> tuple[in
             stdin=subprocess.DEVNULL,
             stdout=log_stream,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
             env=command_environment(),
-            pass_fds=runtime_worker_fds(),
+            **launch_options(detached=True),
         )
     _detached_processes[:] = [running for running in _detached_processes if running.poll() is None]
     _detached_processes.append(process)
@@ -263,4 +266,5 @@ def request_suspension(job: GenerationJob, workspace: Path) -> subprocess.Comple
         text=True,
         check=False,
         timeout=30,
+        **(launch_options() if os.name == "nt" else {}),
     )

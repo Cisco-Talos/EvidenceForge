@@ -48,7 +48,8 @@ def main() -> None:
         output = root / "studio.ts" if check else target
         subprocess.run(
             [
-                str(ui_directory / "node_modules" / ".bin" / "openapi-typescript"),
+                "node",
+                str(ui_directory / "node_modules/openapi-typescript/bin/cli.js"),
                 str(schema),
                 "-o",
                 str(output),

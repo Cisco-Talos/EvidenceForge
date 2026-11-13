@@ -1,5 +1,6 @@
 import { latestPublishedItems } from "./artifactGrouping";
 import { StateMaintenance } from "./StateMaintenance";
+import { StartupScreen } from "./StartupScreen";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, Search, Settings2, X } from "lucide-react";
 import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
@@ -677,7 +678,7 @@ function App() {
       return `- [${String(finding.severity || "finding").toUpperCase()}] ${String(finding.field_path || "scenario")}: ${String(finding.message || "")}${suggestion}`;
     });
     const prompt = [
-      "Please review and fix this scenario's validation findings. First rerun eforge validate against the current authored files so that changes to includes, packs, or overlays are accounted for. Explain the changes you plan, then update the authored files and revalidate. Do not edit generated bundles.",
+      "Please review and fix this scenario's validation findings. First rerun eforge validate --no-record against the current authored files so that changes to includes, packs, or overlays are accounted for. Explain the changes you plan, then update the authored files and revalidate with --no-record. Studio retains validation provenance through its own Validate action. Do not edit generated bundles.",
       "",
       `Saved findings from the Validation panel (${findings.length}; recheck before acting):`,
       ...summaries,
@@ -822,7 +823,7 @@ function App() {
   }
 
   if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
-  if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p>{studio.error && <button onClick={() => window.location.reload()}>Retry</button>}</div>;
+  if (!snapshot || !api) return <StartupScreen progress={studio.startup} error={studio.error} />;
 
   function catalogActions(target: CatalogItem): ObjectAction[] {
     const sourceMissing = snapshot!.missing_sources?.includes(target.id);

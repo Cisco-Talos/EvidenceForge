@@ -818,7 +818,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
     const draft = screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement;
     await waitFor(() => expect(draft.value).toContain("Unknown host"));
     expect(draft.value).toContain("environment.users.0");
-    expect(draft.value).toContain("First rerun eforge validate");
+    expect(draft.value).toContain("First rerun eforge validate --no-record");
     expect(request.mock.calls.some(([path]) => String(path).endsWith("/turns"))).toBe(false);
     await user.type(draft, "{enter}");
     await waitFor(() => expect(request).toHaveBeenCalledWith(

@@ -1,5 +1,6 @@
 """Native NTFS storage contracts; POSIX retains its existing implementation/tests."""
 
+import ctypes
 import os
 import subprocess
 from pathlib import Path
@@ -7,6 +8,31 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native Windows handle and ACL contracts")
+
+
+def test_native_pinned_walk_needs_no_ancestor_listing_or_acl_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    original = filesystem._nt_create_file
+    seen: list[str] = []
+
+    def restricted(*args: object) -> int:
+        attributes = ctypes.cast(args[2], ctypes.POINTER(filesystem._ObjectAttributes)).contents
+        name = attributes.ObjectName.contents.Buffer
+        seen.append(name)
+        if int(args[1]) & 0x20 or (name != tmp_path.name and int(args[1]) & 0x20001):
+            return ctypes.c_int32(0xC0000022).value  # STATUS_ACCESS_DENIED
+        return original(*args)
+
+    monkeypatch.setattr(filesystem, "_nt_create_file", restricted)
+    descriptor = filesystem.open_directory(tmp_path)
+    try:
+        assert filesystem.list_directory(descriptor) == []
+    finally:
+        os.close(descriptor)
+    assert seen[-1] == tmp_path.name and len(seen) == len(tmp_path.parts)
 
 
 def test_private_binary_file_and_handle_relative_publication(tmp_path: Path) -> None:
@@ -147,6 +173,69 @@ def test_private_directory_rejects_external_access_acl(tmp_path: Path, rights: s
         os.close(parent)
 
 
+@pytest.mark.parametrize("rights", ["RX", "W", "M", "F"])
+def test_workspace_privacy_repairs_read_grants_but_refuses_external_writers(
+    tmp_path: Path, rights: str
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    metadata = tmp_path / ".eforge/studio"
+    filesystem.mkdir_private(metadata, parents=True)
+    marker = metadata / "layout.json"
+    filesystem.write_private_atomic(marker, b"preserve this exact layout")
+    before = marker.read_bytes()
+    subprocess.run(
+        ["icacls", str(metadata), "/grant", f"*S-1-1-0:({rights})"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    if rights == "RX":
+        filesystem.protect_owned_directory(metadata)
+        descriptor = filesystem.open_directory(metadata)
+        try:
+            filesystem.require_private(descriptor)
+        finally:
+            os.close(descriptor)
+        filesystem.protect_owned_directory(metadata)
+    else:
+        with pytest.raises(PermissionError, match="another principal"):
+            filesystem.protect_owned_directory(metadata)
+    assert marker.read_bytes() == before
+
+
+def test_workspace_inheritance_repair_preserves_private_files_and_authored_siblings(
+    tmp_path: Path,
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    parent = tmp_path / ".eforge"
+    metadata = parent / "studio"
+    filesystem.mkdir_private(metadata, parents=True)
+    filesystem.write_private_atomic(metadata / "layout.json", b"private layout")
+    sibling = parent / "publisher.yaml"
+    sibling.write_bytes(b"authored identity")
+    subprocess.run(
+        ["icacls", str(parent), "/grant", "*S-1-1-0:(OI)(CI)(RX)"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    subprocess.run(
+        ["icacls", str(metadata), "/inheritance:e"], check=True, capture_output=True, timeout=10
+    )
+    parent_acl = subprocess.check_output(["icacls", str(parent)])
+    filesystem.protect_owned_directory(metadata)
+    descriptor = filesystem.open_directory(metadata)
+    try:
+        filesystem.require_private(descriptor)
+    finally:
+        os.close(descriptor)
+    assert filesystem.read_private_file(metadata / "layout.json") == b"private layout"
+    assert sibling.read_bytes() == b"authored identity"
+    assert subprocess.check_output(["icacls", str(parent)]) == parent_acl
+
+
 def test_handle_relative_unicode_names_preserve_bytes(tmp_path: Path) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 
@@ -227,11 +316,14 @@ def test_native_temporary_storage_survives_duplication_and_positioned_reads() ->
                 os.close(retained)
 
 
-def test_native_directory_publication_is_exclusive(tmp_path: Path) -> None:
+@pytest.mark.parametrize("separate_parents", [False, True])
+def test_native_directory_publication_is_exclusive(tmp_path: Path, separate_parents: bool) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 
     source = tmp_path / "source"
-    target = tmp_path / "target"
+    destination = tmp_path / "destination" if separate_parents else tmp_path
+    destination.mkdir(exist_ok=True)
+    target = destination / "target"
     source.mkdir()
     (source / "evidence").write_bytes(b"original")
     filesystem.publish_new_directory(source, target)
@@ -371,5 +463,19 @@ def test_native_open_rejects_unsupported_flags_without_mutation(tmp_path: Path) 
     path = tmp_path / "retained"
     path.write_bytes(b"preserve")
     with pytest.raises(ValueError, match="Unsupported"):
-        filesystem.open_file(path, os.O_WRONLY | os.O_APPEND)
+        filesystem.open_file(path, os.O_WRONLY | os.O_TEXT)
     assert path.read_bytes() == b"preserve"
+
+
+def test_native_append_preserves_existing_output_after_seek(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    path = tmp_path / "service.log"
+    path.write_bytes(b"existing\n")
+    descriptor = filesystem.open_file(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.write(descriptor, b"next\n")
+    finally:
+        os.close(descriptor)
+    assert path.read_bytes() == b"existing\nnext\n"

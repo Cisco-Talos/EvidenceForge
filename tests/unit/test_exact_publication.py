@@ -5,12 +5,10 @@
 
 from __future__ import annotations
 
-import builtins
 import gc
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
-from typing import Any
 from weakref import ref
 
 import pytest
@@ -70,22 +68,10 @@ def _new_batch() -> ExactPublicationBatch:
 
 def test_sorted_host_writer_uses_lf_for_checkpoint_equivalence(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ordinary sorted output must match checkpoint external-sort newline bytes."""
 
     output = tmp_path / "host.log"
-    original_open = builtins.open
-    newline_arguments: list[str | None] = []
-
-    def recording_open(*args: Any, **kwargs: Any) -> Any:
-        if args and Path(args[0]) == output:
-            newline = kwargs.get("newline")
-            assert newline is None or isinstance(newline, str)
-            newline_arguments.append(newline)
-        return original_open(*args, **kwargs)
-
-    monkeypatch.setattr(builtins, "open", recording_open)
     writer = _SingleHostWriter(
         output,
         sort_on_flush=True,
@@ -95,7 +81,6 @@ def test_sorted_host_writer_uses_lf_for_checkpoint_equivalence(
     writer.write("first")
     writer.close()
 
-    assert newline_arguments == ["\n"]
     assert output.read_bytes() == b"first\nsecond\n"
 
 

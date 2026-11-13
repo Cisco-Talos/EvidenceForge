@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 import sqlite3
 import sys
 from collections.abc import Awaitable, Callable
@@ -12,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.studio.linux_sandbox import linux_sandbox_notice
-from evidenceforge.studio.runtime import command_environment, discover_codex
-from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
+from evidenceforge.studio.processes import executable_command, launch_options
+from evidenceforge.studio.runtime import command_environment, discover_codex, runtime_root
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,17 @@ MAX_PROTOCOL_LINE_BYTES = 64 * 1024 * 1024
 
 CodexEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 CodexRequest = Callable[[int | str, str, dict[str, Any]], Awaitable[None]]
+
+
+def _windows_probe_detail(text: str) -> str:
+    """Keep a bounded cause from the version probe without exposing a traceback."""
+    lines = text.replace("\\n", "\n").splitlines()
+    errors = [line.strip() for line in lines if re.match(r"^\w+(?:Error|Exception):", line)]
+    if errors:
+        return errors[-1][:300]
+    if "Traceback (most recent call last)" in text:
+        return "The private CLI raised an exception during startup."
+    return " ".join(text.split())[:300] or "Codex returned no diagnostic detail."
 
 
 class CodexUnavailableError(RuntimeError):
@@ -67,6 +80,12 @@ class CodexClient:
         self.start_lock = asyncio.Lock()
         self.stderr_tail = ""
 
+    def _launch_config(self) -> tuple[str, ...]:
+        """Select MXC for the packaged Windows child without changing user settings."""
+        if sys.platform == "win32" and runtime_root() is not None:
+            return (*self.config_overrides, 'windows.sandbox="mxc"')
+        return self.config_overrides
+
     async def start(self) -> None:
         """Start and initialize Codex lazily, or reuse a healthy connection."""
         async with self.start_lock:
@@ -84,18 +103,22 @@ class CodexClient:
                 await self.on_event("codex/linuxSandboxReset", {})
             command = discover_codex(self.binary)
             if not command:
-                raise CodexDisconnectedError("Codex CLI was not found; set its path in Settings")
+                raise CodexDisconnectedError(
+                    "Codex CLI was not found in PATH or the supported install locations. "
+                    "Install native Codex for your account, or set its full executable path "
+                    "in Settings → Authoring & tools, then reconnect."
+                )
             try:
                 self.process = await asyncio.create_subprocess_exec(
-                    command,
+                    *executable_command(command),
                     "app-server",
-                    *(arg for override in self.config_overrides for arg in ("-c", override)),
+                    *(arg for override in self._launch_config() for arg in ("-c", override)),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=MAX_PROTOCOL_LINE_BYTES,
                     env=command_environment(),
-                    pass_fds=runtime_worker_fds(),
+                    **launch_options(),
                 )
             except OSError as error:
                 raise CodexDisconnectedError(f"Could not start Codex: {error}") from error
@@ -119,10 +142,51 @@ class CodexClient:
                     timeout=15,
                 )
                 await self._write({"method": "initialized", "params": {}})
+                if sys.platform == "win32":
+                    readiness = await self._request("windowsSandbox/readiness", None, timeout=15)
+                    if readiness.get("status") != "ready":
+                        raise CodexUnavailableError(
+                            "Codex's Windows sandbox is not ready. Packaged Windows authoring "
+                            "requires MXC support and permitting Codex policy. Update Windows "
+                            "and Codex, then reconnect Studio. No authoring message was sent."
+                        )
+                    await self._check_windows_runtime()
                 await self.on_event("codex/connected", {})
             except (CodexUnavailableError, OSError) as error:
                 await self._stop_transport()
                 raise CodexDisconnectedError(str(error)) from error
+
+    async def _check_windows_runtime(self) -> None:
+        """Require the configured native sandbox to execute the private CLI read-only."""
+        root = runtime_root()
+        if root is None:
+            return
+        failure = "Studio's private CLI failed its read-only Windows startup check. "
+        guidance = (
+            " Install the latest Studio preview; if this persists, report this diagnostic "
+            "with the build version. Windows authoring requires compatible MXC support and "
+            "permitting Codex policy. Studio's deterministic tools remain available. "
+            "No authoring message was sent."
+        )
+        try:
+            result = await self._request(
+                "command/exec",
+                {
+                    "command": [str(root / "Scripts/eforge.exe"), "version"],
+                    "cwd": str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"),
+                    "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
+                },
+                timeout=30,
+            )
+        except CodexUnavailableError as error:
+            raise CodexUnavailableError(
+                failure + _windows_probe_detail(str(error)) + guidance
+            ) from error
+        if result.get("exitCode") != 0:
+            detail = _windows_probe_detail(str(result.get("stderr") or result.get("stdout") or ""))
+            raise CodexUnavailableError(
+                f"{failure}Exit code: {result.get('exitCode')!r}. {detail}{guidance}"
+            )
 
     async def stop(self) -> None:
         """Close the owned transport during service shutdown."""
@@ -133,6 +197,12 @@ class CodexClient:
         """Stop only the subprocess and tasks owned by this client."""
         process = self.process
         self.process = None
+        if process is not None and process.stdin is not None:
+            process.stdin.close()
+            try:
+                await asyncio.wait_for(process.stdin.wait_closed(), timeout=2)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                pass
         if process is not None and process.returncode is None:
             process.terminate()
             try:
@@ -140,6 +210,12 @@ class CodexClient:
             except TimeoutError:
                 process.kill()
                 await process.wait()
+        readers = [task for task in (self.reader_task, self.stderr_task) if task is not None]
+        if readers:
+            # Let EOF close native pipe transports before cancellation. Windows
+            # Proactor callbacks can outlive process.wait() and otherwise reach
+            # their destructors after the event loop has already closed.
+            await asyncio.wait(readers, timeout=2)
         for task in (self.reader_task, self.stderr_task, self.dispatch_task):
             if task is not None:
                 task.cancel()
@@ -147,6 +223,12 @@ class CodexClient:
             *(task for task in (self.reader_task, self.stderr_task, self.dispatch_task) if task),
             return_exceptions=True,
         )
+        if process is not None and sys.platform == "win32":
+            # CPython exposes no public Process API to close read pipes still
+            # retained by native descendants. This transport belongs exclusively
+            # to our reaped server; closing it releases pending Proactor reads.
+            process._transport.close()
+            await asyncio.sleep(0)
         for future in self.pending.values():
             if not future.done():
                 future.set_exception(CodexDisconnectedError("Codex connection closed"))
@@ -165,7 +247,7 @@ class CodexClient:
     ) -> dict[str, Any]:
         """Call one Codex RPC method and return its result object."""
         await self.start()
-        return await self._request(method, params, timeout=timeout)
+        return await self._request(method, params or {}, timeout=timeout)
 
     @property
     def connected(self) -> bool:
@@ -188,7 +270,9 @@ class CodexClient:
         self.next_id += 1
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
-        request: dict[str, Any] = {"id": request_id, "method": method, "params": params or {}}
+        request: dict[str, Any] = {"id": request_id, "method": method}
+        if params is not None:
+            request["params"] = params
 
         async def send_and_wait() -> dict[str, Any]:
             await self._write(request)

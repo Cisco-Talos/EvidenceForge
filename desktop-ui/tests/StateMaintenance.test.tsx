@@ -5,6 +5,13 @@ import type { UpgradeStatus } from "../src/api";
 import { StateMaintenance } from "../src/StateMaintenance";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+test("ordinary startup failure does not claim a state upgrade", () => {
+  render(<StateMaintenance status={{ ...base, operation: "startup", phase: "Could not open workspace storage", can_restore: false, warning: null }} onRetry={vi.fn()} onRestore={vi.fn()} onWorkspace={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Retry startup" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry upgrade" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Studio is ready")).not.toBeInTheDocument();
+});
 const base: UpgradeStatus = { state: "failed", scope: "private", operation_id: "a".repeat(32), phase: "Upgrading UI state", completed_steps: 2, total_steps: 5, incompatible: true, warning: "Earlier Studio builds will no longer open this state.", error: "Disk is full", backup_path: "/private/verified-backup", can_retry: true, can_restore: true, versions: { database: 0 } };
 
 for (const state of ["pending", "running", "failed", "blocked", "restored", "ready"] as const) {

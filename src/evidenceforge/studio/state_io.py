@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import sqlite3
@@ -16,6 +17,10 @@ from evidenceforge.models.exceptions import EvidenceForgeError
 
 class StudioStateError(EvidenceForgeError):
     """State cannot be opened or changed safely; never implies permission to reset it."""
+
+
+class StudioStateBusyError(StudioStateError):
+    """A verified Windows lock is held by another process, so bounded retry is safe."""
 
 
 def canonical_path(path: Path) -> Path:
@@ -183,6 +188,10 @@ class StateLock:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             os.close(descriptor)
+            if os.name == "nt" and error.errno in {errno.EACCES, errno.EAGAIN}:
+                raise StudioStateBusyError(
+                    "Another Studio process owns this state; retry after it exits"
+                ) from error
             raise StudioStateError(
                 "Another Studio process owns this state; retry after it exits"
             ) from error

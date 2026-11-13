@@ -1,0 +1,10 @@
+{
+  "python_version": "3.12.12",
+  "minimum_windows": "Windows 11 x86_64; local NTFS (desktop acceptance pending)",
+  "runtimes": {
+    "x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251028/cpython-3.12.12%2B20251028-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "b01ce5aed9bae58023ccfba76c9cf0e789aa2ca36057ee6e6af054da2a2d4eb1"
+    }
+  }
+}

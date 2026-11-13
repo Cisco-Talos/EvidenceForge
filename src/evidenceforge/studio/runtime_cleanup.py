@@ -81,6 +81,7 @@ class RuntimeCleanupReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     available: bool = False
+    unavailable_reason: str | None = None
     settings: RuntimeCleanupSettings = Field(default_factory=RuntimeCleanupSettings)
     checked_at: float | None = None
     removed: list[str] = Field(default_factory=list)
@@ -95,16 +96,22 @@ def _read(path: Path) -> bytes:
     return value
 
 
-def _lease(root: Path, *, exclusive: bool) -> int:
-    import fcntl
-
+def _lease(root: Path, *, exclusive: bool, create: bool = True) -> int:
     path = root.parent / "leases" / f"{root.name}.lock"
     from evidenceforge.studio.state_io import private_directory
 
-    private_directory(path.parent)
-    descriptor = open_regular(path, os.O_RDWR | os.O_CREAT)
+    if create:
+        private_directory(path.parent)
+    descriptor = open_regular(path, os.O_RDWR | os.O_CREAT if create else os.O_RDONLY)
     try:
-        fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        if os.name == "nt":
+            from evidenceforge.studio.windows_leases import lock_runtime
+
+            lock_runtime(descriptor, exclusive=exclusive)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
     except OSError:
         os.close(descriptor)
         raise
@@ -112,30 +119,39 @@ def _lease(root: Path, *, exclusive: bool) -> int:
 
 
 @contextmanager
-def runtime_lease() -> Iterator[None]:
-    """Protect the helper and let detached CLI workers inherit its kernel-held lease."""
+def runtime_lease(*, read_only: bool = False) -> Iterator[None]:
+    """Protect private runtimes, allowing sandboxed CLI calls without cache writes."""
     global _lease_descriptor
     root = runtime_root()
-    if root is None or os.name != "posix":
+    if root is None:
         yield
         return
     if not _NAME.fullmatch(root.name):
         raise StudioStateError("Studio's selected runtime has an invalid cache identity")
-    lock = StateLock(root.parent / "install.lock")
-    deadline = time.monotonic() + 8
-    while True:
-        try:
-            lock.acquire()
-            break
-        except StudioStateError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.05)
-    with lock:
-        descriptor = _lease(root, exclusive=False)
+    if read_only:
+        # The installer already publishes this lease file. Acquire it first,
+        # then verify the immutable root while pruning is excluded by the lock.
+        descriptor = _lease(root, exclusive=False, create=False)
+    else:
+        lock = StateLock(root.parent / "install.lock")
+        deadline = time.monotonic() + 8
+        while True:
+            try:
+                lock.acquire()
+                break
+            except StudioStateError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        with lock:
+            descriptor = _lease(root, exclusive=False)
     previous = _lease_descriptor
     _lease_descriptor = descriptor
     try:
+        if read_only:
+            release = RuntimeRelease.model_validate_json(_read(root / "release.json"))
+            if root.name != f"{release.runtime_id}-{release.architecture}":
+                raise StudioStateError("Studio's selected runtime receipt does not match its cache")
         yield
     finally:
         _lease_descriptor = previous
@@ -144,7 +160,7 @@ def runtime_lease() -> Iterator[None]:
 
 def runtime_worker_fds() -> tuple[int, ...]:
     """Keep a selected runtime alive even if its owning helper unexpectedly exits."""
-    return (_lease_descriptor,) if _lease_descriptor is not None else ()
+    return (_lease_descriptor,) if _lease_descriptor is not None and os.name == "posix" else ()
 
 
 def _process_use(root: Path) -> tuple[bool, str | None]:
@@ -218,7 +234,19 @@ class RuntimeCleanup:
     def __init__(self, data: Path, selected: Path | None = None) -> None:
         self.directory = data / "runtimes"
         self.selected = selected if selected is not None else runtime_root()
-        self.report = RuntimeCleanupReport(available=self.selected is not None)
+        self.report = self._report()
+
+    def _report(self, *, checked_at: float | None = None) -> RuntimeCleanupReport:
+        return RuntimeCleanupReport(
+            available=self.selected is not None and os.name != "nt",
+            checked_at=checked_at,
+            unavailable_reason=(
+                "Automatic runtime cleanup is unavailable in the Windows preview. "
+                "Previous app runtimes are retained."
+                if os.name == "nt"
+                else None
+            ),
+        )
 
     @property
     def settings_path(self) -> Path:
@@ -234,6 +262,10 @@ class RuntimeCleanup:
 
     def save_settings(self, settings: RuntimeCleanupSettings) -> None:
         """Atomically save supported v1 configuration under installer ownership."""
+        if os.name == "nt":
+            raise StudioStateError(
+                "Automatic runtime cleanup is unavailable in the Windows preview"
+            )
         with StateLock(self.directory / "install.lock"):
             self.settings()
             atomic_write(self.settings_path, settings.model_dump_json().encode())
@@ -308,9 +340,9 @@ class RuntimeCleanup:
     def _clean(self, *, now: float | None = None) -> RuntimeCleanupReport:
         """Recheck age, identity, leases and process use under the installer lock."""
         timestamp = now if now is not None else time.time()
-        self.report = RuntimeCleanupReport(
-            available=self.selected is not None, checked_at=timestamp
-        )
+        self.report = self._report(checked_at=timestamp)
+        if os.name == "nt":
+            return self.report
         if self.selected is None:
             try:
                 self.report = self.report.model_copy(update={"settings": self.settings()})

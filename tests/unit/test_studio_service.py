@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import shlex
 import subprocess
 import sys
 import time
@@ -34,9 +33,11 @@ from evidenceforge.studio.codex import (
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
 from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
+from evidenceforge.studio.processes import shell_command
 from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import Conversation, StudioStore
+from tests.support.studio_executable import prepare_script
 
 
 def _paths(root: Path) -> StudioPaths:
@@ -210,8 +211,8 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
             "RESOLVED_SCENARIO.yaml",
         }
         assert (
-            client.get(f"/v1/bundles/{bundle['id']}/files/GROUND_TRUTH.md", headers=headers).text
-            == "# Ground truth\n"
+            client.get(f"/v1/bundles/{bundle['id']}/files/GROUND_TRUTH.md", headers=headers).content
+            == (root / "GROUND_TRUTH.md").read_bytes()
         )
         assert client.get(
             f"/v1/bundles/{bundle['id']}/files/../outside", headers=headers
@@ -219,7 +220,7 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
         archive = client.get(f"/v1/bundles/{bundle['id']}/bundle.zip", headers=headers)
         assert archive.status_code == 200
         with zipfile.ZipFile(io.BytesIO(archive.content)) as contents:
-            assert contents.read("run/GROUND_TRUTH.md") == b"# Ground truth\n"
+            assert contents.read("run/GROUND_TRUTH.md") == (root / "GROUND_TRUTH.md").read_bytes()
         again = client.post("/v1/bundles/import", headers=headers, json={"path": str(root)}).json()
         assert again["id"] == bundle["id"]
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other)})
@@ -1575,7 +1576,7 @@ def test_two_generation_progress_streams_reconcile_independently(
         "(output / 'GENERATION_MANIFEST.json').write_text('{}')\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_EFORGE_BIN", str(fake))
     app = create_app(_paths(tmp_path / "private"), "local-secret")
@@ -1659,7 +1660,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         "    print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
     monkeypatch.delenv("EFORGE_DESKTOP_EFORGE_BIN", raising=False)
@@ -1714,7 +1715,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
     records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     started = next(record for record in records if record["method"] == "thread/start")
     assert str(scenario) in started["params"]["developerInstructions"]
-    assert shlex.join(selected_cli) in started["params"]["developerInstructions"]
+    assert shell_command(selected_cli) in started["params"]["developerInstructions"]
     if kind == "scenario":
         assert "info project_root --json" in started["params"]["developerInstructions"]
         assert "info configuration_context" not in started["params"]["developerInstructions"]
@@ -1728,7 +1729,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         assert resumed["params"]["threadId"] == "thread-alpha"
         assert "--context" in resumed["params"]["developerInstructions"]
         assert selected_context in resumed["params"]["developerInstructions"]
-        assert shlex.join(selected_cli) in resumed["params"]["developerInstructions"]
+        assert shell_command(selected_cli) in resumed["params"]["developerInstructions"]
         assert "info configuration_context --json" in resumed["params"]["developerInstructions"]
         turns = [record for record in records if record["method"] == "turn/start"]
         assert turns[-1]["params"]["input"] == [
@@ -1860,7 +1861,7 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         "    print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", str(fake))
     app = create_app(_paths(tmp_path / "private"), "local-secret")
@@ -2276,7 +2277,7 @@ def test_codex_transport_distinguishes_rejection_timeout_and_process_exit(tmp_pa
         "    print(json.dumps(reply), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def event(method: str, params: dict[str, object]) -> None:
         pass
@@ -2441,7 +2442,7 @@ def test_codex_response_is_not_blocked_by_slow_notification_handler(tmp_path: Pa
         "        print(json.dumps({'id': request['id'], 'result': result}), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def exercise() -> None:
         release_event = asyncio.Event()
@@ -2639,7 +2640,7 @@ def test_codex_classifies_empty_rollout_as_history_pending(tmp_path: Path) -> No
         "    print(json.dumps(response), flush=True)\n",
         encoding="utf-8",
     )
-    fake.chmod(0o755)
+    fake = prepare_script(fake, codex="codex" in fake.name)
 
     async def exercise() -> None:
         async def on_event(method: str, params: dict[str, object]) -> None:
@@ -2987,9 +2988,10 @@ def test_rename_scenario_retains_other_yaml_text_and_permissions(
     path = tmp_path / "scenario.yaml"
     path.write_bytes(contents.encode())
     path.chmod(0o640)
+    original_permissions = path.stat().st_mode & 0o777
     rename_scenario(path, "new", sha256(path.read_bytes()).hexdigest())
     assert path.read_bytes() == expected.encode()
-    assert path.stat().st_mode & 0o777 == 0o640
+    assert path.stat().st_mode & 0o777 == original_permissions
     assert list(tmp_path.iterdir()) == [path]
 
 

@@ -86,7 +86,11 @@ def test_every_reusable_job_records_only_after_its_execution_and_uploads_proof()
             assert steps[upload]["with"]["if-no-files-found"] == "error"
 
 
-def test_native_recovery_has_one_shared_owner_and_retains_platform_variants() -> None:
+def test_native_recovery_has_one_shared_owner_and_retains_platform_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import ci_studio
+
     ci = workflow("ci.yml")["jobs"]
     native = ci["studio-state-recovery"]
     assert native["uses"] == "./.github/workflows/ci-recovery.yml"
@@ -94,11 +98,23 @@ def test_native_recovery_has_one_shared_owner_and_retains_platform_variants() ->
         "macos-latest",
         "ubuntu-24.04",
         "ubuntu-24.04-arm",
+        "windows-2025",
     ]
     assert workflow("installers.yml")["jobs"]["native-recovery"]["uses"] == native["uses"]
     commands = "\n".join(step.get("run", "") for step in ci["studio"]["steps"])
+    assert "scripts.ci_studio" in commands
+    selected: list[str] = []
+
+    def record(command: list[str], *, check: bool) -> None:
+        assert check
+        selected.extend(Path(argument).as_posix() for argument in command)
+
+    monkeypatch.setattr(ci_studio.subprocess, "run", record)
+    ci_studio.main()
+    assert "tests/unit/test_studio_service.py" in selected
+    assert "tests/unit/test_desktop_jobs.py" in selected
     for name in ("runtime", "ownership", "sessions", "state_contracts", "state_durability"):
-        assert f"--ignore=tests/unit/test_studio_{name}.py" in commands
+        assert f"tests/unit/test_studio_{name}.py" not in selected
     # Ubuntu-latest's slow cases remain: its image differs from native Ubuntu 24.04.
     slow = workflow("release-slow.yml")["jobs"]["slow-comprehensive"]
     command = next(step["run"] for step in slow["steps"] if step.get("name") == "Run slow shard")
@@ -112,6 +128,50 @@ def test_embedded_installer_matrix_selector_is_valid_python() -> None:
     script = command.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     ast.parse(script)
     assert "has_linux=" in script
+
+
+def test_windows_preview_keeps_normal_integration_gates() -> None:
+    ci = workflow("ci.yml")
+    assert "ready_for_review" in ci[True]["pull_request"]["types"]
+    for name in ("inputs", "lint", "studio-state-recovery"):
+        assert "if" not in ci["jobs"][name]
+    assert ci["jobs"]["ci-required"]["if"] == "always()"
+    preview = workflow("windows-preview.yml")
+    assert "push" not in preview[True]
+    assert {"workflow_dispatch", "workflow_call"} <= preview[True].keys()
+    assert preview["jobs"]["preview"]["runs-on"] == "windows-2025"
+    assert preview["concurrency"]["cancel-in-progress"] is True
+    commands = "\n".join(step.get("run", "") for step in preview["jobs"]["preview"]["steps"])
+    assert "verify_studio_windows.py" in commands
+    assert "package_studio_windows.py" in commands
+    native = preview["jobs"]["native-tests"]
+    assert native["runs-on"] == "windows-2025"
+    assert "needs" not in native and "needs" not in preview["jobs"]["preview"]
+    native_commands = "\n".join(step.get("run", "") for step in native["steps"])
+    assert "scripts.ci_native_recovery" in native_commands
+    assert "scripts.ci_studio" in native_commands
+
+
+def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -> None:
+    jobs = workflow("windows-preview.yml")["jobs"]
+    qualified = jobs["qualify"]
+    assert set(qualified["needs"]) == {"preview", "native-tests"}
+    assert not qualified.get("if")  # Default success dependency semantics must remain.
+    for name in ("preview", "native-tests"):
+        assert "source-sha" in jobs[name]["outputs"]
+        for step in jobs[name]["steps"]:
+            assert step.get("with", {}).get("name") != "preview-installer-windows-x86_64"
+    script = "\n".join(step.get("run", "") for step in qualified["steps"])
+    assert "$env:PACKAGE_SOURCE -ne $env:NATIVE_SOURCE" in script
+    assert "$report.source_sha -ne $env:PACKAGE_SOURCE" in script
+    assert "Get-FileHash" in script and "$report.sha256 -ne $hash" in script
+    assert "$report.authoring.filesystem_permissions -ne 'passed'" in script
+    assert "$report.authoring.packaged_cli_guard -ne 'passed'" in script
+    uploads = [
+        step for step in qualified["steps"] if "actions/upload-artifact@" in step.get("uses", "")
+    ]
+    assert uploads[0]["with"]["name"] == "preview-installer-windows-x86_64"
+    assert uploads[0]["with"]["if-no-files-found"] == "error"
 
 
 def test_memory_gate_runs_outside_pytest_and_is_required_for_release() -> None:

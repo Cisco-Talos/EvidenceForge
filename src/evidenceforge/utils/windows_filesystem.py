@@ -251,6 +251,31 @@ _get_ace = _bind(
     wintypes.BOOL,
     [wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID)],
 )
+_get_dacl = _bind(
+    _advapi,
+    "GetSecurityDescriptorDacl",
+    wintypes.BOOL,
+    [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ],
+)
+_set_security = _bind(
+    _advapi,
+    "SetSecurityInfo",
+    wintypes.DWORD,
+    [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ],
+)
 _drive_type = _bind(_kernel, "GetDriveTypeW", wintypes.UINT, [wintypes.LPCWSTR])
 _volume_info = _bind(
     _kernel,
@@ -332,7 +357,9 @@ def _private_security_descriptor() -> wintypes.LPVOID:
     return descriptor
 
 
-def require_private(descriptor: int, *, ancestry: bool = False) -> None:
+def require_private(
+    descriptor: int, *, ancestry: bool = False, allow_read_access: bool = False
+) -> None:
     """Validate native token ownership and private access rights on an opened object."""
     owner = wintypes.LPVOID()
     dacl = wintypes.LPVOID()
@@ -369,7 +396,7 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
         acl = ctypes.cast(dacl, ctypes.POINTER(_Acl)).contents
         # An ancestor may allow creating new children, but not replacing existing
         # children or changing its security. Private leaves permit no outside access.
-        mutation = 0x500D0040 if ancestry else 0xFFFFFFFF
+        mutation = 0x500D0040 if ancestry else 0x500D0156 if allow_read_access else 0xFFFFFFFF
         for index in range(acl.AceCount):
             pointer = wintypes.LPVOID()
             _require(_get_ace(dacl, index, ctypes.byref(pointer)))
@@ -388,6 +415,70 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
                 )
     finally:
         _local_free(security)
+
+
+def protect_owned_directory(path: Path) -> None:
+    """Restore a Studio-owned directory's DACL after inherited read-only grants.
+
+    This is deliberately opt-in for Studio metadata, never general storage. Refuse
+    foreign owners, write grants, reparse points and unsafe ancestry before mutation.
+    Protected child ACLs and authored workspace permissions are preserved.
+    """
+    absolute = Path(os.path.abspath(path))
+    for ancestor in absolute.parents:
+        if ancestor.exists():
+            descriptor = open_directory(ancestor)
+            try:
+                require_private(descriptor, ancestry=True)
+            finally:
+                os.close(descriptor)
+    parent = open_directory(absolute.parent, create=True)
+    descriptor: int | None = None
+    try:
+        try:
+            mkdir_child(parent, absolute.name)
+        except FileExistsError:
+            pass
+        descriptor = _open_native(
+            absolute.name,
+            root=_handle(parent),
+            flags=os.O_RDONLY,
+            directory=True,
+            extra_access=0x00040000,  # WRITE_DAC on the pinned object.
+        )
+        try:
+            require_private(descriptor)
+            return
+        except PermissionError:
+            pass
+        require_private(descriptor, allow_read_access=True)
+        security = _private_security_descriptor()
+        try:
+            present, defaulted = wintypes.BOOL(), wintypes.BOOL()
+            dacl = wintypes.LPVOID()
+            _require(
+                _get_dacl(
+                    security, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
+                )
+            )
+            result = _set_security(
+                _handle(descriptor),
+                _SE_FILE_OBJECT,
+                _DACL_SECURITY_INFORMATION | 0x80000000,  # PROTECTED_DACL_SECURITY_INFORMATION
+                None,
+                None,
+                dacl,
+                None,
+            )
+            if result:
+                raise ctypes.WinError(result)
+        finally:
+            _local_free(security)
+        require_private(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
 
 
 def _component(name: str) -> None:
@@ -412,6 +503,7 @@ def _open_native(
     extra_access: int = 0,
     temporary: bool = False,
     write_through: bool = False,
+    ancestry: bool = False,
 ) -> int:
     supported_flags = (
         os.O_RDONLY
@@ -422,9 +514,12 @@ def _open_native(
         | os.O_TRUNC
         | os.O_BINARY
         | os.O_NOINHERIT
+        | os.O_APPEND
     )
     if flags & ~supported_flags:
         raise ValueError("Unsupported native Windows protected-file flags")
+    if flags & os.O_APPEND and (not flags & (os.O_WRONLY | os.O_RDWR) or flags & os.O_TRUNC):
+        raise ValueError("Windows protected append requires write access without truncation")
     if root is not None:
         _component(name)
     buffer = ctypes.create_unicode_buffer(name)
@@ -437,14 +532,29 @@ def _open_native(
         ctypes.sizeof(_ObjectAttributes), root, ctypes.pointer(unicode_name), 0x40, security, None
     )
     access = _READ_CONTROL | _SYNCHRONIZE | _FILE_READ_ATTRIBUTES | extra_access
+    if ancestry:
+        if not directory or flags != os.O_RDONLY or extra_access or temporary:
+            raise ValueError("Ancestry handles permit directory metadata access only")
+        # Pin and inspect each ancestor without listing it or reading its ACL.
+        # MXC permits metadata on ancestors of allowed paths, but correctly denies
+        # broader directory access (even explicit FILE_TRAVERSE on a drive root).
+        access = _SYNCHRONIZE | _FILE_READ_ATTRIBUTES
     if temporary:
         access |= _DELETE
-    if directory:
-        access |= 0x21  # FILE_LIST_DIRECTORY | FILE_TRAVERSE
-    else:
-        access |= 0x2 if flags & os.O_WRONLY else 0x1
-        if flags & os.O_RDWR:
-            access |= 0x3
+    if directory and not ancestry:
+        # Listing belongs to the target directory. Explicit FILE_TRAVERSE is
+        # unnecessary for these handle-relative opens and denied by MXC even on
+        # an otherwise readable directory.
+        access |= 0x1  # FILE_LIST_DIRECTORY
+    elif not directory:
+        if flags & os.O_APPEND:
+            # FILE_APPEND_DATA without FILE_WRITE_DATA keeps inherited helper
+            # output at EOF, including writes made outside the Python CRT.
+            access |= 0x4 | (0x1 if flags & os.O_RDWR else 0)
+        else:
+            access |= 0x2 if flags & os.O_WRONLY else 0x1
+            if flags & os.O_RDWR:
+                access |= 0x3
     disposition = _FILE_OPEN
     if flags & os.O_CREAT:
         disposition = _FILE_CREATE if flags & os.O_EXCL else _FILE_OPEN_IF
@@ -495,12 +605,21 @@ def _open_native(
 def open_directory(path: Path, *, create: bool = False) -> int:
     """Pin a local absolute directory through no-follow handle-relative opens."""
     absolute = Path(os.path.abspath(path))
+    # Extended Win32 spelling is needed by pathlib readers for long bundled
+    # resources. Our NT handle-relative walk already has no MAX_PATH limit;
+    # normalize only an explicit local-drive prefix before enforcing its policy.
+    if absolute.drive.startswith("\\\\?\\") and len(absolute.drive) == 6:
+        absolute = Path(str(absolute)[4:])
     if len(absolute.drive) != 2 or absolute.drive[1] != ":":
         raise OSError("Native Windows protected storage requires a local NTFS drive")
     if _drive_type(absolute.anchor) != 3:  # DRIVE_FIXED; mapped shares are DRIVE_REMOTE.
         raise OSError("Native Windows protected storage requires a fixed local NTFS drive")
     descriptor = _open_native(
-        "\\??\\" + absolute.anchor, root=None, flags=os.O_RDONLY, directory=True
+        "\\??\\" + absolute.anchor,
+        root=None,
+        flags=os.O_RDONLY,
+        directory=True,
+        ancestry=bool(absolute.parts[1:]),
     )
     try:
         filesystem = ctypes.create_unicode_buffer(32)
@@ -511,13 +630,21 @@ def open_directory(path: Path, *, create: bool = False) -> int:
         )
         if filesystem.value.upper() != "NTFS":
             raise OSError("Native Windows protected storage requires an NTFS volume")
-        for component in absolute.parts[1:]:
-            next_descriptor = _open_native(
-                component,
-                root=_handle(descriptor),
-                flags=os.O_CREAT if create else os.O_RDONLY,
-                directory=True,
-            )
+        for index, component in enumerate(absolute.parts[1:], start=1):
+            try:
+                next_descriptor = _open_native(
+                    component,
+                    root=_handle(descriptor),
+                    flags=os.O_RDONLY,
+                    directory=True,
+                    ancestry=index < len(absolute.parts) - 1,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                next_descriptor = _open_native(
+                    component, root=_handle(descriptor), flags=os.O_CREAT, directory=True
+                )
             os.close(descriptor)
             descriptor = next_descriptor
         return descriptor
@@ -637,8 +764,11 @@ def replace_child(
     directory: bool = False,
     write_through: bool = False,
     expected_identity: tuple[int, int] | None = None,
+    replace_open_files: bool = False,
 ) -> None:
     """Atomically publish a file using retained source and destination directory handles."""
+    if replace_open_files and (directory or not replace):
+        raise ValueError("Replacing open Windows files requires file replacement semantics")
     _component(target)
     descriptor = _open_native(
         source,
@@ -656,7 +786,9 @@ def replace_child(
         encoded = target.encode("utf-16-le")
         buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
         information = _RenameInformation.from_buffer(buffer)
-        information.Flags = int(replace)
+        # FILE_RENAME_POSIX_SEMANTICS lets current readers retain the old file
+        # while new opens immediately observe the complete replacement.
+        information.Flags = int(replace) | (0x2 if replace_open_files else 0)
         information.RootDirectory = _handle(target_parent)
         information.FileNameLength = len(encoded)
         ctypes.memmove(
@@ -666,7 +798,11 @@ def replace_child(
         # the Win32 wrapper rejects this form on the hosted Windows runner.
         status = _IoStatusBlock()
         result = _nt_set_information(
-            _handle(descriptor), ctypes.byref(status), buffer, len(buffer), 10
+            _handle(descriptor),
+            ctypes.byref(status),
+            buffer,
+            len(buffer),
+            65 if replace_open_files else 10,  # FileRenameInformationEx / FileRenameInformation
         )
         if result < 0:
             raise ctypes.WinError(_nt_error(result))
@@ -702,14 +838,18 @@ def directory_entries(path: Path) -> list[tuple[str, os.stat_result]]:
 
 
 def publish_new_directory(source: Path, target: Path) -> None:
-    """Atomically rename a staged directory only if its sibling target is absent."""
+    """Atomically move a staged directory on one volume only if the target is absent."""
     source = Path(os.path.abspath(source))
     target = Path(os.path.abspath(target))
-    if source.parent != target.parent:
-        raise ValueError("Windows staged directory publication requires sibling paths")
     parent = open_directory(source.parent)
     try:
-        replace_child(parent, source.name, parent, target.name, replace=False, directory=True)
+        destination = open_directory(target.parent)
+        try:
+            replace_child(
+                parent, source.name, destination, target.name, replace=False, directory=True
+            )
+        finally:
+            os.close(destination)
     finally:
         os.close(parent)
 
@@ -858,7 +998,7 @@ def validate_future_file(path: Path) -> None:
         os.close(descriptor)
 
 
-def write_private_atomic(path: Path, content: bytes) -> None:
+def write_private_atomic(path: Path, content: bytes, *, replace_open_files: bool = False) -> None:
     """Publish fully flushed private bytes through one retained parent handle."""
     absolute = Path(os.path.abspath(path))
     parent = open_directory(absolute.parent, create=True)
@@ -887,7 +1027,7 @@ def write_private_atomic(path: Path, content: bytes) -> None:
         flush_file(descriptor)
         os.close(descriptor)
         descriptor = None
-        replace_child(parent, name, parent, absolute.name)
+        replace_child(parent, name, parent, absolute.name, replace_open_files=replace_open_files)
         name = None
     finally:
         if descriptor is not None:

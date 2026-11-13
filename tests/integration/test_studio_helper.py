@@ -16,12 +16,14 @@ from threading import Thread
 
 import psutil
 import pytest
+from websockets.sync.client import connect
 
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.studio.bootstrap import ServiceDescriptor
 from evidenceforge.studio.service import StudioService
 from evidenceforge.studio.state_upgrade import StateCoordinator
 from evidenceforge.studio.store import StudioStore
+from tests.support.studio_process import stop_helper_child, verified_helper_child
 from tests.support.studio_state import paths
 
 
@@ -38,6 +40,7 @@ def helper_process(tmp_path: Path) -> Iterator[tuple[subprocess.Popen[str], Serv
             text=True,
             env=environment,
         )
+        native: psutil.Process | None = None
         try:
             ready: Queue[str] = Queue()
             assert process.stdout is not None
@@ -46,10 +49,11 @@ def helper_process(tmp_path: Path) -> Iterator[tuple[subprocess.Popen[str], Serv
             descriptor = ServiceDescriptor.model_validate_json(
                 paths(tmp_path / "private").service_file.read_text()
             )
-            assert descriptor.pid == process.pid
+            native = verified_helper_child(process.pid, descriptor)
             yield process, descriptor
         finally:
-            # Only this harness's unreaped Popen child is eligible for cleanup.
+            stop_helper_child(native)
+            # Reap the virtualenv launcher as well as its verified interpreter.
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -92,6 +96,20 @@ def test_real_helper_exits_after_last_window_and_releases_state_ownership(
     assert not selected.service_file.exists()
     with closing(StateCoordinator(selected)) as coordinator:
         assert coordinator.status.state == "ready"
+
+
+def test_real_helper_closes_idle_websocket_without_forced_cancellation(
+    helper: tuple[subprocess.Popen[str], ServiceDescriptor], tmp_path: Path
+) -> None:
+    process, descriptor = helper
+    _request(descriptor, "/v1/session/open")
+    url = descriptor.url.replace("http://", "ws://") + f"/v1/events/ws?token={descriptor.token}"
+    with connect(url, proxy=None, open_timeout=5, close_timeout=1):
+        _request(descriptor, "/v1/session/close")
+        assert process.wait(timeout=8) == 0
+    log = (tmp_path / "helper.log").read_text()
+    assert "timeout graceful shutdown exceeded" not in log
+    assert "Exception in ASGI application" not in log
 
 
 def test_real_helper_retains_verified_worker_then_exits_when_it_finishes(

@@ -5,7 +5,8 @@ generating logs, and reviewing evaluations. Existing CLI and native chat-skill w
 supported. Studio is a supplement, not a replacement.
 
 Studio installers are available for **Apple Silicon macOS** and **Ubuntu 24.04 Linux
-ARM64/x86_64**. Windows and Intel macOS installers are not enabled; other Linux distributions
+ARM64/x86_64**. Windows has an unsigned x86_64 preview build path described below;
+it is not part of published releases. Intel macOS installers are not enabled; other Linux distributions
 and desktop environments remain outside the accepted baseline. macOS field testing covers
 macOS 26 and 27.0.1; the configured macOS 13 deployment floor is not acceptance of older hosts.
 See [release platforms and validation](releases.md).
@@ -21,6 +22,120 @@ and authoring skills. You do not need a source checkout, a separate Python insta
 Node.js, or Rust to use it. Codex-assisted authoring requires you to install and sign in to Codex
 yourself; Codex is not included with EvidenceForge. Validation, generation, evaluation, and bundle
 viewing work without Codex.
+
+## Windows x86_64 preview
+
+The feature-branch preview targets Windows 11 x86_64 on local NTFS. Windows ARM,
+32-bit Windows, Windows 10 and Windows Server desktop qualification are outside its
+scope. Hosted Windows Server CI is engineering evidence, not Windows 11 acceptance.
+
+The single NSIS setup EXE offers **Just me** and **Everyone**. Both choices require
+administrator approval. Everyone shares the installed application files. Studio
+stores settings, credentials, helpers, job records, runtime caches and workspace
+selection in per-account private directories; genuine separate-account isolation
+still awaits acceptance. Launch Studio normally after setup exits; the installer
+does not launch it. If changing installation scope, uninstall the existing copy
+first. Uninstall preserves private state, retained runtimes and authored work.
+Automatic runtime cleanup is unavailable in this preview.
+
+WebView2 is downloaded during setup only when needed. No development tools or
+separately installed Python are required. Native Windows Codex is separately
+installed and signed in; Windows authoring requires native MXC support and
+permitting Codex policy.
+WSL integration is not included. Windows npm shims are resolved to Codex's native
+executable rather than executed through a shell.
+
+Automatic discovery first respects the executable override in Settings and the
+launch environment, then searches PATH. Windows also checks the current account's
+standalone CLI directory (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`),
+`%USERPROFILE%\.local\bin`, npm's usual `%APPDATA%\npm` directory, and the
+registered `OpenAI.Codex` desktop package. Custom install locations can be set in
+**Settings → Authoring & tools → Codex executable**. Discovery does not install
+Codex or edit its saved configuration. Packaged Windows Studio selects MXC for its
+own child process; other Codex sessions retain their saved sandbox selection.
+
+First launch shows runtime verification and installation progress. A changed
+payload shows **Updating Studio**; extracting a private runtime is separate from
+upgrading saved data. An ordinary storage/ownership startup failure offers
+**Retry startup**, without implying that saved schemas need an upgrade.
+Studio can remove outside read-only permissions from its own account-owned
+`.eforge\studio` metadata directory. Foreign owners, outside write access and
+unsafe paths are refused. Authored workspace permissions and private file ACLs
+remain protected.
+
+While the Windows helper initializes, Studio keeps the **Starting Studio** screen
+visible and allows up to 60 seconds for readiness. A newly launched helper that
+exits is reported promptly. The launcher avoids loading the full application just
+to reconnect. The private `logs/service.log` records UTC phase timestamps, elapsed
+time, process ID and runtime identity for startup diagnosis without recording
+connection credentials. Idle event sockets close cooperatively during shutdown.
+
+Studio selects MXC for its packaged Windows Codex process and checks that it can
+run the private CLI read-only before connecting authoring. This requires a
+[compatible device and permitting policy](https://learn.chatgpt.com/docs/windows/windows-sandbox#mxc-compatibility).
+The legacy elevated sandbox uses a separate account and cannot execute this
+preview's private runtime. Studio does not fall back to that account or broaden
+runtime ACLs. Startup failures retain a bounded underlying diagnostic; a CLI
+exception does not establish that Windows lacks MXC.
+
+Successful packaged authoring with MXC remains pending Windows 11 acceptance.
+Hosted Server CI cannot provide that evidence: it tests native legacy filesystem
+restrictions and the real packaged transport's rejection before authoring. The
+verification report records this limitation. Deterministic tools remain usable.
+
+The app and installer are unsigned. Browser downloads may show SmartScreen's
+unrecognized-app warning; enterprise policy can prevent bypass. Smart App Control
+can block unknown unsigned executables without a per-app exception. A checksum
+verifies the downloaded bytes but does not grant Windows trust. Use the preview
+only where local policy permits it; do not disable organization security controls.
+
+Build on native Windows x86_64 after installing the development prerequisites:
+
+```powershell
+uv sync --locked --extra studio --extra dev
+npm --prefix desktop-ui ci
+uv run python scripts/package_studio_windows.py
+```
+
+The output is `dist/windows/EvidenceForge-Studio-<version>-windows-x86_64-test-setup.exe`
+with a SHA256 file. Installer Builds accepts `windows-x86_64` on the feature ref;
+its disposable Windows runner exercises both installation scopes and writes a
+verification report alongside the artifact. The verifier refuses to run on an
+ordinary workstation or one with an existing Studio installation.
+
+During development, **Windows Studio Preview** runs Windows-only checks/builds on
+each push to `codex/studio-windows-x86_64`, with dependency/build caches and
+cancellation of superseded runs. This draft branch temporarily defers full
+Mac/Linux CI; marking the PR ready explicitly starts the full platform gates.
+
+Windows 11 interactive testing must still cover downloaded-file trust controls,
+both scopes, cancelled UAC, separate administrator credentials and intended-user
+ownership, normal-user launch, authoring/sign-in, dialogs, scaling and imports/
+exports. Genuine separate-account isolation remains a separate acceptance gate.
+
+### Reset the Windows preview for a fresh installation test
+
+The normal uninstaller preserves authored work and private state. For a deliberate
+test reset, first quit Studio with no active/background work and preserve anything
+you want to keep. Uninstall **EvidenceForge Studio** through Windows Settings;
+the all-users installation requires administrator approval. Then remove these
+account-specific locations if present:
+
+- `%LOCALAPPDATA%\EvidenceForge` — private state, logs, caches and retained runtimes.
+- `%LOCALAPPDATA%\org.evidenceforge.studio` — Studio's WebView profile/cache.
+- The selected test workspace — the default is the account's Documents directory
+  plus `EvidenceForge`. Redirected Documents can be under OneDrive; deleting that
+  folder also syncs the deletion. This removes authored scenarios, packs and runs.
+- `%USERPROFILE%\.eforge\publisher.yaml` — the optional global publisher identity.
+- The nine EvidenceForge-owned `eforge-*` skill directories installed under
+  `%USERPROFILE%\.agents\skills`; preserve other skills and any custom work.
+- `%USERPROFILE%\.claude\commands\eforge`, if Claude skills were also installed.
+
+Remove the old installer/download folder to avoid testing the wrong snapshot.
+Reboot before installing the replacement if a retained process still owns files.
+Do not remove Codex, its account/configuration/history, sandbox accounts or
+WebView2 as part of this Studio reset. Windows uninstall/history records and
+OneDrive's recovery history are outside this application-state reset.
 
 ## Install and open Studio
 
@@ -258,6 +373,13 @@ Editable conversations can write only inside their active managed draft containe
 escalation, network-enabled shell commands, hooks, plugins and external MCP tools are disabled in
 Studio chats. If Codex cannot confirm the required protection, Studio refuses to send the message.
 Validation, generation and evaluation remain available through the workspace controls.
+
+Chat uses `eforge validate --no-record` to check the current source without writing
+project-level validation receipts outside its permitted folder. Use Studio's **Validate**
+action to retain provenance for the exact current inputs. Ordinary CLI validation still
+retains receipts by default. Unavailable Windows paging-file counters are budgeted as zero
+free swap; they do not prevent scenario validation. Bundled Windows resources use long-path
+access without requiring a change to the computer's long-path policy.
 
 Studio checks publisher setup when it connects to the local helper. If no identity is
 configured, a startup notice offers **Set up publisher** or **Later**. The same setup is

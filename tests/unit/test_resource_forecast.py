@@ -158,7 +158,10 @@ def test_resource_snapshot_honors_container_memory_limit(monkeypatch, tmp_path: 
     assert snapshot.free_disk_bytes == 500 * _GIB
 
 
-def test_resource_snapshot_treats_unavailable_swap_as_zero(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("error", [OSError("swap telemetry denied"), RuntimeError("PDH failed")])
+def test_resource_snapshot_treats_unavailable_swap_as_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
+) -> None:
     """Restricted swap telemetry cannot make an otherwise valid forecast unavailable."""
 
     monkeypatch.setattr(
@@ -167,7 +170,7 @@ def test_resource_snapshot_treats_unavailable_swap_as_zero(monkeypatch, tmp_path
     )
 
     def unavailable_swap() -> None:
-        raise OSError("swap telemetry denied")
+        raise error
 
     monkeypatch.setattr(
         "evidenceforge.generation.resource_forecast.psutil.swap_memory",

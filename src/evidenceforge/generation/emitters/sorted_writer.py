@@ -15,6 +15,7 @@ from pathlib import Path
 from threading import Condition, Lock, get_ident
 from typing import Any, TextIO
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.generation.emitters.base import (
     ExactPublicationError,
     ExactPublicationKey,
@@ -167,7 +168,10 @@ class ExternalSortedLineWriter:
                     return
                 journal_row = self._exact_journal.get(key)
                 if journal_row is not None:
-                    if journal_row.digest != digest or journal_row.path.read_bytes() != payload:
+                    if (
+                        journal_row.digest != digest
+                        or filesystem_path(journal_row.path).read_bytes() != payload
+                    ):
                         raise ExactPublicationError(
                             "Exact sorted publication journal changed content"
                         )
@@ -187,16 +191,16 @@ class ExternalSortedLineWriter:
                 spool_dir = self._ensure_spool_dir_unlocked()
                 namespace, ordinal, cursor = key
                 run_path = spool_dir / (f"exact-{namespace}-{ordinal:016x}-{cursor:08x}.ndjson")
-                if run_path.exists():
-                    if run_path.read_bytes() != payload:
+                if filesystem_path(run_path).exists():
+                    if filesystem_path(run_path).read_bytes() != payload:
                         raise ExactPublicationError(
                             "Exact sorted publication journal changed content"
                         )
                 else:
                     descriptor, raw_pending = tempfile.mkstemp(
-                        prefix=f".{run_path.name}.",
+                        prefix=".efrow-",
                         suffix=".pending",
-                        dir=spool_dir,
+                        dir=filesystem_path(spool_dir),
                     )
                     pending = Path(raw_pending)
                     try:
@@ -204,7 +208,7 @@ class ExternalSortedLineWriter:
                             stream.write(payload)
                             stream.flush()
                             os.fsync(stream.fileno())
-                        os.replace(pending, run_path)
+                        os.replace(pending, filesystem_path(run_path))
                         fsync_directory(spool_dir)
                     except BaseException:
                         pending.unlink(missing_ok=True)
@@ -470,11 +474,11 @@ class ExternalSortedLineWriter:
 
         if not self._run_paths:
             return
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
         descriptor, raw_merge_path = tempfile.mkstemp(
-            prefix=f".{self.output_path.name}.",
+            prefix=".efmerge-",
             suffix=".merging",
-            dir=self.output_path.parent,
+            dir=filesystem_path(self.output_path.parent),
         )
         os.close(descriptor)
         merge_path = Path(raw_merge_path)
@@ -484,7 +488,7 @@ class ExternalSortedLineWriter:
             # existing read-only POSIX flush path unchanged.
             with merge_path.open("r+b" if os.name == "nt" else "rb") as stream:
                 os.fsync(stream.fileno())
-            os.replace(merge_path, self.output_path)
+            os.replace(merge_path, filesystem_path(self.output_path))
             fsync_directory(self.output_path.parent)
             self._exported_run_count = len(self._run_paths)
         except BaseException:
@@ -523,11 +527,11 @@ class ExternalSortedLineWriter:
     def _normalize_exported_runs_unlocked(self) -> None:
         """Collapse exported inputs to the destination as one bounded baseline run."""
 
-        if not self._run_paths or not self.output_path.exists():
+        if not self._run_paths or not filesystem_path(self.output_path).exists():
             return
         for path in self._run_paths:
             if path != self.output_path:
-                path.unlink(missing_ok=True)
+                filesystem_path(path).unlink(missing_ok=True)
         self._run_paths = [self.output_path]
 
     def exact_journal_census(self) -> ExternalSortedJournalCensus:
@@ -596,13 +600,14 @@ class ExternalSortedLineWriter:
 
     def _ensure_spool_dir_unlocked(self) -> Path:
         if self._spool_dir is None:
-            self.output_path.parent.mkdir(parents=True, exist_ok=True)
-            self._spool_dir = Path(
-                tempfile.mkdtemp(
-                    prefix=f".{self.output_path.name}.sort-",
-                    dir=self.output_path.parent,
-                )
+            filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
+            directory = tempfile.mkdtemp(
+                prefix=".efsort-",
+                dir=filesystem_path(self.output_path.parent),
             )
+            # Keep checkpoint/public paths in the caller's namespace. Only I/O
+            # uses extended Windows spelling, including retries and cleanup.
+            self._spool_dir = self.output_path.parent.absolute() / Path(directory).name
         return self._spool_dir
 
     def _next_run_path_unlocked(self) -> Path:
@@ -615,7 +620,7 @@ class ExternalSortedLineWriter:
             return
         self._buffer.sort(key=self._sort_key)
         run_path = self._next_run_path_unlocked()
-        with run_path.open("w", encoding="utf-8", newline="\n") as stream:
+        with filesystem_path(run_path).open("w", encoding="utf-8", newline="\n") as stream:
             for line in self._buffer:
                 stream.write(line)
                 stream.write("\n")
@@ -632,7 +637,7 @@ class ExternalSortedLineWriter:
             self._merge_runs_unlocked(group, merged)
             for path in group:
                 if path != self.output_path:
-                    path.unlink(missing_ok=True)
+                    filesystem_path(path).unlink(missing_ok=True)
             self._run_paths = [merged, *self._run_paths[self.merge_fan_in :]]
 
     def _compact_runs_for_close_unlocked(self) -> None:
@@ -654,12 +659,12 @@ class ExternalSortedLineWriter:
                     compacted.append(merged)
             except BaseException:
                 for path in created:
-                    path.unlink(missing_ok=True)
+                    filesystem_path(path).unlink(missing_ok=True)
                 raise
             retained = set(compacted)
             for path in original:
                 if path not in retained and path != self.output_path:
-                    path.unlink(missing_ok=True)
+                    filesystem_path(path).unlink(missing_ok=True)
             self._run_paths = compacted
 
     @staticmethod
@@ -674,7 +679,7 @@ class ExternalSortedLineWriter:
         heap: list[tuple[Any, int, str]] = []
         try:
             for index, path in enumerate(paths):
-                stream = path.open("r", encoding="utf-8")
+                stream = filesystem_path(path).open("r", encoding="utf-8")
                 streams.append(stream)
                 line = self._read_line(stream)
                 if line is not None:
@@ -692,7 +697,7 @@ class ExternalSortedLineWriter:
     def _merge_runs_unlocked(
         self, paths: Sequence[Path], destination: Path, *, export: bool = False
     ) -> None:
-        with destination.open("w", encoding="utf-8", newline="\n") as stream:
+        with filesystem_path(destination).open("w", encoding="utf-8", newline="\n") as stream:
             for line in self._iter_merged_lines(paths):
                 if export and self._export_projection is not None:
                     line = self._export_projection(line)
@@ -710,5 +715,5 @@ class ExternalSortedLineWriter:
         self._exact_reserved_rows = 0
         self._exact_reserved_bytes = 0
         if self._spool_dir is not None:
-            shutil.rmtree(self._spool_dir, ignore_errors=True)
+            shutil.rmtree(filesystem_path(self._spool_dir), ignore_errors=True)
             self._spool_dir = None

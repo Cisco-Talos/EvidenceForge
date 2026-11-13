@@ -45,6 +45,7 @@ class RuntimeLock(BaseModel):
     python_version: str
     minimum_macos: str = ""
     minimum_linux: str = ""
+    minimum_windows: str = ""
     runtimes: dict[str, RuntimeArchive]
 
 
@@ -121,14 +122,14 @@ def assemble(
     build: Path,
     architectures: list[str],
     *,
-    platform: Literal["macos", "linux"] = "macos",
+    platform: Literal["macos", "linux", "windows"] = "macos",
 ) -> Path:
     """Assemble selected runtime payloads from the lockfile and built project wheel."""
     run([sys.executable, str(root / "scripts/sync_studio_version.py")], root, dict(os.environ))
     run(
         [sys.executable, str(root / "scripts/check_generation_behavior.py")], root, dict(os.environ)
     )
-    lockfile = "runtime-lock.json" if platform == "macos" else "runtime-lock-linux.json"
+    lockfile = "runtime-lock.json" if platform == "macos" else f"runtime-lock-{platform}.json"
     lock = RuntimeLock.model_validate_json((root / "desktop-ui/packaging" / lockfile).read_bytes())
     version: str = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     native_version: str = json.loads((root / "desktop-ui/src-tauri/tauri.conf.json").read_text())[
@@ -187,7 +188,14 @@ def assemble(
         with tarfile.open(downloaded) as archive:
             archive.extractall(staging, filter="data")
         payload = staging / "python"
-        packages = payload / "lib/python3.12/site-packages"
+        packages = payload / (
+            "Lib/site-packages" if platform == "windows" else "lib/python3.12/site-packages"
+        )
+        target_platform = {
+            "macos": f"{architecture}-apple-darwin",
+            "linux": f"{architecture}-unknown-linux-gnu",
+            "windows": f"{architecture}-pc-windows-msvc",
+        }[platform]
         run(
             [
                 "uv",
@@ -198,9 +206,7 @@ def assemble(
                 "--python-version",
                 lock.python_version,
                 "--python-platform",
-                f"{architecture}-apple-darwin"
-                if platform == "macos"
-                else f"{architecture}-unknown-linux-gnu",
+                target_platform,
                 "--only-binary",
                 ":all:",
                 "--require-hashes",
@@ -233,59 +239,99 @@ def assemble(
         for metadata in packages.glob("evidence_forge-*.dist-info/direct_url.json"):
             metadata.unlink()
         validate_runtime_behavior(packages)
-        command = payload / "bin/eforge"
-        command.write_text(
-            "#!/bin/sh\n"
-            'task_runtime_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1\n'
-            'exec "$task_runtime_dir/bin/python3.12" -I -B -m evidenceforge "$@"\n',
-            encoding="utf-8",
-        )
-        command.chmod(0o755)
+        if platform == "windows":
+            command = payload / "Scripts/eforge.exe"
+            command.parent.mkdir(exist_ok=True)
+            run(
+                [
+                    "rustc",
+                    "-C",
+                    "target-feature=+crt-static",
+                    "--edition",
+                    "2021",
+                    "-O",
+                    "--target",
+                    target_platform,
+                    str(root / "desktop-ui/packaging/windows-cli.rs"),
+                    "-o",
+                    str(command),
+                ],
+                root,
+                environment,
+            )
+        else:
+            command = payload / "bin/eforge"
+            command.write_text(
+                "#!/bin/sh\n"
+                'task_runtime_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1\n'
+                'exec "$task_runtime_dir/bin/python3.12" -I -B -m evidenceforge "$@"\n',
+                encoding="utf-8",
+            )
+            command.chmod(0o755)
         notices = payload / "THIRD_PARTY_NOTICES.txt"
+        runtime_licenses = "LICENSE.txt" if platform == "windows" else "share/"
         notices.write_text(
             "EvidenceForge Studio test package\n\n"
             "CPython is distributed by python-build-standalone. Runtime license files are "
-            "included under share/. Package licenses and metadata are retained in the "
+            f"included under {runtime_licenses}. Package licenses and metadata are retained in the "
             "site-packages *.dist-info directories.\n\n"
             f"Python archive: {source.url}\nSHA256: {source.sha256}\n\n"
             + (root / "LICENSE").read_text(),
             encoding="utf-8",
         )
+        if platform == "windows":
+            licenses = payload / "installer-licenses"
+            licenses.mkdir(exist_ok=True)
+            for name in ("NSIS-LICENSE.txt", "TAURI-LICENSE-MIT.txt"):
+                shutil.copyfile(root / "desktop-ui/packaging" / name, licenses / name)
         target = resources / f"runtime-{architecture}.tar.gz"
         pack_payload(payload, target)
+        if platform == "windows":
+            # Bootstrap only installs the retained copy through our native ACL
+            # adapter. Services/workers never run from this app-owned directory.
+            bootstrap = resources / "bootstrap"
+            if bootstrap.exists():
+                shutil.rmtree(bootstrap)
+            shutil.copytree(payload, bootstrap)
         archives[architecture] = {"archive": target.name, "sha256": digest(target)}
         print(f"Assembled {architecture}: {target.stat().st_size / 1024**2:.1f} MiB", flush=True)
     manifest = {
         "schema_version": 1,
         "evidenceforge_version": version,
         "python_version": lock.python_version,
-        **(
-            {"minimum_macos": lock.minimum_macos}
-            if platform == "macos"
-            else {"minimum_linux": lock.minimum_linux}
-        ),
+        f"minimum_{platform}": getattr(lock, f"minimum_{platform}"),
         "runtimes": archives,
     }
     (resources / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    platform_bundle: dict[str, object]
+    if platform == "macos":
+        platform_bundle = {"macOS": {"minimumSystemVersion": lock.minimum_macos}}
+    elif platform == "windows":
+        platform_bundle = {
+            "windows": {
+                "webviewInstallMode": {"type": "downloadBootstrapper"},
+                "nsis": {
+                    "installMode": "both",
+                    "compression": "zlib",
+                    "template": str(root / "desktop-ui/packaging/windows-installer.nsi"),
+                    "installerHooks": str(root / "desktop-ui/packaging/windows-hooks.nsh"),
+                },
+            }
+        }
+    else:
+        # WebKitGTK dynamically loads these plugins; ELF dependencies are insufficient.
+        platform_bundle = {"linux": {"appimage": {"bundleMediaFramework": True}}}
     configuration = build / "tauri-standalone.json"
     configuration.write_text(
         json.dumps(
             {
                 "version": native_version,
-                "bundle": {
-                    "resources": {str(resources): "runtime"},
-                    **(
-                        {"macOS": {"minimumSystemVersion": lock.minimum_macos}}
-                        if platform == "macos"
-                        # WebKitGTK requires dynamically loaded GStreamer plugins at startup.
-                        # ELF dependency collection alone only includes their shared libraries.
-                        else {"linux": {"appimage": {"bundleMediaFramework": True}}}
-                    ),
-                },
+                "bundle": {"resources": {str(resources): "runtime"}, **platform_bundle},
             },
             indent=2,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return configuration
 

@@ -8,6 +8,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from evidenceforge._windows_paths import filesystem_path, resolve_path
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.utils.files import open_host_file
 
@@ -108,7 +109,7 @@ def _safe_relative(value: object) -> str:
 
 
 def _read_file(path: Path, *, offset: int = 0) -> tuple[bytes, os.stat_result]:
-    before = path.lstat()
+    before = filesystem_path(path).lstat()
     if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
         raise CheckpointFilesystemError(f"emitter spool is not a regular file: {path}")
     if hasattr(os, "getuid") and before.st_uid != os.getuid():
@@ -159,7 +160,7 @@ class EmitterSpoolParticipant:
 
     def __init__(self, *, emitters: dict[str, object], output_root: Path) -> None:
         self.emitters = emitters
-        self.output_root = Path(output_root).resolve()
+        self.output_root = resolve_path(Path(output_root))
         self._committed_append: dict[str, _FileState] = {}
         self._committed_sorted: dict[tuple[str, str], _SortedWriterState] = {}
         self._prepared: _PreparedState | None = None
@@ -167,7 +168,7 @@ class EmitterSpoolParticipant:
 
     def _relative_output(self, path: Path) -> str:
         try:
-            relative = path.resolve().relative_to(self.output_root)
+            relative = resolve_path(path).relative_to(self.output_root)
         except ValueError as error:
             raise CheckpointFilesystemError(
                 f"emitter output escaped the staged bundle: {path}"
@@ -345,7 +346,7 @@ class EmitterSpoolParticipant:
                     }
                 )
                 continue
-            if not isinstance(output_path, Path) or not output_path.exists():
+            if not isinstance(output_path, Path) or not filesystem_path(output_path).exists():
                 continue
             relative = self._relative_output(output_path)
             self._capture_append_file(
@@ -359,7 +360,7 @@ class EmitterSpoolParticipant:
 
         declared_emitters: list[object] = []
         for emitter, output_path, replace in self._declared_output_files():
-            if not output_path.exists():
+            if not filesystem_path(output_path).exists():
                 continue
             relative = self._relative_output(output_path)
             if relative in captured_paths:
@@ -489,7 +490,7 @@ class EmitterSpoolParticipant:
                 raise CheckpointCorruptionError("emitter append head does not match its segments")
             path = self.output_root.joinpath(*PurePosixPath(relative).parts)
             AppendOnlySpoolParticipant._replace_file(path, payloads)
-            info = path.lstat()
+            info = filesystem_path(path).lstat()
             restored_append[relative] = _FileState(
                 length=length,
                 chunks=chunks,

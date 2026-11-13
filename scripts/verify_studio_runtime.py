@@ -22,6 +22,7 @@ def run_cli(
     expected_exit_code: int = 0,
 ) -> str:
     """Run the standalone CLI without development dependencies or Studio state."""
+    print(f"Packaged CLI: {arguments}", flush=True)
     result = subprocess.run(
         [str(cli), *arguments],
         cwd=workspace,
@@ -43,17 +44,57 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
     with archive.open("rb") as source:
         if hashlib.file_digest(source, "sha256").hexdigest() != selected["sha256"]:
             raise ValueError("Packaged runtime checksum does not match its manifest")
-    with tempfile.TemporaryDirectory(prefix="eforge standalone ü ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="eforge standalone 汉 ü ") as temporary:
         root = Path(temporary).resolve()
-        runtime = root / "runtime"
-        runtime.mkdir()
-        with tarfile.open(archive) as source:
-            source.extractall(runtime, filter="data")
+        if os.name == "nt":
+            print("Packaged runtime: install checksum-verified private copy", flush=True)
+            installed = subprocess.run(
+                [
+                    str(resources / "bootstrap/python.exe"),
+                    "-I",
+                    "-B",
+                    "-m",
+                    "evidenceforge.studio.windows_runtime",
+                    "--resources",
+                    str(resources),
+                    "--data",
+                    str(root / "data"),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=180,
+                env={
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"PYTHONHOME", "PYTHONPATH", "EFORGE_STUDIO_RUNTIME_ROOT"}
+                },
+            )
+            runtime = Path(json.loads(installed.stdout))
+            for relative in (
+                "LICENSE.txt",
+                "THIRD_PARTY_NOTICES.txt",
+                "installer-licenses/NSIS-LICENSE.txt",
+                "installer-licenses/TAURI-LICENSE-MIT.txt",
+            ):
+                assert (runtime / relative).is_file(), f"Missing distribution notice: {relative}"
+        else:
+            runtime = root / "runtime"
+            runtime.mkdir()
+            with tarfile.open(archive) as source:
+                source.extractall(runtime, filter="data")
         workspace = root / "workspace"
-        workspace.mkdir()
+        if os.name == "nt":
+            # Match a real Documents/workspace/run hierarchy. The previous shallow
+            # smoke missed an exact-row pending name exceeding MAX_PATH at 294 chars.
+            workspace = workspace / ("nested Documents 汉 ü " + "w" * 50)
+        workspace.mkdir(parents=True)
         environment = {
             **os.environ,
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": str(Path(os.environ["SystemRoot"]) / "System32")
+            if os.name == "nt"
+            else "/usr/bin:/bin:/usr/sbin:/sbin",
             "PYTHONHOME": "/deliberately/unavailable/python",
             "PYTHONPATH": "/deliberately/unavailable/packages",
         }
@@ -73,9 +114,19 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
                 "XDG_CACHE_HOME": str(home / "cache"),
             }
         )
-        cli = runtime / "bin/eforge"
+        if os.name == "nt":
+            environment.update(
+                {
+                    "USERPROFILE": str(home),
+                    "LOCALAPPDATA": str(home / "local"),
+                    "APPDATA": str(home / "roaming"),
+                    "PYTHONUTF8": "0",
+                    "PYTHONIOENCODING": "ascii",
+                }
+            )
+        cli = runtime / ("Scripts/eforge.exe" if os.name == "nt" else "bin/eforge")
         run_cli(
-            runtime / "bin/python3.12",
+            runtime / ("python.exe" if os.name == "nt" else "bin/python3.12"),
             [
                 "-I",
                 "-B",
@@ -331,6 +382,8 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
             == manifest["evidenceforge_version"]
         )
         verify_macos_native(cli, workspace, environment)
+        print("Packaged runtime: remove verification workspace", flush=True)
+    print("Packaged runtime: verification passed", flush=True)
     return {
         "architecture": architecture,
         "version": manifest["evidenceforge_version"],
@@ -345,6 +398,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
         "validation": "passed",
         "checkpoint_enabled_generation": "passed",
         "macos_native_generation_and_evaluation": "passed",
+        **({"nested_windows_workspace": "passed"} if os.name == "nt" else {}),
     }
 
 

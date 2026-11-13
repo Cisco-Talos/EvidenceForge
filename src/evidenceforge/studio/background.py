@@ -12,6 +12,7 @@ import sys
 import psutil
 
 from evidenceforge.studio.paths import StudioPaths
+from evidenceforge.studio.processes import isolated_python_options, launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 from evidenceforge.studio.state_io import atomic_write, open_regular
 
@@ -44,7 +45,7 @@ def _start_macos(paths: StudioPaths) -> None:
         "Label": label,
         "ProgramArguments": [
             sys.executable,
-            *(["-I", "-B"] if runtime_root() is not None else []),
+            *(isolated_python_options() if runtime_root() is not None else []),
             "-m",
             "evidenceforge.studio.bootstrap",
             "--serve",
@@ -85,7 +86,7 @@ def _start_macos(paths: StudioPaths) -> None:
         )
 
 
-def start_background_service(paths: StudioPaths) -> None:
+def start_background_service(paths: StudioPaths) -> subprocess.Popen[bytes] | None:
     """Start a detached helper, using a transient user launch agent on macOS."""
     from evidenceforge.studio.ownership import validate_private_paths
 
@@ -99,11 +100,17 @@ def start_background_service(paths: StudioPaths) -> None:
     with os.fdopen(
         open_regular(paths.logs / "service.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND), "ab"
     ) as log:
-        subprocess.Popen(
-            [sys.executable, "-m", "evidenceforge.studio.bootstrap", "--serve"],
+        return subprocess.Popen(
+            [
+                sys.executable,
+                *(isolated_python_options() if runtime_root() is not None else []),
+                "-m",
+                "evidenceforge.studio.bootstrap",
+                "--serve",
+            ],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **launch_options(detached=True),
             env={**os.environ, "EFORGE_STUDIO_DAEMON": "1"},
         )

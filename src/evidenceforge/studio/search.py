@@ -37,7 +37,7 @@ def index_sources(path: Path, content: str, scenario: bool) -> dict[str, str]:
             pass
         else:
             return {
-                str(source.path.relative_to(path.parent))
+                source.path.relative_to(path.parent).as_posix()
                 if source.path.is_relative_to(path.parent)
                 else str(source.path): source.content.decode("utf-8")
                 for source in graph.sources

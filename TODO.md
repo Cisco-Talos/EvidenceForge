@@ -72,6 +72,41 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
+  NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
+  through PR #477. Installed verification and native regression/package evidence
+  are recorded separately from pending desktop acceptance; publication remains separate. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [ ] **P2 — Opt-in Windows clean uninstall (next installer build):** Preserve data
+  by default; offer a reviewed reset of the initiating account's Studio state,
+  retained runtimes and EvidenceForge skills/publisher settings. Require separate
+  explicit selection for deleting authored scenarios, packs and generated output;
+  identify exact owned paths and protect unrelated files/other accounts. Handle
+  Everyone installs and alternate-admin elevation without targeting the wrong
+  profile. Verify both scopes and fresh-install behavior. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [x] **P2 — Studio slow-start and shutdown handling:** Implemented bounded Windows
+  startup waits, prompt dead-helper handling, private startup phase timings and
+  cooperative idle event-socket shutdown, with native regression coverage. Laptop
+  startup timing remains part of desktop acceptance. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [ ] **P2 — Complete deep Windows workspace path qualification:** The output/
+  checkpoint repair covers the observed long-path generation failure. Extend
+  policy-independent native coverage to unusually deep authoring, import/export,
+  external-tool and SQLite paths; review remaining direct I/O boundaries without
+  leaking device-prefixed paths into public metadata or weakening containment.
+  See the [filesystem review](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-generation-failure-and-filesystem-review).
+
+- [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
+  setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
+  ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
+  Genuine separate-account isolation remains required before claiming that capability.
+  Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
+  This preview excludes ARM support, signing and automatic runtime pruning. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 - [ ] **P1 — Evaluate Mac ES JSON key-order variation internally:** Prototype simple,
   reproducible collector-scoped ordering generated and cached from schema keys.
   Measure serialization and end-to-end performance against its raw-log training

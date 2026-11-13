@@ -34,10 +34,9 @@ _RAW_TEMPORAL_METHODS = frozenset(
     }
 )
 
-# Exact integration-head ceiling for direct continuous RNG. Thirty-seven calls
-# are known byte/count/identity texture; the remaining 322 are deferred temporal
-# debt. Keeping the conservative superset here prevents either class from
-# growing while allowing any owner to remove a selector or lower its count.
+# Integration-head ceiling for direct continuous RNG, including byte/count/
+# identity texture and deferred temporal debt. This conservative census prevents
+# growth while allowing any owner to remove a selector or lower its count.
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|actions/network_transaction_planner.py|_plan_explicit_transport_state|uniform
 2|actions/network_transaction_planner.py|_plan_sampled_tcp_state|uniform
@@ -230,7 +229,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|world_model.py|_align_rdp_source_after_future_workstation_session|uniform
 2|world_model.py|_bootstrap_ssh_session|uniform
 2|world_model.py|bootstrap_user_session|uniform
-4|world_model.py|ensure_connection_process|uniform
+2|world_model.py|ensure_connection_process|uniform
 """.strip()
 
 _MIGRATED_LEGACY_CALLS = Counter(
@@ -322,7 +321,7 @@ def test_generation_has_no_remaining_legacy_timing_helper_calls() -> None:
 
 
 def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
-    """The exact 355-call compatibility census cannot gain selectors or calls."""
+    """The exact 353-call compatibility census cannot gain selectors or calls."""
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
@@ -331,7 +330,7 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     observed -= sizes
 
     assert len(caps) == 192
-    assert sum(caps.values()) == 355
+    assert sum(caps.values()) == 353
     assert not observed - caps
     assert len(observed) <= len(caps)
     assert sum(observed.values()) <= sum(caps.values())

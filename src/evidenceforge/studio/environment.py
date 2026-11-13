@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -16,6 +17,7 @@ from evidenceforge.composition.models import SelectedPack
 from evidenceforge.desktop.jobs import _eforge_command
 from evidenceforge.models.exceptions import ConfigurationError
 from evidenceforge.studio.contexts import ConfigurationState, configuration_state, context_arguments
+from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.settings import StudioSettings, controller_settings
 from evidenceforge.studio.store import Project
 
@@ -264,6 +266,7 @@ def inspect_environment(
             text=True,
             check=False,
             timeout=180,
+            **(launch_options() if os.name == "nt" else {}),
         )
         payload = json.loads(completed.stdout)
     except (
