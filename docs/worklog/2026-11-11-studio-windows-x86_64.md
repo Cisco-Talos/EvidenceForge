@@ -1211,3 +1211,45 @@ writer behavior or skip Windows. The previous Windows-only run was superseded by
 the reusable all-platform installer run because both use the same ref concurrency
 group; no artifact from that canceled run is qualified. Integrated laptop replay
 completes all five hours from the unchanged authored input.
+
+### Interactive clean uninstall and maintenance ordering
+
+The user reports missing uninstall cleanup choices and requests maintenance before
+scope selection. Implement on codex/studio-windows-clean-uninstall while #477's
+integration checks continue. Interactive uninstall invokes the installed bootstrap
+cleanup module before removing app files. Silent/passive/update uninstall preserves
+data. No new external Python, GUI package, version bump or publication is introduced.
+
+Three unchecked choices cover private Studio/WebView state and retained runtimes;
+known EvidenceForge skills/global publisher (including listed local edits and
+shared CLI impact); and exact managed authored/run entries in known workspaces.
+The SID/profile and paths are reviewed before a default-No irreversible deletion
+confirmation. Workspace roots, unrelated/added files, other profiles, Codex/auth,
+custom output parents and external exports stay. Native Known Folders and the
+process SID determine locations; inherited administrator/EFORGE profile variables
+are not authority. A small native Windows dialog has no WebView/service dependency.
+
+The elevated broker authenticates the same-session Explorer image/token and starts
+the cleanup module with its unelevated primary token and a fresh user environment.
+The child verifies the expected SID and refuses elevation. Normal same-account
+uninstall starts directly without impersonation privilege. Failed identity/handoff
+only permits separately confirmed app-only uninstall preserving all data. Actual
+alternate-admin/separate-account desktop acceptance remains required; mocks and
+hosted Server CI are not that evidence.
+
+Cleanup inventories no-follow identities, rejects unsafe ownership/ACLs and links,
+and rechecks under startup/helper/state/install/runtime/publication/run ownership.
+Selected namespace entries are staged before deletion; staging failure rolls back
+earlier names. Active or uncertain writers cause refusal, never termination. Native
+handle-relative rename/removal and extended-path inventory cover selected deep
+paths. Failures after deletion begins identify retained staging; approved deletion
+has no transactional undo. No real laptop/profile data is removed during this work.
+
+Maintenance detects registered scope before its action page; Install/Reinstall
+preserves user data, while explicit Uninstall exits instead of reinstalling.
+Scope selection follows maintenance and cross-scope refusal stays enforced.
+nsExec is a standard NSIS plugin covered by the retained zlib license
+(https://nsis.sourceforge.io/License); native token/environment/KnownFolder contracts
+were checked against Microsoft documentation. Fifteen portable safety tests pass.
+Five Windows native dialog/account contract cases and packaged deep cleanup tests
+are added to qualification; native results are pending.

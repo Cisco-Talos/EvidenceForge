@@ -78,7 +78,7 @@ without turning `TODO.md` back into a high-conflict work journal.
   are recorded separately from pending desktop acceptance; publication remains separate. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
-- [ ] **P2 — Opt-in Windows clean uninstall (next installer build):** Preserve data
+- [ ] **P2 — Opt-in Windows clean uninstall (current integration follow-up):** Preserve data
   by default; offer a reviewed reset of the initiating account's Studio state,
   retained runtimes and EvidenceForge skills/publisher settings. Require separate
   explicit selection for deleting authored scenarios, packs and generated output;

@@ -116,6 +116,63 @@ ConvertTo-Json -InputObject @($links) -Compress
     return [Path(link["path"]) for link in links]
 
 
+def verify_cleanup_payload(resources: Path, temporary: Path) -> None:
+    """Exercise packaged cleanup only against an explicit disposable inventory."""
+    script = r"""
+import sys
+from pathlib import Path
+from evidenceforge.cli.install_skills import install_chatgpt_skills
+from evidenceforge.studio.windows_uninstall import UserLocations, build_plan, execute
+from evidenceforge.utils.windows_filesystem import current_user_sid
+root=Path(sys.argv[1])
+from evidenceforge.studio.state_io import private_directory
+private_directory(root)
+private=root/'AppData/Local/EvidenceForge'
+private.mkdir(parents=True)
+(private/'private.txt').write_text('test only')
+workspace=root/'Documents/EvidenceForge'
+artifact=workspace/'.eforge/artifacts/drafts/scenario'/('long-folder-'+('x'*150))/('nested-'+('y'*80))/'source.yaml'
+from evidenceforge._windows_paths import filesystem_path
+filesystem_path(artifact.parent).mkdir(parents=True)
+filesystem_path(artifact).write_text('test only')
+workspace.mkdir(exist_ok=True)
+(workspace/'unrelated.txt').write_text('preserve')
+skills=root/'.agents/skills'
+install_chatgpt_skills(skills)
+(skills/'eforge-generate'/'my-notes.txt').write_text('preserve')
+locations=UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid())
+plan=build_plan(locations)
+execute(plan,set())
+assert private.exists() and filesystem_path(artifact).exists()
+execute(plan,{'private','skills','work'})
+assert not private.exists() and not filesystem_path(artifact).exists()
+assert (workspace/'unrelated.txt').read_text()=='preserve'
+assert (skills/'eforge-generate'/'my-notes.txt').read_text()=='preserve'
+assert not (skills/'eforge-generate'/'SKILL.md').exists()
+"""
+    python = resources / "bootstrap/python.exe"
+    subprocess.run(
+        [str(python), "-I", "-B", "-X", "utf8", "-c", script, str(temporary)],
+        check=True,
+        timeout=120,
+    )
+    subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-X",
+            "utf8",
+            "-m",
+            "evidenceforge.studio.windows_uninstall",
+            "--help",
+        ],
+        check=True,
+        timeout=30,
+        capture_output=True,
+    )
+
+
 def uninstall_app(destination: Path, scope: str) -> None:
     """Wait for uninstallation and finish NSIS's direct-uninstaller cleanup."""
     uninstaller = destination / "uninstall.exe"
@@ -293,6 +350,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 assert registry_location(opposite) is None
                 print(f"{scope}: verify isolated packaged runtime", flush=True)
                 runtime = verify_runtime(destination / "runtime", "x86_64")
+                print(f"{scope}: verify packaged clean-uninstall inventory", flush=True)
+                verify_cleanup_payload(destination / "runtime", root / f"cleanup-{scope}")
                 print(f"{scope}: verify installed shell and helper", flush=True)
                 helper_smoke(destination / "evidenceforge-studio.exe", root / f"launch-{scope}")
                 retained_database = root / f"launch-{scope}/private/data/studio.sqlite"
@@ -332,6 +391,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 )
                 report["scopes"][scope] = {
                     "install_reinstall_scope_refusal": "passed",
+                    "packaged_cleanup_inventory": "passed",
+                    "interactive_account_handoff": "pending genuine Windows desktop acceptance",
                     "scope_shortcuts": "passed",
                     "runtime": runtime,
                     "native_shell_helper": "passed",

@@ -35,7 +35,8 @@ stores settings, credentials, helpers, job records, runtime caches and workspace
 selection in per-account private directories; genuine separate-account isolation
 still awaits acceptance. Launch Studio normally after setup exits; the installer
 does not launch it. If changing installation scope, uninstall the existing copy
-first. Uninstall preserves private state, retained runtimes and authored work.
+first. Uninstall preserves private state, retained runtimes and authored work by default;
+interactive removal offers three separate cleanup choices for the desktop account.
 Automatic runtime cleanup is unavailable in this preview.
 
 WebView2 is downloaded during setup only when needed. No development tools or
@@ -105,8 +106,8 @@ ordinary workstation or one with an existing Studio installation.
 
 During development, **Windows Studio Preview** runs Windows-only checks/builds on
 each push to `codex/studio-windows-x86_64`, with dependency/build caches and
-cancellation of superseded runs. This draft branch temporarily defers full
-Mac/Linux CI; marking the PR ready explicitly starts the full platform gates.
+cancellation of superseded runs. Normal integration runs the full cross-platform
+CI gates; the preview remains independently available through Installer Builds.
 
 Windows 11 interactive testing must still cover downloaded-file trust controls,
 both scopes, cancelled UAC, separate administrator credentials and intended-user
@@ -115,27 +116,44 @@ exports. Genuine separate-account isolation remains a separate acceptance gate.
 
 ### Reset the Windows preview for a fresh installation test
 
-The normal uninstaller preserves authored work and private state. For a deliberate
-test reset, first quit Studio with no active/background work and preserve anything
-you want to keep. Uninstall **EvidenceForge Studio** through Windows Settings;
-the all-users installation requires administrator approval. Then remove these
-account-specific locations if present:
+Quit Studio and finish or pause all background work. In Windows Settings → Apps →
+Installed apps, choose **EvidenceForge Studio → Uninstall**. Existing installations
+can also use the installer's **Install / Reinstall** or **Uninstall** page, which
+appears before the installation-scope page.
 
-- `%LOCALAPPDATA%\EvidenceForge` — private state, logs, caches and retained runtimes.
-- `%LOCALAPPDATA%\org.evidenceforge.studio` — Studio's WebView profile/cache.
-- The selected test workspace — the default is the account's Documents directory
-  plus `EvidenceForge`. Redirected Documents can be under OneDrive; deleting that
-  folder also syncs the deletion. This removes authored scenarios, packs and runs.
-- `%USERPROFILE%\.eforge\publisher.yaml` — the optional global publisher identity.
-- The nine EvidenceForge-owned `eforge-*` skill directories installed under
-  `%USERPROFILE%\.agents\skills`; preserve other skills and any custom work.
-- `%USERPROFILE%\.claude\commands\eforge`, if Claude skills were also installed.
+The interactive uninstaller offers three **unchecked** choices. Leaving them all
+unchecked removes only the application:
 
-Remove the old installer/download folder to avoid testing the wrong snapshot.
-Reboot before installing the replacement if a retained process still owns files.
-Do not remove Codex, its account/configuration/history, sandbox accounts or
-WebView2 as part of this Studio reset. Windows uninstall/history records and
-OneDrive's recovery history are outside this application-state reset.
+- **Studio settings, credentials, caches and retained runtimes:** the current
+  account's `%LOCALAPPDATA%\EvidenceForge` and Studio WebView profile.
+- **EvidenceForge skills and publisher identity:** known EvidenceForge files under
+  the account's `.agents/skills`, legacy `.codex/skills` and `.claude/commands/eforge`,
+  plus `.eforge/publisher.yaml`. This also affects standalone CLI/agent integrations.
+  Listed skill files include local edits; unrelated files and skill parents stay.
+- **Authored scenarios/packs and generated output:** exact app-managed folders,
+  recognized scenario files and run bundles in known workspaces. The workspace
+  root, unrelated files, other accounts and external/custom output parents stay.
+
+The review shows the account and exact paths before a separate irreversible-delete
+confirmation. Deleting synced content may also delete its cloud copies. Canceling
+before confirmation removes no data and cancels application uninstall. Active
+helpers, retained jobs, runtime leases, publishing and run ownership block cleanup;
+cleanup never terminates jobs. Links, junctions, unsafe ownership, unsupported
+filesystems and files changed since review cause refusal. Remaining staged data
+is identified if deletion stops after it starts.
+
+For **Everyone**, the app uninstaller may be elevated, but cleanup runs using the
+same-session Windows desktop user's unelevated token and Known Folders. It never
+uses the alternate UAC administrator's profile. If that account cannot be safely
+identified, only app removal with all data preserved is available. Silent/passive
+uninstall and upgrades preserve data and never request destructive confirmation.
+Genuine alternate-account/UAC desktop acceptance remains required.
+
+Remove old installer downloads separately to avoid testing the wrong snapshot.
+Codex, its sign-in/configuration/history, unrelated skills and WebView2 stay.
+Windows install history, cloud recovery history and independent backups are
+outside this application-state reset. Custom output locations or unrecognized
+files listed as preserved need separate manual review if you also want them gone.
 
 ## Install and open Studio
 
