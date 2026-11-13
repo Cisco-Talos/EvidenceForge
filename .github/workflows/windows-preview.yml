@@ -127,6 +127,7 @@ jobs:
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
           tests/unit/test_windows_filesystem.py
+          tests/unit/test_windows_cleanup.py
           tests/unit/test_windows_streams.py
           tests/unit/test_windows_resource_paths.py tests/unit/test_windows_output_paths.py
           tests/unit/test_external_sorted_writer.py

@@ -305,10 +305,13 @@ def test_ci_requires_new_revision_when_behavior_surface_changes() -> None:
     )
 
 
-def test_behavior_surface_covers_windows_filesystem_spelling(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "module", ["_windows_paths.py", "_windows_cleanup.py", "_windows_cleanup_native.py"]
+)
+def test_behavior_surface_covers_windows_filesystem_helpers(tmp_path: Path, module: str) -> None:
     package = tmp_path / "evidenceforge"
     package.mkdir()
-    helper = package / "_windows_paths.py"
+    helper = package / module
     helper.write_text("VALUE = 1\n")
     original = generation_behavior_surface_digest(package)
     helper.write_text("VALUE = 2\n")

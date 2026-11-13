@@ -12,6 +12,7 @@ The ordered collector API remains the sole owner of final sequence allocation.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -218,7 +219,12 @@ class MacosESIngress:
         """Remove internal snapshots after successful native output finalization."""
         if self.finalized or not self.enabled:
             if filesystem_path(self.root).exists():
-                shutil.rmtree(filesystem_path(self.root))
+                if os.name == "nt":
+                    from evidenceforge._windows_cleanup import remove_temporary_tree
+
+                    remove_temporary_tree(self.root)
+                else:
+                    shutil.rmtree(filesystem_path(self.root))
 
     def barrier_flush(self) -> None:
         """Seal immutable ingress runs without delivering future occurrences."""

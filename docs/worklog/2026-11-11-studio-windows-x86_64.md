@@ -1368,3 +1368,58 @@ separate-account ownership, all three cleanup choices and first-launch setup aft
 reset remain manual acceptance. Hosted Windows Server native UI checks establish
 only their stated bounds. The laptop's separate ground-truth agreement failure
 and broader deep-workspace qualification remain open on the durable roadmap.
+
+### Laptop reaches 100 percent; Windows scratch removal denied (November 13)
+
+PR #483 merged as cf61b3a5. Exact-dev CI 43380044677 passes all 33 jobs and
+Installer Builds 43380044794 passes all 11, including all four packaged targets.
+Qualified Windows artifact 14018207579 has independently verified EXE SHA256
+318411d96561b9e0f593f8f6402d7ec42a659a8e4cd34e7263e8e896e5014609.
+The user now reaches Hour 5/5 on the unchanged healthcare scenario, then fails
+inside MacosESIngress.cleanup -> shutil.rmtree -> os.rmdir with WinError 5.
+The denied entry is an empty .efsort directory under the staged private ES ingress
+in the OneDrive-backed workspace. The physical path is already extended; this
+trace does not establish another MAX_PATH failure. Simulated hours completing is
+not successful final bundle publication. No checkpoint was committed for this run.
+
+Read-only laptop inspection first shows ReadOnly, Directory, Archive, ReparsePoint.
+A later os.lstat shows attributes 0x31 and tag 0: the reparse flag has disappeared
+while ReadOnly remains. Do not equate all reparse points with links or claim that
+OneDrive, an ACL, or an open handle is conclusively responsible. A new-empty-folder
+probe comparing native LocalAppData and the workspace is requested. The failed run
+and its private workspace remain unchanged.
+
+The sorter currently ignores its first rmtree failure and discards its spool path;
+the later ingress cleanup then fails the run on the same leftover directory.
+On codex/windows-ingress-cleanup, retain sorter state until Windows cleanup really
+succeeds. Add bounded native deletion retries (six waits totaling 3.15 seconds),
+preserving persistent and unrelated failures. A ReadOnly repair opens only the
+failed owned entry with OPEN_REPARSE_POINT and changes FileBasicInfo through that
+handle. Preserve ACLs and all other attributes; refuse multiply linked files,
+name-surrogate links and unknown reparse tags. Only the documented Cloud Files tag
+family is eligible alongside ordinary entries. This does not weaken the separate
+protected-storage adapter's strict reparse/ACL rules. POSIX retains its existing
+single-pass cleanup behavior.
+
+Freeze terminal sorted export separately from cleanup. A failed deletion must not
+reapply a potentially non-idempotent projection when close is retried, or accept
+new rows after final export. A portable regression verifies exact unchanged bytes
+and a cleanup-pending state. The same Windows helper covers final checkpoint
+workspace reclamation after its existing ACL/reparse validation, and removal of
+precisely registered installed output during transaction rollback; neither guard
+is relaxed. Native tests include ReadOnly checkpoint content and rollback data.
+
+Portable tests cover transient/partial cleanup, bounded persistent failure,
+unrelated-error refusal, contained attribute repair and all Cloud Files tag variants.
+Native regressions pin real directory handles, prove the old unguarded rmtree fails,
+release the handle and require exact exported bytes, retained state after persistent
+failure and successful retry. Add actual ReadOnly file/directory cleanup plus junction
+target and hardlink protection. Native Windows qualification and the actual laptop's
+cloud-provider acceptance are still pending; mocks are not OneDrive acceptance.
+
+Behavior revision 518 declares no evidence/output change and includes both new
+Windows helpers in the complete behavior surface. Product and storage versions,
+scenario content, output thresholds, tags and publication remain unchanged.
+References: https://docs.python.org/3.12/library/shutil.html#rmtree-example,
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_basic_info,
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-isreparsetagnamesurrogate.
