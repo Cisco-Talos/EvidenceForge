@@ -24,6 +24,7 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -34,6 +35,7 @@ from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.deployment_compiler import compile_deployment_registry
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import HostCapability, WorldModel, WorldPlanner
@@ -1736,6 +1738,8 @@ def test_exact_custom_application_without_system_types_is_eligible(
     assert process.command_line == "case-client.exe --review"
 
 
+@pytest.mark.parametrize("defer_minutes", [0, 30])
+@pytest.mark.parametrize("compiled", [False, True])
 def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     monkeypatch: pytest.MonkeyPatch,
     scenario: Scenario,
@@ -1743,10 +1747,19 @@ def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     users: dict[str, User],
     state_manager: StateManager,
     mock_emitters: dict[str, Mock],
+    defer_minutes: int,
+    compiled: bool,
 ) -> None:
     """Server-side LDAP helper processes should not leak corp.local or stay open forever."""
+    users["alice.admin"].primary_system = systems["DB-01"].hostname
     world_model = WorldModel(scenario, "meridianhcs.local")
-    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    dispatcher = EventDispatcher(
+        state_manager=state_manager,
+        emitters=mock_emitters,
+        deployment_registry=(
+            compile_deployment_registry(scenario, world_model) if compiled else None
+        ),
+    )
     activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
     activity_generator._ad_domain = world_model.ad_domain
     activity_generator._ip_to_system = dict(world_model.systems_by_ip)
@@ -1770,6 +1783,26 @@ def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
         lambda: {"ldap": ["ldapsearch"]},
     )
 
+    original_generate = activity_generator.generate_process
+    execution_closes: dict[int, datetime] = {}
+
+    def generate_with_delayed_launch(**kwargs: Any) -> int:
+        # The execution owner may defer launch for a busy parent/shell. The
+        # traffic consumer must preserve that owner's close, not reschedule it
+        # against the earlier socket request.
+        if not kwargs["process_name"].endswith("/ldapsearch"):
+            return original_generate(**kwargs)
+        kwargs["time"] += timedelta(minutes=defer_minutes)
+        pid = original_generate(**kwargs)
+        close = activity_generator.foreground_process_termination_time(
+            kwargs["system"].hostname, pid
+        )
+        assert close is not None
+        execution_closes[pid] = close
+        return pid
+
+    monkeypatch.setattr(activity_generator, "generate_process", generate_with_delayed_launch)
+
     pid = planner.ensure_connection_process(
         user=users["alice.admin"],
         system=systems["DB-01"],
@@ -1780,10 +1813,14 @@ def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     )
     proc = state_manager.get_process(systems["DB-01"].hostname, pid)
     assert proc is not None
+    close = activity_generator.foreground_process_termination_time(proc.system, pid)
+    assert close == execution_closes[pid]
+    assert close > proc.start_time
+    assert proc.start_time >= session_time + timedelta(minutes=defer_minutes)
     assert "dc=meridianhcs,dc=local" in proc.command_line
     assert "dc=corp,dc=local" not in proc.command_line
 
-    activity_generator.finalize_foreground_process_lifetimes(session_time + timedelta(minutes=1))
+    activity_generator.finalize_foreground_process_lifetimes(close + timedelta(minutes=1))
     events = [call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list]
     creates = [event for event in events if event.event_type == "process_create"]
     terminates = [event for event in events if event.event_type == "process_terminate"]
@@ -1792,7 +1829,9 @@ def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     terminate = next(event for event in terminates if event.process and event.process.pid == pid)
     create = next(event for event in creates if event.process and event.process.pid == pid)
     assert create.timestamp < terminate.timestamp
-    assert (terminate.timestamp - session_time).total_seconds() < 10
+    assert (terminate.timestamp - create.timestamp).total_seconds() < 10
+    assert state_manager.get_process(proc.system, pid) is None
+    assert sum(event.process is not None and event.process.pid == pid for event in terminates) == 1
 
 
 def test_connection_owner_process_does_not_reuse_linux_shell(

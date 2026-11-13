@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 513
+current_revision: 514
 history_start_revision: 1
-behavior_surface_sha256: 0bffe46fad9950930abcdf02d1b5bbc6d6ef9d6d982f9bc454c5970f33e46239
+behavior_surface_sha256: d1556807a942d50d0f419729e1280f4c61e6d9a0a1801f2fa4ceef843de07a03
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5911,3 +5911,12 @@ changes:
   formats: []
   summary: Resolve checkpoint roots through long-path Windows I/O while retaining their
     logical namespace and rejecting all unprefixed long-path probes in native tests.
+- revision: 514
+  id: retain-execution-owned-ldap-process-lifetimes
+  impact: localized
+  domains:
+  - process-lifecycle
+  - baseline-traffic
+  formats: []
+  summary: Keep LDAP client closure owned by process execution instead of replacing it
+    with an earlier network-request timestamp when shell scheduling delays launch.

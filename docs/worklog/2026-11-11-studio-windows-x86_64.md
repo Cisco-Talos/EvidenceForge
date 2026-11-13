@@ -1106,3 +1106,68 @@ do not weaken lifecycle authority or infer that the host Windows platform caused
 this shared engine invariant. Exact input is not included in the pasted log and
 is needed next. No executable change or new installer is made by this initial
 investigation; latest qualified artifact remains `5daed0fe`.
+
+### Exact shared-engine reproduction and LDAP lifetime ownership repair
+
+The first additional paste contains only environment/baseline JSON. The next
+attachment is the complete authored Schema 3 scenario, including healthcare
+1.0.0, seed 42, November 10 14:00 UTC start, five-hour collection, one-hour warm-up,
+all selected formats, storyline and red herrings. Its unchanged local-copy SHA256
+is `84897c7f8147e9655696a7f3e4b80e67689b07001913607f4e723caa216f9797`.
+It is authored input rather than the full frozen configuration, but its replay
+reproduces the exact laptop invariant and object ID on macOS using the current
+packaged defaults. No further user files are needed for this root cause.
+
+Diagnostics identify `/usr/bin/ldapsearch` on modeled `MG-LNX-01`, PID 3746376,
+object `0a4bd957-bb7d-41f4-9e41-f94d1d6288e9`. The live identity is unchanged;
+the invalid close is 15:23:41.398247 UTC, before its actual start at
+15:53:26.843817 UTC. The session ends at 16:02:42.718092 UTC and is not the source
+of the backward close. The original traffic request is 15:23:33.828520 UTC.
+Instrumentation locates the overwrite in WorldPlanner.ensure_connection_process,
+not in lifecycle authority or Windows filesystem access.
+
+Both compiled and legacy traffic branches separately resample an LDAP deadline
+from the earlier network-request time after generate_process has admitted the
+actual, potentially shell-delayed execution. Those consumers overwrite the close
+already owned by process execution. Remove both duplicate planners and the now
+unused lifetime-policy import/temporary executable variable; retain the shared
+execution-owned finalizer and all lifecycle/State checks. Do not clamp an invalid
+close in an emitter or weaken the pre-apply invariant. No scenario edits, timing
+workarounds or Windows-specific exception are introduced.
+
+The existing real LDAP regression now covers compiled/legacy deployment and
+zero-/thirty-minute launch deferral. It captures the execution owner's close,
+requires exact retention after traffic planning, verifies close after actual
+birth and one final termination with no live process leak. All four cases fail
+against the original WorldPlanner and pass with the repair. Local focused checks
+pass 210 world/process/deployment/authority cases, 27 behavior/system cases,
+seven slow stale-process/RDP teardown cases, and all three slow temporal-policy
+cases. Update the explicit direct-RNG ceiling from 358 to 356: two duplicate
+lifetime samples are removed rather than added as unused draws.
+
+An independent baseline-only probe made from the supplied environment also
+reproduces the same backward-close family on the preceding day; it now completes
+all five hours. The unchanged complete authored scenario validates with the
+same seven information findings and intentional viewer.exe warning, generates
+successfully through hour 5, and writes an authoritative bundle containing 41
+data files. Local reproduction inputs, failed runs, diagnostics, repaired output
+and evaluation evidence are retained outside the repository under
+`/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-laptop-lifecycle-2sw31f8c/`.
+No original user files or failed laptop output are modified or overwritten.
+
+Evaluation runs once, exits zero and independently verifies the repaired bundle's
+integrity across 34,673 records. Its acceptance verdict is nevertheless FAIL:
+overall 95.16512810690784, ground-truth agreement 91.78896658389858 against the
+95 hard requirement. The report includes missing/duplicate/unexpected evidence,
+factual and timing discrepancies. Treat this as a separate shared quality finding;
+no acceptance threshold, visibility rule, authoring content or evaluator is changed
+to conceal it. Existing ground-truth reconciliation remains open. Local generation
+completion is not full scenario-quality or Windows desktop acceptance.
+
+Behavior revision 514 declares localized process-lifecycle/baseline-traffic changes,
+including changed sampling after removal of duplicate lifetime draws. Complete
+digest: `d1556807a942d50d0f419729e1280f4c61e6d9a0a1801f2fa4ceef843de07a03`.
+Native Windows preview now includes the world-model/process-lifetime gates so
+both deployment paths and delayed close ownership run on the target OS. Native
+installer requalification is pending. Product versions, storage schemas, signatures,
+release tags, publication and the separate clean-uninstall task remain unchanged.
