@@ -1276,3 +1276,10 @@ File staging now pins separate source/destination parent handles, including roll
 across the quarantine directory. The old sibling-only helper is insufficient for
 this cross-directory staging. Retain the same no-replacement native rename and
 ownership contracts; local safety cases pass before native requalification.
+
+Native run 43364453630 now passes all fifteen ownership/staging safety cases and
+real cancel/preserve UI actions. Two remaining UI assertions read the EDIT control's
+stale creation caption through cross-process GetWindowText. Microsoft documents
+that limitation; use marshalled WM_GETTEXT and assert the selected checkbox state.
+Keep real selected-cleanup and declined-confirmation actions enabled. Reference:
+https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowtextw.

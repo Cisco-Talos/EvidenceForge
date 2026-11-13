@@ -37,6 +37,8 @@ from evidenceforge.utils.windows_filesystem import current_user_sid
 root=Path(sys.argv[1])
 def confirm(text, flags=0, owner=None):
     assert owner, 'Confirmation must be modal to the review window'
+    if flags == 0x10:
+        print(text, file=sys.stderr, flush=True)
     return 7 if sys.argv[2]=='decline' else 6
 ui.message=confirm
 plan=build_plan(UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid()))
@@ -90,11 +92,12 @@ raise SystemExit(ui.choose(plan))
                 assert send(control(window, identifier), 0xF0, 0, 0) == 0
             if action in {"private", "decline"}:
                 send(control(window, 101), 0xF1, 1, 0)
+                assert send(control(window, 101), 0xF0, 0, 0) == 1
                 send(window, 0x111, 101, control(window, 101))
             text = ctypes.create_unicode_buffer(32768)
-            _function("user32", "GetWindowTextW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int])(
-                control(window, 301), text, len(text)
-            )
+            # Cross-process GetWindowText reads the creation caption, not the
+            # EDIT control's current contents. WM_GETTEXT is marshalled by User32.
+            send(control(window, 301), 0xD, len(text), ctypes.addressof(text))
             assert str(root) in text.value
             if action in {"private", "decline"}:
                 assert str(private) in text.value and "DELETE:" in text.value
