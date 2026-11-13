@@ -73,3 +73,38 @@ uv run python scripts/benchmark_evaluation.py /path/to/bundle \
 
 Use identical scenario/configuration inputs and compatibility flags for both runs. Measurements
 must be written outside the input bundle. Labels cannot overwrite earlier measurements.
+
+### Fixed workload memory regression gate
+
+The large-corpus correctness test separately verifies all 500,002 records, including a malformed
+final record, exact denominators, spill and scratch cleanup. It does not impose a total-RSS limit.
+
+Run the resource gate in its own process, outside pytest and coverage:
+
+```bash
+uv run python -m scripts.check_evaluation_memory --output-dir /path/to/new-memory-results
+```
+
+The versioned profile in `tests/fixtures/eval/memory-workloads.yaml` fixes three corpus sizes,
+two workload families and a 16 MiB working-state budget. Distinct process identities stress
+cardinality; correlated eCAR and Zeek rows exercise process, file, tuple, UID, DNS and TLS indexes.
+Each case must retain exact source populations, pass schema validation, spill and clean its scratch.
+The gate then checks both absolute RSS and the largest growth above the smallest corpus in each
+family. These envelopes apply to the fixed fixtures, not arbitrary user scenarios or the default
+256 MiB working-state budget, and finite scaling checks do not prove bounds for every input.
+
+Each evaluator starts in a fresh process, prepares its inputs/imports, reports readiness and waits
+until the external observer is sampling. RSS is sampled every 10 ms during evaluation, with the
+baseline and final resident set also included. Very brief peaks between samples can be missed.
+Process-lifetime `ru_maxrss` remains diagnostic: on Linux it can retain pre-exec parent history.
+Do not subtract two high-water marks to estimate evaluation memory. A controlled retained-parent
+probe checks that unrelated parent allocations do not inflate the sampled worker metric; later
+workers may have lower startup RSS. Import bytecode and OS caches may be warm.
+
+The extended release workflow requires separate native memory jobs on Linux x86_64/ARM64,
+macOS ARM64 and Windows x86_64 using Python 3.12. Reports retain source/harness/profile identities,
+input hashes, interpreter details, baseline/peak RSS, sample counts and evaluator resource facts,
+including on envelope failure. Ordinary OS caches may be warm; no persistent evaluator cache is
+used. Recalibration requires inspecting complete native measurements and documenting headroom,
+rather than raising a limit until CI passes. `--measure-only` collects calibration evidence without
+enforcing candidate limits; release workflow calls cannot select that bypass.

@@ -7,6 +7,7 @@ from scripts.check_evaluation_memory import (
     Measurement,
     Profile,
     WorkerResult,
+    check_history_probe,
     check_measurements,
 )
 
@@ -52,6 +53,17 @@ def matrix() -> tuple[list[Measurement], Profile, Limits]:
 def test_lifetime_high_water_history_does_not_change_evaluator_memory_gate() -> None:
     rows, profile, limits = matrix()
     assert check_measurements(rows, profile, limits) == []
+
+
+@pytest.mark.parametrize("difference", [-64 * MIB, 0, 16 * MIB])
+def test_parent_history_control_allows_lower_or_similar_worker_rss(difference: int) -> None:
+    assert check_history_probe({"sampled_peak_difference_bytes": difference}) == []
+
+
+def test_parent_history_control_rejects_inflated_worker_rss() -> None:
+    assert check_history_probe({"sampled_peak_difference_bytes": 64 * MIB}) == [
+        "RSS sampling increased by over 32 MiB under unrelated parent pressure"
+    ]
 
 
 @pytest.mark.parametrize("peaks", [(120, 140, 165), (120, 165, 120)])

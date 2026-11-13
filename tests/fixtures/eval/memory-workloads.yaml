@@ -1,10 +1,13 @@
-# Calibration candidate. The existing 512 MiB envelope is retained until native
-# measurements establish the platform-specific limits and growth allowance.
+# Python 3.12 native calibration: Actions 43331641707, November 12, 2026.
+# Peak envelope = observed family maximum * 1.25, rounded up to 32 MiB.
+# Growth allowance = observed growth + 16 MiB, rounded up to 16 MiB,
+# with a 32 MiB minimum. Both families independently satisfy these bounds.
+# Evidence and measurement boundaries: docs/worklog/2026-11-12-evaluation-memory-contracts.md.
 version: 1
 memory_budget_mib: 16
 records: [24000, 72000, 216000]
 limits:
-  linux-x86_64: {peak_mib: 512, growth_mib: 64}
-  linux-aarch64: {peak_mib: 512, growth_mib: 64}
-  darwin-arm64: {peak_mib: 512, growth_mib: 64}
-  win32-amd64: {peak_mib: 512, growth_mib: 64}
+  linux-x86_64: {peak_mib: 224, growth_mib: 32}
+  linux-aarch64: {peak_mib: 192, growth_mib: 32}
+  darwin-arm64: {peak_mib: 224, growth_mib: 32}
+  win32-amd64: {peak_mib: 192, growth_mib: 32}

@@ -454,6 +454,13 @@ def check_measurements(rows: list[Measurement], profile: Profile, limits: Limits
     return failures
 
 
+def check_history_probe(probe: dict[str, Any]) -> list[str]:
+    """Reject inflated worker RSS, allowing lower startup RSS on later runs."""
+    if probe["sampled_peak_difference_bytes"] > 32 * MIB:
+        return ["RSS sampling increased by over 32 MiB under unrelated parent pressure"]
+    return []
+
+
 def main() -> None:
     """Retain every measurement before enforcing the calibrated envelopes."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -505,8 +512,7 @@ def main() -> None:
             (args.output_dir / "measurements.json").write_text(json.dumps(report, indent=2) + "\n")
             print(row.model_dump_json(), flush=True)
     failures = check_measurements(rows, profile, profile.limits[platform_key])
-    if abs(report["history_probe"]["sampled_peak_difference_bytes"]) > 32 * MIB:
-        failures.append("RSS sampling changed by over 32 MiB under unrelated parent pressure")
+    failures.extend(check_history_probe(report["history_probe"]))
     report["failures"] = failures
     (args.output_dir / "measurements.json").write_text(json.dumps(report, indent=2) + "\n")
     if failures and not args.measure_only:
