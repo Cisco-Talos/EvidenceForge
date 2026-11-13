@@ -606,8 +606,9 @@ def snapshot_resources(destination: Path) -> ResourceSnapshot:
     virtual = psutil.virtual_memory()
     try:
         swap = psutil.swap_memory()
-    except OSError:
-        # Some restricted macOS environments deny the sysctl used by psutil.
+    except (OSError, RuntimeError):
+        # Restricted macOS sysctl access raises OSError; unavailable Windows PDH
+        # counters raise RuntimeError. Neither makes swap available to budget.
         # Treat unavailable swap as zero so the forecast remains conservative.
         free_swap = 0
     else:

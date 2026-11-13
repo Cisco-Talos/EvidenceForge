@@ -50,6 +50,71 @@ def scenario_draft(project: Path) -> Path:
     return create_draft(original, project_root=project)
 
 
+@pytest.mark.parametrize("json_output", [False, True])
+def test_scoped_cli_validation_tolerates_windows_counters_without_writing_receipts(
+    properties_project: Path, monkeypatch: pytest.MonkeyPatch, json_output: bool
+) -> None:
+    source = scenario_draft(properties_project)
+    before = source.read_bytes()
+    receipts = properties_project / ".eforge/artifacts/validations"
+    mkdir = Path.mkdir
+    attempts: list[Path] = []
+
+    def restricted_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+        if path == receipts:
+            attempts.append(path)
+            raise PermissionError("Chat cannot write project validation receipts")
+        mkdir(path, *args, **kwargs)
+
+    def unavailable_swap() -> None:
+        raise RuntimeError("PdhAddEnglishCounterW failed. Performance counters may be disabled.")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.resource_forecast.psutil.swap_memory", unavailable_swap
+    )
+    arguments = ["validate", str(source), "--project-root", str(properties_project)]
+    if json_output:
+        arguments.append("--json")
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "mkdir", restricted_mkdir)
+        result = CliRunner().invoke(app, [*arguments, "--no-record"])
+    assert result.exit_code == 0, result.output
+    assert attempts == [] and not receipts.exists()
+    assert "Validation record was not retained" not in result.output
+    if json_output:
+        payload = json.loads(result.stdout)
+        assert payload["valid"]
+        assert payload["resource_forecast"]["available"]
+        assert payload["resource_forecast"]["snapshot"]["free_swap_bytes"] == 0
+    else:
+        assert "Scenario is valid" in result.output
+    assert source.read_bytes() == before
+
+    # The ordinary CLI retains the existing exact-input receipt contract.
+    retained = CliRunner().invoke(app, arguments)
+    assert retained.exit_code == 0, retained.output
+    assert inspect_properties(source, project_root=properties_project).validated_with is not None
+
+
+def test_scoped_validation_still_reports_invalid_scenario(properties_project: Path) -> None:
+    source = properties_project / "invalid.yaml"
+    source.write_text("name: incomplete\n")
+    result = CliRunner().invoke(
+        app,
+        [
+            "validate",
+            str(source),
+            "--no-record",
+            "--json",
+            "--project-root",
+            str(properties_project),
+        ],
+    )
+    assert result.exit_code != 0
+    assert not json.loads(result.stdout)["valid"]
+    assert not (properties_project / ".eforge/artifacts/validations").exists()
+
+
 @pytest.mark.parametrize(
     "kind, name, version",
     [("industry", "healthcare", "1.0.0"), ("organization", "northstar-health", "1.1.0")],

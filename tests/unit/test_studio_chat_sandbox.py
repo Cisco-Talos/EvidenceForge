@@ -58,6 +58,8 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
     published.mkdir()
     source = published / "scenario.yaml"
     source.write_text("published bytes")
+    valid_source = published / "validation.yaml"
+    shutil.copyfile(Path(__file__).parents[1] / "fixtures/scenarios/minimal.yaml", valid_source)
     completed = workspace / "completed-draft.yaml"
     completed.write_text("historical draft bytes")
     revision = workspace / "new-draft"
@@ -222,6 +224,20 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             for arguments in (["version"], ["schema", "--help"], ["validate", "--help"]):
                 result = await execute(discussion, [packaged_cli, *arguments])
                 assert result["exitCode"] == 0, result
+            result = await execute(
+                discussion,
+                [
+                    packaged_cli,
+                    "validate",
+                    str(valid_source),
+                    "--project-root",
+                    str(workspace),
+                    "--json",
+                    "--no-record",
+                ],
+            )
+            assert result["exitCode"] == 0 and json.loads(result["stdout"])["valid"], result
+            assert not (workspace / ".eforge/artifacts/validations").exists()
         for target in (source, completed):
             commands = [
                 protect_command(target),
@@ -254,6 +270,7 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         )
         assert read["exitCode"] == 0 and read["stdout"] == "published bytes", read
         access = ChatAccess(mode="draft", source=revision / "scenario.yaml", directory=revision)
+        shutil.copyfile(valid_source, access.source)
         effective = await client.call("config/read", {"cwd": str(revision), "includeLayers": True})
         created = await client.call(
             "thread/start",
@@ -268,6 +285,20 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
         if packaged_cli and (sys.platform != "win32" or native_mxc):
             result = await execute(access, [packaged_cli, "version"])
             assert result["exitCode"] == 0, result
+            result = await execute(
+                access,
+                [
+                    packaged_cli,
+                    "validate",
+                    str(access.source),
+                    "--project-root",
+                    str(workspace),
+                    "--json",
+                    "--no-record",
+                ],
+            )
+            assert result["exitCode"] == 0 and json.loads(result["stdout"])["valid"], result
+            assert not (workspace / ".eforge/artifacts/validations").exists()
         result = await execute(
             access,
             [

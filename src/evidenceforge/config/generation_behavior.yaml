@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 510
+current_revision: 511
 history_start_revision: 1
-behavior_surface_sha256: fb98dded6e2d9907e5bc6a5526a10028da84aeca4f5f3018dbc321057ecab186
+behavior_surface_sha256: c20bb06c697fe3077e626acbfad3ce71cd17c29233e64e059459253936f5d507
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5885,3 +5885,12 @@ changes:
   - syslog
   summary: Inspect the known Windows temporary-stream type without allocating a file
     during import, preserving exact publication and generated evidence semantics.
+- revision: 511
+  id: preserve-windows-bundled-resource-and-forecast-access
+  impact: none
+  domains:
+  - packaged-resource-integrity
+  - resource-forecasting
+  formats: []
+  summary: Read long Windows bundled paths without legacy path truncation and budget
+    zero swap when optional paging counters are unavailable; generated evidence is unchanged.

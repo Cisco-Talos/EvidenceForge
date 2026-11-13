@@ -2537,6 +2537,11 @@ def validate(
         "--json",
         help="Emit a stable machine-readable validation envelope.",
     ),
+    no_record: bool = typer.Option(
+        False,
+        "--no-record",
+        help="Validate without writing a validation receipt (for read-only or scoped callers).",
+    ),
     checkpoint_hours: int = typer.Option(
         _DEFAULT_CHECKPOINT_HOURS,
         "--checkpoint-hours",
@@ -2647,7 +2652,7 @@ def validate(
     from evidenceforge.artifacts.properties import remember_validation, validation_signature
 
     validation_before = None
-    if resolved_project_root is not None:
+    if not no_record and resolved_project_root is not None:
         try:
             validation_before = validation_signature(
                 scenario_file, resolved_project_root, context, compiled=compiled

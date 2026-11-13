@@ -605,6 +605,11 @@ def _open_native(
 def open_directory(path: Path, *, create: bool = False) -> int:
     """Pin a local absolute directory through no-follow handle-relative opens."""
     absolute = Path(os.path.abspath(path))
+    # Extended Win32 spelling is needed by pathlib readers for long bundled
+    # resources. Our NT handle-relative walk already has no MAX_PATH limit;
+    # normalize only an explicit local-drive prefix before enforcing its policy.
+    if absolute.drive.startswith("\\\\?\\") and len(absolute.drive) == 6:
+        absolute = Path(str(absolute)[4:])
     if len(absolute.drive) != 2 or absolute.drive[1] != ":":
         raise OSError("Native Windows protected storage requires a local NTFS drive")
     if _drive_type(absolute.anchor) != 3:  # DRIVE_FIXED; mapped shares are DRIVE_REMOTE.

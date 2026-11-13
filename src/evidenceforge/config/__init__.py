@@ -11,9 +11,10 @@ instead of computing them relative to their own __file__.
 
 from pathlib import Path
 
+from evidenceforge._windows_paths import package_resource_path
 from evidenceforge.models.exceptions import ConfigurationError
 
-_CONFIG_DIR = Path(__file__).parent
+_CONFIG_DIR = package_resource_path(Path(__file__).parent)
 
 
 def get_config_directory() -> Path:

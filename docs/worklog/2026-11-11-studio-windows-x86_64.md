@@ -703,3 +703,53 @@ Its top-level fatal handler exits 21. Actual host-vs-sandbox cause and the later
 successful command/result remain unverified. Generic psutil wording does not
 establish disabled or corrupt host counters. Keep both integration defects open;
 use Studio's trusted Validate action for the current draft's authoritative result.
+
+### Validation and generation failure repairs
+
+Fix in chat reran validation and reported the same PDH/receipt failures, explicitly
+leaving findings unverified and making no authored-file or bundle changes. The
+user then reports validation with warnings, followed by generation failing before
+startup with the behavior-manifest safeguard. No successful workaround command
+was returned by chat. A read-only installed-runtime probe gives declared digest
+`fb98dded6e2d9907e5bc6a5526a10028da84aeca4f5f3018dbc321057ecab186` and actual
+`f51596e4bd1925714a1b9b22da0388156e239c5f5b468db87d6f13e4047c423c`.
+
+Rebuilding that exact digest from installer source `aa5b1f15` while omitting the
+two Metrolink organization catalogs whose full installed names are 260 characters
+produces the user's actual digest exactly. Complete source reproduces the declared
+digest. The two files are `application_catalog.yaml` and
+`destination_catalog.yaml` under the packaged Metrolink 1.0.0 `catalogs` directory.
+This identifies legacy Windows path enumeration/stat omission, not a scenario
+repair or a justification to accept the incomplete digest. Hosted Windows CI
+passed on its host; it did not expose this laptop path-policy boundary.
+
+The correction spells Windows bundled config and behavior-inventory paths using
+extended local paths. Native protected-storage walks normalize the explicit
+local-drive prefix before their existing fixed-NTFS/no-follow checks; UNC/device
+roots remain rejected. No registry/policy or ACL changes are required. A native
+regression copies the package to a long path, emulates legacy unprefixed stat
+failures, verifies full digest equivalence and real pack loading, then confirms a
+catalog edit still changes the digest. No integrity check is disabled or reset.
+
+Optional psutil swap OSError/RuntimeError now budgets zero free swap at the owning
+forecast boundary; scenario errors and other forecast failures keep their existing
+handling. `eforge validate --no-record` skips receipt capture/persistence for scoped
+callers. Chat instructions and Fix in chat explicitly use it; ordinary CLI/Studio
+validation still retains project-level exact-input provenance. No write scope is
+broadened, no receipt paths migrate, and existing CLI defaults remain unchanged.
+Native model-free permission probes exercise real no-record validation in both
+read-only discussion and draft scope when packaged CLI execution is available;
+legacy hosted Windows still must reject the private packaged runtime safely.
+
+Windows captured CRLF logs previously became double newlines in diagnostics,
+truncating wrapped fatal-error details before their hashes. Normalize CRLF before
+bare CR; LF/CRLF/CR regression cases retain the complete bounded error paragraph.
+
+Local validation passes 107 resource/provenance/config/permission/behavior cases
+(one native Windows skip) and 87 prediction/context/chat/diagnostic cases (four
+native Windows skips). All 114 App UI cases, generated API types, frontend build,
+Ruff and formatting pass. Behavior revision 511 declares impact none with the
+complete updated source digest. Product/storage versions are unchanged. Native
+Windows build/qualification and laptop validation/generation/evaluation remain
+pending for this correction; keep the current installation and scenario for an
+in-place upgrade rather than resetting user data.

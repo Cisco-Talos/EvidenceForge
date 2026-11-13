@@ -367,6 +367,13 @@ escalation, network-enabled shell commands, hooks, plugins and external MCP tool
 Studio chats. If Codex cannot confirm the required protection, Studio refuses to send the message.
 Validation, generation and evaluation remain available through the workspace controls.
 
+Chat uses `eforge validate --no-record` to check the current source without writing
+project-level validation receipts outside its permitted folder. Use Studio's **Validate**
+action to retain provenance for the exact current inputs. Ordinary CLI validation still
+retains receipts by default. Unavailable Windows paging-file counters are budgeted as zero
+free swap; they do not prevent scenario validation. Bundled Windows resources use long-path
+access without requiring a change to the computer's long-path policy.
+
 Studio checks publisher setup when it connects to the local helper. If no identity is
 configured, a startup notice offers **Set up publisher** or **Later**. The same setup is
 available under **Settings → Workspace**. Enter a publisher ID (lowercase letters,
