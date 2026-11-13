@@ -1322,3 +1322,49 @@ WAL-backed rows and active-worker checks; never use immutable/main-only reads th
 can hide recent jobs. Wrap SQLite/I/O failures as safe cleanup refusal. Add real
 populated-store/first-run reset and retained-WAL/no-source-mutation regressions;
 installed cleanup now contains actual Studio history/settings, not just a sentinel.
+
+### Clean-uninstall integration evidence
+
+Current implementation 75b2b803fdfcbcec62d7e987f350fafde349be5e passes all
+33 jobs of routine/native source CI 43370368609, including Windows, Apple Silicon
+macOS and both Linux architectures. Windows qualification run 43370362980 passes
+its complete native service/recovery job: 512 service cases, 228 state/edge cases,
+59 session/ownership cases and 145 crash/recovery cases, with platform-specific
+skips reported separately by pytest. Its early uninstall gate passes 24 safety and
+real-dialog/account-contract cases, including populated SQLite state. The native
+strict legacy-path regression also passes without relying on the runner's path
+policy. All three jobs of Windows qualification 43370362980 pass. Actual installed
+GUI navigation confirms maintenance before scope and the registered default in
+both scopes. Both scopes pass populated-state packaged cleanup, install/reinstall,
+scope-switch refusal, shortcuts, isolated runtime, helper, checkpoint/resume/output
+equivalence and uninstall preservation. The package job also passes 366 focused
+runtime/process/path cases, 375 frontend tests and 11 Rust shell tests.
+
+The qualified preview artifact contains the EXE, checksum and verification JSON.
+Independently downloaded bytes match SHA256
+718e419314d0857e64f4df52a32b768d530de65c7032baa970783edc8e758aa5.
+Report source is 75b2b803fdfcbcec62d7e987f350fafde349be5e; its CI gates bind both
+package and native service/recovery to run 43370362980. Both maintenance/cleanup
+scope results pass; signed is false and desktop acceptance remains pending.
+Runner image 20261103.298.1 uses CPython 3.12.16 (MSVC 1944 AMD64), Rust 1.100.0
+(0ef1bc386), Node 22.23.4 and uv 0.13.8 (3d97a6aad). Final roadmap/worklog closure
+changes only these two CI-evidence-excluded documentation paths; production and
+test inputs remain identical. PR #483 targets dev; the merged dev snapshot will
+receive a fresh installer build rather than relabeling this preview's source SHA.
+
+The preceding integrated dev snapshot 990372ef passes both automatic CI 43366108064
+and all-platform Installer Builds 43366108243. Those installers precede clean
+uninstall and cannot substitute for the final follow-up installer. No version,
+schema, release tag, publication or acceptance threshold changes are made.
+
+Checkpoint lineage audit confirms that integrated behavior revision 517 retains
+safe history-prefix checks: the older Windows branch's 5daed0fe metadata classifies
+as unknown because its history differs, while pre-Windows dev 15a415a9 classifies
+as localized. Same-build use of retained runtimes remains exact. Renumbering the
+integrated history does not silently authorize cross-lineage checkpoint reuse.
+
+Genuine Windows 11 desktop/UAC cancellation, alternate administrator credentials,
+separate-account ownership, all three cleanup choices and first-launch setup after
+reset remain manual acceptance. Hosted Windows Server native UI checks establish
+only their stated bounds. The laptop's separate ground-truth agreement failure
+and broader deep-workspace qualification remain open on the durable roadmap.

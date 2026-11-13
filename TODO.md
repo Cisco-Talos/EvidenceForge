@@ -78,13 +78,12 @@ without turning `TODO.md` back into a high-conflict work journal.
   are recorded separately from pending desktop acceptance; publication remains separate. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
-- [ ] **P2 — Opt-in Windows clean uninstall (current integration follow-up):** Preserve data
-  by default; offer a reviewed reset of the initiating account's Studio state,
-  retained runtimes and EvidenceForge skills/publisher settings. Require separate
-  explicit selection for deleting authored scenarios, packs and generated output;
-  identify exact owned paths and protect unrelated files/other accounts. Handle
-  Everyone installs and alternate-admin elevation without targeting the wrong
-  profile. Verify both scopes and fresh-install behavior. See the
+- [x] **P2 — Opt-in Windows clean uninstall:** Implemented three separately selected,
+  reviewed cleanup choices for private state/runtimes, known skills/publisher settings,
+  and managed authored work/output. Default uninstall preserves data; account-bound
+  ownership checks protect unrelated files and other profiles. Maintenance precedes
+  scope selection. Native and installed evidence is recorded separately from genuine
+  Windows 11/UAC/alternate-account acceptance, which remains below. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
 - [x] **P2 — Studio slow-start and shutdown handling:** Implemented bounded Windows
@@ -103,6 +102,8 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
+  Exercise all three optional uninstall cleanup choices and subsequent fresh setup;
+  verify default preservation and cleanup ownership when another administrator elevates.
   Genuine separate-account isolation remains required before claiming that capability.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   This preview excludes ARM support, signing and automatic runtime pruning. See the
