@@ -806,3 +806,40 @@ Do not infer success from cached pre-upgrade validation or the old failed job.
 Actual laptop MXC validation/generation/evaluation and final Mac/Linux integration,
 remaining desktop/UAC and genuine separate-account acceptance remain open. The
 PR stays draft into dev; remove the temporary draft iteration guard before merge.
+
+### Requested for the next installer: opt-in clean uninstall
+
+The user requests an uninstall option that removes EvidenceForge user data and
+skills so reinstalling behaves like a clean install. Record this for the next
+installer build; no current installer changes or user-data deletion are requested.
+The normal uninstall/upgrade path must continue preserving data by default.
+
+Proposed design: an unchecked, clearly destructive current-account clean-reset
+option with a concrete inventory of paths before deletion. Include Studio private
+settings/database, helper registration, app-owned credentials/WebView profile,
+cache/logs and retained runtimes. Explicitly list EvidenceForge global publisher
+identity and EvidenceForge-owned skill directories, which are shared with the
+standalone CLI and agent integrations. Preserve unrelated skills/tool settings and
+separately installed Codex/authentication; handle modified skill files through
+ownership/content checks and explicit review rather than deleting a whole skills
+parent. Shared EvidenceForge files require a clear explanation of their CLI impact.
+
+Authored scenarios, packs, workspace metadata and generated output need a separate
+explicit deletion choice with exact folders shown, enabling a genuine fresh state
+when the user selects it. Do not recursively delete an arbitrary workspace root or
+external exports merely because Studio once opened them. Cancel/refuse cleanup
+while helpers, jobs, authoring or external writers still own affected resources.
+
+For Everyone installations, cleanup targets only the initiating account, never
+all profiles or the alternate administrator account used for UAC. Establish and
+validate the original account before elevation, or perform the per-account reset
+through an authenticated unelevated helper. This is a design requirement, not an
+implemented account-handoff mechanism. Keep automated upgrade/silent uninstall
+preservation unchanged unless a dedicated destructive option is explicitly set.
+
+Add native tests for preservation-by-default, opted-in removal, modified/shared
+skills, authored-content selection, both scopes, cancellation, alternate-admin
+ownership and fresh-install first-run state. Genuine separate-account acceptance
+still requires actual accounts. This is an application-state reset, not erasure
+of Windows install history, OneDrive recovery history or independent backups.
+The durable roadmap now tracks this requested feature; implementation is pending.

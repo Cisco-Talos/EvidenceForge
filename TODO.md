@@ -78,6 +78,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   Mac/Linux regression/package gates pass; release publication remains separate. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
+- [ ] **P2 — Opt-in Windows clean uninstall (next installer build):** Preserve data
+  by default; offer a reviewed reset of the initiating account's Studio state,
+  retained runtimes and EvidenceForge skills/publisher settings. Require separate
+  explicit selection for deleting authored scenarios, packs and generated output;
+  identify exact owned paths and protect unrelated files/other accounts. Handle
+  Everyone installs and alternate-admin elevation without targeting the wrong
+  profile. Verify both scopes and fresh-install behavior. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
