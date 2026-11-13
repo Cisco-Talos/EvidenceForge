@@ -843,3 +843,44 @@ ownership and fresh-install first-run state. Genuine separate-account acceptance
 still requires actual accounts. This is an application-state reset, not erasure
 of Windows install history, OneDrive recovery history or independent backups.
 The durable roadmap now tracks this requested feature; implementation is pending.
+
+### Laptop startup timeout followed by automatic recovery
+
+After installing the `4d54c3c2` preview, the user reports a long startup followed
+by `Studio service did not become ready; see .../logs/service.log`. Roughly twenty
+seconds after that warning, Studio automatically reaches Scenarios. This is
+user-reported recovery, not a timing measurement or a completed validation/
+generation/evaluation acceptance result.
+
+The supplied service.log tail contains old runtime IDs `31670707...` and
+`a13193f8...` (both predate this repair payload), with Uvicorn forced cancellation
+of an idle event WebSocket waiting in `queue.get()` after the three-second graceful
+shutdown limit. The shared log is appended across helper launches and lacks
+startup phase timestamps at its warning level. These entries establish a shutdown
+cleanup issue for those older helpers; they do not establish a current helper
+startup crash or the cause of the laptop's slow initialization.
+
+Code tracing identifies the exact warning in `bootstrap.connect_or_start()`:
+readiness has a fixed twelve-second wait after launch/attachment preparation.
+The frontend displays that exception and schedules reconnect after one second;
+a later successful attach clears the error and reaches Scenarios. This explains
+the reported failure-then-recovery sequence. The same fixed readiness wait is
+currently used across platforms. Bootstrap also imports the complete service
+module before connection logic, while service readiness waits for application
+creation and initial workspace scanning. Actual phase durations on the laptop
+remain unmeasured; do not attribute the delay to hardware, antivirus or OneDrive
+without evidence.
+
+Queue slow-start handling with the requested clean-uninstall work for the next
+installer batch; this startup recovered and does not justify resetting user data
+or interrupting the current validation/generation/evaluation test. Keep startup
+progress visible while a verified helper initializes, with a reasonable bounded
+Windows wait and immediate handling of genuine failures. Preserve owner/runtime
+verification, launch locks, safe replacement and prevention of duplicate helpers.
+Add timestamped runtime/phase diagnostics without logging connection credentials.
+The idle event-socket route must observe disconnect/shutdown while waiting for
+events, rather than relying on a future event or Uvicorn's forced cancellation.
+Require delayed-start/dead-helper/concurrent-attach and idle-WebSocket shutdown
+regressions; retain native Mac/Linux gates for shared lifecycle changes. No
+runtime change or new installer is made by this investigation. Both follow-ups
+are now durable backlog items; all executable evidence stays bound to `4d54c3c2`.

@@ -87,6 +87,14 @@ without turning `TODO.md` back into a high-conflict work journal.
   profile. Verify both scopes and fresh-install behavior. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
+- [ ] **P2 — Studio slow-start and shutdown handling (next installer batch):** Avoid
+  reporting a startup failure while a verified helper is still initializing;
+  retain bounded waits, progress, ownership checks and single-helper behavior.
+  Record startup phase timings and close idle event sockets cooperatively before
+  shutdown deadlines. Cover delayed startup, reconnect, dead helpers and idle
+  socket shutdown on native platforms. See the
+  [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
