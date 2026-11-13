@@ -66,6 +66,7 @@ jobs:
       prerelease: ${{ steps.plan.outputs.prerelease }}
       dmg_name: ${{ steps.plan.outputs.dmg_name }}
       ci-modern: ${{ steps.ci-policy.outputs.modern }}
+      ci-memory: ${{ steps.ci-policy.outputs.memory }}
     steps:
       - name: Checkout release snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -94,6 +95,11 @@ jobs:
           else
             echo "modern=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ -f scripts/check_evaluation_memory.py ]; then
+            echo "memory=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "memory=false" >> "$GITHUB_OUTPUT"
+          fi
 
   release-ci:
     if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
@@ -109,6 +115,7 @@ jobs:
     uses: ./.github/workflows/release-slow.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
+      legacy-memory-policy: ${{ needs.validate-release-version.outputs.ci-memory != 'true' }}
 
   build-installers:
     if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'

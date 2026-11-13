@@ -114,6 +114,101 @@ def test_embedded_installer_matrix_selector_is_valid_python() -> None:
     assert "has_linux=" in script
 
 
+def test_memory_gate_runs_outside_pytest_and_is_required_for_release() -> None:
+    memory = workflow("evaluation-memory.yml")
+    assert memory["permissions"] == {"contents": "read"}
+    job = memory["jobs"]["memory"]
+    assert set(job["strategy"]["matrix"]["os"]) == {
+        "ubuntu-24.04",
+        "ubuntu-24.04-arm",
+        "macos-latest",
+        "windows-latest",
+    }
+    command = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Measure fixed evaluation workloads"
+    )
+    assert "scripts.check_evaluation_memory" in command
+    assert "pytest" not in command and "--cov" not in command
+    assert "github.event_name == 'workflow_dispatch' && inputs.calibrate" in command
+    assert "calibrate" not in memory[True]["workflow_call"].get("inputs", {})
+    upload = job["steps"][-1]
+    assert upload["if"] == "always()"
+    assert "measurements.json" in upload["with"]["path"]
+    release = workflow("release-slow.yml")["jobs"]
+    assert release["evaluation-memory"]["uses"] == "./.github/workflows/evaluation-memory.yml"
+    required = release["release-required"]
+    assert "evaluation-memory" in required["needs"]
+    assert "needs['evaluation-memory'].result" in required["steps"][0]["run"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Release policy uses the Ubuntu shell")
+@pytest.mark.parametrize(
+    "current,legacy,allowed", [(False, True, True), (True, False, True), (True, True, False)]
+)
+def test_historical_memory_policy_cannot_skip_current_snapshot_gate(
+    tmp_path: Path,
+    current: bool,
+    legacy: bool,
+    allowed: bool,
+) -> None:
+    jobs = workflow("release-slow.yml")["jobs"]
+    step = next(
+        s for s in jobs["inputs"]["steps"] if s["name"] == "Verify historical memory policy"
+    )
+    if current:
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts/check_evaluation_memory.py").write_text("# current harness\n")
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        env={**os.environ, "LEGACY_MEMORY_POLICY": str(legacy).lower()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is allowed
+    release = workflow("release.yml")["jobs"]["release-slow"]
+    assert "ci-memory != 'true'" in release["with"]["legacy-memory-policy"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Release policy uses the Ubuntu shell")
+@pytest.mark.parametrize(
+    "legacy,memory,slow,allowed",
+    [
+        (False, "success", "success", True),
+        (False, "skipped", "success", False),
+        (False, "failure", "success", False),
+        (True, "skipped", "success", True),
+        (True, "failure", "success", False),
+        (True, "skipped", "failure", False),
+    ],
+)
+def test_extended_release_requires_each_applicable_resource_and_correctness_gate(
+    legacy: bool,
+    memory: str,
+    slow: str,
+    allowed: bool,
+) -> None:
+    step = workflow("release-slow.yml")["jobs"]["release-required"]["steps"][0]
+    command = step["run"]
+    for job, result in (
+        ("evaluation-memory", memory),
+        ("slow-comprehensive", slow),
+        ("checkpoint-portability", "success"),
+    ):
+        command = command.replace("${{ needs['" + job + "'].result }}", result)
+    result = subprocess.run(
+        ["bash", "-e", "-c", command],
+        env={**os.environ, "LEGACY_MEMORY_POLICY": str(legacy).lower()},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is allowed
+
+
 def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -> None:
     jobs = workflow("release.yml")["jobs"]
     assert jobs["build-installers"]["needs"] == ["release-scope", "validate-release-version"]

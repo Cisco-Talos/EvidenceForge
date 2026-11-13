@@ -381,13 +381,7 @@ from evidenceforge.utils.files import load_yaml
 scenario = Scenario(**load_yaml(Path(sys.argv[2])))
 scenario.output.logs = [{"format": "ecar"}]
 report = EvaluationEngine(Path(sys.argv[1]), scenario, memory_budget_bytes=16*1024*1024, scratch_dir=Path(sys.argv[3])).run()
-try:
-    import resource
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if sys.platform != "darwin": peak *= 1024
-except ImportError:
-    peak = None
-print(json.dumps({"report":report.model_dump(mode="json"),"peak_rss_bytes":peak}))
+print(report.model_dump_json())
 """
     result = subprocess.run(
         [sys.executable, "-c", code, str(data), str(root / "scenarios/minimal.yaml"), str(scratch)],
@@ -396,8 +390,7 @@ print(json.dumps({"report":report.model_dump(mode="json"),"peak_rss_bytes":peak}
         text=True,
         timeout=600,
     )
-    measured = json.loads(result.stdout)
-    report = measured["report"]
+    report = json.loads(result.stdout)
     assert report["total_records"] == count + 1
     assert report["source_counts"]["ecar"] == count + 1
     schema = next(
@@ -410,15 +403,4 @@ print(json.dumps({"report":report.model_dump(mode="json"),"peak_rss_bytes":peak}
     assert "500002" in " ".join(schema["sample_failures"])
     assert report["acceptance_passed"] is False
     assert report["supplementary"]["evaluation_resources"]["spilled"] is True
-    if measured["peak_rss_bytes"] is not None:
-        assert measured["peak_rss_bytes"] < 512 * 1024 * 1024
-    (tmp_path / "resource-measurement.json").write_text(
-        json.dumps(
-            {
-                "records": report["total_records"],
-                "peak_rss_bytes": measured["peak_rss_bytes"],
-                "resources": report["supplementary"]["evaluation_resources"],
-            }
-        )
-    )
     assert list(scratch.iterdir()) == []

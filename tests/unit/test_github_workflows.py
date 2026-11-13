@@ -105,4 +105,5 @@ def test_release_slow_workflow_shards_tests_and_parallelizes_portability() -> No
     assert set(jobs["release-required"]["needs"]) == {
         "slow-comprehensive",
         "checkpoint-portability",
+        "evaluation-memory",
     }
