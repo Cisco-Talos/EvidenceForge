@@ -762,3 +762,47 @@ returning false. Supply ENOENT to model the unavailable legacy path faithfully;
 keep the negative control, full relocated-pack reads and tamper checks intact.
 This correction changes the test fixture only; the implementation digest remains
 `c20bb06c697fe3077e626acbfad3ce71cd17c29233e64e059459253936f5d507`.
+
+### Qualified validation and generation repair installer
+
+Snapshot `4d54c3c2635b2d4670abdf3433673c8fcf75d4b1` passes all three jobs in
+[Windows-only CI 43334563062](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43334563062). The native short gate passes all 159 cases
+(one POSIX-only skip), including the complete relocated-pack long-path/digest/
+tamper regression, PDH fallback and scoped validation without outside writes.
+The full Windows job passes 485 Studio cases (31 existing conditional skips),
+228 state/migration cases (one skip), 58 helper/runtime cases (twelve POSIX-only
+skips), and all 145 slow recovery cases. All 375 frontend cases and eleven release
+Rust shell tests pass; Ruff, formatting, generated API types and production build
+pass. The native long-path negative control remains enforced with faithful errno.
+
+Both installation scopes pass isolated packaged CLI/resources, full behavior
+manifest verification, generation/evaluation, checkpoint-enabled generation and
+resume equivalence, shell/helper startup, reinstall, scope-switch refusal,
+shortcuts and uninstall data preservation. The report records legacy-elevated
+model-free filesystem probes and correct private-CLI refusal on hosted Server;
+actual Windows 11 MXC validation/authoring and desktop acceptance remain pending.
+The new positive discussion/draft CLI validation probes run only where packaged
+execution is actually available; hosted Server does not certify MXC execution.
+
+[Qualified installer, checksum and report](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43334563062/artifacts/13998679936). Independent hashing of
+`EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe` (71,635,069 bytes) matches the report and SHA256 file:
+`b336a285eece07e890ee734c986a69844b18bd23f32299e8f81dcd97c5348ebb`. Qualification binds the exact source snapshot and both passing native/
+package gates to this run. Runner image `20261103.298.1`; host Python
+3.12.16, rustc 1.100.0 (`0ef1bc386`, November 9), Node 22.23.4 and uv 0.13.8.
+Payload Python remains pinned to 3.12.12. Verified local download:
+`/tmp/eforge-windows-qualified-4d54c3c2/`.
+
+The Windows extended-path implementation follows Microsoft's
+[documented file path behavior](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
+Neither Windows policy nor private ACLs is changed. The complete manifest check
+remains enabled; no incomplete digest is adopted. Product versions, release tags
+and publication remain unchanged. This final follow-up is documentation only and
+skips redundant CI; executable evidence remains bound to `4d54c3c2`.
+
+Next laptop acceptance: quit Studio, upgrade the existing Everyone installation,
+launch normally, explicitly Validate the existing authored draft, start a fresh
+generation and evaluate its output. Preserve the scenario/current private state.
+Do not infer success from cached pre-upgrade validation or the old failed job.
+Actual laptop MXC validation/generation/evaluation and final Mac/Linux integration,
+remaining desktop/UAC and genuine separate-account acceptance remain open. The
+PR stays draft into dev; remove the temporary draft iteration guard before merge.
