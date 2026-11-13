@@ -177,3 +177,65 @@ test("maintenance keeps its window lease alive and stops heartbeats on unmount",
   expect(request.mock.calls.filter(([path]) => path === "/v1/session/heartbeat")).toHaveLength(2);
   vi.useRealTimers();
 });
+
+test("opening a replacement workspace reports progress until its library is loaded and ignores duplicate submission", async () => {
+  let status = { state: "blocked", operation_id: "missing", error: "Workspace is missing" };
+  let finishSelection!: () => void;
+  let finishBootstrap!: (value: StudioSnapshot) => void;
+  const request = vi.fn(async (path: string) => {
+    if (path === "/v1/state/status") return status;
+    if (path === "/v1/workspaces/select") return new Promise<void>((resolve) => { finishSelection = () => { status = { ...status, state: "ready", error: "" }; resolve(); }; });
+    if (path === "/v1/bootstrap") return new Promise<StudioSnapshot>((resolve) => { finishBootstrap = resolve; });
+    return {};
+  });
+  const client = { request, subscribe: vi.fn(() => ({ close: vi.fn() })) } as unknown as StudioApi;
+  vi.mocked(connectStudio).mockResolvedValue(client);
+  const hook = renderHook(useStudio);
+  await waitFor(() => expect(hook.result.current.maintenance?.state).toBe("blocked"));
+  let selection!: Promise<void>;
+  act(() => {
+    selection = hook.result.current.selectRecoveryWorkspace("C:\\Users\\david\\EvidenceForge");
+    void hook.result.current.selectRecoveryWorkspace("C:\\Users\\david\\EvidenceForge");
+  });
+  expect(hook.result.current.openingWorkspace).toBe("C:\\Users\\david\\EvidenceForge");
+  expect(request.mock.calls.filter(([path]) => path === "/v1/workspaces/select")).toHaveLength(1);
+  expect(request).toHaveBeenCalledWith("/v1/workspaces/select", "POST", { path: "C:\\Users\\david\\EvidenceForge" }, 180000);
+  vi.useFakeTimers();
+  await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+  expect(hook.result.current.openingWorkspace).toBe("C:\\Users\\david\\EvidenceForge");
+  expect(hook.result.current.error).toBeNull();
+  vi.useRealTimers();
+  await act(async () => { finishSelection(); await selection; });
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bootstrap"));
+  expect(hook.result.current.openingWorkspace).not.toBeNull();
+  const snapshot = { seq: 1, conversations: [], projects: [], folders: [], views: [] } as unknown as StudioSnapshot;
+  await act(async () => { finishBootstrap(snapshot); });
+  await waitFor(() => expect(hook.result.current.snapshot).toBe(snapshot));
+  expect(hook.result.current.openingWorkspace).toBeNull();
+  hook.unmount();
+});
+
+test("a failed workspace selection clears opening feedback and allows retry", async () => {
+  const blocked = { state: "blocked", operation_id: "missing", error: "Workspace is missing" };
+  let failure = true;
+  const request = vi.fn(async (path: string) => {
+    if (path === "/v1/state/status") return blocked;
+    if (path === "/v1/workspaces/select") {
+      if (failure) throw new Error("Cannot open selected storage");
+      return {};
+    }
+    return {};
+  });
+  vi.mocked(connectStudio).mockResolvedValue({ request } as unknown as StudioApi);
+  const hook = renderHook(useStudio);
+  await waitFor(() => expect(hook.result.current.maintenance?.state).toBe("blocked"));
+  await act(async () => { await hook.result.current.selectRecoveryWorkspace("/unavailable"); });
+  expect(hook.result.current.openingWorkspace).toBeNull();
+  expect(hook.result.current.error).toContain("Cannot open selected storage");
+  failure = false;
+  await act(async () => { await hook.result.current.selectRecoveryWorkspace("/other"); });
+  await waitFor(() => expect(hook.result.current.maintenance?.state).toBe("blocked"));
+  expect(hook.result.current.error).toBeNull();
+  expect(request.mock.calls.filter(([path]) => path === "/v1/workspaces/select")).toHaveLength(2);
+  hook.unmount();
+});

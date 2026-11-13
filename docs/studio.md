@@ -308,8 +308,14 @@ checkpoint objects can trigger
 heavy synchronization, transient sharing conflicts and OneDrive bulk-deletion prompts.
 Documents folder backup can redirect the Windows Documents known folder into OneDrive even
 when a separate physical `C:\Users\<user>\Documents` folder exists. Studio does not disable
-sync safeguards or migrate files automatically. Back up completed bundles and authored work;
-stop jobs before any manually reviewed workspace move. Custom run destinations remain
+sync safeguards or migrate files automatically. Back up completed bundles and authored work.
+Relocating a whole workspace with its Studio history is not currently supported. Selecting
+the copied folder registers a different workspace: source files can be rediscovered, but
+conversations, validation results, project associations and job history in the private
+Studio database remain associated with the original location. Copied run folders are not
+automatically reattached to that history, and saved jobs/checkpoints can contain absolute
+paths. Preserve the private Studio data and copied files rather than editing database paths
+or immutable run metadata manually. Custom run destinations remain
 preserved by clean uninstall and should be managed/backed up separately.
 
 For a first run:

@@ -1686,3 +1686,44 @@ Quick Start stating the OneDrive/cloud-sync restriction and linking to the detai
 storage guidance. Reconcile the stale Windows-delivery-deferred development note
 with the implemented unsigned x86_64 test preview. This documentation-only follow-up
 does not change the installer built from 031c77ad or its identity.
+
+### Copied workspace, deferred relocation and opening feedback (November 13)
+
+The user copies the complete OneDrive EvidenceForge workspace to their profile
+root, removes the OneDrive copy, and selects the new path at the missing-workspace
+startup prompt. After about 30 seconds the scenario library opens, but chats,
+validation results and scenario runs show zero. Code inspection confirms that
+workspace selection opens another workspace; it does not perform a relocation.
+Catalog registration is scoped by resolved workspace/source paths and creates new
+item IDs at the destination. Conversations and jobs are filtered by the original
+workspace path in the private studio.sqlite database, and saved validation results
+are keyed by the original item IDs. Source recovery handles moves within the same
+workspace; it does not merge whole-workspace registrations. Folder copying alone
+cannot transfer these associations or rebase absolute saved job/checkpoint paths.
+No claim is made that the laptop database has been inspected or that all copied
+files are verified; records may still be in its private state. Preserve those
+records and copied runs, and do not rewrite provenance or database paths blindly.
+
+The user explicitly classifies workspace relocation as an unsupported feature and
+requests a P2 TODO rather than an immediate migration implementation. Record a
+reviewed all-platform move/relink feature with backup, active-writer exclusion,
+conflict handling, interrupted-move recovery and preserved associations/provenance.
+Also record their separate P2 TODO for optional native file/folder browsers at all
+file/path entry points on all platforms. No file browser or relocation is implemented.
+Add explicit manual-copy limitations to the storage documentation.
+
+Fix the immediate startup workspace-opening feedback on the existing feature
+branch: the recovery hook marks selection in flight synchronously, ignores duplicate
+submissions, clears an old request error and uses a 180-second selection timeout
+instead of the generic 15 seconds. App reuses its normal indeterminate startup
+screen with Opening workspace / Checking workspace storage and loading your
+scenario library. Retain that screen through the subsequent reconnect/bootstrap,
+not just until the selection POST returns. Failure clears the opening state and
+returns to the applicable recovery/error UI with retry available. No backend schema,
+private history, immutable run metadata or workspace associations are changed.
+
+The focused hook/maintenance/startup gate passes 20 tests, including a simulated
+30-second preparation, duplicate submission, delayed bootstrap, failure and retry.
+Frontend production build, Ruff lint/format and diff whitespace checks pass.
+The earlier delivered installer remains exact source 031c77ad; this frontend repair
+will be included in the next installer build. No acceptance CI is started for TODOs.

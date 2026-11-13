@@ -822,6 +822,7 @@ function App() {
     if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); }
   }
 
+  if (studio.openingWorkspace) return <StartupScreen progress={{ title: "Opening workspace", detail: "Checking workspace storage and loading your scenario library…", percent: null }} error={null} />;
   if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
   if (!snapshot || !api) return <StartupScreen progress={studio.startup} error={studio.error} />;
 

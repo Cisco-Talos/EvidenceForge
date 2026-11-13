@@ -72,6 +72,21 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P2 — Optional native file and folder browsers throughout Studio:** Review every
+  file/path entry point, including startup workspace recovery, Settings, imports,
+  exports and executable selection. Offer an appropriate optional file/folder chooser
+  on macOS, Linux and Windows while retaining direct path entry. This is deferred UI
+  work; do not bundle it into the immediate workspace-opening feedback repair.
+
+- [ ] **P2 — Supported Studio workspace relocation:** Provide a reviewed move/relink
+  workflow on all platforms that preserves scenario/pack registrations, projects,
+  conversations, validation history, generated runs and evaluations. Account for
+  absolute paths, Codex sessions, private metadata and retained checkpoints; preserve
+  immutable provenance. Back up state, block active writers and handle destination
+  conflicts and interrupted moves. Selecting another workspace currently does not
+  migrate these associations. See the
+  [Windows laptop follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
 - [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
   NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
   through PR #477. Installed verification and native regression/package evidence
