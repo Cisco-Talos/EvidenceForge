@@ -261,8 +261,15 @@ from evidenceforge.studio.state_io import private_directory
 private_directory(root)
 private=root/'AppData/Local/EvidenceForge'
 private.mkdir(parents=True)
-(private/'private.txt').write_text('test only')
 workspace=root/'Documents/EvidenceForge'
+from evidenceforge.studio.store import StudioStore
+from evidenceforge.studio.paths import StudioPaths
+from evidenceforge.studio.settings import SettingsStore, StudioSettings
+store=StudioStore(private/'studio.sqlite')
+store.publish('cleanup-check','notification',{'message':'private test history'})
+store.close()
+paths=StudioPaths(config=private,data=private,state=private,cache=private/'cache',logs=private/'logs')
+SettingsStore(paths).save(StudioSettings(workspace=workspace))
 artifact=workspace/'.eforge/artifacts/drafts/scenario'/('long-folder-'+('x'*150))/('nested-'+('y'*80))/'source.yaml'
 from evidenceforge._windows_paths import filesystem_path
 filesystem_path(artifact.parent).mkdir(parents=True)

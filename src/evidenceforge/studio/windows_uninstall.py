@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sqlite3
 import stat
 import sys
+import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal
@@ -357,6 +359,45 @@ def _move(source: Path, target: Path, *, directory: bool) -> None:
         source.rename(target)
 
 
+def _check_workers_snapshot(database: Path) -> None:
+    """Inspect retained jobs without SQLite creating journals in the reviewed tree."""
+    from evidenceforge.studio.state_io import canonical_path, private_directory
+    from evidenceforge.studio.state_upgrade import check_workers
+
+    try:
+        safe_path(filesystem_path(database))
+        if not filesystem_path(database).exists():
+            check_workers(database)
+            return
+        if not filesystem_path(database).is_file():
+            raise StudioStateError("Studio's job database is not a regular file")
+        # Read-only WAL connections can create -wal/-shm in the source directory.
+        # Copy the main database and committed WAL under the already-held ownership
+        # locks. SQLite rebuilds its disposable shared-memory index in this private
+        # snapshot, preserving the original inventory and the full WAL-backed view.
+        with tempfile.TemporaryDirectory(prefix="eforge-uninstall-probe-") as temporary:
+            root = canonical_path(Path(temporary))
+            private_directory(root)
+            snapshot = root / database.name
+            for suffix in ("", "-wal"):
+                source = database.with_name(database.name + suffix)
+                safe_path(filesystem_path(source))
+                if filesystem_path(source).exists():
+                    if not filesystem_path(source).is_file():
+                        raise StudioStateError(
+                            f"Studio database journal is not a regular file: {source}"
+                        )
+                    shutil.copyfile(
+                        filesystem_path(source),
+                        filesystem_path(snapshot.with_name(snapshot.name + suffix)),
+                    )
+            check_workers(snapshot)
+    except (OSError, sqlite3.Error) as error:
+        raise StudioStateError(
+            f"Could not verify retained Studio work; no cleanup was started: {error}"
+        ) from error
+
+
 def execute(plan: CleanupPlan, selected: set[Category]) -> None:
     """Lock/recheck, stage exact selected entries, then remove only that staged inventory."""
     if not selected:
@@ -367,7 +408,6 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
         if current_user_sid() != plan.locations.account:
             raise StudioStateError("Uninstall account changed after review; cleanup refused")
     from evidenceforge.generation.checkpoints.store import RunLock
-    from evidenceforge.studio.state_upgrade import check_workers
 
     targets = [target for target in plan.targets if target.category in selected]
     staged: list[tuple[Path, Path]] = []
@@ -394,7 +434,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
         for path in sorted(set(locks)):
             if filesystem_path(path.parent).is_dir():
                 held.append(stack.enter_context(StateLock(path)))
-        check_workers(private / "studio.sqlite")
+        _check_workers_snapshot(private / "studio.sqlite")
         for target in targets:
             if _inventory(target.path) != target.entries:
                 raise StudioStateError(

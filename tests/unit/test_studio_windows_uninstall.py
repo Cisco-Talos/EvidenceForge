@@ -254,3 +254,77 @@ def test_ordinary_lock_named_data_and_directories_are_included(locations: UserLo
     assert "cache/install.lock" in selected_files
     execute(plan, {"private"})
     assert not ordinary.exists() and not nested.exists() and not locations.private.exists()
+
+
+def test_populated_studio_database_cleanup_and_fresh_initialization(
+    locations: UserLocations,
+) -> None:
+    from evidenceforge.studio.paths import StudioPaths
+    from evidenceforge.studio.settings import SettingsStore, StudioSettings
+    from evidenceforge.studio.store import StudioStore
+    from evidenceforge.studio.windows_uninstall import _inventory
+
+    root = locations.private
+    store = StudioStore(root / "studio.sqlite")
+    store.publish("fixture", "notification", {"message": "old private history"})
+    store.close()
+    paths = StudioPaths(
+        config=root, data=root, state=root, cache=root / "cache", logs=root / "logs"
+    )
+    SettingsStore(paths).save(StudioSettings(workspace=locations.documents / "EvidenceForge"))
+    publisher = write(
+        locations.profile / ".eforge/publisher.yaml",
+        "publisher: test\npublisher_display_name: Test\n",
+    )
+    before = _inventory(root)
+    plan = build_plan(locations)
+    execute(plan, {"skills"})
+    assert not publisher.exists()
+    assert _inventory(root) == before  # Ownership inspection must not add WAL/SHM or change bytes.
+    execute(build_plan(locations), {"private"})
+    assert not root.exists()
+    fresh = StudioStore(root / "studio.sqlite")
+    try:
+        assert fresh._db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        assert not paths.settings_file.exists()
+    finally:
+        fresh.close()
+
+
+def test_retained_wal_is_visible_to_probe_without_source_mutation(locations: UserLocations) -> None:
+    import sqlite3
+    import subprocess
+    import sys
+
+    from evidenceforge.studio.windows_uninstall import _check_workers_snapshot, _inventory
+
+    database = locations.private / "studio.sqlite"
+    database.parent.mkdir(parents=True)
+    script = """
+import os, sqlite3, sys
+connection=sqlite3.connect(sys.argv[1])
+connection.execute('PRAGMA journal_mode=WAL')
+connection.execute('CREATE TABLE retained (value TEXT)')
+connection.commit()
+connection.execute("INSERT INTO retained VALUES ('committed only in WAL')")
+connection.commit()
+os._exit(0)
+"""
+    subprocess.run([sys.executable, "-c", script, str(database)], check=True, timeout=20)
+    assert database.with_name("studio.sqlite-wal").is_file()
+    before = _inventory(locations.private)
+
+    def probe(snapshot: Path) -> None:
+        assert snapshot != database
+        connection = sqlite3.connect(snapshot.as_uri() + "?mode=ro", uri=True)
+        try:
+            assert (
+                connection.execute("SELECT value FROM retained").fetchone()[0]
+                == "committed only in WAL"
+            )
+        finally:
+            connection.close()
+
+    with patch("evidenceforge.studio.state_upgrade.check_workers", side_effect=probe):
+        _check_workers_snapshot(database)
+    assert _inventory(locations.private) == before

@@ -1307,3 +1307,18 @@ platforms in 43360461241 pass on integrated 19c7e0a4. The only later foundation
 changes are the exact-byte test-spy removal and evidence notes, with identical
 production/dependency/behavior inputs. No release, version bump or tag is made.
 Follow-up #483 must still pass current-head CI and actual new installer verification.
+
+A further populated-database acceptance check finds a real refusal hidden by the
+initial text-only cleanup fixtures. Even a read-only SQLite ownership probe creates
+studio.sqlite-wal and studio.sqlite-shm beside a closed WAL-mode database. The
+strict post-review inventory then correctly rejects changed files. Reproduction
+shows exactly those two added entries with no other changed files; fixture retained
+under /private/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-clean-sqlite-drift-l99g0xm9/.
+Keep #483 unmerged while repairing the probe, not the inventory guard.
+
+Inspect a private copy of the main database plus committed WAL under existing
+ownership locks, rebuilding SQLite's transient index only in that copy. Preserve
+WAL-backed rows and active-worker checks; never use immutable/main-only reads that
+can hide recent jobs. Wrap SQLite/I/O failures as safe cleanup refusal. Add real
+populated-store/first-run reset and retained-WAL/no-source-mutation regressions;
+installed cleanup now contains actual Studio history/settings, not just a sentinel.
