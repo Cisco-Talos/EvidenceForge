@@ -30,11 +30,11 @@ def _require(value: Any) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
 
-def message(text: str, flags: int = 0) -> int:
+def message(text: str, flags: int = 0, owner: int | None = None) -> int:
     """Show a native, console-free account/data message."""
     return _function(
         "user32", "MessageBoxW", ctypes.c_int, [wt.HWND, wt.LPCWSTR, wt.LPCWSTR, wt.UINT]
-    )(None, text, "Uninstall EvidenceForge Studio", flags)
+    )(owner, text, "Uninstall EvidenceForge Studio", flags)
 
 
 def _elevated(token: Any) -> bool:

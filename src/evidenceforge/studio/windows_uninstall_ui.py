@@ -64,6 +64,7 @@ def choose(plan: CleanupPlan) -> int:
                             "The full list is in the review window. Only the checked categories "
                             "for the displayed account will be removed.",
                             0x134,
+                            window,
                         )
                         != 6
                     ):
@@ -88,6 +89,7 @@ def choose(plan: CleanupPlan) -> int:
                 "and reopen uninstall. If deletion had already started, some selected files "
                 "may be gone; do not remove unlisted files manually.",
                 0x10,
+                window,
             )
         return default(window, event, word, parameter)
 

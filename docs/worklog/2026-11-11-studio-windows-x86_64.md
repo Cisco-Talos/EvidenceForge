@@ -1253,3 +1253,21 @@ nsExec is a standard NSIS plugin covered by the retained zlib license
 were checked against Microsoft documentation. Fifteen portable safety tests pass.
 Five Windows native dialog/account contract cases and packaged deep cleanup tests
 are added to qualification; native results are pending.
+
+Review follow-up makes irreversible confirmation modal to the review window so
+selection cannot change behind it. Native coverage also declines that confirmation
+and then cancels, asserting preserved data. Dialog automation waits for every
+control rather than racing window creation. The older installed uninstaller must
+be updated once to expose new choices; the documentation states that explicitly.
+
+First native run 43363292131 catches real Windows directory-rename refusal while
+ownership handles remain open, plus test attachment assuming the Windows venv
+launcher PID owns its interpreter's window. Keep both native gates. Stage selected
+files into private adjacent containers while original directory/lock skeletons
+stay pinned. Mark only owned selected control files delete-pending; close ownership
+before reclaiming empty original directories. Never recursively delete fresh or
+unlisted original entries. Roll back all staged files if pre-deletion staging fails.
+Run locks stay at their original paths until their owner releases them. Automation
+accepts only the launcher or its verified descendants and waits for all controls.
+A separate early native uninstall step now fails before expensive runtime/package
+work. Portable cases still pass; Windows requalification is pending this repair.

@@ -121,6 +121,8 @@ Installed apps, choose **EvidenceForge Studio → Uninstall**. Existing installa
 can also use the installer's **Install / Reinstall** or **Uninstall** page, which
 appears before the installation-scope page.
 
+Update an older installation once before testing these choices: its previously
+installed uninstaller cannot acquire new features from a downloaded setup file.
 The interactive uninstaller offers three **unchecked** choices. Leaving them all
 unchecked removes only the application:
 

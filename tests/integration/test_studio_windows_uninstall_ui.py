@@ -9,12 +9,13 @@ import time
 from ctypes import wintypes as wt
 from pathlib import Path
 
+import psutil
 import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Native Windows dialog ABI")
 
 
-@pytest.mark.parametrize("action", ["cancel", "preserve", "private"])
+@pytest.mark.parametrize("action", ["cancel", "preserve", "private", "decline"])
 def test_native_cleanup_review_defaults_and_actions(tmp_path: Path, action: str) -> None:
     root = tmp_path / "cleanup test ü 汉"
     from evidenceforge.studio.state_io import private_directory
@@ -34,12 +35,17 @@ from evidenceforge.studio.windows_uninstall import UserLocations, build_plan
 from evidenceforge.studio import windows_uninstall_ui as ui
 from evidenceforge.utils.windows_filesystem import current_user_sid
 root=Path(sys.argv[1])
-ui.message=lambda *args: 6
+def confirm(text, flags=0, owner=None):
+    assert owner, 'Confirmation must be modal to the review window'
+    return 7 if sys.argv[2]=='decline' else 6
+ui.message=confirm
 plan=build_plan(UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid()))
 raise SystemExit(ui.choose(plan))
 """
     with subprocess.Popen(
-        [sys.executable, "-c", script, str(root)], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        [sys.executable, "-c", script, str(root), action],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     ) as child:
         try:
             from evidenceforge.studio.windows_uninstall_native import _function
@@ -53,22 +59,36 @@ raise SystemExit(ui.choose(plan))
             while time.monotonic() < deadline:
                 candidate = find("EvidenceForge.Uninstall.Review", None)
                 pid = wt.DWORD()
-                if candidate and pid_for(candidate, ctypes.byref(pid)) and pid.value == child.pid:
+                descendants = {child.pid}
+                if child.poll() is None:
+                    descendants.update(
+                        process.pid
+                        for process in psutil.Process(child.pid).children(recursive=True)
+                    )
+                if candidate and pid_for(candidate, ctypes.byref(pid)) and pid.value in descendants:
                     ready = _function("user32", "GetDlgItem", wt.HWND, [wt.HWND, ctypes.c_int])
-                    if ready(candidate, 301):
+                    if all(
+                        ready(candidate, identifier)
+                        for identifier in (101, 102, 103, 201, 202, 301)
+                    ):
                         window = candidate
                         break
                 if child.poll() is not None:
                     break
                 time.sleep(0.05)
-            assert window, child.communicate(timeout=1)
+            if not window:
+                child.kill()
+                stdout, stderr = child.communicate(timeout=5)
+                pytest.fail(
+                    f"Review window did not attach to child/descendant {descendants}: {stdout!r} {stderr!r}"
+                )
             control = _function("user32", "GetDlgItem", wt.HWND, [wt.HWND, ctypes.c_int])
             send = _function(
                 "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
             )
             for identifier in (101, 102, 103):
                 assert send(control(window, identifier), 0xF0, 0, 0) == 0
-            if action == "private":
+            if action in {"private", "decline"}:
                 send(control(window, 101), 0xF1, 1, 0)
                 send(window, 0x111, 101, control(window, 101))
             text = ctypes.create_unicode_buffer(32768)
@@ -76,12 +96,18 @@ raise SystemExit(ui.choose(plan))
                 control(window, 301), text, len(text)
             )
             assert str(root) in text.value
-            if action == "private":
+            if action in {"private", "decline"}:
                 assert str(private) in text.value and "DELETE:" in text.value
             button = 202 if action == "cancel" else 201
             send(control(window, button), 0xF5, 0, 0)
+            if action == "decline":
+                assert child.poll() is None and sentinel.exists()
+                send(control(window, 202), 0xF5, 0, 0)
             stdout, stderr = child.communicate(timeout=20)
-            assert child.returncode == (1 if action == "cancel" else 0), (stdout, stderr)
+            assert child.returncode == (1 if action in {"cancel", "decline"} else 0), (
+                stdout,
+                stderr,
+            )
         finally:
             if child.poll() is None:
                 child.kill()

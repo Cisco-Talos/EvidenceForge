@@ -77,6 +77,18 @@ class CleanupPlan(BaseModel):
     workspaces: tuple[Path, ...] = ()
 
 
+def _ownership_lock(path: Path) -> bool:
+    return path.name in {
+        "service-start.lock",
+        "service-instance.lock",
+        "studio-data.lock",
+        "install.lock",
+        "publication.lock",
+        "owner.lock",
+        "run.lock",
+    } or (path.parent.name == "leases" and path.suffix == ".lock")
+
+
 def _inventory(path: Path) -> tuple[FileIdentity, ...]:
     """Reject links, hard links, foreign/writable objects and unsupported filesystems."""
     safe_path(filesystem_path(path))
@@ -103,7 +115,7 @@ def _inventory(path: Path) -> tuple[FileIdentity, ...]:
                 os.close(descriptor)
         # Ownership locks may be acquired after review. They contain no user data;
         # inspect their safety but exclude volatile contents from the snapshot.
-        if not current.name.endswith(".lock"):
+        if not _ownership_lock(current):
             entries.append(
                 FileIdentity(
                     relative=current.relative_to(path).as_posix(),
@@ -333,19 +345,10 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
     from evidenceforge.studio.state_upgrade import check_workers
 
     targets = [target for target in plan.targets if target.category in selected]
-    staged: list[tuple[CleanupTarget, Path]] = []
-
-    def release_run(lock: RunLock) -> None:
-        # Namespace staging moves our own lock together with its run. Release the
-        # same verified owner at its new name, rather than probing the vacated path.
-        for target, destination in staged:
-            if lock.workspace.is_relative_to(target.path) and filesystem_path(destination).exists():
-                relative = lock.workspace.relative_to(target.path)
-                lock.workspace = destination / relative
-                lock.path = lock.workspace / "run.lock"
-                break
-        lock.release()
-
+    staged: list[tuple[Path, Path]] = []
+    containers: list[Path] = []
+    original_directories: list[Path] = []
+    held: list[StateLock] = []
     with ExitStack() as stack:
         private = plan.locations.private
         locks = [
@@ -365,7 +368,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
             )
         for path in sorted(set(locks)):
             if filesystem_path(path.parent).is_dir():
-                stack.enter_context(StateLock(path))
+                held.append(stack.enter_context(StateLock(path)))
         check_workers(private / "studio.sqlite")
         for target in targets:
             if _inventory(target.path) != target.entries:
@@ -376,32 +379,92 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                 if entry.directory and Path(entry.relative).name == ".eforge-generation":
                     lock = RunLock(target.path / entry.relative)
                     lock.acquire()  # Refuses active/remote/uncertain external CLI ownership.
-                    stack.callback(release_run, lock)
+                    stack.callback(lock.release)
         try:
             for target in targets:
                 destination = target.path.with_name(f".eforge-uninstall-{uuid4().hex}")
-                _move(target.path, destination, directory=target.directory)
-                staged.append((target, destination))
+                if target.directory:
+                    # Windows cannot rename a directory containing open ownership
+                    # handles. Keep those handles/names alive and stage only its
+                    # inventoried files. Original directories are reclaimed only
+                    # when empty, so concurrent new startup data is never removed.
+                    from evidenceforge.studio.state_io import private_directory
+
+                    private_directory(destination)
+                    containers.append(destination)
+                    for entry in sorted(
+                        target.entries, key=lambda item: (not item.directory, item.relative)
+                    ):
+                        source = target.path / entry.relative
+                        stage = destination / entry.relative
+                        if entry.directory:
+                            private_directory(stage)
+                            original_directories.append(source)
+                        else:
+                            _move(source, stage, directory=False)
+                            staged.append((source, stage))
+                else:
+                    _move(target.path, destination, directory=False)
+                    staged.append((target.path, destination))
+            if os.name == "nt":
+                from evidenceforge.utils import windows_filesystem as fs
+
+                for lock in held:
+                    if any(
+                        lock.path.is_relative_to(target.path)
+                        for target in targets
+                        if target.directory
+                    ):
+                        # Mark only our own control handle's file delete-pending.
+                        # New startup cannot reopen it until ownership is released.
+                        parent = fs.open_directory(lock.path.parent)
+                        try:
+                            identity = os.fstat(lock.descriptor)
+                            fs.remove_child(
+                                parent,
+                                lock.path.name,
+                                expected_identity=(identity.st_dev, identity.st_ino),
+                            )
+                        finally:
+                            os.close(parent)
         except (OSError, EvidenceForgeError):
-            for target, destination in reversed(staged):
-                _move(destination, target.path, directory=target.directory)
-            raise
-    # Locks remain valid through staging, then close before their namespace is reclaimed.
-    for target, destination in staged:
-        try:
-            if target.directory:
+            for source, destination in reversed(staged):
+                _move(destination, source, directory=False)
+            for directory in reversed(containers):
                 if os.name == "nt":
                     from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
 
-                    WindowsCheckpointIO().remove_tree(destination)
+                    WindowsCheckpointIO().remove_tree(directory)
                 else:
-                    shutil.rmtree(destination)
-            else:
-                filesystem_path(destination).unlink()
+                    shutil.rmtree(directory)
+            raise
+    # All ownership handles have closed before unlinking their original skeleton.
+    # POSIX doesn't have delete-pending names, so remove only our own lock files.
+    if os.name != "nt":
+        for lock in held:
+            if any(lock.path.is_relative_to(target.path) for target in targets if target.directory):
+                lock.path.unlink(missing_ok=True)
+    for _source, destination in staged:
+        try:
+            filesystem_path(destination).unlink()
         except OSError as error:
             raise StudioStateError(
                 f"Selected data remains staged at {destination}; close file users and retry: {error}"
             ) from error
+    for directory in containers:
+        if os.name == "nt":
+            from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
+
+            WindowsCheckpointIO().remove_tree(directory)
+        else:
+            shutil.rmtree(directory)
+    for directory in sorted(
+        set(original_directories), key=lambda item: len(item.parts), reverse=True
+    ):
+        try:
+            filesystem_path(directory).rmdir()  # Never recursively remove fresh/unlisted entries.
+        except OSError:
+            pass
     # Remove empty owned containers only; never shared parents or unrelated files.
     for target in targets:
         if target.category != "skills":

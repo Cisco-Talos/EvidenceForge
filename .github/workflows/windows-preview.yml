@@ -105,6 +105,11 @@ jobs:
           rustc +stable --version
           node --version
           uv --version
+      - name: Test uninstall ownership and native review
+        run: >-
+          uv run --no-sync pytest --no-cov
+          tests/unit/test_studio_windows_uninstall.py
+          tests/integration/test_studio_windows_uninstall_ui.py
       - name: Cache Windows Rust dependencies and build artifacts
         id: rust-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
@@ -121,8 +126,6 @@ jobs:
         run: >-
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
-          tests/unit/test_studio_windows_uninstall.py
-          tests/integration/test_studio_windows_uninstall_ui.py
           tests/unit/test_windows_filesystem.py
           tests/unit/test_windows_streams.py
           tests/unit/test_windows_resource_paths.py tests/unit/test_windows_output_paths.py
