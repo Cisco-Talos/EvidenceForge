@@ -931,3 +931,66 @@ heavy service import in attachment bootstrap. Native Windows CI/qualification an
 actual laptop timing remain pending. Shared lifecycle changes still require final
 Mac/Linux integration before merge. Generation behavior revision 511/digest and
 all product/storage versions remain unchanged.
+
+### Laptop generation failure and filesystem review
+
+The user confirms fresh validation and Fix in chat now work with the `4d54c3c2`
+payload. The remaining `viewer.exe` Downloads/System32 fallback warning is
+intentional scenario information. Do not change the narrative to compensate for
+platform errors. Generation now passes validation and resource forecasting, then
+fails during warm-up in `ExternalSortedLineWriter._commit_exact_row()` while
+creating a pending exact ES-ingress row. The provided full filename is 294
+characters under Documents/OneDrive, the Studio run directory, hidden staged
+data, a modeled Mac FQDN and nested sort/pending names. This is host Windows
+filesystem access while generating Mac evidence, not a modeled-Mac defect.
+
+The user requests a broader path/filename review after this second long-path
+failure. A repository-wide static inventory covers Path/open/os/shutil/SQLite
+boundaries and 78 temporary allocations in production code and scripts (including
+Mac-only capture and developer/CI tools). Trace the owners rather than globally
+monkeypatching Python I/O or changing Windows registry policy:
+
+| Area | Review result and action |
+| --- | --- |
+| Bundled catalogs and manifest reads | Existing explicit extended-path reads retained. Include the shared path-spelling module in the behavior surface so changes cannot escape integrity verification. |
+| Sorted output and exact ES-ingress rows | Physical I/O now uses extended Windows paths for create/read/stat/replace/cleanup, including lost-return retry, compaction, export and checkpoint runs. Short fixed spool/pending/merge prefixes avoid repeating user filenames and exceeding a single component's limit. |
+| Direct/host emitters, ES ingress and ASA rewrites | Apply the same boundary conversion to headers, exact rows, final footers, ingress reads/removal and ASA ordering/connection-ID replacement. Logical output paths and exact receipt/capacity semantics stay unchanged. |
+| Checkpoint storage and spool adapters | Fix metadata existence/stat/read/cleanup checks alongside existing native no-follow NTFS write-through operations. Recovery discovery returns logical paths; manifests/relative references retain their existing namespace. Native publication barriers and integrity checks remain enforced. |
+| Shared atomic text writes | Use extended physical spelling and a bounded temporary prefix, retaining symlink refusal and atomic replacement. Include this shared utility in the behavior surface. |
+| Private Studio state/runtime extraction | Existing descriptor-relative Windows adapter owns ACLs, reparse rejection and publication. No ACL widening, runtime relocation or user-data migration. |
+| Bash/Snort/Windows private journals | Existing Windows branches allocate through native handle-relative storage, independently of the public output tree; ordinary tempfile branches are POSIX. SQLite remains behind existing journal/storage owners. Evaluation scratch defaults to the OS temporary directory. |
+| Authoring/import/export and auxiliary scripts | Existing short UUID/fixed temporary components generally avoid filename duplication. Several direct pathlib/tempfile boundaries still rely on the host's long-path behavior at unusually deep user-selected roots. This review does not certify arbitrary-depth authoring/import/export or external applications; retain this as a separate qualification gap rather than claim every filesystem call was hardened. Mac capture tools remain Mac-only. |
+
+Public filenames, CLI arguments, manifests, checkpoint schema, evidence bytes and
+Mac/Linux path spelling remain unchanged. Internal scratch prefixes change on all
+platforms. No broad replacement of public paths with device-prefixed strings is
+made. Individual filesystem component limits still apply. The implementation
+uses Microsoft's documented extended-path spelling rather than assuming the
+host enables LongPathsEnabled. SQLite has its own
+[Windows VFS limits](https://www.sqlite.org/vfs.html#standard_windows_vfses);
+Python path conversion alone does not establish arbitrary-length database support.
+
+Native regressions explicitly reject unprefixed paths at or beyond 260 characters,
+even on a runner with long-path policy enabled. Cover exact-row rename lost return,
+ordinary/exact sorting, checkpoint snapshot/restoration, balanced merges, logical
+path retention, final output replacement, cleanup, long valid filename components,
+atomic text replacement and unrelated-file preservation, direct/host headers/rows/
+footers, plus checkpoint publication/restart/integrity rejection/reclamation.
+Existing platform-independent exact-publication and symlink tests stay active.
+The packaged runtime smoke now uses a deeper Unicode workspace for real CLI
+validation, authoring operations, checkpoint-enabled Windows/Mac generation and
+Mac-source evaluation in each installer scope, with development tools off PATH.
+
+Behavior revision 512 declares no evidence-output change; the complete digest is
+`08f3b6df398d4bf999068491f7a9b628b18cada5e7362bbeab3499ed37f40c9e`.
+The surface also includes the shared Windows spelling/atomic-text utilities.
+Local checks pass 262 writer/ASA/path/checkpoint cases, 63 threading/native-Mac
+publication cases and 68 behavior/path/writer/native checkpoint CLI cases (the
+latter includes two full suspension/verification/resume equivalence workloads).
+These counts overlap and must not be summed as unique tests. Four native test
+bodies also pass their semantic checks on POSIX; Windows guard/ACL evidence still
+requires native CI. New native deep-path tests and expanded packaged qualification
+are pending. The prior startup/shutdown CI run `43345013290` passes its full Studio
+service stage before this next build; do not offer its artifact as the generation
+path repair. Product versions, tags, publication and clean-uninstall scope remain
+unchanged. Laptop generation/evaluation acceptance remains pending a new payload.

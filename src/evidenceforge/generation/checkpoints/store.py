@@ -20,6 +20,7 @@ from typing import Any
 import psutil
 from pydantic import ValidationError
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.utils.files import fsync_directory, open_host_file
 from evidenceforge.utils.files import mkdir_private_host as _mkdir_private_host
 
@@ -170,7 +171,7 @@ def _atomic_replace(path: Path, payload: bytes) -> None:
         _replace_checkpoint_path(temporary, path)
         fsync_directory(path.parent)
     finally:
-        temporary.unlink(missing_ok=True)
+        filesystem_path(temporary).unlink(missing_ok=True)
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -229,7 +230,7 @@ class RunLock:
                     _replace_checkpoint_path(self.path, stale)
                 except FileNotFoundError:
                     continue
-                stale.unlink(missing_ok=True)
+                filesystem_path(stale).unlink(missing_ok=True)
                 fsync_directory(self.workspace)
 
     def _read_owner(self) -> dict[str, object]:
@@ -266,7 +267,10 @@ class RunLock:
         try:
             owner = self._read_owner()
         except CheckpointLockError as error:
-            if not self.path.exists() and not self.path.is_symlink():
+            if (
+                not filesystem_path(self.path).exists()
+                and not filesystem_path(self.path).is_symlink()
+            ):
                 return RunLockInspection(state="absent")
             return RunLockInspection(state="invalid", detail=str(error))
         hostname = owner.get("hostname")
@@ -304,7 +308,7 @@ class RunLock:
         if owner.get("hostname") != socket.gethostname() or owner.get("pid") != os.getpid():
             self._owned = False
             raise CheckpointLockError("generation lock ownership changed before release")
-        self.path.unlink()
+        filesystem_path(self.path).unlink()
         fsync_directory(self.workspace)
         self._owned = False
 
@@ -370,16 +374,16 @@ class IncrementalCheckpointStore:
     def validate_existing_workspace(self) -> None:
         """Validate an existing workspace without creating or probing any path."""
 
-        if not self.output_root.exists():
+        if not filesystem_path(self.output_root).exists():
             raise CheckpointFilesystemError(f"generation output does not exist: {self.output_root}")
         self._validate_output_ancestry(create=False)
-        if not self.workspace.exists():
+        if not filesystem_path(self.workspace).exists():
             raise CheckpointFilesystemError(
                 f"generation checkpoint workspace does not exist: {self.workspace}"
             )
         self._validate_protected_directory(self.workspace)
         for directory in (self.objects, self.recovery):
-            if directory.exists():
+            if filesystem_path(directory).exists():
                 self._validate_protected_directory(directory)
 
     def _validate_output_root(self) -> None:
@@ -388,7 +392,7 @@ class IncrementalCheckpointStore:
     def _validate_output_ancestry(self, *, create: bool) -> None:
         current = self.output_root
         existing: list[Path] = []
-        while not current.exists():
+        while not filesystem_path(current).exists():
             if current == current.parent:
                 break
             current = current.parent
@@ -398,7 +402,7 @@ class IncrementalCheckpointStore:
                 break
             current = current.parent
         for path in reversed(existing):
-            info = path.lstat()
+            info = filesystem_path(path).lstat()
             if stat.S_ISLNK(info.st_mode):
                 raise CheckpointFilesystemError(
                     f"checkpoint output ancestry cannot contain symlinks: {path}"
@@ -429,7 +433,7 @@ class IncrementalCheckpointStore:
                     f"checkpoint directory is unsafe: {path}"
                 ) from error
             return
-        info = path.lstat()
+        info = filesystem_path(path).lstat()
         if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
             raise CheckpointFilesystemError(f"checkpoint path is not a real directory: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
@@ -451,8 +455,8 @@ class IncrementalCheckpointStore:
                 "use another filesystem or --checkpoint-hours 0"
             ) from error
         finally:
-            probe.unlink(missing_ok=True)
-            replacement.unlink(missing_ok=True)
+            filesystem_path(probe).unlink(missing_ok=True)
+            filesystem_path(replacement).unlink(missing_ok=True)
 
     @staticmethod
     def _encode_segment(draft: SegmentDraft) -> tuple[bytes, str]:
@@ -505,8 +509,8 @@ class IncrementalCheckpointStore:
         mkdir_private_host(directory, parents=True, exist_ok=True)
         path = directory / f"{digest}{suffix}"
         relative = path.relative_to(self.workspace).as_posix()
-        if path.exists():
-            info = path.lstat()
+        if filesystem_path(path).exists():
+            info = filesystem_path(path).lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                 raise CheckpointFilesystemError(f"checkpoint object path is unsafe: {path}")
             if info.st_size != len(payload):
@@ -519,8 +523,8 @@ class IncrementalCheckpointStore:
         temporary = directory / f".{digest}.pending-{uuid.uuid4().hex}"
         try:
             _write_new_file(temporary, payload)
-            if path.exists():
-                if path.lstat().st_size != len(payload):
+            if filesystem_path(path).exists():
+                if filesystem_path(path).lstat().st_size != len(payload):
                     raise CheckpointCorruptionError(
                         f"checkpoint object changed during publication: {relative}"
                     )
@@ -528,7 +532,7 @@ class IncrementalCheckpointStore:
                 _replace_checkpoint_path(temporary, path)
             fsync_directory(directory)
         finally:
-            temporary.unlink(missing_ok=True)
+            filesystem_path(temporary).unlink(missing_ok=True)
         if os.name == "nt":
             self._windows_io._durable[path] = digest
         return relative, True
@@ -747,7 +751,7 @@ class IncrementalCheckpointStore:
             prepare_dependencies(self, segment_catalogs, resolved_path, resolved_digest)
         pending = self.recovery / f".pending-{sequence:020d}-{uuid.uuid4().hex}"
         final = self.recovery / f"{sequence:020d}"
-        if final.exists():
+        if filesystem_path(final).exists():
             indexed_sequences = {item_sequence for item_sequence, _ in self._read_index()}
             if sequence in indexed_sequences:
                 raise CheckpointFilesystemError(f"checkpoint sequence already exists: {sequence}")
@@ -805,14 +809,14 @@ class IncrementalCheckpointStore:
                 logger.warning("Deferred checkpoint recovery rotation after failure: %s", error)
             return manifest
         finally:
-            if pending.exists():
+            if filesystem_path(pending).exists():
                 _remove_checkpoint_tree(pending)
 
     def _publish_index(self, manifest: CheckpointManifest, payload: bytes) -> None:
         entries: list[dict[str, object]] = [
             {"manifest_sha256": _sha256(payload), "sequence": manifest.sequence}
         ]
-        if self.index_path.exists():
+        if filesystem_path(self.index_path).exists():
             for sequence, manifest_sha256 in self._read_index():
                 if sequence == manifest.sequence:
                     continue
@@ -831,7 +835,7 @@ class IncrementalCheckpointStore:
         """Read the authoritative ordered recovery pointer without following links."""
 
         try:
-            info = self.index_path.lstat()
+            info = filesystem_path(self.index_path).lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                 raise CheckpointCorruptionError("checkpoint recovery index is not a regular file")
             if hasattr(os, "getuid") and info.st_uid != os.getuid():
@@ -843,7 +847,7 @@ class IncrementalCheckpointStore:
 
                 document = json.loads(read_private_file(self.index_path))
             else:
-                document = json.loads(self.index_path.read_bytes())
+                document = json.loads(filesystem_path(self.index_path).read_bytes())
         except FileNotFoundError:
             return []
         except (OSError, json.JSONDecodeError) as error:
@@ -915,30 +919,30 @@ class IncrementalCheckpointStore:
             except CheckpointCorruptionError:
                 continue
             retained_paths.update(segment.relative_path for segment in segments)
-        if not self.objects.exists():
+        if not filesystem_path(self.objects).exists():
             return
         for path in self.objects.rglob("*"):
-            if not path.is_file():
+            if not filesystem_path(path).is_file():
                 continue
             relative = path.relative_to(self.workspace).as_posix()
             if relative not in retained_paths:
-                path.unlink()
+                filesystem_path(path).unlink()
         for directory in sorted(
-            (path for path in self.objects.rglob("*") if path.is_dir()),
+            (path for path in self.objects.rglob("*") if filesystem_path(path).is_dir()),
             key=lambda path: len(path.parts),
             reverse=True,
         ):
             try:
-                directory.rmdir()
+                filesystem_path(directory).rmdir()
             except OSError:
                 pass
 
     def _recovery_directories(self) -> list[Path]:
-        if not self.recovery.exists():
+        if not filesystem_path(self.recovery).exists():
             return []
         directories = [
-            path
-            for path in self.recovery.iterdir()
+            self.recovery / path.name
+            for path in filesystem_path(self.recovery).iterdir()
             if path.is_dir() and not path.name.startswith(".") and path.name.isdigit()
         ]
         return sorted(directories, key=lambda path: int(path.name), reverse=True)
@@ -951,10 +955,10 @@ class IncrementalCheckpointStore:
     ) -> CheckpointManifest:
         manifest_path = directory / _MANIFEST_NAME
         try:
-            info = manifest_path.lstat()
+            info = filesystem_path(manifest_path).lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                 raise CheckpointCorruptionError("checkpoint manifest is not a regular file")
-            payload = manifest_path.read_bytes()
+            payload = filesystem_path(manifest_path).read_bytes()
             if expected_sha256 is not None and _sha256(payload) != expected_sha256:
                 raise CheckpointCorruptionError("checkpoint manifest failed index validation")
             value = json.loads(payload)
@@ -978,7 +982,7 @@ class IncrementalCheckpointStore:
         try:
             for part in relative.parts:
                 current = current / part
-                info = current.lstat()
+                info = filesystem_path(current).lstat()
                 if stat.S_ISLNK(info.st_mode):
                     raise CheckpointCorruptionError(
                         f"checkpoint object traverses a symlink: {current}"
@@ -991,7 +995,7 @@ class IncrementalCheckpointStore:
 
     def _validate_file(self, relative_path: str, expected_size: int, expected_hash: str) -> bytes:
         path = self._object_path(relative_path)
-        info = path.lstat()
+        info = filesystem_path(path).lstat()
         if not stat.S_ISREG(info.st_mode):
             raise CheckpointCorruptionError(f"checkpoint object is not a regular file: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
@@ -1008,7 +1012,7 @@ class IncrementalCheckpointStore:
                     f"checkpoint object has an unsafe owner or is externally writable: {path}"
                 ) from error
         else:
-            payload = path.read_bytes()
+            payload = filesystem_path(path).read_bytes()
         if len(payload) != expected_size or _sha256(payload) != expected_hash:
             raise CheckpointCorruptionError(
                 f"checkpoint object failed integrity validation: {path}"
@@ -1081,7 +1085,7 @@ class IncrementalCheckpointStore:
         resolved_path = self._object_path(manifest.resolved_scenario_relative_path)
         self._validate_file(
             manifest.resolved_scenario_relative_path,
-            resolved_path.stat().st_size,
+            filesystem_path(resolved_path).stat().st_size,
             manifest.resolved_scenario_sha256,
         )
         segments = self.segment_references(manifest)
@@ -1151,7 +1155,7 @@ class IncrementalCheckpointStore:
         path = self._object_path(recovery.manifest.resolved_scenario_relative_path)
         return self._validate_file(
             recovery.manifest.resolved_scenario_relative_path,
-            path.stat().st_size,
+            filesystem_path(path).stat().st_size,
             recovery.manifest.resolved_scenario_sha256,
         )
 
@@ -1166,7 +1170,7 @@ class IncrementalCheckpointStore:
 
         if os.name == "nt":
             self._windows_io.require_healthy()
-        if not self.workspace.exists():
+        if not filesystem_path(self.workspace).exists():
             return
         self._validate_protected_directory(self.workspace)
-        shutil.rmtree(self.workspace)
+        shutil.rmtree(filesystem_path(self.workspace))

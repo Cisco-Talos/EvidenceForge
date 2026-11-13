@@ -2361,7 +2361,7 @@ def test_threaded_failure_closes_existing_sensor_writers_before_reraising(tmp_pa
         rows = output.read_text(encoding="utf-8").splitlines()
         assert len(rows) == 1
         assert json.loads(rows[0])["ts"] == pytest.approx(observation.source_time(key).timestamp())
-    assert not list(tmp_path.rglob(".conn.json.sort-*"))
+    assert not list(tmp_path.rglob(".efsort-*"))
     assert not list(tmp_path.rglob("*.merging"))
     assert not list(tmp_path.rglob("*.preview"))
 

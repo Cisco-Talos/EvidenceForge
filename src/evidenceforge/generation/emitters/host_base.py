@@ -41,6 +41,7 @@ from queue import Empty
 from threading import Condition, Lock, get_ident
 from typing import Any
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import (
     ExactPublicationError,
@@ -160,17 +161,21 @@ class _SingleHostWriter:
                     return
                 self._flush_unlocked()
                 self._write_header_unlocked()
-                self.output_path.parent.mkdir(parents=True, exist_ok=True)
+                filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
                 pending = self._exact_file_pending.get(key)
                 if pending is None:
-                    offset = self.output_path.stat().st_size if self.output_path.exists() else 0
+                    offset = (
+                        filesystem_path(self.output_path).stat().st_size
+                        if filesystem_path(self.output_path).exists()
+                        else 0
+                    )
                     pending = (digest, offset, len(payload))
                     self._exact_file_pending[key] = pending
                 pending_digest, offset, payload_length = pending
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Exact host admission changed on retry")
-                mode = "r+b" if self.output_path.exists() else "w+b"
-                with open(self.output_path, mode) as output:
+                mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
+                with open(filesystem_path(self.output_path), mode) as output:
                     output.seek(offset)
                     retained_payload = output.read(payload_length)
                     if retained_payload == payload:
@@ -254,15 +259,18 @@ class _SingleHostWriter:
             return
         header = self._header if self._header.endswith("\n") else f"{self._header}\n"
         payload = header.encode("utf-8")
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.output_path.exists() and self.output_path.stat().st_size:
-            with self.output_path.open("rb") as stream:
+        filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
+        if (
+            filesystem_path(self.output_path).exists()
+            and filesystem_path(self.output_path).stat().st_size
+        ):
+            with filesystem_path(self.output_path).open("rb") as stream:
                 retained = stream.read(len(payload))
             if retained != payload:
                 raise ExactPublicationError("Host writer found a conflicting existing header")
             self._header_written = True
             return
-        with self.output_path.open("wb") as stream:
+        with filesystem_path(self.output_path).open("wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
@@ -331,8 +339,8 @@ class _SingleHostWriter:
         if self._sort_on_flush:
             self.buffer.sort(key=self._sort_key)
         self._write_header_unlocked()
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.output_path, "a", encoding="utf-8", newline="\n") as f:
+        filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
+        with open(filesystem_path(self.output_path), "a", encoding="utf-8", newline="\n") as f:
             for entry in self.buffer:
                 f.write(entry)
                 if not entry.endswith("\n"):
@@ -349,15 +357,19 @@ class _SingleHostWriter:
             encoded = footer if footer.endswith("\n") else f"{footer}\n"
             payload = encoded.encode()
             digest = hashlib.sha256(payload).hexdigest()
-            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
             if self._footer_pending is None:
-                offset = self.output_path.stat().st_size if self.output_path.exists() else 0
+                offset = (
+                    filesystem_path(self.output_path).stat().st_size
+                    if filesystem_path(self.output_path).exists()
+                    else 0
+                )
                 self._footer_pending = (digest, offset, len(payload))
             pending_digest, offset, payload_length = self._footer_pending
             if pending_digest != digest or payload_length != len(payload):
                 raise ExactPublicationError("Host writer footer changed during retry")
-            mode = "r+b" if self.output_path.exists() else "w+b"
-            with self.output_path.open(mode) as output:
+            mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
+            with filesystem_path(self.output_path).open(mode) as output:
                 output.seek(offset)
                 retained = output.read(payload_length)
                 if retained == payload:

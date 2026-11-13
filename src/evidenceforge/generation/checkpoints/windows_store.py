@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.utils import windows_filesystem as filesystem
 
 from .errors import CheckpointCorruptionError
@@ -27,7 +28,9 @@ def prepare_dependencies(
     operations = store._windows_io
     operations.require_healthy()
     resolved = store.workspace / resolved_path
-    operations.ensure_file(resolved, size=resolved.stat().st_size, digest=resolved_digest)
+    operations.ensure_file(
+        resolved, size=filesystem_path(resolved).stat().st_size, digest=resolved_digest
+    )
     visiting: set[str] = set()
 
     def adopt(reference: SegmentCatalogReference) -> None:

@@ -3,6 +3,9 @@
 
 """Unit tests for path safety utilities."""
 
+import os
+from pathlib import Path
+
 import pytest
 
 from evidenceforge.utils.paths import reject_symlink, safe_path_join, sanitize_path_component
@@ -105,3 +108,19 @@ class TestRejectSymlink:
         link.symlink_to(tmp_path / "nonexistent")
         with pytest.raises(PermissionError, match="symlinked path"):
             reject_symlink(link)
+
+
+def test_atomic_write_long_filename_and_symlink_refusal(tmp_path: Path) -> None:
+    from evidenceforge._windows_paths import filesystem_path
+    from evidenceforge.utils.paths import safe_write_text
+
+    target = tmp_path / ("scenario-" + "a" * 220 + ".yaml")
+    safe_write_text(target, "first\n")
+    safe_write_text(target, "second\n")
+    assert filesystem_path(target).read_text() == "second\n"
+    if os.name != "nt":
+        link = tmp_path / "link.yaml"
+        link.symlink_to(target)
+        with pytest.raises(PermissionError, match="symlinked path"):
+            safe_write_text(link, "must not replace")
+        assert target.read_text() == "second\n"

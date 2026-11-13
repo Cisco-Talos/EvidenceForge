@@ -95,6 +95,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   socket shutdown on native platforms. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
+- [ ] **P2 — Complete deep Windows workspace path qualification:** The output/
+  checkpoint repair covers the observed long-path generation failure. Extend
+  policy-independent native coverage to unusually deep authoring, import/export,
+  external-tool and SQLite paths; review remaining direct I/O boundaries without
+  leaking device-prefixed paths into public metadata or weakening containment.
+  See the [filesystem review](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-generation-failure-and-filesystem-review).
+
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.

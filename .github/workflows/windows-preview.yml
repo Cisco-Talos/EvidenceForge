@@ -126,7 +126,8 @@ jobs:
           tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
           tests/unit/test_windows_filesystem.py
           tests/unit/test_windows_streams.py
-          tests/unit/test_windows_resource_paths.py
+          tests/unit/test_windows_resource_paths.py tests/unit/test_windows_output_paths.py
+          tests/unit/test_external_sorted_writer.py
           tests/unit/test_resource_forecast.py tests/unit/test_artifact_properties.py
           tests/unit/test_studio_runtime.py tests/unit/test_studio_background.py
           tests/unit/test_studio_startup.py tests/unit/test_studio_event_socket.py

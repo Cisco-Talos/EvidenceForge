@@ -85,7 +85,11 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
             with tarfile.open(archive) as source:
                 source.extractall(runtime, filter="data")
         workspace = root / "workspace"
-        workspace.mkdir()
+        if os.name == "nt":
+            # Match a real Documents/workspace/run hierarchy. The previous shallow
+            # smoke missed an exact-row pending name exceeding MAX_PATH at 294 chars.
+            workspace = workspace / ("nested Documents 汉 ü " + "w" * 50)
+        workspace.mkdir(parents=True)
         environment = {
             **os.environ,
             "PATH": str(Path(os.environ["SystemRoot"]) / "System32")
@@ -394,6 +398,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
         "validation": "passed",
         "checkpoint_enabled_generation": "passed",
         "macos_native_generation_and_evaluation": "passed",
+        **({"nested_windows_workspace": "passed"} if os.name == "nt" else {}),
     }
 
 

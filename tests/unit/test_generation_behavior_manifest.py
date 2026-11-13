@@ -245,7 +245,7 @@ def test_behavior_surface_digest_changes_when_covered_file_changes(tmp_path: Pat
 
 @pytest.mark.parametrize(
     "utility",
-    ("ids.py", "rng.py", "time.py", "timing.py", "ua_template.py", "windows_ids.py"),
+    ("ids.py", "paths.py", "rng.py", "time.py", "timing.py", "ua_template.py", "windows_ids.py"),
 )
 def test_behavior_surface_covers_deterministic_output_utilities(
     tmp_path: Path,
@@ -303,3 +303,13 @@ def test_ci_requires_new_revision_when_behavior_surface_changes() -> None:
         current_revision=8,
         current_digest="b" * 64,
     )
+
+
+def test_behavior_surface_covers_windows_filesystem_spelling(tmp_path: Path) -> None:
+    package = tmp_path / "evidenceforge"
+    package.mkdir()
+    helper = package / "_windows_paths.py"
+    helper.write_text("VALUE = 1\n")
+    original = generation_behavior_surface_digest(package)
+    helper.write_text("VALUE = 2\n")
+    assert generation_behavior_surface_digest(package) != original

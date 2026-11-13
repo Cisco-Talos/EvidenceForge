@@ -37,6 +37,7 @@ from contextlib import contextmanager
 from io import BufferedReader
 from pathlib import Path
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.models.exceptions import PathSafetyError
 
 logger = logging.getLogger(__name__)
@@ -326,6 +327,7 @@ def safe_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> Non
         PermissionError: If the destination path is a symlink.
         OSError: If the temporary file cannot be created, written, or moved.
     """
+    path = filesystem_path(path)
     reject_symlink(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -335,7 +337,7 @@ def safe_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> Non
             "w",
             encoding=encoding,
             dir=path.parent,
-            prefix=f".{path.name}.",
+            prefix=".efwrite-",
             suffix=".tmp",
             delete=False,
         ) as temp_file:

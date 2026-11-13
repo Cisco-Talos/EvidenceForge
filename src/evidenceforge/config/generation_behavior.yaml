@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 511
+current_revision: 512
 history_start_revision: 1
-behavior_surface_sha256: c20bb06c697fe3077e626acbfad3ce71cd17c29233e64e059459253936f5d507
+behavior_surface_sha256: 08f3b6df398d4bf999068491f7a9b628b18cada5e7362bbeab3499ed37f40c9e
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5894,3 +5894,12 @@ changes:
   formats: []
   summary: Read long Windows bundled paths without legacy path truncation and budget
     zero swap when optional paging counters are unavailable; generated evidence is unchanged.
+- revision: 512
+  id: preserve-windows-nested-output-filesystem-access
+  impact: none
+  domains:
+  - output-publication
+  - checkpoint-storage
+  formats: []
+  summary: Use long-path Windows I/O spelling and bounded temporary names while retaining
+    logical output paths, exact publication, deterministic bytes and checkpoint identity.

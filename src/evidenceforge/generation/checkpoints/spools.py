@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.utils.files import fsync_directory, open_host_file
 
 from .errors import CheckpointCorruptionError, CheckpointFilesystemError
@@ -188,7 +189,7 @@ class AppendOnlySpoolParticipant:
 
     @staticmethod
     def _open_append_source(path: Path, prior: _CommittedFile) -> tuple[int, os.stat_result]:
-        info = path.lstat()
+        info = filesystem_path(path).lstat()
         if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
             raise CheckpointFilesystemError(f"append-only spool is not a regular file: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
@@ -391,7 +392,7 @@ class AppendOnlySpoolParticipant:
         restored: dict[str, _CommittedFile] = {}
         for name, path in self._files.items():
             self._replace_file(path, bodies[name])
-            info = path.lstat()
+            info = filesystem_path(path).lstat()
             state = expected[name]
             restored[name] = _CommittedFile(
                 length=state.length,
@@ -433,7 +434,7 @@ class ImmutableSpoolFilesParticipant:
 
     @staticmethod
     def _read_immutable(path: Path) -> bytes:
-        before = path.lstat()
+        before = filesystem_path(path).lstat()
         if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
             raise CheckpointFilesystemError(f"immutable spool is not a regular file: {path}")
         if hasattr(os, "getuid") and before.st_uid != os.getuid():

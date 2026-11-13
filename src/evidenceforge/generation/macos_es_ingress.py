@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.es_collector import ESCollectorRegistry, ESCollectorState
 from evidenceforge.events.macos_native_coverage import (
@@ -216,8 +217,8 @@ class MacosESIngress:
     def cleanup(self) -> None:
         """Remove internal snapshots after successful native output finalization."""
         if self.finalized or not self.enabled:
-            if self.root.exists():
-                shutil.rmtree(self.root)
+            if filesystem_path(self.root).exists():
+                shutil.rmtree(filesystem_path(self.root))
 
     def barrier_flush(self) -> None:
         """Seal immutable ingress runs without delivering future occurrences."""
@@ -256,7 +257,7 @@ class MacosESIngress:
         visible_rows = 0
         export_rows: dict[Path, MacosOccurrenceDigest] = {}
         for route in sorted(self.spool._writers.values(), key=lambda item: str(item.output_path)):
-            with route.output_path.open(encoding="utf-8") as stream:
+            with filesystem_path(route.output_path).open(encoding="utf-8") as stream:
                 for line in iter(lambda: stream.readline(_MAX_INGRESS_BYTES + 1), ""):
                     if len(line.encode()) > _MAX_INGRESS_BYTES:
                         raise StateError("ES occurrence snapshot exceeds its modeled row bound")
@@ -463,7 +464,7 @@ class MacosESIngress:
             raise StateError("Native ES export changed its committed host routes")
         for path, expected in self._export_rows.items():
             actual = MacosOccurrenceDigest()
-            with path.open(encoding="utf-8", newline="") as stream:
+            with filesystem_path(path).open(encoding="utf-8", newline="") as stream:
                 for line in iter(lambda: stream.readline(_MAX_INGRESS_BYTES + 1), ""):
                     if len(line.encode()) > _MAX_INGRESS_BYTES or not line.endswith("\n"):
                         raise StateError("Native ES export contains an invalid record extent")
