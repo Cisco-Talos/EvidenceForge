@@ -60,7 +60,7 @@ fn connect_helper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     startup_progress::report(
         &app,
         "Starting Studio",
-        "Opening your workspace and local service…",
+        "Starting the local service and opening your workspace. This can take a moment after an update…",
     );
     let mut command = std::process::Command::new(studio_python());
     #[cfg(target_os = "windows")]

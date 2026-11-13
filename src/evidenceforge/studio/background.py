@@ -86,7 +86,7 @@ def _start_macos(paths: StudioPaths) -> None:
         )
 
 
-def start_background_service(paths: StudioPaths) -> None:
+def start_background_service(paths: StudioPaths) -> subprocess.Popen[bytes] | None:
     """Start a detached helper, using a transient user launch agent on macOS."""
     from evidenceforge.studio.ownership import validate_private_paths
 
@@ -100,7 +100,7 @@ def start_background_service(paths: StudioPaths) -> None:
     with os.fdopen(
         open_regular(paths.logs / "service.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND), "ab"
     ) as log:
-        subprocess.Popen(
+        return subprocess.Popen(
             [
                 sys.executable,
                 *(isolated_python_options() if runtime_root() is not None else []),

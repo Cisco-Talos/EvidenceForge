@@ -120,7 +120,7 @@ def test_source_launch_replaces_changed_helpers_and_only_accepts_selected_runtim
     # An old descriptor briefly remaining after startup must never be returned.
     read = Mock(side_effect=[old, old, current])
     replace = Mock()
-    start = Mock()
+    start = Mock(return_value=None)
     monkeypatch.setattr(bootstrap, "runtime_id", lambda: "source-current")
     monkeypatch.setattr(bootstrap, "_read_descriptor", read)
     monkeypatch.setattr(bootstrap, "_is_live", lambda descriptor: True)

@@ -884,3 +884,50 @@ Require delayed-start/dead-helper/concurrent-attach and idle-WebSocket shutdown
 regressions; retain native Mac/Linux gates for shared lifecycle changes. No
 runtime change or new installer is made by this investigation. Both follow-ups
 are now durable backlog items; all executable evidence stays bound to `4d54c3c2`.
+
+### Lifecycle fixes implemented immediately
+
+The user explicitly requests implementing the startup/shutdown fixes now rather
+than waiting for installer-specific clean-uninstall work. That reset option stays
+separate and remains unimplemented. These runtime changes do not patch the
+already installed immutable payload; delivery requires a rebuilt payload.
+
+The Windows launch-lock and readiness budgets are now sixty seconds each; existing
+Mac/Linux twelve-second budgets remain unchanged. Polling still authenticates the
+selected runtime/process and retains the original exclusive launch/instance locks.
+A returned Popen handle lets startup detect an exited owned child immediately;
+an observed verified starting helper's disappearance also fails promptly. No
+process is killed or replaced solely because readiness is slow, and concurrent
+attachment waits for the same helper. Existing authenticated idle-replacement
+checks remain unchanged.
+
+Bootstrap now lazily imports the application/server in the helper process. This
+removes the complete service import from every short-lived attachment command and
+publishes verified helper discovery before heavy application import/initialization.
+The existing Starting Studio progress remains visible during the bounded wait,
+with an explicit after-update explanation instead of the premature twelve-second
+failure. Native-shell connection JSON/stdout stays unchanged.
+
+Private lifecycle logging appends UTC phase timestamps, elapsed seconds, role,
+PID and runtime identity to service.log. Phase markers distinguish launch-lock
+waiting, child launch, discovery, application import, state/workspace preparation,
+workspace scan, retention checks, readiness and stop. A context-local reporter
+keeps simultaneous launch contexts separate; logging uses verified no-follow file
+access and never includes the descriptor token or console/IPC output.
+
+The event socket now races a queued event against an independent disconnect
+receiver, drains both tasks and removes its subscription on exit. Backfill/cursor
+and live delivery remain intact. A deterministic direct-ASGI regression checks an
+idle peer disconnect, and a real helper/socket test checks clean process shutdown
+without Uvicorn's forced-cancellation or ASGI-exception messages.
+
+Local checks pass 59 focused startup/socket/runtime/ownership/background cases,
+140 service/session/state-contract cases and seven real helper/ownership cases,
+plus all twelve Rust shell tests, four startup/API frontend cases, generated API
+types, Ruff and formatting. Simulated-clock tests cover twenty-second Windows
+readiness and contended launch, sixty-second refusal, unchanged POSIX limits,
+new/observed helper exit and no duplicate launch. A fresh-process test rejects
+heavy service import in attachment bootstrap. Native Windows CI/qualification and
+actual laptop timing remain pending. Shared lifecycle changes still require final
+Mac/Linux integration before merge. Generation behavior revision 511/digest and
+all product/storage versions remain unchanged.

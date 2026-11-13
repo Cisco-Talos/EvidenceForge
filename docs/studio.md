@@ -63,6 +63,13 @@ Studio can remove outside read-only permissions from its own account-owned
 unsafe paths are refused. Authored workspace permissions and private file ACLs
 remain protected.
 
+While the Windows helper initializes, Studio keeps the **Starting Studio** screen
+visible and allows up to 60 seconds for readiness. A newly launched helper that
+exits is reported promptly. The launcher avoids loading the full application just
+to reconnect. The private `logs/service.log` records UTC phase timestamps, elapsed
+time, process ID and runtime identity for startup diagnosis without recording
+connection credentials. Idle event sockets close cooperatively during shutdown.
+
 Studio selects MXC for its packaged Windows Codex process and checks that it can
 run the private CLI read-only before connecting authoring. This requires a
 [compatible device and permitting policy](https://learn.chatgpt.com/docs/windows/windows-sandbox#mxc-compatibility).

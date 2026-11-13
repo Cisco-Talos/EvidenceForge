@@ -16,6 +16,7 @@ from threading import Thread
 
 import psutil
 import pytest
+from websockets.sync.client import connect
 
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.studio.bootstrap import ServiceDescriptor
@@ -95,6 +96,20 @@ def test_real_helper_exits_after_last_window_and_releases_state_ownership(
     assert not selected.service_file.exists()
     with closing(StateCoordinator(selected)) as coordinator:
         assert coordinator.status.state == "ready"
+
+
+def test_real_helper_closes_idle_websocket_without_forced_cancellation(
+    helper: tuple[subprocess.Popen[str], ServiceDescriptor], tmp_path: Path
+) -> None:
+    process, descriptor = helper
+    _request(descriptor, "/v1/session/open")
+    url = descriptor.url.replace("http://", "ws://") + f"/v1/events/ws?token={descriptor.token}"
+    with connect(url, proxy=None, open_timeout=5, close_timeout=1):
+        _request(descriptor, "/v1/session/close")
+        assert process.wait(timeout=8) == 0
+    log = (tmp_path / "helper.log").read_text()
+    assert "timeout graceful shutdown exceeded" not in log
+    assert "Exception in ASGI application" not in log
 
 
 def test_real_helper_retains_verified_worker_then_exits_when_it_finishes(
