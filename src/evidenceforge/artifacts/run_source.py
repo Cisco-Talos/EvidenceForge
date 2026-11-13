@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -16,7 +15,6 @@ from evidenceforge.composition.models import GenerationManifestDocument
 from evidenceforge.config.provider import _register_trusted_derived_cache
 
 logger = logging.getLogger(__name__)
-_CONTENT_STAMPS = os.name == "nt"
 _SourceStamp = tuple[int, int, int, int, str]
 
 
@@ -39,21 +37,17 @@ def _stamp(path: Path, limit: int) -> _SourceStamp:
     info = path.stat()
     if info.st_size > limit:
         raise ValueError("Captured source exceeds the inspection limit")
-    content_stamp = ""
-    if _CONTENT_STAMPS:
-        # Windows creation time is not a change counter, and rapid equal-size
-        # rewrites can retain the same last-write stamp. Verify current bytes
-        # before reusing parsed identity; never retain file bytes in the LRU.
-        digest = hashlib.sha256()
-        consumed = 0
-        with path.open("rb") as stream:
-            while chunk := stream.read(min(1024 * 1024, limit - consumed + 1)):
-                consumed += len(chunk)
-                if consumed > limit:
-                    raise ValueError("Captured source exceeds the inspection limit")
-                digest.update(chunk)
-        content_stamp = digest.hexdigest()
-    return info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, content_stamp
+    # Metadata does not prove byte identity on any platform. Verify current
+    # content before reusing parsed identity; never retain file bytes in the LRU.
+    digest = hashlib.sha256()
+    consumed = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(min(1024 * 1024, limit - consumed + 1)):
+            consumed += len(chunk)
+            if consumed > limit:
+                raise ValueError("Captured source exceeds the inspection limit")
+            digest.update(chunk)
+    return info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, digest.hexdigest()
 
 
 @lru_cache(maxsize=256)

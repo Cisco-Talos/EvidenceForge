@@ -105,7 +105,7 @@ def test_imported_bundle_identity_requires_unchanged_registered_manifest_and_res
     assert captured_scenario(tmp_path, manifest_sha256=manifest_digest) is None
 
 
-def test_identity_cache_reuses_verified_bytes_but_rejects_changed_snapshot(
+def test_identity_cache_reuses_parsed_source_but_rejects_changed_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     frozen = tmp_path / "RESOLVED_SCENARIO.yaml"
@@ -129,7 +129,7 @@ def test_identity_cache_reuses_verified_bytes_but_rejects_changed_snapshot(
     assert reads == 2
 
 
-def test_windows_identity_cache_detects_same_size_edits_with_identical_metadata(
+def test_identity_cache_detects_same_size_edits_with_identical_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resolved = tmp_path / "RESOLVED_SCENARIO.yaml"
@@ -143,7 +143,6 @@ def test_windows_identity_cache_detects_same_size_edits_with_identical_metadata(
         return frozen.get(path) or original_stat(path, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(Path, "stat", unchanged_stat)
-    monkeypatch.setattr(run_source, "_CONTENT_STAMPS", True)
     first = captured_scenario(tmp_path, manifest_sha256=manifest_digest)
     assert first is not None and first.version == "1.0.0"
     _input(resolved, {"status": "published", "publisher": "team", "version": "9.0.0"})
@@ -155,7 +154,7 @@ def test_windows_identity_cache_detects_same_size_edits_with_identical_metadata(
     assert captured_scenario(tmp_path, manifest_sha256=manifest_digest) is None
 
 
-def test_windows_content_stamp_enforces_limit_even_when_metadata_is_stale(
+def test_content_stamp_enforces_limit_even_when_metadata_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "snapshot"
@@ -170,7 +169,6 @@ def test_windows_content_stamp_enforces_limit_even_when_metadata_is_stale(
         )
 
     monkeypatch.setattr(Path, "stat", unchanged_stat)
-    monkeypatch.setattr(run_source, "_CONTENT_STAMPS", True)
     with pytest.raises(ValueError, match="inspection limit"):
         run_source._stamp(path, 8)
 

@@ -1471,3 +1471,15 @@ post at most one Next command per native page handle, only after recognized welc
 license or maintenance content appears. Never advance a partially loaded or unknown
 scope page. Portable transition tests cover changing content and delayed controls;
 repeat both actual installed-scope navigation checks in native qualification.
+
+The user asks why captured-file content verification is Windows-only. The initial
+scope preserved the POSIX metadata fast path, but that optimization does not establish
+the required unchanged-bytes guarantee. Generalize the bounded streamed SHA256 stamp
+to every host OS. Remove the platform switch and forced-Windows test setup: the
+same-size/frozen-metadata and stale-size-limit regressions now exercise the default
+implementation on macOS, Linux and Windows. Retain the 256-entry parsed-result LRUs,
+without caching file bytes, and existing inspection limits (64 MiB captured source,
+8 MiB manifest). This adds sequential content inspection per lookup on POSIX while
+avoiding repeated YAML/JSON parsing; generated log data is never scanned. Requalify
+the shared implementation on all supported native CI platforms. The separate scratch
+cleanup repair remains Windows-specific, and the P1 scratch-design review is shared.
