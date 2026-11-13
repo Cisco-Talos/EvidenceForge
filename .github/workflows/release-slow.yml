@@ -8,6 +8,10 @@ on:
       force-tests:
         type: boolean
         default: false
+      legacy-memory-policy:
+        description: Recover a historical snapshot that predates the memory harness
+        type: boolean
+        default: false
   pull_request:
     branches:
       - main
@@ -47,6 +51,14 @@ jobs:
       - name: Identify tested inputs
         id: identity
         run: uv run --no-sync python -m scripts.ci_evidence identity
+      - name: Verify historical memory policy
+        env:
+          LEGACY_MEMORY_POLICY: ${{ inputs.legacy-memory-policy || false }}
+        run: |
+          if [ "$LEGACY_MEMORY_POLICY" = "true" ] && [ -f scripts/check_evaluation_memory.py ]; then
+            echo "Current snapshots must run the evaluation memory gate"
+            exit 1
+          fi
   slow-comprehensive:
     name: Slow comprehensive tests (${{ matrix.shard_number }}/4, no coverage)
     runs-on: ubuntu-latest
@@ -167,6 +179,8 @@ jobs:
       group: eforge-${{ needs.inputs.outputs.digest }}-portability-ubuntu-latest
       queue: max
   evaluation-memory:
+    needs: inputs
+    if: inputs.legacy-memory-policy != true
     uses: ./.github/workflows/evaluation-memory.yml
     with:
       source-ref: ${{ inputs.source-ref || github.sha }}
@@ -180,10 +194,14 @@ jobs:
     if: always()
     steps:
       - name: Check release jobs
+        env:
+          LEGACY_MEMORY_POLICY: ${{ inputs.legacy-memory-policy || false }}
         run: |
           if [ "${{ needs['evaluation-memory'].result }}" != "success" ]; then
-            echo "Evaluation memory checks finished with result: ${{ needs['evaluation-memory'].result }}"
-            exit 1
+            if [ "$LEGACY_MEMORY_POLICY" != "true" ] || [ "${{ needs['evaluation-memory'].result }}" != "skipped" ]; then
+              echo "Evaluation memory checks finished with result: ${{ needs['evaluation-memory'].result }}"
+              exit 1
+            fi
           fi
 
           if [ "${{ needs['slow-comprehensive'].result }}" != "success" ]; then

@@ -4,6 +4,8 @@ on:
     branches: [dev, main]
     paths:
       - .github/workflows/evaluation-memory.yml
+      - .github/workflows/release-slow.yml
+      - .github/workflows/release.yml
       - scripts/check_evaluation_memory.py
       - tests/fixtures/eval/memory-workloads.yaml
       - src/evidenceforge/evaluation/**

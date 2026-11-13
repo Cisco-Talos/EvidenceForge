@@ -108,3 +108,6 @@ including on envelope failure. Ordinary OS caches may be warm; no persistent eva
 used. Recalibration requires inspecting complete native measurements and documenting headroom,
 rather than raising a limit until CI passes. `--measure-only` collects calibration evidence without
 enforcing candidate limits; release workflow calls cannot select that bypass.
+Recovery of a historical tagged source without this harness retains its original
+gates through an explicit source-bound compatibility policy. That policy rejects
+current sources containing the harness and cannot excuse a failed memory job.

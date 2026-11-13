@@ -71,6 +71,14 @@ Routine CI also exposed an older exact release-job-set assertion. It now require
 the additional memory gate, preserving its existing shard and portability checks.
 Windows checkout preserves fixture bytes explicitly.
 
+Historical tagged snapshots can predate the new harness. Release planning binds
+the memory policy to the captured source: only snapshots without the harness may
+use the explicit historical policy. The slow workflow rejects that policy if the
+checked-out harness exists, and requires all original correctness/portability
+gates even for historical recovery. New snapshots cannot waive a failed or skipped
+memory gate. Shell-executed positive/negative contracts cover those cases; all
+50 focused resource, fixture and workflow checks pass after this compatibility repair.
+
 ## Verification
 
 - The 500,002-record correctness test passes in 242.48 seconds without coverage.
