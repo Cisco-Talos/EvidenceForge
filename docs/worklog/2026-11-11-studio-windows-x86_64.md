@@ -1842,3 +1842,12 @@ Correct the test to contrast strict require_private with cleanup's explicit
 allow-read policy, verify unchanged ACLs and require refusal of a newly added outside
 write grant. Do not attribute the laptop failure to the settings reader or claim an
 inconsistent preexisting ACL policy based on that disproven assumption.
+
+Run 43517279694 passes all 45 focused native checks, including the corrected ACL
+contract. Final review also reuses state_io.open_regular for cleanup settings on
+both platforms, retaining its pinned ancestry, regular/single-link and opened-file
+identity checks rather than a separate pathname-based read implementation. The
+cleanup-specific native ACL check remains on that same verified descriptor.
+This small follow-up will be included in the delivered installer. Remote input was
+interrupted before any retained chat error could be recovered; no laptop data,
+permissions or installation was changed by that diagnostic attempt.

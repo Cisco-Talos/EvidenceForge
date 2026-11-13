@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.models.exceptions import EvidenceForgeError
-from evidenceforge.studio.state_io import StateLock, StudioStateError, safe_path
+from evidenceforge.studio.state_io import StateLock, StudioStateError, open_regular, safe_path
 
 Category = Literal["private", "skills", "work"]
 LABELS: dict[Category, str] = {
@@ -219,20 +219,16 @@ def _read_cleanup_settings(path: Path) -> dict[str, object]:
     Cleanup does not reopen the running private service. This explicit owner/mutation
     policy matches the cleanup inventory without changing ordinary settings reads.
     """
-    safe_path(filesystem_path(path))
-    if os.name == "nt":
-        from evidenceforge.utils import windows_filesystem as fs
+    descriptor = open_regular(filesystem_path(path), os.O_RDONLY)
+    try:
+        if os.name == "nt":
+            from evidenceforge.utils import windows_filesystem as fs
 
-        descriptor = fs.open_file(path, os.O_RDONLY)
-        try:
             fs.require_private(descriptor, allow_read_access=True)
-            with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                payload = stream.read(8 * 1024 * 1024 + 1)
-        finally:
-            os.close(descriptor)
-    else:
-        with path.open("rb") as stream:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
             payload = stream.read(8 * 1024 * 1024 + 1)
+    finally:
+        os.close(descriptor)
     if len(payload) > 8 * 1024 * 1024:
         raise StudioStateError(f"Cleanup settings exceed the inspection limit: {path}")
     raw = json.loads(payload)
