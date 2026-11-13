@@ -744,6 +744,7 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     engine._find_system = lambda hostname: system_a if hostname == system_a.hostname else None
 
     step_1 = Mock()
+    step_1.id = "step-one"
     step_1.time = "2024-03-15T10:00:00Z"
     step_1.actor = attacker.username
     step_1.system = system_a.hostname
@@ -751,6 +752,7 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     step_1.events = [Mock(type="process"), Mock(type="process")]
 
     step_2 = Mock()
+    step_2.id = "step-two"
     step_2.time = "2024-03-15T10:00:05Z"
     step_2.actor = attacker.username
     step_2.system = system_a.hostname
@@ -772,6 +774,12 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     }
     monkeypatch.setattr(engine, "_parse_storyline_time", lambda t: parsed_times[t])
     monkeypatch.setattr("evidenceforge.generation.engine.storyline._get_rng", lambda: _FixedRng())
+    # Hold placement at nominal time so this test exercises the cadence collision,
+    # independently of the shared planner's scoped jitter contract.
+    monkeypatch.setattr(
+        "evidenceforge.generation.engine.storyline.StorylineTimingPlanner.place_event",
+        lambda _planner, nominal_time, **_scope: nominal_time,
+    )
 
     def fake_typing_cadence(count: int, _rng: _FixedRng) -> list[float]:
         if count == 2:

@@ -38,6 +38,7 @@ import math
 import random
 import shlex
 import string
+from bisect import bisect_left
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -141,6 +142,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     remote_auth_transport_max_duration_seconds,
 )
+from evidenceforge.generation.storyline_timing import STORYLINE_EVENT_JITTER_SECONDS
 from evidenceforge.generation.timing import (
     TimingSampler,
     TimingScope,
@@ -3463,18 +3465,19 @@ class BaselineMixin:
         if lifetime is None:
             return
         canonical_start = max(ensure_utc(start_time), ensure_utc(running.start_time))
-        duration = (
-            self.activity_generator._bounded_process_duration(
+        if _get_os_category(system.os) == "macos":
+            self.activity_generator._generate_bounded_foreground_process_termination(
+                user=user,
                 system=system,
                 start_time=canonical_start,
                 pid=pid,
                 process_name=running.image,
+                logon_id=running.logon_id or logon_id,
                 lifetime=lifetime,
                 rng=rng,
             )
-            if _get_os_category(system.os) == "macos"
-            else timedelta(seconds=rng.uniform(*lifetime))
-        )
+            return
+        duration = timedelta(seconds=rng.uniform(*lifetime))
         self.activity_generator.generate_process_termination(
             user=user,
             system=system,
@@ -3482,7 +3485,6 @@ class BaselineMixin:
             pid=pid,
             process_name=running.image,
             logon_id=running.logon_id or logon_id,
-            **({"macos_command_completed": True} if _get_os_category(system.os) == "macos" else {}),
         )
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
@@ -4453,7 +4455,7 @@ class BaselineMixin:
         with BaselineMixin._baseline_profile_span(self, "baseline.lateral_movement"):
             self._generate_lateral_movement_noise(current_hour)
         with BaselineMixin._baseline_profile_span(self, "baseline.suspicious_noise"):
-            self._generate_suspicious_noise(current_hour)
+            self._generate_suspicious_noise(current_hour, interleave_authored=emit_storylines)
         with BaselineMixin._baseline_profile_span(self, "baseline.firewall_denies"):
             self._generate_firewall_deny_baseline(current_hour)
 
@@ -4541,7 +4543,9 @@ class BaselineMixin:
             if event_time >= self._baseline_pass_end(current_hour):
                 continue
             self._execute_authored_events_for_hour(current_hour, through=event_time)
-            self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
+            self._generate_user_activity(
+                user, event_time, current_hour, planned_logoffs, interleave_authored=True
+            )
 
     def _baseline_pass_end(self, current_hour: datetime) -> datetime:
         """Return the exclusive end of this full warm-up or bounded output pass."""
@@ -6885,7 +6889,9 @@ class BaselineMixin:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
-    def _generate_suspicious_noise(self, current_hour: datetime) -> None:
+    def _generate_suspicious_noise(
+        self, current_hour: datetime, *, interleave_authored: bool = False
+    ) -> None:
         """Generate suspicious-but-benign ambient noise events.
 
         Creates events that look suspicious in isolation but have legitimate
@@ -6904,6 +6910,16 @@ class BaselineMixin:
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
         systems = self.scenario.environment.systems
         personas = self.scenario.personas
+
+        def before_macos_activity(result: dict[str, Any]) -> None:
+            system = result.get("system")
+            if (
+                interleave_authored
+                and system is not None
+                and _get_os_category(system.os) == "macos"
+                and self._baseline_pass_admits(current_hour, start=result["time"])
+            ):
+                self._execute_authored_events_for_hour(current_hour, through=result["time"])
 
         for event_ordinal in range(num_events):
             pattern_info = pick_suspicious_pattern(
@@ -6924,6 +6940,7 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    before_macos_activity(result)
                     event_time = result["time"]
                     if not self._baseline_pass_admits(current_hour, start=event_time):
                         continue
@@ -6978,6 +6995,7 @@ class BaselineMixin:
                     ):
                         continue
                     result["time"] = aligned_time
+                    before_macos_activity(result)
                     logon_id = self._ensure_session_on_system(
                         result["user"],
                         result["system"],
@@ -7016,6 +7034,7 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    before_macos_activity(result)
                     # Generate failed logons followed by a success
                     user = result["user"]
                     system = result["system"]
@@ -7044,6 +7063,7 @@ class BaselineMixin:
                         current_hour,
                         start=success_time,
                     ):
+                        before_macos_activity({**result, "time": success_time})
                         self.activity_generator.generate_logon(
                             user=user,
                             system=system,
@@ -7068,6 +7088,7 @@ class BaselineMixin:
                     current_hour,
                     start=result["time"],
                 ):
+                    before_macos_activity(result)
                     self.activity_generator.generate_logon(
                         user=result["user"],
                         system=result["system"],
@@ -7092,6 +7113,7 @@ class BaselineMixin:
                         seconds=dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35)
                     ),
                 ):
+                    before_macos_activity(result)
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
@@ -7165,6 +7187,7 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    before_macos_activity(result)
                     requested_duration_max = 120.0 if result.get("large_transfer") else 10.0
                     maximum_duration = self._baseline_network_close_bound_seconds(
                         src_ip=result["system"].ip,
@@ -7265,6 +7288,7 @@ class BaselineMixin:
                     current_hour,
                     start=result["time"],
                 ):
+                    before_macos_activity(result)
                     self.state_manager.set_current_time(result["time"])
                     logon_id = self._ensure_session_on_system(
                         result["user"],
@@ -8618,12 +8642,64 @@ class BaselineMixin:
             return None
         return adjusted_time
 
+    def _macos_authored_foreground_deadline(
+        self, user: User, system: System, time: datetime
+    ) -> datetime | None:
+        """Reserve pending authored shell use before admitting optional foreground work."""
+        index: dict[tuple[str, str], tuple[tuple[datetime, str, int], ...]] | None = getattr(
+            self, "_authored_macos_foreground_deadlines", None
+        )
+        if index is None:
+            pending: dict[tuple[str, str], list[tuple[datetime, str, int]]] = {}
+            systems_by_ip = {host.ip: host.hostname for host in self.scenario.environment.systems}
+            for section, entries in (
+                ("storyline", self.scenario.storyline),
+                ("red_herring", self.scenario.red_herrings),
+            ):
+                for ordinal, entry in enumerate(entries):
+                    hosts: set[str] = set()
+                    for spec in entry.events:
+                        if spec.type == "smb_activity" or (
+                            spec.type == "process" and spec.launch_method != "finder"
+                        ):
+                            hosts.add(entry.system)
+                        elif spec.type == "ssh_session":
+                            source = systems_by_ip.get(spec.source_ip)
+                            if source is not None:
+                                hosts.add(source)
+                    deadline = self._parse_storyline_time(entry.time) - timedelta(
+                        seconds=STORYLINE_EVENT_JITTER_SECONDS
+                    )
+                    for hostname in hosts:
+                        key = (entry.actor.casefold(), hostname.casefold())
+                        pending.setdefault(key, []).append((deadline, section, ordinal))
+            index = {key: tuple(sorted(rows)) for key, rows in pending.items()}
+            self._authored_macos_foreground_deadlines = index
+        rows = index.get((user.username.casefold(), system.hostname.casefold()), ())
+        # Nominal-time interleaving has already executed older entries. Only the
+        # jitter window immediately before this timestamp can still be pending.
+        start = bisect_left(
+            rows,
+            ensure_utc(time) - timedelta(seconds=STORYLINE_EVENT_JITTER_SECONDS),
+            key=lambda row: row[0],
+        )
+        for position in range(start, len(rows)):
+            deadline, section, ordinal = rows[position]
+            executed = (
+                self._storyline_executed if section == "storyline" else self._red_herring_executed
+            )
+            if ordinal not in executed:
+                return max(ensure_utc(time), deadline)
+        return None
+
     def _generate_user_activity(
         self,
         user: User,
         event_time: datetime,
         current_hour: datetime | None = None,
         planned_logoffs: dict[tuple[str, str], float] | None = None,
+        *,
+        interleave_authored: bool = False,
     ) -> None:
         """Generate activity for user at specified time."""
         terminal_pass = current_hour is not None and self._baseline_pass_is_terminal(current_hour)
@@ -8826,9 +8902,28 @@ class BaselineMixin:
                 end=None if start_only else t + timedelta(seconds=close_bound),
             ):
                 continue
+            if interleave_authored and _get_os_category(system.os) == "macos":
+                assert current_hour is not None
+                # Startup pacing can advance this action past other authored
+                # work. Drain that frontier before publishing future process
+                # parents that an earlier authored operation could otherwise select.
+                self._execute_authored_events_for_hour(current_hour, through=t)
             self.state_manager.set_current_time(t)
             self.activity_generator.execute_baseline_activity(
-                user=user, system=system, time=t, activity_type=activity_type
+                user=user,
+                system=system,
+                time=t,
+                activity_type=activity_type,
+                **(
+                    {
+                        "foreground_deadline": self._macos_authored_foreground_deadline(
+                            user, system, t
+                        )
+                    }
+                    if _get_os_category(system.os) == "macos"
+                    and activity_type.startswith("process_")
+                    else {}
+                ),
             )
 
         # Persona-driven 4648: sysadmin RunAs and helpdesk remote sessions

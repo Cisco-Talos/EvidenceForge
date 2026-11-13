@@ -80,7 +80,7 @@ from evidenceforge.generation.engine.storyline_helpers import periodic as period
 from evidenceforge.generation.engine.storyline_helpers import process as process_helpers
 from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.generation.storage_world import CompiledStorageFile
-from evidenceforge.generation.storyline_timing import STORYLINE_EVENT_JITTER_SECONDS
+from evidenceforge.generation.storyline_timing import StorylineTimingPlanner
 from evidenceforge.generation.world_model import (
     RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
     RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
@@ -3799,15 +3799,13 @@ class StorylineMixin:
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
             nominal_time = self._parse_storyline_time(storyline_event.time)
-            event_time = nominal_time
             rng = _get_rng()
-            jitter = timedelta(
-                seconds=rng.uniform(
-                    -STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS
-                ),
-                microseconds=rng.randint(0, 999999),
+            event_time = StorylineTimingPlanner(self.activity_generator.timing_runtime).place_event(
+                nominal_time,
+                event_id=storyline_event.id,
+                host=storyline_event.system,
+                section="storyline",
             )
-            event_time = event_time + jitter
             if _prev_event_time and event_time <= _prev_event_time:
                 event_time = _prev_event_time + timedelta(milliseconds=rng.randint(100, 5000))
 
@@ -3948,13 +3946,13 @@ class StorylineMixin:
         event_idx + 1
 
         nominal_time = self._parse_storyline_time(storyline_event.time)
-        event_time = nominal_time
         rng = _get_rng()
-        jitter = timedelta(
-            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
-            microseconds=rng.randint(0, 999999),
+        event_time = StorylineTimingPlanner(self.activity_generator.timing_runtime).place_event(
+            nominal_time,
+            event_id=storyline_event.id,
+            host=storyline_event.system,
+            section="storyline",
         )
-        event_time = event_time + jitter
 
         actor = self._find_actor(storyline_event.actor)
         system = self._find_system(storyline_event.system)
@@ -4073,13 +4071,13 @@ class StorylineMixin:
         rh_event = self.scenario.red_herrings[event_idx]
 
         nominal_time = self._parse_storyline_time(rh_event.time)
-        event_time = nominal_time
         rng = _get_rng()
-        jitter = timedelta(
-            seconds=rng.uniform(-STORYLINE_EVENT_JITTER_SECONDS, STORYLINE_EVENT_JITTER_SECONDS),
-            microseconds=rng.randint(0, 999999),
+        event_time = StorylineTimingPlanner(self.activity_generator.timing_runtime).place_event(
+            nominal_time,
+            event_id=rh_event.id,
+            host=rh_event.system,
+            section="red_herring",
         )
-        event_time = event_time + jitter
 
         actor = self._find_actor(rh_event.actor)
         system = self._find_system(rh_event.system)

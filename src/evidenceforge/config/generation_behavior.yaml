@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 514
+current_revision: 517
 history_start_revision: 1
-behavior_surface_sha256: d1556807a942d50d0f419729e1280f4c61e6d9a0a1801f2fa4ceef843de07a03
+behavior_surface_sha256: 45b45f516bb490fb7e1d4ddb8def0108e56f04175acc97828fe265d3b2c252d8
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5876,6 +5876,38 @@ changes:
   summary: Share native ICMP type/code and connection-state projection between conn
     rendering and source requirements, preserving existing packet evidence and TCP/UDP semantics.
 - revision: 510
+  id: macos-es-escaped-solidus
+  impact: localized
+  domains:
+  - native-process-observation
+  formats:
+  - macos_endpoint_security
+  summary: Escape solidus characters in native Endpoint Security NDJSON to match
+    eslogger's Foundation spelling while preserving field values and object and array order.
+- revision: 511
+  id: shared-subsecond-placement-and-natural-exit-default
+  impact: material
+  domains:
+  - authored-event-placement
+  - suspicious-benign-placement
+  - natural-command-completion
+  formats: []
+  summary: Share scoped microsecond placement for baseline and authored activity and
+    supply configured default success only for eligible unlisted natural Mac command completions.
+- revision: 512
+  id: authored-foreground-admission-and-paced-frontiers
+  impact: material
+  domains:
+  - baseline-foreground-admission
+  - authored-shell-reservations
+  - paced-baseline-authored-frontiers
+  - prepared-process-parent-readiness
+  - terminal-lifecycle-frontier
+  formats: []
+  summary: Admit optional Mac foreground work only when it fits before authored shell use,
+    interleave authored work before background activity, reject future prepared parents,
+    and retain committed lifecycle watermarks during terminal settlement.
+- revision: 513
   id: avoid-windows-syslog-import-temporary-file
   impact: none
   domains:
@@ -5885,7 +5917,7 @@ changes:
   - syslog
   summary: Inspect the known Windows temporary-stream type without allocating a file
     during import, preserving exact publication and generated evidence semantics.
-- revision: 511
+- revision: 514
   id: preserve-windows-bundled-resource-and-forecast-access
   impact: none
   domains:
@@ -5894,7 +5926,7 @@ changes:
   formats: []
   summary: Read long Windows bundled paths without legacy path truncation and budget
     zero swap when optional paging counters are unavailable; generated evidence is unchanged.
-- revision: 512
+- revision: 515
   id: preserve-windows-nested-output-filesystem-access
   impact: none
   domains:
@@ -5903,7 +5935,7 @@ changes:
   formats: []
   summary: Use long-path Windows I/O spelling and bounded temporary names while retaining
     logical output paths, exact publication, deterministic bytes and checkpoint identity.
-- revision: 513
+- revision: 516
   id: resolve-long-windows-checkpoint-roots
   impact: none
   domains:
@@ -5911,7 +5943,7 @@ changes:
   formats: []
   summary: Resolve checkpoint roots through long-path Windows I/O while retaining their
     logical namespace and rejecting all unprefixed long-path probes in native tests.
-- revision: 514
+- revision: 517
   id: retain-execution-owned-ldap-process-lifetimes
   impact: localized
   domains:

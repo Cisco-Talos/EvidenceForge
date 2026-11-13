@@ -14,23 +14,69 @@ import subprocess
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import evidenceforge.generation.activity.suspicious_benign as suspicious_benign
+import evidenceforge.generation.engine.baseline as baseline_module
 from evidenceforge.generation.activity.suspicious_benign import (
     _HOURLY_PLACEMENT_MAX_SECONDS,
-    _inclusive_integer_distribution,
     _sample_hourly_placement_seconds,
 )
 from evidenceforge.generation.engine.baseline import BaselineMixin
-from evidenceforge.generation.timing import TimingRuntime, TriangularDistribution
+from evidenceforge.generation.timing import (
+    TimingRuntime,
+    TriangularDistribution,
+    uniform_distribution,
+)
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import generation_seed_scope
 
 _PATTERNS = tuple(_HOURLY_PLACEMENT_MAX_SECONDS)
 _HOUR = datetime(2026, 2, 3, 14, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("interleave", [False, True])
+def test_macos_noise_drains_authored_work_before_materializing_its_future_shell(
+    monkeypatch: pytest.MonkeyPatch, interleave: bool
+) -> None:
+    user = User(username="alex", full_name="Alex Example", email="alex@example.test")
+    system = System(hostname="MAC-01", ip="192.0.2.10", os="macOS 27", type="workstation")
+    baseline = BaselineMixin()
+    baseline.scenario = SimpleNamespace(
+        baseline_activity=SimpleNamespace(suspicious_noise="low"),
+        environment=SimpleNamespace(users=[user], systems=[system], domain="example.test"),
+        personas=[],
+    )
+    calls: list[tuple[str, datetime]] = []
+    baseline.activity_generator = SimpleNamespace(
+        timing_runtime=TimingRuntime(reference_time=_HOUR, namespace="noise-authored-frontier"),
+        generate_process=lambda **kwargs: calls.append(("process", kwargs["time"])) or 1234,
+    )
+    baseline._baseline_pass_end = lambda _hour: _HOUR + timedelta(hours=1)
+    baseline._baseline_pass_is_terminal = lambda _hour: False
+    baseline._baseline_pass_admits = lambda *_args, **_kwargs: True
+    baseline._align_rsat_with_future_workstation_session = lambda _user, _system, at, *_args: at
+    baseline._ensure_session_on_system = lambda *_args, **_kwargs: "session-test"
+    baseline._schedule_foreground_process_termination = lambda **_kwargs: None
+    baseline._execute_authored_events_for_hour = lambda _hour, through: calls.append(
+        ("authored", through)
+    )
+    monkeypatch.setattr(baseline_module, "get_suspicious_event_count", lambda *_args: 1)
+    monkeypatch.setattr(
+        baseline_module, "pick_suspicious_pattern", lambda *_args: {"type": "suspicious_cli"}
+    )
+    with generation_seed_scope(42):
+        baseline._generate_suspicious_noise(_HOUR, interleave_authored=interleave)
+    assert [name for name, _time in calls] == (
+        ["authored", "process"] if interleave else ["process"]
+    )
+    if interleave:
+        assert calls[0][1] == calls[1][1]
 
 
 def _environment() -> tuple[list[User], list[System]]:
@@ -71,14 +117,14 @@ def _placement_population(
     order: tuple[int, ...],
     *,
     workers: int,
-) -> tuple[dict[str, int], dict[str, int]]:
+) -> tuple[dict[str, float], dict[str, int]]:
     runtime = TimingRuntime(
         reference_time=_HOUR,
         namespace="suspicious-benign-placement-parity",
     )
     users, systems = _environment()
 
-    def generate(index: int) -> tuple[str, int]:
+    def generate(index: int) -> tuple[str, float]:
         pattern = _PATTERNS[index]
         generator = getattr(suspicious_benign, f"generate_{pattern}")
         args: list[Any] = [
@@ -95,7 +141,7 @@ def _placement_population(
             100 + index,
         )
         assert result is not None
-        return pattern, int((result["time"] - _HOUR).total_seconds())
+        return pattern, (result["time"] - _HOUR).total_seconds()
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         placements = dict(executor.map(generate, order))
@@ -112,11 +158,30 @@ def test_all_nine_placements_are_owner_audited_and_order_independent() -> None:
     placements, sample_counts = forward
     assert set(placements) == set(_PATTERNS)
     assert all(
-        0 <= placements[name] <= maximum for name, maximum in _HOURLY_PLACEMENT_MAX_SECONDS.items()
+        0 <= placements[name] < maximum + 1
+        for name, maximum in _HOURLY_PLACEMENT_MAX_SECONDS.items()
     )
     assert sample_counts == {
         f"suspicious_benign.{pattern}.hourly_placement": 1 for pattern in _PATTERNS
     }
+
+
+def test_hourly_placement_has_no_second_or_millisecond_atoms() -> None:
+    runtime = TimingRuntime(reference_time=_HOUR, namespace="continuous-hour-placement")
+    values = [
+        _sample_hourly_placement_seconds(
+            pattern="suspicious_cli",
+            hostname="MAC-01",
+            current_hour=_HOUR,
+            timing_runtime=runtime,
+            timing_ordinal=ordinal,
+        )
+        for ordinal in range(2000)
+    ]
+    assert all(0 < value < 3600 for value in values)
+    assert len(set(values)) == len(values)
+    assert sum(value.is_integer() for value in values) < len(values) // 100
+    assert sum(round(value * 1_000_000) % 1000 == 0 for value in values) < len(values) // 100
 
 
 class _EdgeSampler:
@@ -124,31 +189,31 @@ class _EdgeSampler:
         self._upper = upper
         self.requests: list[tuple[str, Any, str]] = []
 
-    def sample_value(
+    def sample_timedelta(
         self,
         distribution: Any,
         *,
         relationship_key: str,
         scope: Any,
         sample_key: str,
-    ) -> float:
+    ) -> timedelta:
         self.requests.append((relationship_key, scope, sample_key))
         components = distribution.components
         triangles = tuple(component.distribution for component in components)
         assert all(isinstance(item, TriangularDistribution) for item in triangles)
         if self._upper:
-            return max(item.maximum for item in triangles) - 0.000001
-        return min(item.minimum for item in triangles) + 0.000001
+            return timedelta(microseconds=max(item.maximum for item in triangles) - 1)
+        return timedelta(microseconds=min(item.minimum for item in triangles) + 1)
 
 
-def test_prior_inclusive_support_and_scope_axes_are_exact() -> None:
-    """The migrated distributions retain both legacy support edges and all identity axes."""
+def test_continuous_second_buckets_and_scope_axes_are_exact() -> None:
+    """Placement retains the former second buckets without quantizing to their starts."""
 
     for pattern, maximum in _HOURLY_PLACEMENT_MAX_SECONDS.items():
-        distribution = _inclusive_integer_distribution(0, maximum)
+        distribution = uniform_distribution(0, (maximum + 1) * 1_000_000)
         triangles = tuple(component.distribution for component in distribution.components)
-        assert all(item.minimum == -0.5 for item in triangles)
-        assert all(item.maximum == maximum + 0.5 for item in triangles)
+        assert all(item.minimum == 0 for item in triangles)
+        assert all(item.maximum == (maximum + 1) * 1_000_000 for item in triangles)
         lower_sampler = _EdgeSampler(upper=False)
         upper_sampler = _EdgeSampler(upper=True)
         common = {
@@ -162,14 +227,14 @@ def test_prior_inclusive_support_and_scope_axes_are_exact() -> None:
                 timing_runtime=SimpleNamespace(sampler=lower_sampler),
                 **common,
             )
-            == 0
+            == 0.000001
         )
         assert (
             _sample_hourly_placement_seconds(
                 timing_runtime=SimpleNamespace(sampler=upper_sampler),
                 **common,
             )
-            == maximum
+            == maximum + 1 - 0.000001
         )
         relationship, scope, sample_key = upper_sampler.requests[0]
         assert relationship == f"suspicious_benign.{pattern}.hourly_placement"
@@ -242,7 +307,7 @@ def test_placements_are_pythonhashseed_deterministic() -> None:
         """
         import json
         import random
-        from datetime import UTC, datetime
+        from datetime import UTC, datetime, timedelta
 
         from evidenceforge.generation.activity.suspicious_benign import (
             _HOURLY_PLACEMENT_MAX_SECONDS,
@@ -270,7 +335,7 @@ def test_placements_are_pythonhashseed_deterministic() -> None:
             if pattern in {"suspicious_cli", "unusual_powershell"}:
                 args.append("example.test")
             event = generator(*args, runtime, 100 + index)
-            result[pattern] = int((event["time"] - hour).total_seconds())
+            result[pattern] = (event["time"] - hour).total_seconds()
         print(json.dumps(result, sort_keys=True))
         """
     )

@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal
 
 from evidenceforge.generation.timing import (
     ConstantDistribution,
@@ -16,6 +18,7 @@ from evidenceforge.generation.timing import (
     TruncatedLognormalDistribution,
     TruncatedNormalDistribution,
     WeightedDistribution,
+    uniform_distribution,
 )
 
 STORYLINE_EVENT_JITTER_SECONDS = 30
@@ -26,6 +29,44 @@ class StorylineTimingPlanner:
     """Sample canonical storyline timing from one shared stateless runtime."""
 
     runtime: TimingRuntime
+
+    def place_event(
+        self,
+        nominal_time: datetime,
+        *,
+        event_id: str,
+        host: str,
+        section: Literal["storyline", "red_herring"],
+    ) -> datetime:
+        """Place an authored action through the shared scoped microsecond sampler.
+
+        Retain the authored jitter policy's broad offset plus subsecond phase.
+        The semantic event identity makes interleaved and batch execution agree.
+        """
+        scope = TimingScope(
+            stable_id=event_id,
+            host=host,
+            source=section,
+            lifecycle_id=nominal_time.isoformat(),
+        )
+        relationship = f"{section}.event.placement"
+        preferred = self.runtime.sampler.after(
+            nominal_time,
+            uniform_distribution(
+                -STORYLINE_EVENT_JITTER_SECONDS * 1_000_000,
+                STORYLINE_EVENT_JITTER_SECONDS * 1_000_000,
+            ),
+            relationship_key=relationship,
+            scope=scope,
+            sample_key="jitter",
+        )
+        return self.runtime.sampler.after(
+            preferred,
+            uniform_distribution(0, 1_000_000),
+            relationship_key=relationship,
+            scope=scope,
+            sample_key="fractional_phase",
+        )
 
     def _scope(
         self,

@@ -6,9 +6,6 @@ on:
       source-ref:
         type: string
         default: ''
-  push:
-    branches:
-      - codex/studio-windows-x86_64
 permissions:
   contents: read
   actions: read

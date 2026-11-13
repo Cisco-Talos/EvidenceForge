@@ -38,8 +38,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   inputs:
-    # Temporary: this draft branch iterates through Windows Studio Preview only.
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'dev' && github.head_ref == 'codex/studio-windows-x86_64' && github.event.pull_request.draft) }}
     name: CI input identity
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -63,8 +61,6 @@ jobs:
         id: identity
         run: uv run --no-sync python -m scripts.ci_evidence identity
   lint:
-    # Temporary: this draft branch iterates through Windows Studio Preview only.
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'dev' && github.head_ref == 'codex/studio-windows-x86_64' && github.event.pull_request.draft) }}
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -355,8 +351,6 @@ jobs:
       group: eforge-${{ needs.inputs.outputs.digest }}-studio-${{ matrix.os }}
       queue: max
   studio-state-recovery:
-    # Temporary: this draft branch iterates through Windows Studio Preview only.
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'dev' && github.head_ref == 'codex/studio-windows-x86_64' && github.event.pull_request.draft) }}
     name: Studio state recovery (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -439,7 +433,7 @@ jobs:
       - windows-checkpoint-durability
       - inputs
       - coverage
-    if: always() && !(github.event_name == 'pull_request' && github.base_ref == 'dev' && github.head_ref == 'codex/studio-windows-x86_64' && github.event.pull_request.draft)
+    if: always()
     steps:
       - name: Check required jobs
         run: |

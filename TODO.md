@@ -74,8 +74,8 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 - [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
   NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
-  on `codex/studio-windows-x86_64` (draft PR #477). Installed verification and native
-  Mac/Linux regression/package gates pass; release publication remains separate. See the
+  through PR #477. Installed verification and native regression/package evidence
+  are recorded separately from pending desktop acceptance; publication remains separate. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
 - [ ] **P2 — Opt-in Windows clean uninstall (next installer build):** Preserve data
@@ -87,12 +87,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   profile. Verify both scopes and fresh-install behavior. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
-- [ ] **P2 — Studio slow-start and shutdown handling (next installer batch):** Avoid
-  reporting a startup failure while a verified helper is still initializing;
-  retain bounded waits, progress, ownership checks and single-helper behavior.
-  Record startup phase timings and close idle event sockets cooperatively before
-  shutdown deadlines. Cover delayed startup, reconnect, dead helpers and idle
-  socket shutdown on native platforms. See the
+- [x] **P2 — Studio slow-start and shutdown handling:** Implemented bounded Windows
+  startup waits, prompt dead-helper handling, private startup phase timings and
+  cooperative idle event-socket shutdown, with native regression coverage. Laptop
+  startup timing remains part of desktop acceptance. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
 - [ ] **P2 — Complete deep Windows workspace path qualification:** The output/
@@ -109,6 +107,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   This preview excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+- [ ] **P1 — Evaluate Mac ES JSON key-order variation internally:** Prototype simple,
+  reproducible collector-scoped ordering generated and cached from schema keys.
+  Measure serialization and end-to-end performance against its raw-log training
+  value, then decide whether to adopt it. Avoid a maintained native-permutation
+  catalog; preserve values, array/entitlement order, filtering and exact recovery.
+  This evaluation is separate from slash escaping; no contributor ordering PR is needed.
+  See the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
 
 Source-aware ground truth, deterministic agreement scoring and action-specific visibility
 validation are implemented on `codex/ground-truth-reconciliation`; source exclusions now retain
@@ -546,6 +551,39 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1 — Canonical shell execution and completion model:** Replace the temporary
+  unlisted natural-completion success assumption with canonical shell outcomes.
+  Implement bounded parsing with correct quoting/escaping,
+  command-list/conditional/pipeline execution, canonical
+  process outcomes and shell-result propagation. Use overlay-capable YAML behavior
+  overrides over declared default outcomes and varied durations, respecting known
+  failures, builtins, persistent processes, source qualification and exact recovery.
+  A conservative simple-command fast path may share the tokenizer. Apply the same
+  contracts to baseline and authored producers; avoid command-specific completion
+  patches for the reproduced missing ES exits. User accepted the direction; detailed
+  grammar scope is in the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
+
+- [ ] **P2 — Native Mac filesystem stat realism:** Qualify protected-file flags and
+  package timestamp provenance, initial directory populations and link-count changes,
+  and required volume/device relationships through canonical filesystem providers.
+  Split small metadata/state fixes from broader sealed/data-volume modeling. User
+  wants bounded contributions; see the [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
+- [ ] **P2 — Define Mac audit-version host-history requirements:** Internal investigation
+  confirms that PID allocation includes hidden boot/activity churn while published
+  audit versions count only explicit modeled allocations. Discuss the shared-history
+  model with the contributor before implementation. Preserve chronological fork/exec
+  identity, parent/responsible references, filtering and exact recovery; avoid numerical
+  PID/version invariants or emitter offsets. The separately reproduced fork-time
+  artifact was repaired in the shared timing path. See the same Issue 478 review.
+- [ ] **P2 — Bounded Mac ES open/write coverage:** Define canonical file/descriptor
+  producers, mutations, timing and observation scope before adding native open/write
+  projections. Opening does not establish a read; notifications do not supply byte
+  counts. User wants a scoped contribution; see the same Issue 478 review.
+- [ ] **P2 — Mac ES BTM and session-event projections:** Scope independent BTM,
+  OpenSSH connection-level login/logout and graphical loginwindow session slices
+  over their canonical owners, with version-qualified native references and
+  correlation/recovery gates. User wants contributor PRs; see the same Issue 478 review.
+
 - [ ] **P2 — Revamp OS-family modeling and classification:** Evaluate an explicit typed
   OS-family field in the scenario/system schema, retaining OS name/version/build as
   descriptive metadata and an intentional category for network appliances/other systems.
@@ -845,6 +883,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   analyze-output.
 - [ ] Example scenario collection for ransomware, credential stuffing, and
   insider threat.
+- [ ] Design easier delivery and discovery of example scenarios, including Studio.
+  Contributed exercises belong under the existing `scenarios/` directory for now;
+  repository examples are not a bundled installer library. See the
+  [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
 - [ ] Config file inheritance/templating.
 - [ ] Overlay `_replace: true` recursive propagation for nested lists.
 - [ ] Overlay `_delete: true` for removing built-in entries.

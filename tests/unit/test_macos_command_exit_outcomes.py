@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Invented command completions preserve known results without success defaults."""
+"""Canonical command completion preserves explicit truth and scoped model defaults."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -213,21 +213,17 @@ def test_nominal_command_completion_commits_one_known_exit(
         assert exits[0].process.executable.path == process.image
 
 
-@pytest.mark.parametrize(
-    "reason", ["teardown", "extra_arguments", "legacy_policy", "deadline", "hold"]
-)
+@pytest.mark.parametrize("reason", ["teardown", "legacy_policy", "deadline", "hold"])
 def test_unspecified_or_truncated_completion_remains_unknown(
     tmp_path: Path, scenarios_dir: Path, reason: str
 ) -> None:
     with _engine(tmp_path, scenarios_dir) as fixture:
         engine, target, user, session = fixture
-        process, at = _launch(
-            fixture, "/usr/bin/id -u" if reason == "extra_arguments" else "/usr/bin/id"
-        )
+        process, at = _launch(fixture)
         if reason == "legacy_policy":
             engine.macos_execution_metadata.profile = (
                 engine.macos_execution_metadata.profile.model_copy(
-                    update={"command_completions": ()}
+                    update={"command_completions": (), "assume_unlisted_command_success": False}
                 )
             )
         if reason == "deadline":
@@ -250,6 +246,84 @@ def test_unspecified_or_truncated_completion_remains_unknown(
             is None
         )
     assert _native_exits(tmp_path, process.pid) == []
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/bin/id -u",
+        "/bin/zsh -c 'id; groups'",
+        "/bin/zsh -c 'ls -la ~/Library/LaunchAgents'",
+    ],
+)
+def test_unlisted_natural_completion_supplies_canonical_success_without_changing_lookup(
+    tmp_path: Path, scenarios_dir: Path, native: bool, command: str
+) -> None:
+    with _engine(tmp_path, scenarios_dir, native=native) as fixture:
+        engine, target, user, session = fixture
+        process, at = _launch(fixture, command)
+        provider = engine.macos_execution_metadata
+        assert provider.command_completion(process, at) is None
+        if process.image == "/usr/bin/id":
+            assert provider.ordinary_close(process, at, owner="session") is None
+        engine.activity_generator.generate_process_termination(
+            user,
+            target,
+            at,
+            process.pid,
+            process.image,
+            session.logon_id,
+            macos_command_completed=True,
+        )
+        ended = engine.state_manager._ended_processes_by_object_id[process.object_id]
+        assert ended.exit_outcome == PosixProcessExit(exit_code=0)
+        restored = type(engine.state_manager)()
+        _restore_head(restored, _capture_head(engine.state_manager))
+        assert restored._ended_processes_by_object_id[process.object_id].exit_outcome == (
+            ended.exit_outcome
+        )
+    exits = _native_exits(tmp_path, process.pid)
+    assert len(exits) == int(native)
+    if native:
+        assert exits[0].event.exit.stat == 0
+
+
+def test_matching_completion_rule_precedes_unlisted_success_assumption(
+    tmp_path: Path, scenarios_dir: Path
+) -> None:
+    configured_code = 7
+    with _engine(tmp_path, scenarios_dir) as fixture:
+        engine, target, user, session = fixture
+        process, at = _launch(fixture, "/usr/bin/id -u")
+        provider = engine.macos_execution_metadata
+        provider.profile = provider.profile.model_copy(
+            update={
+                "command_completions": (
+                    MacosCommandCompletionPolicy(
+                        arguments=process.arguments,
+                        exit_code=configured_code,
+                    ),
+                ),
+            }
+        )
+        engine.activity_generator.generate_process_termination(
+            user,
+            target,
+            at,
+            process.pid,
+            process.image,
+            session.logon_id,
+            macos_command_completed=True,
+        )
+        expected = PosixProcessExit(exit_code=configured_code)
+        assert (
+            engine.state_manager._ended_processes_by_object_id[process.object_id].exit_outcome
+            == expected
+        )
+    exits = _native_exits(tmp_path, process.pid)
+    assert len(exits) == 1
+    assert exits[0].event.exit.stat == configured_code << 8
 
 
 @pytest.mark.parametrize("outcome", [PosixProcessExit(exit_code=7), PosixProcessExit(signal=15)])
@@ -358,6 +432,8 @@ def test_old_profile_preserves_unknown_and_duplicate_invocations_are_rejected() 
     )
 
     raw = load_macos_execution_metadata_profile().model_dump()
+    del raw["assume_unlisted_command_success"]
+    assert not MacosExecutionMetadataProfile.model_validate(raw).assume_unlisted_command_success
     del raw["command_completions"]
     assert MacosExecutionMetadataProfile.model_validate(raw).command_completions == ()
     rule = {"arguments": ["/usr/bin/id"], "exit_code": 0}
@@ -442,7 +518,14 @@ def test_query_policy_does_not_borrow_unknown_or_replaced_execution_facts(
                 ),
             ),
         ]
-        assert all(provider.command_completion(identity, at) is None for identity in alternatives)
+        for identity in alternatives:
+            assert provider.command_completion(identity, at, allow_unlisted_success=True) is None
+        assert (
+            provider.command_completion(
+                process, at, connection_failed=True, allow_unlisted_success=True
+            )
+            is None
+        )
 
 
 @pytest.mark.parametrize(

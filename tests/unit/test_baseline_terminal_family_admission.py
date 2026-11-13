@@ -1937,6 +1937,8 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
     baseline._get_user_persona = lambda _user: None
     monkeypatch.setattr(baseline_module, "_get_rng", SelectionRng)
 
+    baseline.scenario.storyline = []
+    baseline.scenario.red_herrings = []
     baseline._generate_user_activity(
         user,
         end_time - timedelta(seconds=90),

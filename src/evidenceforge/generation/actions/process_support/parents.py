@@ -121,7 +121,14 @@ class ProcessParentResolver:
         """Select or request the canonical local shell; SSH retains its own startup owner."""
         if parent_pid not in {0, 4} and self.queries._is_pid_active_at(system, parent_pid, time):
             parent = self.state_manager.get_process(system.hostname, parent_pid)
-            if parent is not None and (not parent.logon_id or parent.logon_id == logon_id):
+            if (
+                parent is not None
+                and (not parent.logon_id or parent.logon_id == logon_id)
+                and (
+                    materialize_shell
+                    or ensure_utc(parent.executed_at or parent.start_time) <= ensure_utc(time)
+                )
+            ):
                 return parent_pid
         session = self.state_manager.get_session(logon_id) if logon_id else None
         ssh_session = session is not None and session.session_kind == "ssh"
@@ -139,6 +146,14 @@ class ProcessParentResolver:
                     and bound.image in {"/bin/zsh", "/bin/bash"}
                     and bound.execution_ordinal > 0
                     and bound.end_time is None
+                    and (
+                        materialize_shell
+                        or (
+                            self.queries._is_pid_active_at(system, bound.pid, time)
+                            and ensure_utc(bound.executed_at or bound.start_time)
+                            <= ensure_utc(time)
+                        )
+                    )
                 ):
                     # A just-completed startup may be ahead of the request. The
                     # launch scheduler consumes its execution-readiness boundary.
@@ -148,6 +163,10 @@ class ProcessParentResolver:
                     process.system == system.hostname
                     and process.image in {"/bin/zsh", "/bin/bash"}
                     and self.queries._is_pid_active_at(system, process.pid, time)
+                    and (
+                        materialize_shell
+                        or ensure_utc(process.executed_at or process.start_time) <= ensure_utc(time)
+                    )
                 ):
                     return process.pid
             if (

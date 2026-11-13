@@ -18,16 +18,19 @@ from tests.support.output_equivalence import deterministic_bundle_files
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("launch", ["local", "ssh", "occupied_local"])
+@pytest.mark.parametrize("launch", ["local", "ssh", "released_local", "occupied_local"])
 def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
     tmp_path: Path, scenarios_dir: Path, launch: str
 ) -> None:
-    scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(
-        mode="json", exclude_none=True
-    )
+    scenario = macos_ssh_scenario(
+        scenarios_dir, macos_receiver=True, authored_close=launch == "occupied_local"
+    ).model_dump(mode="json", exclude_none=True)
     scenario["time_window"]["duration"] = "25m"
     scenario["output"]["logs"].append({"format": "macos_endpoint_security"})
     hostname = "SSH-TEST" if launch == "ssh" else "TEST-01"
+    # An authored +30m close keeps SSH in the foreground past the +25m
+    # collection boundary. Do not depend on a sampled duration to make the
+    # occupied-shell negative control impossible to serialize inside the window.
     if launch == "local":
         # The SSH client occupies this local shell until its remote session closes.
         # Test local commands without simultaneously handing that shell to SSH.
@@ -96,13 +99,13 @@ def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
     ]
     assert len(accepted) == len(MACOS_NATIVE_QUERY_COMMANDS)
     assert all(event["emitted"] and event["attributes"]["pid"] > 0 for event in accepted)
-    native = [
-        record["event"]["exec"]
+    records = [
+        json.loads(line)
         for path in (output / "data").rglob("macos_endpoint_security.ndjson")
         if any(part == hostname or part.startswith(f"{hostname}.") for part in path.parts)
         for line in path.read_text().splitlines()
-        if (record := json.loads(line))["event_type"] == 9
     ]
+    native = [record["event"]["exec"] for record in records if record["event_type"] == 9]
     for event in accepted:
         matches = [
             execution
@@ -111,6 +114,28 @@ def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
             and execution["target"]["executable"]["path"] == event["attributes"]["process_name"]
         ]
         assert len(matches) == 1, event["storyline_id"]
+    if launch == "released_local":
+        clients = [
+            execution
+            for execution in native
+            if execution["target"]["executable"]["path"] == "/usr/bin/ssh"
+            and any("@SSH-TEST" in argument for argument in execution["args"])
+        ]
+        assert len(clients) == 1
+        client_ends = [
+            record
+            for record in records
+            if record["event_type"] == 15
+            and record["process"]["audit_token"] == clients[0]["target"]["audit_token"]
+        ]
+        assert len(client_ends) == 1
+        accepted_pids = {event["attributes"]["pid"] for event in accepted}
+        assert all(
+            record["time"] > client_ends[0]["time"]
+            for record in records
+            if record["event_type"] == 9
+            and record["event"]["exec"]["target"]["audit_token"]["pid"] in accepted_pids
+        )
     host = next(
         item for item in truth["macos_native_coverage"]["hosts"] if item["hostname"] == hostname
     )

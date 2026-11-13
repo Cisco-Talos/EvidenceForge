@@ -1171,3 +1171,34 @@ Native Windows preview now includes the world-model/process-lifetime gates so
 both deployment paths and delayed close ownership run on the target OS. Native
 installer requalification is pending. Product versions, storage schemas, signatures,
 release tags, publication and the separate clean-uninstall task remain unchanged.
+
+### Integration into dev and next-morning installer
+
+On November 12 the user authorized integration into dev with remaining desktop
+acceptance and the separate ground-truth finding explicitly open, and requested
+monitoring the PRs through merge plus a fresh verified Windows installer from dev.
+Related PRs #480, #481 and #482 are already merged; #477 is the remaining open PR.
+Merge origin/dev 15a415a9 into the Windows branch without changing the user's other
+checkout. Resolve roadmap and workflow-test additions by retaining both branches.
+Remove the temporary draft-only full-CI guard and replace its test with the normal
+integration-gate contract. Preserve the newer dev evaluator memory/release policy.
+
+Dev owns behavior revisions 510–512; append the five Windows behavior entries as
+513–517 to retain one sequential integrated history. This changes branch-local
+revision numbering only, not product or storage versions. Integrated complete
+behavior digest: 45b45f516bb490fb7e1d4ddb8def0108e56f04175acc97828fe265d3b2c252d8.
+Combine both branches' removed direct-RNG calls: 192 selectors, 353 calls remain;
+do not restore dummy draws or loosen the census. Native qualification of 51629cd7
+continues while local integration is prepared; the integrated snapshot needs its
+own checks. Installer publication/release tags remain outside this authorization.
+
+Remove the obsolete feature-branch push trigger from Windows Studio Preview;
+retain its manual/reusable entry points and Installer Builds Windows selection.
+This ends draft iteration mode and avoids duplicating the all-platform integration
+installer run. Normal CI, source recovery and preview artifact qualification remain
+required; the in-flight pre-integration Windows run is not canceled by a new push.
+
+Local integration validation passes 283 focused workflow/behavior/world/process/
+Mac foreground and timing tests, all three slow temporal-policy checks, all 32
+workflow contracts after removing the branch trigger, Ruff/formatting and exact
+behavior/version checks. The locked merged dependency updates are installed.

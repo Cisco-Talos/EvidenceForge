@@ -190,13 +190,21 @@ class MacosExecutionMetadataProducer:
         self._known_until = window_end
 
     def command_completion(
-        self, process: ProcessIdentity, at: datetime, *, connection_failed: bool = False
+        self,
+        process: ProcessIdentity,
+        at: datetime,
+        *,
+        connection_failed: bool = False,
+        allow_unlisted_success: bool = False,
     ) -> PosixProcessExit | None:
         """Select declared nominal truth for an exact first command execution.
 
         The completion owner must separately prove a natural bounded close.
         Neither successful exec nor a matching display command establishes a result.
         Later image replacements and unspecified/frozen legacy policies stay unknown.
+        The natural-completion owner alone may request the profile's temporary
+        unlisted-success assumption. Ordinary-close classification remains an exact
+        policy lookup. A matching rule with an unknown result remains unknown.
         """
         if (
             process.execution_ordinal != 1
@@ -241,6 +249,12 @@ class MacosExecutionMetadataProducer:
                 for pattern, value in zip(patterns, process.arguments, strict=True)
             ):
                 return PosixProcessExit(exit_code=code) if code is not None else None
+        if (
+            allow_unlisted_success
+            and self.profile.assume_unlisted_command_success
+            and not connection_failed
+        ):
+            return PosixProcessExit(exit_code=0)
         return None
 
     def command_environment(

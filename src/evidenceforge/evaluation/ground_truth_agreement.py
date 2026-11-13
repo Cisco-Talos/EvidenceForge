@@ -1346,7 +1346,13 @@ def evaluate_ground_truth(
             ):
                 from evidenceforge.evaluation.source_timing_proof import verify_process_timing
 
-                proof_errors = verify_process_timing(row, expectation, index, timing_points)
+                proof_errors = verify_process_timing(
+                    row,
+                    expectation,
+                    index,
+                    timing_points,
+                    collection_start=scenario.time_window.start,
+                )
                 if (
                     contract is not None
                     and "process_timing" in contract.source_rules

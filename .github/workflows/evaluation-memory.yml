@@ -1,0 +1,63 @@
+name: Evaluation Memory
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - .github/workflows/evaluation-memory.yml
+      - .github/workflows/release-slow.yml
+      - .github/workflows/release.yml
+      - scripts/check_evaluation_memory.py
+      - tests/fixtures/eval/memory-workloads.yaml
+      - src/evidenceforge/evaluation/**
+      - pyproject.toml
+      - uv.lock
+  workflow_call:
+    inputs:
+      source-ref:
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      calibrate:
+        description: Collect measurements without enforcing candidate envelopes
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  memory:
+    name: Evaluation memory (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - name: Preserve fixture bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+      - name: Measure fixed evaluation workloads
+        run: uv run --no-sync python -m scripts.check_evaluation_memory --output-dir ci-memory ${{ github.event_name == 'workflow_dispatch' && inputs.calibrate && '--measure-only' || '' }}
+      - name: Retain resource diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: evaluation-memory-${{ matrix.os }}
+          path: |
+            ci-memory/measurements.json
+            ci-memory/**/worker.stderr
+          if-no-files-found: error
+          retention-days: 14

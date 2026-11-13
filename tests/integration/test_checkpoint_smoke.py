@@ -882,6 +882,9 @@ def test_short_generation_checkpoint_suspension_and_resume(
             and not persistence
             and not native
             and not native_system_job
+            # Finder launches are GUI activity; incidental baseline sampling
+            # need not produce a shell-history file for this workload.
+            and not finder
         ):
             assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
