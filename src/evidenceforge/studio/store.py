@@ -473,9 +473,9 @@ class StudioStore:
                             break
             item = CatalogItem(
                 id=old.id if old else uuid4().hex,
-                workspace=workspace,
+                workspace=Path(workspace_key),
                 kind=kind,
-                path=source.path,
+                path=Path(path_key),
                 name=source.name,
                 display_name=source.display_name,
                 description=source.description,
@@ -538,10 +538,12 @@ class StudioStore:
 
     def save_imported_bundle(self, bundle: ImportedBundle) -> ImportedBundle:
         """Keep one stable identity for each workspace-local external bundle path."""
+        bundle.workspace = bundle.workspace.resolve()
+        bundle.root = bundle.root.resolve()
         with self._lock, self._db:
             row = self._db.execute(
                 "SELECT id FROM imported_bundles WHERE workspace=? AND root=?",
-                (str(bundle.workspace.resolve()), str(bundle.root.resolve())),
+                (str(bundle.workspace), str(bundle.root)),
             ).fetchone()
             if row:
                 bundle.id = row["id"]
@@ -550,8 +552,8 @@ class StudioStore:
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (
                     bundle.id,
-                    str(bundle.workspace.resolve()),
-                    str(bundle.root.resolve()),
+                    str(bundle.workspace),
+                    str(bundle.root),
                     bundle.model_dump_json(),
                 ),
             )
@@ -595,6 +597,8 @@ class StudioStore:
 
     def save_item(self, item: CatalogItem) -> None:
         """Update GUI metadata without rewriting an authored file."""
+        item.workspace = item.workspace.resolve()
+        item.path = item.path.resolve()
         with self._lock, self._db:
             self._db.execute(
                 "UPDATE items SET payload=? WHERE id=?", (item.model_dump_json(), item.id)
@@ -800,13 +804,14 @@ class StudioStore:
 
     def save_project(self, project: Project) -> None:
         """Create or update a project, enforcing unique names per workspace."""
+        project.workspace = project.workspace.resolve()
         with self._lock, self._db:
             self._db.execute(
                 "INSERT INTO projects(id, workspace, name, payload) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name, payload=excluded.payload",
                 (
                     project.id,
-                    str(project.workspace.resolve()),
+                    str(project.workspace),
                     project.name,
                     project.model_dump_json(),
                 ),
@@ -1073,13 +1078,14 @@ class StudioStore:
 
     def save_conversation(self, conversation: Conversation) -> None:
         """Persist a conversation independently of its selected UI view."""
+        conversation.workspace = conversation.workspace.resolve()
         with self._lock, self._db:
             self._db.execute(
                 "INSERT INTO conversations(id, workspace, item_id, payload) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET item_id=excluded.item_id, payload=excluded.payload",
                 (
                     conversation.id,
-                    str(conversation.workspace.resolve()),
+                    str(conversation.workspace),
                     conversation.item_id,
                     conversation.model_dump_json(),
                 ),

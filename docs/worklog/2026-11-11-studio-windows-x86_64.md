@@ -1879,3 +1879,35 @@ still runs that older version's cleanup implementation. The precise old chat
 WinError 6, the laptop's cleanup ACL path/principal, genuine Windows 11 dual-scope/
 UAC/alternate-account acceptance and P0 evidence-disagreement repairs remain open.
 No PR, release, tag or version bump is created; full CI remains deferred as requested.
+
+### Startup record identity rejected an equivalent Windows drive (November 13)
+
+The user tests installer ac14928c and gets Studio record identity mismatch in items,
+with database/settings/private-layout versions already equal to 3/4/1. A user-run
+read-only inspection of a temporary SQLite/WAL copy identifies exactly 14 mismatches:
+11 items and 3 conversations have SQL workspace C:\Users\david\EvidenceForge but
+JSON workspace c:\Users\david\EvidenceForge. Their IDs and the inspected item kind/
+source paths match. This is our writer/reader inconsistency, not an invalid Windows
+path, a required upgrade or proof of damage caused by the earlier workspace move.
+Do not delete/reset state or require the user to rewrite their database.
+
+The store resolves workspace/source paths for indexed SQL columns but previously
+serialized the original spelling in the JSON model. Resolve once into the model
+before serialization for items, projects, conversations and imported bundles; use
+that same value in the indexed columns. This also prevents the same split with
+noncanonical input paths on POSIX. Preserve schema versions, stable IDs and content.
+The reader recognizes only an absolute Windows drive-letter case alias in path
+projections. It performs no path resolution or record rewrites during inspection;
+historical workspace paths may be absent. Keep directory/file casing, other drives,
+relative paths, UNC namespaces, IDs, names and kinds strict. POSIX comparisons are
+unchanged. Accepting C: versus c: does not bypass permissions or ownership checks.
+
+Add portable negative identity cases and a write/reopen projection regression, plus
+native Windows preservation/reopen and actual create_app restart cases with legacy
+lowercase workspace payloads. The native read-only inspection compares authoritative
+database digests and verifies saved IDs/metadata survive; a different record ID still
+fails. Include this small test file in opt-in build-only native diagnostics, keeping
+full acceptance disabled. The local focused state/search/source-recovery/pack-identity
+and contract gate passes 128 tests with one native skip in 36.78 seconds; subsequent
+added edge/startup cases and native results are recorded with the next build below.
+Ruff and formatting checks pass. No laptop database or ACL is edited remotely.

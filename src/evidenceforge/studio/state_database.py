@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import closing
@@ -246,6 +247,27 @@ def inspect_database(path: Path) -> int:
     return version
 
 
+def _same_record_path(left: object, right: object, *, windows: bool) -> bool:
+    """Recognize only an absolute Windows drive-letter case alias, without I/O.
+
+    Directory/file spelling, namespaces and non-path identity fields stay strict.
+    Do not resolve stored paths: historical workspaces may no longer exist.
+    """
+    if left == right:
+        return True
+    return (
+        windows
+        and isinstance(left, str)
+        and isinstance(right, str)
+        and len(left) >= 3
+        and len(right) >= 3
+        and left[0] in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        and left[1:3] == ":\\"
+        and left[0].swapcase() == right[0]
+        and left[1:] == right[1:]
+    )
+
+
 def validate_records(connection: sqlite3.Connection) -> None:
     """Check authoritative records without persisting defaults or regenerating identity."""
     from evidenceforge.studio.state_records_v1 import (
@@ -298,7 +320,9 @@ def validate_records(connection: sqlite3.Connection) -> None:
             row = dict(zip(names, values, strict=True))
             payload = decode_record(row["payload"], table)
             if table in {"items", "projects", "conversations", "imported_bundles"}:
-                if payload.get("id") != row["id"] or payload.get("workspace") != row["workspace"]:
+                if payload.get("id") != row["id"] or not _same_record_path(
+                    payload.get("workspace"), row["workspace"], windows=os.name == "nt"
+                ):
                     raise StudioStateError(f"Studio record identity mismatch in {table}")
             for field in {
                 "items": ("kind", "path"),
@@ -306,7 +330,12 @@ def validate_records(connection: sqlite3.Connection) -> None:
                 "imported_bundles": ("root",),
                 "views": ("name",),
             }.get(table, ()):
-                if payload.get(field) != row[field]:
+                same = (
+                    _same_record_path(payload.get(field), row[field], windows=os.name == "nt")
+                    if field in {"path", "root"}
+                    else payload.get(field) == row[field]
+                )
+                if not same:
                     raise StudioStateError(f"Studio record projection mismatch in {table}")
             if table in {"projects", "conversations"}:
                 timestamp = payload.get("updated_at")
@@ -319,7 +348,12 @@ def validate_records(connection: sqlite3.Connection) -> None:
             model.model_validate(payload)
             if table.startswith("chat_"):
                 for key in ("id", "conversation_id", "workspace"):
-                    if key in row and payload.get(key) != row[key]:
+                    same = (
+                        _same_record_path(payload.get(key), row.get(key), windows=os.name == "nt")
+                        if key == "workspace"
+                        else payload.get(key) == row.get(key)
+                    )
+                    if key in row and not same:
                         raise StudioStateError(f"Studio chat identity mismatch in {table}")
     if "jobs" in existing:
         for identity, kind, raw in connection.execute("SELECT id, kind, payload FROM jobs"):
