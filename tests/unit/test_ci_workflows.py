@@ -156,7 +156,7 @@ def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -
     jobs = workflow("windows-preview.yml")["jobs"]
     qualified = jobs["qualify"]
     assert set(qualified["needs"]) == {"preview", "native-tests"}
-    assert not qualified.get("if")  # Default success dependency semantics must remain.
+    assert qualified["if"] == "${{ !inputs.build-only }}"
     for name in ("preview", "native-tests"):
         assert "source-sha" in jobs[name]["outputs"]
         for step in jobs[name]["steps"]:
@@ -174,6 +174,42 @@ def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -
     ]
     assert uploads[0]["with"]["name"] == "preview-installer-windows-x86_64"
     assert uploads[0]["with"]["if-no-files-found"] == "error"
+
+
+def test_windows_build_only_mode_skips_acceptance_and_never_uploads_as_qualified() -> None:
+    preview = workflow("windows-preview.yml")
+    for entry in ("workflow_dispatch", "workflow_call"):
+        option = preview[True][entry]["inputs"]["build-only"]
+        assert option["type"] == "boolean" and option["default"] is False
+    jobs = preview["jobs"]
+    full_only = "${{ !inputs.build-only }}"
+    assert jobs["native-tests"]["if"] == jobs["qualify"]["if"] == full_only
+    steps = jobs["preview"]["steps"]
+    for step in steps:
+        if step["name"].startswith(("Test ", "Verify ", "Check Python")) or step["name"] in {
+            "Install pinned native Codex",
+            "Upload installer candidate pending native service checks",
+        }:
+            assert step["if"] == full_only, step["name"]
+    build = next(step for step in steps if step.get("id") == "package-build")
+    assert "if" not in build and "package_studio_windows.py" in build["run"]
+    fast = next(
+        step for step in steps if step["name"] == "Upload unqualified Windows test installer"
+    )
+    assert fast["if"] == "${{ inputs.build-only }}"
+    assert fast["with"]["name"] == "unqualified-windows-installer-x86_64"
+    assert ".verification.json" not in fast["with"]["path"]
+    metadata = next(step for step in steps if step["name"] == "Record unqualified build metadata")
+    assert metadata["if"] == "${{ inputs.build-only }}"
+    for required in (
+        "qualification = 'not_run'",
+        "runtime_id = $runtimeHash",
+        "source_sha =",
+        "ci_run_id =",
+        "sha256 = $hash",
+        "Build checksum mismatch",
+    ):
+        assert required in metadata["run"]
 
 
 def test_memory_gate_runs_outside_pytest_and_is_required_for_release() -> None:

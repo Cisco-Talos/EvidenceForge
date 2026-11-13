@@ -114,6 +114,8 @@ without turning `TODO.md` back into a high-conflict work journal.
   Exercise all three optional uninstall cleanup choices and subsequent fresh setup;
   verify default preservation and cleanup ownership when another administrator elevates.
   Genuine separate-account isolation remains required before claiming that capability.
+  Laptop test/fix iterations may use explicit unqualified build-only Windows previews;
+  full CI and installer qualification remain required before declaring testing complete.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   This preview excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).

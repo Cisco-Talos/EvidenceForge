@@ -104,10 +104,22 @@ its disposable Windows runner exercises both installation scopes and writes a
 verification report alongside the artifact. The verifier refuses to run on an
 ordinary workstation or one with an existing Studio installation.
 
-During development, **Windows Studio Preview** runs Windows-only checks/builds on
-each push to `codex/studio-windows-x86_64`, with dependency/build caches and
-cancellation of superseded runs. Normal integration runs the full cross-platform
-CI gates; the preview remains independently available through Installer Builds.
+During development, dispatch **Windows Studio Preview** on a feature branch. Its
+default mode runs native Windows checks and installer qualification. For rapid
+laptop test/fix iterations, select the explicit `build-only` option:
+
+```sh
+gh workflow run windows-preview.yml --ref YOUR_FEATURE_BRANCH -f build-only=true
+```
+
+This mode builds the unsigned EXE and checksum without running acceptance suites.
+It uploads `unqualified-windows-installer-x86_64`, with `.build.json` metadata
+identifying the source commit, runtime payload, toolchain and `qualification: not_run`.
+The normal qualified artifact remains `preview-installer-windows-x86_64` and requires
+both native service/recovery and installed-scope verification. Dependency/build
+caches and cancellation of superseded runs apply to both modes. Run full
+cross-platform CI and qualified installer checks before declaring testing complete;
+normal PR integration gates and Installer Builds retain their existing defaults.
 
 Windows 11 interactive testing must still cover downloaded-file trust controls,
 both scopes, cancelled UAC, separate administrator credentials and intended-user

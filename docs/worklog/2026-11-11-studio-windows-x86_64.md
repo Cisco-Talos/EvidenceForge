@@ -1513,3 +1513,43 @@ Install / Upgrade (preserve user data), including the native navigation driver
 and its transition tests. Same-version reinstallation still uses this action.
 The Windows runtime is a tar.gz extracted by the bundled native bootstrap Python
 through tarfile.open(mode=r:gz); it requires neither WSL nor external tar/gzip.
+
+The user confirms the installed cleanup helper SHA256 is
+857e4229480ad0d8bf1efaecf6a1715921847c8282c08c725a2d2101be4cbcdd,
+exactly matching the delivered fix. The failed XML still exists (95,952 bytes)
+with Archive and ReparsePoint attributes, without ReadOnly when inspected. This
+does not prove which flags or external handles were present at the failed open.
+It confirms a new access failure rather than an absent cleanup implementation.
+
+Windows CRT open maps sharing conflicts and permission denials to EACCES. Add
+one generated-file acquisition boundary across host, direct, sensor and external
+sorted writers. On Windows, retry possible access/sharing errors with seven waits
+totaling 6.35 seconds. Preserve access/sharing modes, ACLs, flags and original
+exceptions; only stream acquisition is retried. Reads, writes, flushes, receipt
+publication and namespace operations are never blindly replayed. Persistent errors
+include file attributes and reparse-tag diagnostics. POSIX keeps one ordinary open.
+The sensor writer's related physical I/O probes also use the existing extended-path
+adapter. This addresses a reproducible class, not proven OneDrive causation.
+
+Portable tests cover transient/persistent opens, mode/encoding preservation,
+unrelated/POSIX failures and lost write returns. Publication and real Windows
+Security finalization tests retain committed XML rows and prove retry neither
+duplicates records nor changes the uncontended bytes. Model-based tests pass
+locally; nine real Windows handle/attribute cases are authored and pending native
+execution. Replaying the unchanged captured five-hour input at seed 42 succeeds;
+all 53 manifest-declared file hashes verify and match the previous baseline.
+Evidence: /var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-windows-output-open-replay-r7oga5_4/.
+Behavior revision 519 declares no evidence change; product and storage versions stay.
+
+The user explicitly requests build-only Windows iterations to avoid acceptance-test
+latency, with full CI deferred until testing is ready to be declared complete.
+Add opt-in build-only to Windows Studio Preview; keep full qualification the default
+for manual/reusable callers. Skip service/recovery, native/frontend/shell tests,
+Codex probes and installed-scope acceptance only in that mode. Package construction,
+version/behavior integrity and artifact checksums remain part of the build.
+Upload a separately named unqualified EXE/checksum/build-metadata artifact; no
+verification report or qualified artifact is issued. Record source, CI run, runtime
+payload ID and toolchain for precise laptop identification. Keep this iteration on
+the feature branch without opening an automatically tested PR; full CI/qualification
+and integration follow the user's readiness decision. Deliver the built EXE locally
+under Downloads for transfer to the Windows laptop. No tags or releases are published.

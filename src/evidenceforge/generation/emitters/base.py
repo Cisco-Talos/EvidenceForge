@@ -47,6 +47,7 @@ from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.verification_resources import VerificationResources
+from evidenceforge.generation.file_io import open_generated_file
 from evidenceforge.output_targets import OutputTarget, normalize_output_target
 from evidenceforge.utils.files import fsync_directory
 
@@ -1734,8 +1735,8 @@ class LogEmitter(ABC):
 
             # Write header to file
             filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
-            with open(
-                filesystem_path(self.output_path), "w", encoding=self.format_def.output.encoding
+            with open_generated_file(
+                self.output_path, "w", encoding=self.format_def.output.encoding
             ) as f:
                 f.write(header)
                 if not header.endswith("\n"):
@@ -1821,7 +1822,7 @@ class LogEmitter(ABC):
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Exact direct-file admission changed on retry")
                 mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
-                with open(filesystem_path(self.output_path), mode) as output:
+                with open_generated_file(self.output_path, mode) as output:
                     output.seek(offset)
                     retained_payload = output.read(payload_length)
                     if retained_payload == payload:
@@ -1929,8 +1930,8 @@ class LogEmitter(ABC):
 
         # Append buffered events to file
         mode = "a" if self._header_written else "w"
-        with open(
-            filesystem_path(self.output_path), mode, encoding=self.format_def.output.encoding
+        with open_generated_file(
+            self.output_path, mode, encoding=self.format_def.output.encoding
         ) as f:
             for event in self.buffer:
                 f.write(event)
@@ -1980,7 +1981,7 @@ class LogEmitter(ABC):
                 pending_digest, offset, payload_length = self._footer_pending
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Emitter footer changed during retry")
-                with filesystem_path(self.output_path).open("r+b") as output:
+                with open_generated_file(self.output_path, "r+b") as output:
                     output.seek(offset)
                     retained = output.read(payload_length)
                     if retained == payload:
