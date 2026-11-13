@@ -321,13 +321,22 @@ def _move(source: Path, target: Path, *, directory: bool) -> None:
     if os.name == "nt":
         from evidenceforge.utils import windows_filesystem as fs
 
-        parent = fs.open_directory(source.parent)
+        source_parent = fs.open_directory(source.parent)
         try:
-            fs.replace_child(
-                parent, source.name, parent, target.name, replace=False, directory=directory
-            )
+            target_parent = fs.open_directory(target.parent)
+            try:
+                fs.replace_child(
+                    source_parent,
+                    source.name,
+                    target_parent,
+                    target.name,
+                    replace=False,
+                    directory=directory,
+                )
+            finally:
+                os.close(target_parent)
         finally:
-            os.close(parent)
+            os.close(source_parent)
     else:
         source.rename(target)
 

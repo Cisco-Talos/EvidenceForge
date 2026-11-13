@@ -1271,3 +1271,8 @@ Run locks stay at their original paths until their owner releases them. Automati
 accepts only the launcher or its verified descendants and waits for all controls.
 A separate early native uninstall step now fails before expensive runtime/package
 work. Portable cases still pass; Windows requalification is pending this repair.
+
+File staging now pins separate source/destination parent handles, including rollback
+across the quarantine directory. The old sibling-only helper is insufficient for
+this cross-directory staging. Retain the same no-replacement native rename and
+ownership contracts; local safety cases pass before native requalification.
