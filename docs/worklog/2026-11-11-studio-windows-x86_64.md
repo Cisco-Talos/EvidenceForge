@@ -1668,3 +1668,21 @@ match the prior baseline. Evidence is in
 /var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-owned-cleanup-replay-n5rmj3wi/.
 No product/storage version bump, release tag, publication, PR or merge is authorized
 by this rapid laptop iteration; deliver another explicitly unqualified build-only EXE.
+
+Build-only run 43498872833 succeeds at exact source
+031c77ad7e32a36a1fc452ee29bfe187fba9623d. Service/recovery, native/installed
+acceptance and qualification are skipped as requested. Downloaded EXE SHA256
+9083aec4301ff4f32c1c3395ea6532b0c6980412ad7879ef2e70f92b1ef796bd
+matches both the SHA256 sidecar and build metadata. Metadata records qualification
+not_run, signed false, x86_64-pc-windows-msvc, bundled Python 3.12.12 and runtime
+b17c54393704eac7e2f077909695ddfa34237a078d9d36bd942495c6667a4764.
+The EXE (72,084,392 bytes), checksum and metadata are independently copied and
+byte-verified under /Users/dabianco/Downloads/EvidenceForge-Windows-build-only-031c77ad/.
+No release is published and no PR is opened. Laptop verification and full gates
+remain pending.
+
+At the user's request, add a one-sentence GitHub IMPORTANT callout to README's
+Quick Start stating the OneDrive/cloud-sync restriction and linking to the detailed
+storage guidance. Reconcile the stale Windows-delivery-deferred development note
+with the implemented unsigned x86_64 test preview. This documentation-only follow-up
+does not change the installer built from 031c77ad or its identity.

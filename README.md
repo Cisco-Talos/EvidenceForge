@@ -219,6 +219,9 @@ capabilities already shipped in an older installer.
 For the packaged desktop app, follow the [Studio guide](docs/studio.md#install-and-open-studio).
 The commands below cover the traditional source-checkout CLI and chat-skill workflow.
 
+> [!IMPORTANT]
+> **Windows Studio preview:** Keep active workspaces and generated runs on local NTFS storage, such as `%USERPROFILE%\EvidenceForge`; OneDrive and other cloud-synced locations are unsupported. See [storage guidance](docs/studio.md#start-with-a-workspace).
+
 macOS and Linux are the primary supported host platforms. Native Windows runs Python directly,
 without WSL; generation output, checkpoint workspaces, and temporary storage must use local NTFS
 paths without junctions or other reparse points. Windows checkpoints use native write-through
@@ -399,8 +402,9 @@ uv run eforge eval ./output
 ## Development
 
 EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
-Native developer builds target Apple Silicon macOS and Ubuntu 24.04 ARM64/x86_64. Linux
-installers remain previews pending desktop acceptance; Windows Studio delivery is deferred.
+Native developer builds target Apple Silicon macOS, Ubuntu 24.04 ARM64/x86_64 and Windows 11
+x86_64. Linux installers remain previews pending desktop acceptance. Windows NSIS builds are
+unsigned test previews, with Windows 11 desktop acceptance still pending.
 Engine and CLI platform support is described above.
 
 See [Contributing](CONTRIBUTING.md#development-setup) for all build/test environment setup,

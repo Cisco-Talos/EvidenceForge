@@ -303,7 +303,8 @@ field to `C:\Users\<user>\EvidenceForge\runs`, then save settings before startin
 
 Use a local disk for active generation and checkpoints. The Windows preview's storage
 baseline is local NTFS; OneDrive and other cloud-synced active workspaces/run folders are
-not qualified. Large datasets and the creation/deletion of checkpoint objects can trigger
+unsupported for active use in this preview. Large datasets and the creation/deletion of
+checkpoint objects can trigger
 heavy synchronization, transient sharing conflicts and OneDrive bulk-deletion prompts.
 Documents folder backup can redirect the Windows Documents known folder into OneDrive even
 when a separate physical `C:\Users\<user>\Documents` folder exists. Studio does not disable
