@@ -1,7 +1,8 @@
 NSIS — Copyright (C) 1999-2026 Contributors
 https://nsis.sourceforge.io/Docs/AppendixI.html
 
-NSIS core and the zlib compression module use the zlib/libpng license.
+NSIS core, standard plugins (including nsExec) and the zlib compression module
+use the zlib/libpng license.
 The Windows Studio preview explicitly selects zlib compression.
 
 This software is provided 'as-is', without any express or implied warranty.

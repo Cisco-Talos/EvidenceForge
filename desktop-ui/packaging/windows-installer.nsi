@@ -182,17 +182,25 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
 !endif
 
-; 3. Install mode (if it is set to `both`)
-!if "${INSTALLMODE}" == "both"
-  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-  !insertmacro MULTIUSER_PAGE_INSTALLMODE
-!endif
-
-; 4. Custom page to ask user if he wants to reinstall/uninstall
+; 3. Custom page to ask user if he wants to reinstall/uninstall
 ;    only if a previous installation was detected
 Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+    ReadRegStr $0 HKCU "${UNINSTKEY}" "UninstallString"
+    ReadRegStr $1 HKLM "${UNINSTKEY}" "UninstallString"
+    ${If} $0 != ""
+    ${AndIf} $1 != ""
+      MessageBox MB_OK|MB_ICONSTOP "Studio is registered in both scopes. Use Windows Installed apps to uninstall the unwanted copy first. User data is preserved by default."
+      Abort
+    ${ElseIf} $1 != ""
+      Call MultiUser.InstallMode.AllUsers
+    ${ElseIf} $0 != ""
+      Call MultiUser.InstallMode.CurrentUser
+    ${EndIf}
+  ${EndIf}
   !insertmacro EForgeCheckScope
 
   ; Uninstall previous WiX installation if exists.
@@ -267,6 +275,14 @@ Function PageReinstall
     Abort
   ${EndIf}
 
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+    StrCpy $R1 "Studio is already installed. Choose an action before selecting the installation scope."
+    StrCpy $R2 "Install / Reinstall (preserve user data)"
+    StrCpy $R3 "Uninstall"
+    !insertmacro MUI_HEADER_TEXT "EvidenceForge Studio maintenance" "Choose what you want to do."
+  ${EndIf}
+
   ; Skip showing the page if passive
   ;
   ; Note that we don't call this earlier at the beginning
@@ -291,7 +307,7 @@ Function PageReinstall
     Pop $R3
     ; Disable this radio button if downgrading and downgrades are disabled
     !if "${ALLOWDOWNGRADES}" == "false"
-      ${IfThen} $R0 = -1 ${|} EnableWindow $R3 0 ${|}
+      ${IfThen} $R0 = -1 ${|} EnableWindow $R2 0 ${|}
     !endif
     ${NSD_OnClick} $R3 PageReinstallUpdateSelection
 
@@ -318,6 +334,15 @@ Function PageReinstallUpdateSelection
 FunctionEnd
 Function PageLeaveReinstall
   ${NSD_GetState} $R2 $R1
+
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+    ${If} $R1 = 0
+      Goto reinst_uninstall
+    ${Else}
+      Goto reinst_done
+    ${EndIf}
+  ${EndIf}
 
   ; If migrating from Wix, always uninstall
   ${If} $WixMode = 1
@@ -365,7 +390,7 @@ Function PageLeaveReinstall
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
+      StrCpy $R1 "$R1 /$MultiUser.InstallMode _?=$4" ; append uninstall directory
       ExecWait '$R1' $0
     ${EndIf}
 
@@ -390,8 +415,19 @@ Function PageLeaveReinstall
       MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
       Abort
     ${EndIf}
+    ${IfNot} ${Silent}
+    ${AndIf} $PassiveMode <> 1
+      SetErrorLevel 0
+      Quit
+    ${EndIf}
   reinst_done:
 FunctionEnd
+
+; 4. Install mode (if it is set to `both`)
+!if "${INSTALLMODE}" == "both"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+  !insertmacro MULTIUSER_PAGE_INSTALLMODE
+!endif
 
 ; 5. Choose install directory page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
@@ -760,6 +796,20 @@ Section Uninstall
 
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
+  ; Upgrades and silent/passive uninstall preserve data. Review cleanup under the
+  ; original desktop token, never the UAC administrator's token.
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+  ${AndIf} $UpdateMode <> 1
+    nsExec::ExecToStack '"$INSTDIR\runtime\bootstrap\python.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --broker'
+    Pop $0
+    Pop $1
+    ${If} $0 != "0"
+      SetErrorLevel 1
+      Abort
+    ${EndIf}
+  ${EndIf}
+
   ; Delete the app directory and its content from disk
   ; Copy main executable
   Delete "$INSTDIR\${MAINBINARYNAME}.exe"
@@ -844,7 +894,7 @@ Section Uninstall
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
   ${EndIf}
 
-  ; Studio preserves every account's private state and authored work.
+  ; User data is preserved unless its unelevated owner explicitly selected cleanup.
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL

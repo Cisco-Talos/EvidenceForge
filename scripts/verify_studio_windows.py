@@ -116,6 +116,202 @@ ConvertTo-Json -InputObject @($links) -Compress
     return [Path(link["path"]) for link in links]
 
 
+def verify_maintenance_navigation(installer: Path, scope: str, destination: Path) -> None:
+    """Navigate maintenance before scope, then cancel before any installation action."""
+    import ctypes
+    from ctypes import wintypes as wt
+
+    from evidenceforge.studio.windows_uninstall_native import _function
+
+    callback = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    enumerate_windows = _function("user32", "EnumWindows", wt.BOOL, [callback, wt.LPARAM])
+    enumerate_children = _function(
+        "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback, wt.LPARAM]
+    )
+    owner = _function(
+        "user32", "GetWindowThreadProcessId", wt.DWORD, [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    )
+    visible = _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])
+    control = _function("user32", "GetDlgItem", wt.HWND, [wt.HWND, ctypes.c_int])
+    send = _function(
+        "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    )
+    post = _function("user32", "PostMessageW", wt.BOOL, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM])
+    style = _function("user32", "GetWindowLongPtrW", ctypes.c_ssize_t, [wt.HWND, ctypes.c_int])
+
+    def text(window: int) -> str:
+        buffer = ctypes.create_unicode_buffer(4096)
+        send(window, 0xD, len(buffer), ctypes.addressof(buffer))
+        return buffer.value.replace("&", "")
+
+    def children(window: int) -> list[int]:
+        result: list[int] = []
+
+        @callback
+        def collect(child: int, parameter: int) -> bool:
+            result.append(child)
+            return True
+
+        enumerate_children(window, collect, 0)
+        return result
+
+    with subprocess.Popen(
+        [str(installer)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ) as child:
+        owned: list[psutil.Process] = []
+        try:
+
+            def windows() -> list[int]:
+                nonlocal owned
+                try:
+                    owned = (
+                        psutil.Process(child.pid).children(recursive=True)
+                        if child.poll() is None
+                        else owned
+                    )
+                except psutil.NoSuchProcess:
+                    return []
+                pids = {child.pid, *(process.pid for process in owned if process.is_running())}
+                result: list[int] = []
+
+                @callback
+                def collect(window: int, parameter: int) -> bool:
+                    pid = wt.DWORD()
+                    owner(window, ctypes.byref(pid))
+                    if pid.value in pids and visible(window):
+                        result.append(window)
+                    return True
+
+                enumerate_windows(collect, 0)
+                return result
+
+            def scope_radios(window: int) -> tuple[int | None, int | None]:
+                everyone, current = None, None
+                for handle in children(window):
+                    if style(handle, -16) & 0xF not in (4, 9):
+                        continue
+                    caption = text(handle).lower()
+                    if any(value in caption for value in ("anyone", "everyone", "all users")):
+                        everyone = handle
+                    elif any(value in caption for value in ("for me", "current user")):
+                        current = handle
+                return everyone, current
+
+            deadline = time.monotonic() + 45
+            maintenance = False
+            scope_seen = False
+            last_text: list[str] = []
+            advanced: set[tuple[str, ...]] = set()
+            while time.monotonic() < deadline and child.poll() is None:
+                for window in windows():
+                    last_text = [text(handle) for handle in children(window)]
+                    everyone, current = scope_radios(window)
+                    if everyone and current:
+                        assert maintenance, "Scope page appeared before maintenance"
+                        assert send(everyone if scope == "AllUsers" else current, 0xF0, 0, 0) == 1
+                        scope_seen = True
+                        break
+                    if "Install / Reinstall (preserve user data)" in last_text:
+                        maintenance = True
+                    next_button = control(window, 1)
+                    caption = text(next_button).strip().lower() if next_button else ""
+                    signature = tuple(last_text)
+                    if caption in {"next >", "next", "i agree"} and signature not in advanced:
+                        advanced.add(signature)
+                        post(window, 0x111, 1, next_button)
+                if scope_seen:
+                    break
+                time.sleep(0.1)
+            assert scope_seen, f"Maintenance/scope navigation did not complete: {last_text}"
+            for window in windows():
+                if control(window, 2):
+                    post(window, 0x111, 2, control(window, 2))
+                    break
+            deadline = time.monotonic() + 10
+            while child.poll() is None and time.monotonic() < deadline:
+                for window in windows():
+                    if control(window, 6) and control(window, 7):
+                        post(window, 0x111, 6, control(window, 6))
+                time.sleep(0.1)
+            child.wait(timeout=5)
+            assert registry_location(scope) == str(destination)
+            assert (destination / "evidenceforge-studio.exe").is_file()
+        finally:
+            for process in reversed(owned):
+                try:
+                    if process.is_running():
+                        process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+
+
+def verify_cleanup_payload(resources: Path, temporary: Path) -> None:
+    """Exercise packaged cleanup only against an explicit disposable inventory."""
+    script = r"""
+import sys
+from pathlib import Path
+from evidenceforge.cli.install_skills import install_chatgpt_skills
+from evidenceforge.studio.windows_uninstall import UserLocations, build_plan, execute
+from evidenceforge.utils.windows_filesystem import current_user_sid
+root=Path(sys.argv[1])
+from evidenceforge.studio.state_io import private_directory
+private_directory(root)
+private=root/'AppData/Local/EvidenceForge'
+private.mkdir(parents=True)
+workspace=root/'Documents/EvidenceForge'
+from evidenceforge.studio.store import StudioStore
+from evidenceforge.studio.paths import StudioPaths
+from evidenceforge.studio.settings import SettingsStore, StudioSettings
+store=StudioStore(private/'studio.sqlite')
+store.publish('cleanup-check','notification',{'message':'private test history'})
+store.close()
+paths=StudioPaths(config=private,data=private,state=private,cache=private/'cache',logs=private/'logs')
+SettingsStore(paths).save(StudioSettings(workspace=workspace))
+artifact=workspace/'.eforge/artifacts/drafts/scenario'/('long-folder-'+('x'*150))/('nested-'+('y'*80))/'source.yaml'
+from evidenceforge._windows_paths import filesystem_path
+filesystem_path(artifact.parent).mkdir(parents=True)
+filesystem_path(artifact).write_text('test only')
+workspace.mkdir(exist_ok=True)
+(workspace/'unrelated.txt').write_text('preserve')
+skills=root/'.agents/skills'
+install_chatgpt_skills(skills)
+(skills/'eforge-generate'/'my-notes.txt').write_text('preserve')
+locations=UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid())
+plan=build_plan(locations)
+execute(plan,set())
+assert private.exists() and filesystem_path(artifact).exists()
+execute(plan,{'private','skills','work'})
+assert not private.exists() and not filesystem_path(artifact).exists()
+assert (workspace/'unrelated.txt').read_text()=='preserve'
+assert (skills/'eforge-generate'/'my-notes.txt').read_text()=='preserve'
+assert not (skills/'eforge-generate'/'SKILL.md').exists()
+"""
+    python = resources / "bootstrap/python.exe"
+    subprocess.run(
+        [str(python), "-I", "-B", "-X", "utf8", "-c", script, str(temporary)],
+        check=True,
+        timeout=120,
+    )
+    subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-X",
+            "utf8",
+            "-m",
+            "evidenceforge.studio.windows_uninstall",
+            "--help",
+        ],
+        check=True,
+        timeout=30,
+        capture_output=True,
+    )
+
+
 def uninstall_app(destination: Path, scope: str) -> None:
     """Wait for uninstallation and finish NSIS's direct-uninstaller cleanup."""
     uninstaller = destination / "uninstall.exe"
@@ -228,6 +424,7 @@ def verify_installer(installer: Path) -> dict[str, Any]:
         "signed": False,
         "scopes": {},
         "default_directories": {},
+        "maintenance_navigation": {},
         "desktop_acceptance": "pending Windows 11 interactive and separate-account testing",
     }
     private_root = Path(os.environ["LOCALAPPDATA"]) / "EvidenceForge"
@@ -249,6 +446,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 f"{scope}: default directory {registered!r}, expected {str(destination)!r}"
             )
             shortcuts = verify_shortcuts(scope, destination / "evidenceforge-studio.exe")
+            verify_maintenance_navigation(installer, scope, destination)
+            report["maintenance_navigation"][scope] = "passed"
             if not private_state_existed:
                 assert not private_root.exists(), (
                     "Setup initialized private state before normal launch"
@@ -293,6 +492,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 assert registry_location(opposite) is None
                 print(f"{scope}: verify isolated packaged runtime", flush=True)
                 runtime = verify_runtime(destination / "runtime", "x86_64")
+                print(f"{scope}: verify packaged clean-uninstall inventory", flush=True)
+                verify_cleanup_payload(destination / "runtime", root / f"cleanup-{scope}")
                 print(f"{scope}: verify installed shell and helper", flush=True)
                 helper_smoke(destination / "evidenceforge-studio.exe", root / f"launch-{scope}")
                 retained_database = root / f"launch-{scope}/private/data/studio.sqlite"
@@ -332,6 +533,8 @@ def verify_installer(installer: Path) -> dict[str, Any]:
                 )
                 report["scopes"][scope] = {
                     "install_reinstall_scope_refusal": "passed",
+                    "packaged_cleanup_inventory": "passed",
+                    "interactive_account_handoff": "pending genuine Windows desktop acceptance",
                     "scope_shortcuts": "passed",
                     "runtime": runtime,
                     "native_shell_helper": "passed",

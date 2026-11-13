@@ -167,6 +167,8 @@ def test_windows_qualified_artifact_requires_both_native_and_installer_gates() -
     assert "Get-FileHash" in script and "$report.sha256 -ne $hash" in script
     assert "$report.authoring.filesystem_permissions -ne 'passed'" in script
     assert "$report.authoring.packaged_cli_guard -ne 'passed'" in script
+    assert "$report.maintenance_navigation.$scope -ne 'passed'" in script
+    assert "$report.scopes.$scope.packaged_cleanup_inventory -ne 'passed'" in script
     uploads = [
         step for step in qualified["steps"] if "actions/upload-artifact@" in step.get("uses", "")
     ]

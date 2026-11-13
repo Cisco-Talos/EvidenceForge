@@ -1211,3 +1211,160 @@ writer behavior or skip Windows. The previous Windows-only run was superseded by
 the reusable all-platform installer run because both use the same ref concurrency
 group; no artifact from that canceled run is qualified. Integrated laptop replay
 completes all five hours from the unchanged authored input.
+
+### Interactive clean uninstall and maintenance ordering
+
+The user reports missing uninstall cleanup choices and requests maintenance before
+scope selection. Implement on codex/studio-windows-clean-uninstall while #477's
+integration checks continue. Interactive uninstall invokes the installed bootstrap
+cleanup module before removing app files. Silent/passive/update uninstall preserves
+data. No new external Python, GUI package, version bump or publication is introduced.
+
+Three unchecked choices cover private Studio/WebView state and retained runtimes;
+known EvidenceForge skills/global publisher (including listed local edits and
+shared CLI impact); and exact managed authored/run entries in known workspaces.
+The SID/profile and paths are reviewed before a default-No irreversible deletion
+confirmation. Workspace roots, unrelated/added files, other profiles, Codex/auth,
+custom output parents and external exports stay. Native Known Folders and the
+process SID determine locations; inherited administrator/EFORGE profile variables
+are not authority. A small native Windows dialog has no WebView/service dependency.
+
+The elevated broker authenticates the same-session Explorer image/token and starts
+the cleanup module with its unelevated primary token and a fresh user environment.
+The child verifies the expected SID and refuses elevation. Normal same-account
+uninstall starts directly without impersonation privilege. Failed identity/handoff
+only permits separately confirmed app-only uninstall preserving all data. Actual
+alternate-admin/separate-account desktop acceptance remains required; mocks and
+hosted Server CI are not that evidence.
+
+Cleanup inventories no-follow identities, rejects unsafe ownership/ACLs and links,
+and rechecks under startup/helper/state/install/runtime/publication/run ownership.
+Selected namespace entries are staged before deletion; staging failure rolls back
+earlier names. Active or uncertain writers cause refusal, never termination. Native
+handle-relative rename/removal and extended-path inventory cover selected deep
+paths. Failures after deletion begins identify retained staging; approved deletion
+has no transactional undo. No real laptop/profile data is removed during this work.
+
+Maintenance detects registered scope before its action page; Install/Reinstall
+preserves user data, while explicit Uninstall exits instead of reinstalling.
+Scope selection follows maintenance and cross-scope refusal stays enforced.
+nsExec is a standard NSIS plugin covered by the retained zlib license
+(https://nsis.sourceforge.io/License); native token/environment/KnownFolder contracts
+were checked against Microsoft documentation. Fifteen portable safety tests pass.
+Five Windows native dialog/account contract cases and packaged deep cleanup tests
+are added to qualification; native results are pending.
+
+Review follow-up makes irreversible confirmation modal to the review window so
+selection cannot change behind it. Native coverage also declines that confirmation
+and then cancels, asserting preserved data. Dialog automation waits for every
+control rather than racing window creation. The older installed uninstaller must
+be updated once to expose new choices; the documentation states that explicitly.
+
+First native run 43363292131 catches real Windows directory-rename refusal while
+ownership handles remain open, plus test attachment assuming the Windows venv
+launcher PID owns its interpreter's window. Keep both native gates. Stage selected
+files into private adjacent containers while original directory/lock skeletons
+stay pinned. Mark only owned selected control files delete-pending; close ownership
+before reclaiming empty original directories. Never recursively delete fresh or
+unlisted original entries. Roll back all staged files if pre-deletion staging fails.
+Run locks stay at their original paths until their owner releases them. Automation
+accepts only the launcher or its verified descendants and waits for all controls.
+A separate early native uninstall step now fails before expensive runtime/package
+work. Portable cases still pass; Windows requalification is pending this repair.
+
+File staging now pins separate source/destination parent handles, including rollback
+across the quarantine directory. The old sibling-only helper is insufficient for
+this cross-directory staging. Retain the same no-replacement native rename and
+ownership contracts; local safety cases pass before native requalification.
+
+Native run 43364453630 now passes all fifteen ownership/staging safety cases and
+real cancel/preserve UI actions. Two remaining UI assertions read the EDIT control's
+stale creation caption through cross-process GetWindowText. Microsoft documents
+that limitation; use marshalled WM_GETTEXT and assert the selected checkbox state.
+Keep real selected-cleanup and declined-confirmation actions enabled. Reference:
+https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowtextw.
+
+Review also routes private staging-directory creation through filesystem_path.
+Add native legacy-path rejection for the full uninstall inventory/staging/removal
+of a >300-character runtime resource; policy-enabled runner success alone is not
+evidence for an ordinary Windows laptop. Retain logical review paths and preserve
+an unrelated profile file. Reject dot-dot workspace spellings before containment.
+Native UI/ownership gate for ce9c8802 passes all 21 cases; the package build continues.
+
+Add installed GUI maintenance navigation in both scopes: open the actual setup,
+visit maintenance before the scope radios, verify the registered scope is selected,
+and cancel before any Install action. Require registration/app files to remain.
+This complements static template ordering with real NSIS navigation on the hosted
+runner, while retaining Windows 11 desktop/UAC acceptance separately. Only owned
+installer windows/descendants are automated. Ordinary data named run.lock or a
+.lock directory remains in the inventory; exclusions are reserved protocol paths.
+Local safety cases now pass sixteen tests.
+
+PR #477 merges into dev as 990372efe6dcbefb2a3f20281935835e948f0ba1 on November 12
+(04:31 UTC November 13). Current-head routine/native CI 43362249936 passes.
+Complete slow/portability/native memory run 43360464067 and all four installed
+platforms in 43360461241 pass on integrated 19c7e0a4. The only later foundation
+changes are the exact-byte test-spy removal and evidence notes, with identical
+production/dependency/behavior inputs. No release, version bump or tag is made.
+Follow-up #483 must still pass current-head CI and actual new installer verification.
+
+A further populated-database acceptance check finds a real refusal hidden by the
+initial text-only cleanup fixtures. Even a read-only SQLite ownership probe creates
+studio.sqlite-wal and studio.sqlite-shm beside a closed WAL-mode database. The
+strict post-review inventory then correctly rejects changed files. Reproduction
+shows exactly those two added entries with no other changed files; fixture retained
+under /private/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-clean-sqlite-drift-l99g0xm9/.
+Keep #483 unmerged while repairing the probe, not the inventory guard.
+
+Inspect a private copy of the main database plus committed WAL under existing
+ownership locks, rebuilding SQLite's transient index only in that copy. Preserve
+WAL-backed rows and active-worker checks; never use immutable/main-only reads that
+can hide recent jobs. Wrap SQLite/I/O failures as safe cleanup refusal. Add real
+populated-store/first-run reset and retained-WAL/no-source-mutation regressions;
+installed cleanup now contains actual Studio history/settings, not just a sentinel.
+
+### Clean-uninstall integration evidence
+
+Current implementation 75b2b803fdfcbcec62d7e987f350fafde349be5e passes all
+33 jobs of routine/native source CI 43370368609, including Windows, Apple Silicon
+macOS and both Linux architectures. Windows qualification run 43370362980 passes
+its complete native service/recovery job: 512 service cases, 228 state/edge cases,
+59 session/ownership cases and 145 crash/recovery cases, with platform-specific
+skips reported separately by pytest. Its early uninstall gate passes 24 safety and
+real-dialog/account-contract cases, including populated SQLite state. The native
+strict legacy-path regression also passes without relying on the runner's path
+policy. All three jobs of Windows qualification 43370362980 pass. Actual installed
+GUI navigation confirms maintenance before scope and the registered default in
+both scopes. Both scopes pass populated-state packaged cleanup, install/reinstall,
+scope-switch refusal, shortcuts, isolated runtime, helper, checkpoint/resume/output
+equivalence and uninstall preservation. The package job also passes 366 focused
+runtime/process/path cases, 375 frontend tests and 11 Rust shell tests.
+
+The qualified preview artifact contains the EXE, checksum and verification JSON.
+Independently downloaded bytes match SHA256
+718e419314d0857e64f4df52a32b768d530de65c7032baa970783edc8e758aa5.
+Report source is 75b2b803fdfcbcec62d7e987f350fafde349be5e; its CI gates bind both
+package and native service/recovery to run 43370362980. Both maintenance/cleanup
+scope results pass; signed is false and desktop acceptance remains pending.
+Runner image 20261103.298.1 uses CPython 3.12.16 (MSVC 1944 AMD64), Rust 1.100.0
+(0ef1bc386), Node 22.23.4 and uv 0.13.8 (3d97a6aad). Final roadmap/worklog closure
+changes only these two CI-evidence-excluded documentation paths; production and
+test inputs remain identical. PR #483 targets dev; the merged dev snapshot will
+receive a fresh installer build rather than relabeling this preview's source SHA.
+
+The preceding integrated dev snapshot 990372ef passes both automatic CI 43366108064
+and all-platform Installer Builds 43366108243. Those installers precede clean
+uninstall and cannot substitute for the final follow-up installer. No version,
+schema, release tag, publication or acceptance threshold changes are made.
+
+Checkpoint lineage audit confirms that integrated behavior revision 517 retains
+safe history-prefix checks: the older Windows branch's 5daed0fe metadata classifies
+as unknown because its history differs, while pre-Windows dev 15a415a9 classifies
+as localized. Same-build use of retained runtimes remains exact. Renumbering the
+integrated history does not silently authorize cross-lineage checkpoint reuse.
+
+Genuine Windows 11 desktop/UAC cancellation, alternate administrator credentials,
+separate-account ownership, all three cleanup choices and first-launch setup after
+reset remain manual acceptance. Hosted Windows Server native UI checks establish
+only their stated bounds. The laptop's separate ground-truth agreement failure
+and broader deep-workspace qualification remain open on the durable roadmap.

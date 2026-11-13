@@ -105,6 +105,11 @@ jobs:
           rustc +stable --version
           node --version
           uv --version
+      - name: Test uninstall ownership and native review
+        run: >-
+          uv run --no-sync pytest --no-cov
+          tests/unit/test_studio_windows_uninstall.py
+          tests/integration/test_studio_windows_uninstall_ui.py
       - name: Cache Windows Rust dependencies and build artifacts
         id: rust-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
@@ -217,6 +222,12 @@ jobs:
           if ($report.source_sha -ne $env:PACKAGE_SOURCE) { throw 'Report source mismatch' }
           if ($report.authoring.filesystem_permissions -ne 'passed' -or
               $report.authoring.packaged_cli_guard -ne 'passed') { throw 'Missing authoring evidence' }
+          foreach ($scope in @('CurrentUser', 'AllUsers')) {
+            if ($report.maintenance_navigation.$scope -ne 'passed' -or
+                $report.scopes.$scope.packaged_cleanup_inventory -ne 'passed') {
+              throw "Missing uninstall/maintenance evidence for $scope"
+            }
+          }
           if ($report.sha256 -ne $hash) { throw 'Report checksum mismatch' }
           if ($checksum -ne "$hash  $($installer.Name)") { throw 'Checksum file mismatch' }
           $report | Add-Member -NotePropertyName ci_gates -NotePropertyValue @{

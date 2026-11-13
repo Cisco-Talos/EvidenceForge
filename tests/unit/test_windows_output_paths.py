@@ -222,3 +222,42 @@ def test_long_direct_writer_headers_exact_rows_and_footers(
     text = filesystem_path(output).read_text()
     assert text.count("ordinary") == text.count("exact") == 1
     assert "<Events>" in text and "</Events>" in text
+
+
+def test_long_uninstall_inventory_staging_and_removal(
+    tmp_path: Path, legacy_path_limit: list[str]
+) -> None:
+    from evidenceforge.studio.state_io import private_directory
+    from evidenceforge.studio.windows_uninstall import UserLocations, build_plan, execute
+    from evidenceforge.utils.windows_filesystem import current_user_sid
+
+    profile = tmp_path / "account 汉 ü"
+    private_directory(profile)
+    local = profile / "AppData/Local"
+    private = local / "EvidenceForge"
+    deep = (
+        private
+        / "runtimes/retained/Lib/site-packages"
+        / ("catalog-" + "a" * 140)
+        / ("b" * 90)
+        / "resource.yaml"
+    )
+    assert len(str(deep)) > 300
+    filesystem_path(deep.parent).mkdir(parents=True)
+    filesystem_path(deep).write_text("selected runtime resource")
+    unrelated = profile / "unrelated.txt"
+    unrelated.write_text("preserve")
+    plan = build_plan(
+        UserLocations(
+            profile=profile,
+            local=local,
+            documents=profile / "Documents",
+            account=current_user_sid(),
+        )
+    )
+    execute(plan, set())
+    assert filesystem_path(deep).read_text() == "selected runtime resource"
+    execute(plan, {"private"})
+    assert not private.exists()
+    assert unrelated.read_text() == "preserve"
+    assert legacy_path_limit == []
