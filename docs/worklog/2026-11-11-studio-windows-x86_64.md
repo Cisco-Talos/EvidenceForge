@@ -1202,3 +1202,12 @@ Local integration validation passes 283 focused workflow/behavior/world/process/
 Mac foreground and timing tests, all three slow temporal-policy checks, all 32
 workflow contracts after removing the branch trigger, Ruff/formatting and exact
 behavior/version checks. The locked merged dependency updates are installed.
+
+Full integration CI exposes one stale Windows-only newline-test spy: it compares
+an extended physical open path against a logical Path and observes zero calls.
+The authoritative byte assertion already verifies the contract. Remove the spy
+and retain the exact `first\nsecond\n` byte check on every platform; do not alter
+writer behavior or skip Windows. The previous Windows-only run was superseded by
+the reusable all-platform installer run because both use the same ref concurrency
+group; no artifact from that canceled run is qualified. Integrated laptop replay
+completes all five hours from the unchanged authored input.
