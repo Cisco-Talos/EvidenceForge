@@ -1460,3 +1460,14 @@ unknown/no identity, plus refusal when content grows past a stale size limit.
 All 131 focused source/cache/cleanup/sorting/ES/behavior/workflow cases pass locally;
 the earlier five engine/transaction cases remain unchanged. Add run-source tests to
 the fast native Windows stage and requalify the combined implementation before merge.
+
+Windows installer run 43462494722 passes the combined cleanup/cache native stage
+and builds the EXE, but its maintenance-page automation fails during AllUsers
+navigation. The driver keys Next commands by changing text snapshots, so controls
+being populated or destroyed can queue multiple Next commands for one page. It
+also includes hidden controls. Keep the existing product page order and strict
+maintenance-before-scope assertion. Observe one visible direct child dialog and
+post at most one Next command per native page handle, only after recognized welcome,
+license or maintenance content appears. Never advance a partially loaded or unknown
+scope page. Portable transition tests cover changing content and delayed controls;
+repeat both actual installed-scope navigation checks in native qualification.
