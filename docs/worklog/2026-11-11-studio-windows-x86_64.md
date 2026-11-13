@@ -1074,3 +1074,35 @@ temporary draft iteration guard, remaining desktop/UAC and genuine separate-acco
 acceptance remain necessary before claiming broader readiness. PR #477 remains
 draft into dev. This evidence-only follow-up skips redundant CI; executable
 qualification stays bound to `5daed0fe`.
+
+### Laptop reaches collection hour 3; process-close invariant failure
+
+After the qualified path repair, the user reports that generation completes
+warm-up and reaches hour 3/5 before stopping after about three minutes. The log
+still reports successful resource forecasting and the intentional viewer.exe
+path warning. Installed runtime ID is
+`f4da13d3cbf1950ad4a46adc75ed1554d3a5b184af7e45587b05ddf2b3d21c5f`.
+The failing input is the private frozen job input
+`inputs/c3a4ef8447db4ad289cfd4883b6c214a/RESOLVED_SCENARIO.yaml`; output is
+`runs/scenario/20261112-214111-c3a4ef84`. No recovery point was committed.
+Preserve both and do not reset the installation, alter scenario timing or overwrite
+failed output for diagnosis.
+
+The new failure is `LifecycleShadowViolationError`, process-close parity, object
+`0a4bd957-bb7d-41f4-9e41-f94d1d6288e9`. The stack is baseline hourly stale-process
+cleanup -> process termination bundle/service -> dispatcher compatibility State/
+lifecycle pre-apply -> LifecycleShadow._validate_process_close_pre_apply. That
+check rejects any missing live PID, different live object ID, or close timestamp
+before the live process's start. The current message includes only the object ID,
+so the pasted log does not distinguish those cases or identify the modeled host,
+PID, image or final close timestamp. It contains no new filesystem failure.
+
+Code tracing confirms Mac hosts are excluded from generic stale cleanup, which
+checks its frozen process against live State immediately before requesting close.
+Termination may subsequently resolve session ownership, adjust canonical timing,
+resolve missing authentication identity and prepare source timestamps before
+dispatch. Reproduce the exact frozen input/seed to locate the first divergence;
+do not weaken lifecycle authority or infer that the host Windows platform caused
+this shared engine invariant. Exact input is not included in the pasted log and
+is needed next. No executable change or new installer is made by this initial
+investigation; latest qualified artifact remains `5daed0fe`.
