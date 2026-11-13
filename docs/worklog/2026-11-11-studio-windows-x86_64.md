@@ -1553,3 +1553,18 @@ payload ID and toolchain for precise laptop identification. Keep this iteration 
 the feature branch without opening an automatically tested PR; full CI/qualification
 and integration follow the user's readiness decision. Deliver the built EXE locally
 under Downloads for transfer to the Windows laptop. No tags or releases are published.
+
+Build-only run 43488279139 succeeds from 718af5db; native service/recovery and
+qualification jobs are skipped as requested. Artifact 14068986715 is explicitly
+unqualified. Independently downloaded EXE SHA256 is
+b6931c88bec48997a1c288be104954749a8e72fe050798be3e34244951ea83b0.
+Build metadata records runtime
+8c7252e93a97c3081c51ef1b1e4d284e34594f16e32a805c6136e5c970cc1a73
+and qualification not_run. EXE, checksum and build metadata are copied to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-718af5db/.
+The new installer contains Install / Upgrade and bounded generated-file open
+retries. The actual laptop/OneDrive rerun, native nine-case handle/attribute tests
+and full CI/qualification remain pending. The model-free local focused gate passes
+154 cases; nine real-Windows cases are skipped on this macOS host. All 53 declared
+output hashes in the local five-hour replay match and verify. No new PR is opened
+and no code is merged while the user is still in the rapid testing loop.
