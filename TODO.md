@@ -72,6 +72,26 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1 — Windows authoring smoke generation checkpoint rename failure:**
+  A draft-local CLI smoke run validates and forecasts, then fails acquiring its run
+  lock with WinError 6 in WindowsCheckpointIO.mkdir -> replace_child -> native
+  directory rename. Reproduce under Studio's Windows authoring sandbox and identify
+  the rejected handle/operation without weakening isolation, locks or durability.
+  Ordinary Studio generation succeeds; that does not qualify this separate path.
+  See the [laptop trace](docs/worklog/2026-11-11-studio-windows-x86_64.md#successful-scenario-pipeline-with-authoring-and-ui-follow-ups-november-13).
+
+- [ ] **P2 — Unrequested command menu after New Scenario:** Reproduce the repeated
+  laptop report that creating a scenario opens its chat with the command menu over
+  it, without the user invoking a shortcut. Inspect modal dismissal/focus, keyboard
+  dispatch and pointer activation; fix the opening trigger rather than assuming
+  user input or merely clearing the overlay after the fact. Cover all platforms.
+
+- [ ] **P3 — Transient validation AbortError after Fix in Chat:** Reproduce and
+  diagnose a revalidation that reports "signal is aborted without reason" before
+  succeeding on retry. Inspect the API's default 15-second timeout, operation
+  duration and cancellation/reconnect behavior; preserve the previous result and
+  provide an actionable error. Do not infer harmlessness solely from a later success.
+
 - [ ] **P2 — Optional native file and folder browsers throughout Studio:** Review every
   file/path entry point, including startup workspace recovery, Settings, imports,
   exports and executable selection. Offer an appropriate optional file/folder chooser

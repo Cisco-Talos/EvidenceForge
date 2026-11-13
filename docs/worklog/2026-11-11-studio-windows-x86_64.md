@@ -1938,3 +1938,62 @@ hash-check the EXE, .exe.sha256 and .build.json under
 The user should install/upgrade over the current copy while preserving existing
 state. No cleanup/reset, state schema migration or laptop database edit is required
 for this confirmed drive-letter mismatch. Publication/version/tag/PR remain unchanged.
+
+### Successful scenario pipeline with authoring and UI follow-ups (November 13)
+
+On the e021a95f preview, the user creates industry/organization packs, authors a new
+scenario, fixes one expected validation warning through chat, forecasts, generates
+and evaluates successfully with no evidence disagreements in that new scenario.
+The older scenario still reports 140 disagreements. No ground-truth repair was
+included in these installer iterations; the previously confirmed shared defects
+remain P0 release blockers, with the remaining cases still needing exact-bundle
+analysis. Do not portray the unchanged count as a failed repair already shipped.
+
+The user quotes a publication refusal because the authoring session may write only
+the active draft. That boundary is expected: Studio's reviewed Publish action owns
+release creation outside the draft. The user mentioned publication testing without
+intending a publication request. The attachment does not contain a publish command
+or its result, so it cannot establish whether publication was actually attempted.
+Do not expand authoring filesystem permissions based on this report.
+
+The attachment c49f67d6-6b08-4825-b3e3-842697376645 instead supplies the previously
+missing generation trace. Runtime b5c5e26397a10f889c9bbca28f98d2542265d663ea4dc0556cb1d0a89b7b6a25
+runs its isolated Python module CLI with seed 42 and explicit local project root.
+Input is the aerospace-test industry draft add6d338-07af-435d-a783-a12c65015605's
+verification/consumer.yaml; output is its sibling verification/output directory.
+The aerospace-smoke input loads, validates cross-references and forecasts normally.
+Failure is RunLock.acquire -> mkdir_private_host -> WindowsCheckpointIO.mkdir,
+recursively creating the output parent -> _rename -> filesystem.replace_child ->
+NtSetInformationFile result converted at windows_filesystem.py:808 to WinError 6.
+This narrows the failure to native directory publication in the authoring session;
+it does not yet identify which handle or sandbox translation fails. Regular Studio
+helper generation passing does not close this different invocation path. Record a
+focused P1 investigation preserving isolation, lock ownership and durability.
+
+The user twice observes the command menu over a newly created scenario's chat,
+without pressing its shortcut. The visible text is App.tsx's command menu, opened
+by the search button or Ctrl/Cmd+K handler. Code inspection has not yet reproduced
+the unintended opening trigger. Record P2 modal/focus/key/pointer investigation,
+not a speculative clear-overlay patch or attribution to user input.
+
+Record the requested low-priority (P3) transient validation AbortError investigation.
+App.validateItem uses StudioApi.request's default 15-second timer, whose abort()
+provides no explicit reason. That is a plausible source of the displayed browser
+message, not confirmation of this incident's timing or proof it was harmless.
+The next validation succeeded. Preserve prior results and investigate cancellation,
+operation lifetime and useful timeout messaging rather than silently retrying work.
+
+Manual Install Skills is not a prerequisite for Studio authoring: resolve_turn_skill
+uses existing enabled skills or installs missing bundled Codex skills using the
+selected scope, with missing_only=True. Disabled skills still require enabling;
+existing skills are not automatically overwritten. The button remains useful for
+bulk installation/update/repair and configuring standalone Codex/Claude clients.
+The user's not clicking it does not establish that no skills were installed/reused.
+
+Proceed with uninstall acceptance while keeping these repairs open. Before any
+optional work/data deletion, preserve an external backup of the current workspace,
+including the old disagreeing bundle and aerospace verification input/logs. Test
+default preservation first and verify content/history after reinstall, then test
+optional category cleanup on backed-up/disposable content. Do not rerun or repair
+these scenarios merely to repeat the already successful ordinary GUI pipeline.
+This is a roadmap/evidence update; no new installer, full CI or quality-repair claim.
