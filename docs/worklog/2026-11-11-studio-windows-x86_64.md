@@ -1021,3 +1021,56 @@ GROUND_TRUTH.json and OBSERVATION_MANIFEST.json is byte-identical, with no missi
 extra or normalized differences. Local evidence is retained under
 `/tmp/eforge-path-byte-comparison`; this verifies evidence semantics on POSIX and
 is separate from native Windows path-policy qualification.
+
+### Qualified nested-output and lifecycle repair installer
+
+Snapshot `5daed0fe35b33fc9576cf1bc5eb8d2221ce86ec3` passes all three jobs in
+[Windows-only CI 43347955968](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43347955968).
+The strict short native gate passes 196 cases (one existing POSIX-only skip),
+including all six deep-path cases with zero swallowed unprefixed probes. Native
+Studio passes 494 cases (31 existing conditional skips); state/migration passes
+228 (one skip), helper/runtime passes 59 (twelve POSIX-only skips), and all 145
+slow recovery cases pass. Frontend passes all 375 cases across 37 files; all eleven
+Windows release Rust tests pass. Ruff, formatting, generated API types and the
+production frontend build pass.
+
+Both installer scopes pass isolated packaged CLI/resources, complete behavior
+manifest verification, the deeper Unicode workspace's scenario/pack authoring
+operations, checkpoint-enabled generation, native Mac-source generation/evaluation,
+packaged suspend/verify/resume equivalence, shell/helper startup, reinstall,
+scope-switch refusal, shortcuts and uninstall preservation. Explicit legacy-path
+rejection is established by the native writer/checkpoint tests; the packaged smoke
+establishes actual installed behavior on this runner, whose policy is not changed.
+The native helper gate includes cooperative idle-event-socket shutdown. These
+results qualify the combined startup, shutdown and output-path implementation.
+
+[Qualified EXE, checksum and report](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43347955968/artifacts/14003994810).
+Independent hashing of the downloaded
+`EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe` (71,613,736 bytes)
+matches both the SHA256 file and report:
+`e7862fa9cd607ff3d878af3092282f58058bd26d838a9e883f23bd99fea6c8b7`.
+The report independently matches source `5daed0fe`, run `43347955968`, both
+passing package/native gates, both scopes' nested-workspace evidence and unsigned
+status. Verified local copy: `/tmp/eforge-windows-qualified-5daed0fe/`.
+Runner image `20261103.298.1`; host Python 3.12.16 (MSC 1944), rustc 1.100.0
+(`0ef1bc386`, November 9), Node 22.23.4, uv 0.13.8 (`3d97a6aad`, November 12).
+Payload Python stays pinned to 3.12.12. Behavior revision 513/digest remain as
+recorded above; no product/storage version changes, release tags or publication.
+
+Hosted Server records passing legacy-elevated model-free filesystem probes and
+safe packaged-CLI refusal. It does not establish Windows 11 MXC execution or
+separate-account desktop acceptance. Earlier laptop fresh validation/Fix in chat
+success remains user-reported evidence for the previous payload. Next: quit
+Studio, upgrade the existing Everyone installation, launch normally and run a
+fresh generation/evaluation from the preserved draft. Confirm restart timing and
+consult the new phase logs if it is still slow. Do not reset/delete the scenario,
+private state or prior incomplete output to install this repair.
+
+Unusually deep authoring/import/export/external-tool/SQLite qualification remains
+a separately tracked gap; passing the packaged authoring examples does not prove
+all arbitrary-depth paths or component lengths. The requested clean-uninstall
+option remains separate pending work. Final Mac/Linux integration, removal of the
+temporary draft iteration guard, remaining desktop/UAC and genuine separate-account
+acceptance remain necessary before claiming broader readiness. PR #477 remains
+draft into dev. This evidence-only follow-up skips redundant CI; executable
+qualification stays bound to `5daed0fe`.
