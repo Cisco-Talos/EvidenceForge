@@ -134,6 +134,7 @@ jobs:
           tests/unit/test_world_model.py tests/unit/test_process_lifetimes.py
           tests/unit/test_resource_forecast.py tests/unit/test_artifact_properties.py
           tests/unit/test_studio_runtime.py tests/unit/test_studio_background.py
+          tests/unit/test_studio_run_source.py
           tests/unit/test_studio_startup.py tests/unit/test_studio_event_socket.py
       - name: Check Python and frontend contracts
         run: |

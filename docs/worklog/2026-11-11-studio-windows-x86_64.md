@@ -1440,3 +1440,23 @@ scenario content, output thresholds, tags and publication remain unchanged.
 References: https://docs.python.org/3.12/library/shutil.html#rmtree-example,
 https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_basic_info,
 https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-isreparsetagnamesurrogate.
+
+Integration CI 43457721143 exposes an independent Windows display-cache defect:
+test_imported_bundle_identity_requires_unchanged_registered_manifest_and_resolved_bytes
+returns the old published label after a rapid same-size resolved-file rewrite.
+The parallel Windows service run passes on identical code, consistent with the
+timestamp collision being timing-sensitive. A deterministic frozen-metadata control
+reproduces the stale published identity on unchanged baseline dev cf61b3a5, so this
+is not a generation-cleanup regression and the original failing assertion stays.
+
+On Windows, add a bounded streamed content hash to captured source/manifest cache
+stamps before reusing parsed identity. Metadata alone is insufficient: creation time
+does not represent changes, and equal-size rewrites can share last-write stamps.
+Retain parsed-model caching and its callback-free value graph, without retaining
+file bytes in keys; keep POSIX's metadata fast path. The existing 64 MiB source and
+8 MiB manifest limits also bound reads when reported size is stale. New deterministic
+tests freeze every metadata field across same-size edits to both files and require
+unknown/no identity, plus refusal when content grows past a stale size limit.
+All 131 focused source/cache/cleanup/sorting/ES/behavior/workflow cases pass locally;
+the earlier five engine/transaction cases remain unchanged. Add run-source tests to
+the fast native Windows stage and requalify the combined implementation before merge.

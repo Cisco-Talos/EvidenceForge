@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import weakref
 from pathlib import Path
 
@@ -126,6 +127,52 @@ def test_identity_cache_reuses_verified_bytes_but_rejects_changed_snapshot(
     frozen.write_text("scenario: {name: changed}\n", encoding="utf-8")
     assert captured_scenario(tmp_path / "missing-run", frozen, digest) is None
     assert reads == 2
+
+
+def test_windows_identity_cache_detects_same_size_edits_with_identical_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolved = tmp_path / "RESOLVED_SCENARIO.yaml"
+    digest = _input(resolved, {"status": "published", "publisher": "team", "version": "1.0.0"})
+    manifest_digest = _manifest(tmp_path, digest)
+    manifest = tmp_path / "GENERATION_MANIFEST.json"
+    original_stat = Path.stat
+    frozen = {resolved: resolved.stat(), manifest: manifest.stat()}
+
+    def unchanged_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        return frozen.get(path) or original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", unchanged_stat)
+    monkeypatch.setattr(run_source, "_CONTENT_STAMPS", True)
+    first = captured_scenario(tmp_path, manifest_sha256=manifest_digest)
+    assert first is not None and first.version == "1.0.0"
+    _input(resolved, {"status": "published", "publisher": "team", "version": "9.0.0"})
+    assert len(resolved.read_bytes()) == frozen[resolved].st_size
+    changed = captured_scenario(tmp_path, manifest_sha256=manifest_digest)
+    assert changed is not None and changed.status == "unknown" and changed.version is None
+    _manifest(tmp_path, hashlib.sha256(resolved.read_bytes()).hexdigest())
+    assert len(manifest.read_bytes()) == frozen[manifest].st_size
+    assert captured_scenario(tmp_path, manifest_sha256=manifest_digest) is None
+
+
+def test_windows_content_stamp_enforces_limit_even_when_metadata_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "snapshot"
+    path.write_bytes(b"ok")
+    frozen = path.stat()
+    path.write_bytes(b"larger than the inspection limit")
+    original_stat = Path.stat
+
+    def unchanged_stat(current: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        return (
+            frozen if current == path else original_stat(current, follow_symlinks=follow_symlinks)
+        )
+
+    monkeypatch.setattr(Path, "stat", unchanged_stat)
+    monkeypatch.setattr(run_source, "_CONTENT_STAMPS", True)
+    with pytest.raises(ValueError, match="inspection limit"):
+        run_source._stamp(path, 8)
 
 
 def test_missing_oversize_and_malformed_sources_never_guess_a_release_version(
