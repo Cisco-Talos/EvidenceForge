@@ -994,3 +994,30 @@ are pending. The prior startup/shutdown CI run `43345013290` passes its full Stu
 service stage before this next build; do not offer its artifact as the generation
 path repair. Product versions, tags, publication and clean-uninstall scope remain
 unchanged. Laptop generation/evaluation acceptance remains pending a new payload.
+
+#### Native root-normalization follow-up
+
+Run `43347148706` on `40aab0c8` passes all 196 short native cases (one existing
+POSIX-only skip), including all six new deep-output test bodies, but the strict
+fixture teardown detects two swallowed unprefixed stat probes on the long
+checkpoint root. The two checkpoint-store constructors use ordinary Path.resolve;
+Windows pathlib probes the final path even though later publication/recovery
+succeeds. Keep the teardown failure and fix the constructor, rather than treating
+swallowed access failures as acceptable native coverage.
+
+A shared resolve_path now resolves through physical extended spelling and then
+returns the caller's logical namespace, preserving deliberately explicit extended
+paths. Use it for store/spool root normalization and spool-relative containment
+comparisons. Native assertions cover normal/explicit namespaces and strict existing
+file resolution. The guard now records stacks for unexpected probes so future
+swallowed I/O failures remain diagnosable. Local behavior/host-path/incremental
+checkpoint tests pass 143 cases; Ruff and formatting pass. Revision 513/digest
+`0bffe46fad9950930abcdf02d1b5bbc6d6ef9d6d982f9bc454c5970f33e46239`
+declares no evidence change. Native requalification is pending the follow-up.
+
+Independent before/after generation from isolated `d77aeaef` and `40aab0c8` source
+copies passes the unchanged Mac native smoke workload. Every event artifact,
+GROUND_TRUTH.json and OBSERVATION_MANIFEST.json is byte-identical, with no missing,
+extra or normalized differences. Local evidence is retained under
+`/tmp/eforge-path-byte-comparison`; this verifies evidence semantics on POSIX and
+is separate from native Windows path-policy qualification.

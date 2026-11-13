@@ -7,13 +7,14 @@ import errno
 import io
 import os
 import shutil
+import traceback
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from evidenceforge._windows_paths import filesystem_path
+from evidenceforge._windows_paths import filesystem_path, resolve_path
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.utils.paths import safe_write_text
@@ -25,6 +26,7 @@ pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native Windows output p
 def legacy_path_limit(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     """Reject ordinary long paths even when the runner enables long-path policy."""
     denied: list[str] = []
+    stacks: dict[str, str] = {}
 
     def guard(function: Callable[..., Any], path_count: int = 1) -> Callable[..., Any]:
         def checked(*args: Any, **kwargs: Any) -> Any:
@@ -33,6 +35,7 @@ def legacy_path_limit(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
                     path = os.fsdecode(argument)
                     if len(path) >= 260 and not path.startswith("\\\\?\\"):
                         denied.append(path)
+                        stacks[path] = "".join(traceback.format_stack(limit=10))
                         raise FileNotFoundError(errno.ENOENT, "Legacy Windows path limit", path)
             return function(*args, **kwargs)
 
@@ -44,7 +47,9 @@ def legacy_path_limit(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     monkeypatch.setattr(io, "open", guard(io.open))
     monkeypatch.setattr(builtins, "open", guard(builtins.open))
     yield denied
-    assert denied == [], f"Output I/O used unprefixed long paths: {denied}"
+    assert denied == [], "Unprefixed long-path I/O:\n" + "\n".join(
+        f"{path}\n{stacks[path]}" for path in denied
+    )
 
 
 @pytest.mark.parametrize("checkpoint", [False, True])
@@ -114,6 +119,8 @@ def test_long_sorted_exact_retry_checkpoint_merge_and_cleanup(
     expected = ["02|exact", *(f"{index:02d}|ordinary" for index in range(8))]
     if not checkpoint:
         expected.append("09|after-flush")
+    assert resolve_path(output, strict=True) == output
+    assert resolve_path(filesystem_path(output), strict=True) == filesystem_path(output)
     assert filesystem_path(output).read_text().splitlines() == sorted(expected)
     assert not list(filesystem_path(parent).glob(".efsort-*"))
     assert not list(filesystem_path(parent).glob(".efmerge-*"))
@@ -144,7 +151,9 @@ def test_long_checkpoint_publication_recovery_integrity_and_reclamation(
 
     root = tmp_path / ("workspace 汉 ü " + "a" * 95) / ("runs " + "b" * 95)
     assert len(str(root)) > 260
+    assert resolve_path(root) == root
     store = IncrementalCheckpointStore(root)
+    assert store.output_root == root
     for sequence in range(3):
         store.commit(
             sequence=sequence,

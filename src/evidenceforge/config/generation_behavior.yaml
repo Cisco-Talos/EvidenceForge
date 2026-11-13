@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 512
+current_revision: 513
 history_start_revision: 1
-behavior_surface_sha256: 08f3b6df398d4bf999068491f7a9b628b18cada5e7362bbeab3499ed37f40c9e
+behavior_surface_sha256: 0bffe46fad9950930abcdf02d1b5bbc6d6ef9d6d982f9bc454c5970f33e46239
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5903,3 +5903,11 @@ changes:
   formats: []
   summary: Use long-path Windows I/O spelling and bounded temporary names while retaining
     logical output paths, exact publication, deterministic bytes and checkpoint identity.
+- revision: 513
+  id: resolve-long-windows-checkpoint-roots
+  impact: none
+  domains:
+  - checkpoint-storage
+  formats: []
+  summary: Resolve checkpoint roots through long-path Windows I/O while retaining their
+    logical namespace and rejecting all unprefixed long-path probes in native tests.

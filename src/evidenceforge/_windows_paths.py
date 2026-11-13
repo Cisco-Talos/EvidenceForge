@@ -27,3 +27,16 @@ def filesystem_path(path: Path) -> Path:
 def package_resource_path(path: Path) -> Path:
     """Keep bundled data readable without requiring Windows long-path policy changes."""
     return filesystem_path(path)
+
+
+def resolve_path(path: Path, *, strict: bool = False) -> Path:
+    """Resolve through Windows long-path I/O while retaining the caller's namespace."""
+    resolved = filesystem_path(path).resolve(strict=strict)
+    if os.name != "nt" or str(path).startswith("\\\\?\\"):
+        return resolved
+    spelling = str(resolved)
+    if spelling.startswith("\\\\?\\UNC\\"):
+        return Path("\\\\" + spelling[8:])
+    if spelling.startswith("\\\\?\\"):
+        return Path(spelling[4:])
+    return resolved

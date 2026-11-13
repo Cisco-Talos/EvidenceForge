@@ -20,7 +20,7 @@ from typing import Any
 import psutil
 from pydantic import ValidationError
 
-from evidenceforge._windows_paths import filesystem_path
+from evidenceforge._windows_paths import filesystem_path, resolve_path
 from evidenceforge.utils.files import fsync_directory, open_host_file
 from evidenceforge.utils.files import mkdir_private_host as _mkdir_private_host
 
@@ -329,7 +329,7 @@ class IncrementalCheckpointStore:
         *,
         publication_synchronization_hook: Callable[[str, int], None] | None = None,
     ) -> None:
-        self.output_root = Path(output_root).resolve()
+        self.output_root = resolve_path(Path(output_root))
         self.workspace = self.output_root / _WORKSPACE_NAME
         self.objects = self.workspace / "objects"
         self.recovery = self.workspace / "recovery"
