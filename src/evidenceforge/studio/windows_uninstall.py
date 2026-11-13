@@ -227,7 +227,10 @@ def build_plan(locations: UserLocations) -> CleanupPlan:
             yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
         )
         candidates.append(("skills", publisher))
-    workspaces: set[Path] = {locations.documents / "EvidenceForge"}
+    workspaces: set[Path] = {
+        locations.profile / "EvidenceForge",
+        locations.documents / "EvidenceForge",  # Previous preview default remains discoverable.
+    }
     settings = locations.private / "settings.json"
     safe_path(filesystem_path(settings))
     if filesystem_path(settings).is_file():

@@ -345,7 +345,7 @@ p { line-height: 1.5; }
 .run-outcome-icons .state-icon { width: 24px; height: 24px; padding: 0; justify-content: center; }
 .run-outcome-icons svg, .run-score-summary svg { flex: none; }
 .run-latest { font-size: 10px; color: #96b8f1; }
-.workspace-run .job-row-summary { grid-template-columns: minmax(145px, 1fr) 120px 90px minmax(95px, .75fr) minmax(130px, 1fr) auto; gap: 10px; }
+.workspace-run .job-row-summary { grid-template-columns: minmax(145px, 1fr) 120px 90px minmax(95px, .75fr) minmax(130px, 1fr) 280px; gap: 10px; }
 .workspace-run .job-row-title { flex-wrap: wrap; }
 .run-score-summary { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 11px; color: #cbd9eb; }
 .run-score-summary > span { display: flex; align-items: center; gap: 7px; }
@@ -578,7 +578,7 @@ p { line-height: 1.5; }
 .job-row:last-child { border-bottom: 0; }
 .job-row[open] { background: #172840; }
 .job-row.source-highlight, .job-row.source-highlight[open] { background: #25415f; box-shadow: inset 4px 0 #8bb4ff, 0 0 0 1px #648dca; }
-.job-row-summary { display: grid; grid-template-columns: minmax(155px, 1.6fr) 130px 105px minmax(125px, 1fr) auto; align-items: center; gap: 12px; min-height: 69px; padding: 9px 17px; cursor: pointer; list-style: none; }
+.job-row-summary { display: grid; grid-template-columns: minmax(155px, 1.6fr) 130px 105px minmax(125px, 1fr) 280px; align-items: center; gap: 12px; min-height: 69px; padding: 9px 17px; cursor: pointer; list-style: none; }
 .job-row-summary:hover { background: #1c3049; }
 .job-row-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .job-row-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 9px; min-width: 0; }
@@ -1363,7 +1363,7 @@ html[data-platform="linux"] select optgroup { color: var(--text); background-col
 .chat-activity-entry .chat-activity-row { flex: 1; min-width: 0; }
 .scorecard-dialog { width: min(900px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
 .job-row-result { min-width: 0; }
-.job-row-controls { flex-wrap: wrap; }
+.job-row-controls { flex-wrap: wrap; max-width: 100%; }
 @media (max-width: 1200px) {
   .job-row-summary, .workspace-run .job-row-summary { grid-template-columns: minmax(120px, 1fr) 110px 95px minmax(110px, 1fr); }
   .job-row-controls, .workspace-run .job-row-controls { grid-column: 1 / -1; grid-row: auto; justify-self: stretch; justify-content: flex-end; }

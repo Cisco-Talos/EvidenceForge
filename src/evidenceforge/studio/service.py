@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.artifacts.bundle_properties import BundleProperties, inspect_bundle_properties
 from evidenceforge.artifacts.lifecycle import _safe_path
 from evidenceforge.artifacts.lineage import ArtifactGroup
@@ -2338,7 +2339,7 @@ def create_app(
             target = plan.stage / ".eforge/config"
             try:
                 if target.exists():
-                    shutil.rmtree(target)
+                    remove_owned_tree(target)
                 if config.is_dir():
                     total = 0
                     for path in config.rglob("*"):
@@ -2361,7 +2362,7 @@ def create_app(
                         )
                     target_root = project_overlay_root(stage_project)
                     if target_root.exists():
-                        shutil.rmtree(target_root)
+                        remove_owned_tree(target_root)
                     target_root.mkdir(parents=True)
                     if layer_root.exists() or layer_root.is_symlink():
                         captures = capture_overlays(
@@ -3068,12 +3069,12 @@ def create_app(
             else:
                 await asyncio.to_thread(build_portable_archive, repository, pack, target)
         except (OSError, ValueError, EvidenceForgeError) as exc:
-            shutil.rmtree(temporary)
+            remove_owned_tree(temporary)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return FileResponse(
             target,
             filename=f"{storage_name(item.name)}-{item.version}.efpack",
-            background=BackgroundTask(shutil.rmtree, temporary),
+            background=BackgroundTask(remove_owned_tree, temporary),
         )
 
     @app.get("/v1/items")
@@ -3312,7 +3313,7 @@ def create_app(
                 studio.store.project(item.project_id) if item.project_id else None,
             )
         except (OSError, ValueError, ConfigurationError) as exc:
-            shutil.rmtree(cloned_path.parent)
+            remove_owned_tree(cloned_path.parent)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         source = next(
             (found for found in discover_scenarios(workspace, []) if found.path == cloned_path),

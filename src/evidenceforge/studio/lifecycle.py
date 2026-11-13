@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.composition.models import GenerationManifestDocument
 from evidenceforge.desktop.library import discover_scenarios
 from evidenceforge.naming import storage_name, validate_name
@@ -205,6 +206,6 @@ def clone_scenario(source: Path, workspace: Path, name: str) -> Path:
         target = destination / original.name
         target.write_text(updated, encoding="utf-8")
     except (OSError, shutil.Error, UnicodeError):
-        shutil.rmtree(destination)
+        remove_owned_tree(destination)
         raise
     return target

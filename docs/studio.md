@@ -287,11 +287,29 @@ is idle and retry the failed command.
 
 ## Start with a workspace
 
-Studio creates a default workspace in your Documents directory named `EvidenceForge`.
-On Linux it uses the Documents directory configured through XDG; if no distinct Documents
-directory is configured, it uses `~/EvidenceForge`.
+On Windows, Studio creates new workspaces in `%USERPROFILE%\EvidenceForge`
+(typically `C:\Users\<user>\EvidenceForge`), outside Documents folder backup.
+On macOS the default is `~/Documents/EvidenceForge`. On Linux it uses the Documents
+directory configured through XDG; if no distinct Documents directory is configured,
+it uses `~/EvidenceForge`. Saved workspace choices and explicit overrides stay unchanged.
 Use **Settings → Workspace** to select another location. Workspace selection is independent of
 where Studio was launched. Projects organize library entries within a workspace.
+
+**Generated runs folder** selects a separate destination for new generations in the active
+workspace; leave it empty to use `<workspace>/runs`. Saving it does not move existing runs,
+change their recovery paths or detach their history. Resource forecasts use the same saved
+destination. To keep an existing OneDrive scenario library while testing locally, set this
+field to `C:\Users\<user>\EvidenceForge\runs`, then save settings before starting a new run.
+
+Use a local disk for active generation and checkpoints. The Windows preview's storage
+baseline is local NTFS; OneDrive and other cloud-synced active workspaces/run folders are
+not qualified. Large datasets and the creation/deletion of checkpoint objects can trigger
+heavy synchronization, transient sharing conflicts and OneDrive bulk-deletion prompts.
+Documents folder backup can redirect the Windows Documents known folder into OneDrive even
+when a separate physical `C:\Users\<user>\Documents` folder exists. Studio does not disable
+sync safeguards or migrate files automatically. Back up completed bundles and authored work;
+stop jobs before any manually reviewed workspace move. Custom run destinations remain
+preserved by clean uninstall and should be managed/backed up separately.
 
 For a first run:
 

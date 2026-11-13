@@ -116,6 +116,9 @@ without turning `TODO.md` back into a high-conflict work journal.
   Genuine separate-account isolation remains required before claiming that capability.
   Laptop test/fix iterations may use explicit unqualified build-only Windows previews;
   full CI and installer qualification remain required before declaring testing complete.
+  Qualify the local `%USERPROFILE%\EvidenceForge` default, separate run destinations,
+  retained legacy workspace paths and retryable deletion of read-only checkpoint trees.
+  Cloud-synced active workspaces/run folders remain outside the local-NTFS baseline.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   This preview excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).

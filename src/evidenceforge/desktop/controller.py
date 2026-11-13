@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +15,12 @@ from typing import Protocol
 
 import psutil
 
+from evidenceforge._windows_cleanup import (
+    remove_empty_owned_directory,
+    remove_owned_file,
+    remove_owned_tree,
+)
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.desktop.evaluation_errors import evaluation_failure_message
 from evidenceforge.desktop.job_store import ControlIntent, JobStore
 from evidenceforge.desktop.jobs import _start_process, request_suspension, resume_generation
@@ -27,6 +32,7 @@ from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStor
 from evidenceforge.studio.processes import isolated_python_options, launch_options
 from evidenceforge.studio.runtime import command_environment, runtime_root
 from evidenceforge.studio.runtime_cleanup import runtime_lease
+from evidenceforge.utils.files import open_host_file
 
 logger = logging.getLogger(__name__)
 _controller_processes: list[subprocess.Popen[bytes]] = []
@@ -96,6 +102,61 @@ def _terminate_owned(job: ProcessRecord) -> None:
                 pass
 
 
+def _remove_bundle_files(root: Path) -> None:
+    """Keep ownership receipts until contents are removed, so failure remains retryable."""
+    physical = filesystem_path(root)
+    identity = physical.stat(follow_symlinks=False)
+    receipts = {
+        path: (path.read_bytes(), path.stat(follow_symlinks=False).st_mode & 0o777)
+        for name in (".eforge-desktop-job.json", "GENERATION_MANIFEST.json")
+        if (path := physical / name).is_file()
+    }
+    for path in physical.iterdir():
+        if path in receipts:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            remove_owned_tree(path)
+        else:
+            remove_owned_file(path)
+    current = physical.stat(follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+        raise OSError("Bundle directory changed during deletion; ownership must be reviewed")
+    try:
+        for path, (data, _mode) in receipts.items():
+            if path.is_symlink() or path.read_bytes() != data:
+                raise OSError("Bundle ownership receipt changed during deletion")
+            remove_owned_file(path)
+        remove_empty_owned_directory(physical)
+    except OSError as error:
+        # A final rmdir may fail after receipt removal. Restore only into the same
+        # surviving directory, exclusively; never replace a new receipt or root.
+        try:
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import open_directory
+
+                parent = open_directory(physical)
+            else:
+                parent = os.open(physical, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                current = os.fstat(parent)
+                if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+                    raise OSError("Bundle directory identity changed; receipts were not restored")
+                for path, (data, mode) in receipts.items():
+                    try:
+                        descriptor = open_host_file(
+                            path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode, dir_fd=parent
+                        )
+                    except FileExistsError:
+                        continue
+                    with os.fdopen(descriptor, "wb") as stream:
+                        stream.write(data)
+            finally:
+                os.close(parent)
+        except OSError as restore_error:
+            error.add_note(f"Bundle deletion receipt could not be restored: {restore_error}")
+        raise
+
+
 def _delete_owned_incomplete(job: GenerationJob) -> bool:
     """Delete only a marked incomplete bundle owned by this exact GUI job."""
     root = job.output_root
@@ -110,7 +171,7 @@ def _delete_owned_incomplete(job: GenerationJob) -> bool:
         return False
     if payload.get("job_id") != job.id or _running(job):
         return False
-    shutil.rmtree(root)
+    _remove_bundle_files(root)
     return True
 
 
@@ -134,7 +195,7 @@ def _delete_owned_complete(job: GenerationJob) -> bool:
         return False
     if payload.get("job_id") != job.id or _running(job):
         return False
-    shutil.rmtree(root)
+    _remove_bundle_files(root)
     return True
 
 

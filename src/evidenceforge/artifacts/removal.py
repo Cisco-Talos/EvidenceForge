@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.artifacts.lifecycle import (
     MAX_BYTES,
     ArtifactError,
@@ -243,7 +244,7 @@ def _delete_tree_last_source(target: Path, source: Path) -> None:
             continue
         if os.name == "nt":
             if path.is_dir():
-                shutil.rmtree(path)
+                remove_owned_tree(path)
             else:
                 path.unlink()
             continue

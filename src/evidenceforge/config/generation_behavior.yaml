@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 519
+current_revision: 520
 history_start_revision: 1
-behavior_surface_sha256: d7a13a6b0dec56372f4f48db1448cbd6bc5b7eace48967a4d1f093d2a821aba4
+behavior_surface_sha256: 4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5970,3 +5970,12 @@ changes:
   formats: []
   summary: Retry bounded Windows generated-file open failures before acquiring the stream;
     preserve access modes, permissions, exact publication receipts and evidence bytes.
+- revision: 520
+  id: centralize-owned-workspace-removal
+  impact: none
+  domains:
+  - output-publication
+  - temporary-storage
+  formats: []
+  summary: Share bounded Windows removal and per-entry read-only repair across owned
+    staging and journal trees without changing evidence bytes or protected storage policy.

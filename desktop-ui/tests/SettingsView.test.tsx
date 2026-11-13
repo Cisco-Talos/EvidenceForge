@@ -134,3 +134,24 @@ test("Windows preview explains retained runtimes and disables unsupported cleanu
   await waitFor(() => expect(screen.getByRole("button", { name: "Save settings" })).toHaveProperty("disabled", true));
   expect(request).not.toHaveBeenCalledWith("/v1/runtime/cleanup-settings", expect.anything(), expect.anything());
 });
+
+test("a separate run destination preserves other workspaces and clearing restores the default", async () => {
+  const settings = {
+    workspace: "C:\\Users\\david\\OneDrive\\Documents\\EvidenceForge", recent_workspaces: [],
+    output_parents: { other: "D:\\other-runs" }, max_concurrent_generations: 2, checkpoint_hours: 24,
+    quit: { action: "continue", continue_queued_generations: true, continue_evaluations: "continue", pause_close_timing: "handoff", pause_evaluations: "finish", kill_incomplete_bundles: "preserve", authoring_turns: "stop" },
+    skill_install_scope: "global", skill_install_agent: "all", codex_path: null, eforge_path: null,
+  } as StudioSettings;
+  const request = vi.fn(async (_path: string, _method?: string, body?: unknown) => body);
+  render(<Tooltip.Provider><SettingsView settings={settings} paths={{ data: "private", logs: "logs" }} api={{ request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi} onSaved={async () => undefined} onError={vi.fn()} /></Tooltip.Provider>);
+  const user = userEvent.setup();
+  const input = screen.getByRole("textbox", { name: "Generated runs folder" });
+  await user.type(input, "C:\\Users\\david\\EvidenceForge\\runs");
+  await user.click(screen.getByRole("button", { name: "Save settings" }));
+  await waitFor(() => expect(request).toHaveBeenLastCalledWith("/v1/settings", "PUT", expect.objectContaining({
+    workspace: settings.workspace, output_parents: { other: "D:\\other-runs", [settings.workspace]: "C:\\Users\\david\\EvidenceForge\\runs" },
+  })));
+  await user.clear(input);
+  await user.click(screen.getByRole("button", { name: "Save settings" }));
+  await waitFor(() => expect(request).toHaveBeenLastCalledWith("/v1/settings", "PUT", expect.objectContaining({ output_parents: { other: "D:\\other-runs" } })));
+});

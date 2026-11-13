@@ -40,6 +40,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.external_parsers.errors import SplunkHarnessError, SplunkParserError
 from evidenceforge.external_parsers.sof_elk_zeek import ZEEK_LOG_SPECS
 from evidenceforge.external_parsers.splunk_runtime import (
@@ -695,7 +696,7 @@ def _copy_regular_app_tree(source_root: Path, destination_root: Path) -> None:
                         destination_dir / entry.name,
                     )
     except (OSError, SplunkHarnessError):
-        shutil.rmtree(destination_root, ignore_errors=True)
+        remove_owned_tree(destination_root, ignore_errors=True)
         raise
 
 
@@ -1361,7 +1362,7 @@ def _extract_app_archive(
             extracted.append(destination)
         return tuple(extracted)
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        remove_owned_tree(temp_dir, ignore_errors=True)
 
 
 def _safe_zip_extract(

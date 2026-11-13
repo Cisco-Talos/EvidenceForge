@@ -313,6 +313,8 @@ def assemble(
                 "nsis": {
                     "installMode": "both",
                     "compression": "zlib",
+                    "installerIcon": str(root / "desktop-ui/src-tauri/icons/icon.ico"),
+                    "uninstallerIcon": str(root / "desktop-ui/src-tauri/icons/icon.ico"),
                     "template": str(root / "desktop-ui/packaging/windows-installer.nsi"),
                     "installerHooks": str(root / "desktop-ui/packaging/windows-hooks.nsh"),
                 },

@@ -30,7 +30,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -62,6 +61,7 @@ from rich.table import Column, Table
 from rich.text import Text
 
 from evidenceforge import __version__
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.cli.checkpoint_commands import checkpoint_app
 from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.lifecycle_commands import register_lifecycle_commands, scenario_app
@@ -1751,7 +1751,7 @@ def _cleanup_failed_generation_staging(
 ) -> None:
     """Discard only temporary staging; the caller owns migration restoration and persistent state."""
     if staging_dir and staging_dir.exists() and not persistent_staging:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        remove_owned_tree(staging_dir, ignore_errors=True)
         console.print("[dim]Cleaned up staging directory[/dim]")
     if has_existing:
         console.print("[dim]Previous output preserved[/dim]")
@@ -2119,13 +2119,13 @@ def generate(
             return
         staged = checkpoint_store.staged_bundle
         if staged.exists():
-            shutil.rmtree(staged)
+            remove_owned_tree(staged)
         os.replace(backup, staged)
 
     def discard_pre_migration_staging_backup() -> None:
         backup = pre_migration_staging_backup
         if backup is not None and backup.exists():
-            shutil.rmtree(backup)
+            remove_owned_tree(backup)
 
     # Generate logs
     try:
@@ -2194,7 +2194,7 @@ def generate(
                         )
                     os.replace(staging_dir, pre_migration_staging_backup)
                 else:
-                    shutil.rmtree(staging_dir)
+                    remove_owned_tree(staging_dir)
             staging_dir.mkdir(parents=True, mode=0o700)
         elif has_existing:
             staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
@@ -2289,7 +2289,7 @@ def generate(
                 SIDECAR_REGISTRY.replace(staging_dir, ground_truth_dir)
             finally:
                 if not persistent_staging:
-                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    remove_owned_tree(staging_dir, ignore_errors=True)
 
             console.print("[dim]Replaced previous output[/dim]")
 

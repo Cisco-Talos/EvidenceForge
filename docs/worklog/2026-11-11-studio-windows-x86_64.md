@@ -1568,3 +1568,103 @@ and full CI/qualification remain pending. The model-free local focused gate pass
 154 cases; nine real-Windows cases are skipped on this macOS host. All 53 declared
 output hashes in the local five-hour replay match and verify. No new PR is opened
 and no code is merged while the user is still in the rapid testing loop.
+
+### Successful laptop generation; local storage and shared cleanup (November 13)
+
+The user reports that build-only 718af5db now completes generation and evaluation
+on the existing laptop scenario. Their next Delete bundle attempt fails with
+WinError 5 under `.eforge-generation/objects/resolved/8b`. OneDrive also repeatedly
+asks to confirm bulk deletion of checkpoint-object YAML, run.lock and hundreds of
+other items. The workspace is in OneDrive Documents. This confirms sync churn,
+not that every earlier access denial had the same cause: an earlier controlled
+probe reproduced read-only-directory deletion failure in local AppData as well.
+The first protected-private-state SID failure was a separate ACL issue.
+
+The user agrees to prefer local-only storage for large datasets. Windows new-user
+workspace selection now uses `%USERPROFILE%\EvidenceForge`, independent of the
+Documents known folder and OneDrive folder backup. Both physical Documents folders
+can exist separately on the laptop; Studio previously requested the configured
+known folder rather than hardcoding either physical Documents path. Preserve saved
+workspace choices, explicit overrides and macOS/Linux defaults. Expose the existing
+per-workspace `output_parents` setting as **Generated runs folder**: this allows a
+local run root without relocating the existing scenario library or invalidating
+history/checkpoint paths. New generations and resource forecasts already share that
+setting. No automatic move or rewrite of an existing job is performed. Clean
+uninstall discovers both the local default and the legacy Documents default even
+after private settings are removed; unrelated content and custom output roots stay.
+Document local NTFS as the preview baseline and cloud-synced active workspaces/run
+folders as unqualified. Do not disable OneDrive deletion prompts as a product fix.
+
+The deletion review finds raw recursive removal bypassing the existing Windows
+scratch helper in controller bundle deletion, artifact/import/export staging,
+composition rollback, draft cloning, CLI generation staging, ground-truth journal
+cleanup and external-parser scratch cleanup. Route caller-owned workspace trees
+through `remove_owned_tree`; retain the old scratch entrypoint as a delegating
+interface. Windows applies bounded namespace-removal retries and the existing
+handle-checked ReadOnly repair, preserving ACLs and refusing redirected/hardlinked
+attribute repair. Give each failing unlink/rmdir its own budget so a tree with more
+than seven read-only entries can be removed. Do not multiply an exhausted per-entry
+budget by retrying the entire tree. POSIX retains ordinary removal and its prior
+best-effort behavior at callsites that explicitly ignored cleanup errors.
+
+Controller deletion still requires its original exact-job marker, inactive process,
+owned-output flag and complete/incomplete eligibility checks. Keep marker/manifest
+receipts until other contents have gone; restore exclusively through a pinned,
+identity-checked directory handle if final empty-root removal fails. Never restore
+into a replacement root or overwrite a new receipt. Native protected-storage
+ancestry/reparse restrictions remain in force for recovery; ambiguous restoration
+fails closed. This does not adopt old folders whose marker was already lost by a
+previous partial deletion. Existing protected private-state/recovery/runtime and
+POSIX dir_fd removal contracts stay separate. An AST regression inventories the
+remaining deliberate direct recursive-removal exceptions, including callback
+references, so new workspace bypasses require review. This is a recursive-removal
+review, not a claim that every file operation or cloud provider is qualified.
+
+Use the existing branded ICO for both NSIS installer and uninstaller resources.
+Fix the shared JobCard grid: reserve a consistent action track rather than allowing
+each row's button count to resize earlier columns; put bundle size on the metadata
+line consistently. Browser inspection of actual ScenarioRuns/JobCard components at
+1440, 900 and 600 CSS pixels confirms aligned status/progress tracks, no horizontal
+row overflow, and usable wrapping. At desktop width all three action variants fit
+one 35px control row. Temporary visual harness and browser tab are removed afterward.
+
+The supplied evaluation paste is truncated mid-finding at about 64 KiB; do not treat
+it as a complete authoritative bundle or invent its missing acceptance tail. The
+complete visible action summary scores ground-truth agreement 97.10822866487705,
+with 3,047 correct of 3,187 applicable checks across 11 equally weighted actions.
+Its failure summary is 2 factual, 66 missing/duplicate and 72 unexpected-evidence
+checks (140 total); 1,300 expected absences and 656 coverage gaps are separate.
+The user's GUI reports PASS; passing an action-averaged threshold does not mean
+zero contradictions. Bounded inspection of ten complete findings identifies:
+
+- DNS SRV expected answers include priority/weight/port, while the reported parsed
+  answer contains only the DC hostname: projection/parser contract needs review.
+- SMTP expected and reported fields look identical, including empty sender and
+  recipient list, but matched_count is zero: comparator/normalization needs review.
+- HTTP proxy GET/POST evidence is present and matches; a second required CONNECT
+  to port 80 is absent: investigate tunnel-vs-plain-HTTP requirement construction.
+- eCAR/Sysmon evidence is present while the recorded expectation says absent due
+  to missing_capability or source_rule_filtering: investigate observation/visibility
+  ownership and exact selectors. Repeated findings can select the same row.
+
+These are provisional engine/evaluator-contract findings, not grounds to rewrite
+this authored scenario or weaken the 95% agreement gate. Definitive ownership and
+all remaining findings require the complete report and exact frozen bundle/source
+records. The new laptop scenario is not assumed identical to the older captured
+five-hour replay. The durable mixed-fleet ground-truth backlog remains open.
+
+Validation on this macOS host: focused Studio/controller/cleanup/settings/behavior
+checks pass (201 passed, one native-only skipped), artifact lifecycle/lineage/pack
+release/removal checks pass (111), resource prediction checks pass (13), frontend
+Settings/ScenarioRuns/BundleLibrary/ObjectActions checks pass (29), and frontend
+production build succeeds. After the final receipt-restoration hardening, its
+cleanup/controller/audit gate passes 50 with one native-only skipped. Native large
+read-only bundle deletion is in the existing Windows cleanup test module for the
+later qualified Windows gate; it is not claimed as run in build-only mode. Ruff,
+format, generated types and manifest integrity are required before committing.
+Behavior revision 520 declares no evidence-byte change. The unchanged older captured
+five-hour source at seed 42 completes again: all 53 declared file SHA256s verify and
+match the prior baseline. Evidence is in
+/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-owned-cleanup-replay-n5rmj3wi/.
+No product/storage version bump, release tag, publication, PR or merge is authorized
+by this rapid laptop iteration; deliver another explicitly unqualified build-only EXE.

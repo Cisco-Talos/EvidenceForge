@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import base64
 import json
-import shutil
 import socket
 import ssl
 import subprocess
@@ -40,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.external_parsers.compose_runtime import ComposeCommand, find_compose_runtime
 from evidenceforge.external_parsers.errors import SplunkHarnessError, SplunkParserError
 
@@ -110,7 +110,7 @@ def reset_splunk_run_directories(work_dir: Path) -> None:
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
-            shutil.rmtree(path)
+            remove_owned_tree(path)
         path.mkdir(parents=True, exist_ok=True)
 
 

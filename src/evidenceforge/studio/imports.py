@@ -17,6 +17,7 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.composition.models import CompositionSpec, PackReference, PackType
 from evidenceforge.composition.packs import LoadedPack, PackRepository, version_satisfies_constraint
 from evidenceforge.composition.releases import (
@@ -66,7 +67,7 @@ def _publish_windows_directory(source: Path, target: Path) -> None:
         publish_new_directory(staging, target)
     finally:
         if staging.exists():
-            shutil.rmtree(staging)
+            remove_owned_tree(staging)
 
 
 class ScenarioImportRequest(BaseModel):
@@ -471,7 +472,7 @@ class PreparedImport:
 
     def close(self) -> None:
         """Remove only this generated temporary snapshot."""
-        shutil.rmtree(self.stage, ignore_errors=True)
+        remove_owned_tree(self.stage, ignore_errors=True)
 
     def add_files(self, root: Path, files: dict[str, bytes]) -> None:
         """Capture bounded, relative files without replacing conflicting snapshots."""
@@ -699,7 +700,7 @@ class PreparedImport:
                 if target.is_file():
                     target.unlink()
                 else:
-                    shutil.rmtree(target)
+                    remove_owned_tree(target)
             raise
         return workspace / self.target if self.target else None
 
@@ -1162,7 +1163,7 @@ def prepare_archive(request: PackImportRequest, workspace: Path, cache: Path) ->
         plan.sources = {source: plan.sources[source]}
         plan.review.can_import = not any(row.status == "conflict" for row in plan.review.rows)
         plan.review.destination = workspace / ".eforge/packs"
-        shutil.rmtree(extracted)
+        remove_owned_tree(extracted)
         return plan
     except (OSError, ValueError, PackError, yaml.YAMLError):
         plan.close()

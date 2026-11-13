@@ -727,6 +727,21 @@ def test_platform_paths_and_default_workspace_can_be_isolated(
     assert SettingsStore(paths).load() == settings
 
 
+def test_windows_default_avoids_redirected_documents_and_preserves_saved_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", raising=False)
+    monkeypatch.setattr("evidenceforge.studio.paths.sys.platform", "win32")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    synced = tmp_path / "OneDrive" / "Documents" / "EvidenceForge"
+    monkeypatch.setattr("evidenceforge.studio.paths.user_documents_path", lambda: synced.parent)
+    assert default_workspace() == tmp_path / "EvidenceForge"
+    assert StudioSettings().workspace == tmp_path / "EvidenceForge"
+    assert StudioSettings(workspace=synced).workspace == synced
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(synced))
+    assert default_workspace() == synced
+
+
 def test_linux_xdg_documents_and_private_directories(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.delenv("EFORGE_STUDIO_HOME", raising=False)
     monkeypatch.delenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", raising=False)

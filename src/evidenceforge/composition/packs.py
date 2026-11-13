@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.config import get_config_directory
 from evidenceforge.models.exceptions import ConfigurationError, EvidenceForgeError, PackError
 from evidenceforge.utils import (
@@ -925,7 +925,7 @@ class PackRepository:
         if path.is_symlink():
             path.unlink(missing_ok=True)
         elif path.is_dir():
-            shutil.rmtree(path)
+            remove_owned_tree(path)
         elif _path_exists(path):
             path.unlink(missing_ok=True)
 

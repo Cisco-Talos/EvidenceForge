@@ -80,6 +80,19 @@ def test_selected_categories_are_independent_and_other_accounts_stay(
     assert not list(locations.profile.rglob(".eforge-uninstall-*"))
 
 
+def test_clean_uninstall_finds_local_default_even_after_private_settings_are_removed(
+    locations: UserLocations,
+) -> None:
+    local = locations.profile / "EvidenceForge"
+    work = write(local / ".eforge/artifacts/drafts/scenario/source.yaml")
+    unrelated = write(local / "my-notes.txt")
+    legacy = write(locations.documents / "EvidenceForge/.eforge/artifacts/legacy/source.yaml")
+    plan = build_plan(locations)
+    execute(plan, {"work"})
+    assert not work.exists() and not legacy.exists()
+    assert unrelated.read_text() == "preserve"
+
+
 def test_modified_known_skills_are_explicit_and_unrelated_files_survive(
     locations: UserLocations,
 ) -> None:
