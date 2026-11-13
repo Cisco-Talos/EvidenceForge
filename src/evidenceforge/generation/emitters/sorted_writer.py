@@ -120,6 +120,7 @@ class ExternalSortedLineWriter:
         self._active_exact_publication_keys: set[ExactPublicationParticipantKey] = set()
         self._close_state = "open"
         self._close_thread: int | None = None
+        self._terminal_export_complete = False
         self._exported_run_count = 0
 
     def write(self, rendered: str) -> None:
@@ -373,16 +374,18 @@ class ExternalSortedLineWriter:
                 self._exact_publication_condition.wait()
         try:
             with self._lock:
-                self._spill_unlocked()
-                if self._run_paths:
-                    self._compact_runs_for_close_unlocked()
-                    self._publish_runs_unlocked()
-                    self._mark_exact_rows_exported_unlocked()
-                    self._normalize_exported_runs_unlocked()
+                if not self._terminal_export_complete:
+                    self._spill_unlocked()
+                    if self._run_paths:
+                        self._compact_runs_for_close_unlocked()
+                        self._publish_runs_unlocked()
+                        self._mark_exact_rows_exported_unlocked()
+                        self._normalize_exported_runs_unlocked()
+                    self._terminal_export_complete = True
                 self._cleanup_spool_unlocked()
         except BaseException:
             with self._exact_publication_condition:
-                self._close_state = "open"
+                self._close_state = "cleanup-pending" if self._terminal_export_complete else "open"
                 self._close_thread = None
                 self._exact_publication_condition.notify_all()
             raise
@@ -705,6 +708,14 @@ class ExternalSortedLineWriter:
                 stream.write("\n")
 
     def _cleanup_spool_unlocked(self) -> None:
+        if self._spool_dir is not None:
+            if os.name == "nt":
+                from evidenceforge._windows_cleanup import remove_temporary_tree
+
+                remove_temporary_tree(self._spool_dir)
+            else:
+                shutil.rmtree(filesystem_path(self._spool_dir), ignore_errors=True)
+            self._spool_dir = None
         self._run_paths.clear()
         self._exact_journal.clear()
         self._exact_admitted_bytes = 0
@@ -714,6 +725,3 @@ class ExternalSortedLineWriter:
         self._exact_capacity_reservations.clear()
         self._exact_reserved_rows = 0
         self._exact_reserved_bytes = 0
-        if self._spool_dir is not None:
-            shutil.rmtree(filesystem_path(self._spool_dir), ignore_errors=True)
-            self._spool_dir = None

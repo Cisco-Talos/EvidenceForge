@@ -7,6 +7,8 @@ import errno
 import io
 import os
 import shutil
+import stat
+import subprocess
 import traceback
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -180,6 +182,7 @@ def test_long_checkpoint_publication_recovery_integrity_and_reclamation(
     filesystem_path(dependency).write_bytes(b"tampered")
     with pytest.raises(CheckpointCorruptionError):
         restarted.read_resolved_scenario(recovery)
+    os.chmod(filesystem_path(dependency), stat.S_IREAD)
     store.remove_workspace()
     assert not filesystem_path(store.workspace).exists()
 
@@ -261,3 +264,171 @@ def test_long_uninstall_inventory_staging_and_removal(
     assert not private.exists()
     assert unrelated.read_text() == "preserve"
     assert legacy_path_limit == []
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_sorted_close_releases_native_delete_block_without_losing_retry_state(
+    tmp_path: Path,
+    legacy_path_limit: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    persistent: bool,
+) -> None:
+    from evidenceforge import _windows_cleanup as cleanup
+    from evidenceforge.utils.windows_filesystem import open_directory
+
+    output = tmp_path / ("workspace ü " + "a" * 95) / ("runs " + "b" * 95) / "rows.log"
+    writer = ExternalSortedLineWriter(output, sort_key=str, buffer_size=1)
+    writer.write("02|second")
+    writer.write("01|first")
+    spool = writer._spool_dir
+    assert spool is not None
+    descriptor = open_directory(spool)
+    waits: list[float] = []
+
+    def release_after_denial(delay: float) -> None:
+        nonlocal descriptor
+        waits.append(delay)
+        if not persistent and descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+
+    monkeypatch.setattr(cleanup, "sleep", release_after_denial)
+    try:
+        if persistent:
+            with pytest.raises(PermissionError):
+                writer.close()
+            assert writer._spool_dir == spool
+            assert writer._close_state == "cleanup-pending" and not writer._closed
+            assert len(waits) == len(cleanup._DELETE_RETRY_DELAYS)
+            os.close(descriptor)
+            descriptor = None
+        writer.close()
+        assert waits
+        assert filesystem_path(output).read_text().splitlines() == ["01|first", "02|second"]
+        assert writer.event_count == 2 and writer._closed
+        assert writer._spool_dir is None and not filesystem_path(spool).exists()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        writer.close()
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_native_es_ingress_cleanup_retries_without_changing_exported_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistent: bool
+) -> None:
+    from evidenceforge import _windows_cleanup as cleanup
+    from evidenceforge.utils.windows_filesystem import open_directory
+    from tests.unit.test_macos_es_ingress import _publish
+
+    _, dispatcher, output, ingress, _ = _publish(tmp_path)
+    ingress.finalize(dispatcher)
+    output.close()
+    ingress.verify_export(dispatcher)
+    exported = next((tmp_path / "output").rglob("macos_endpoint_security.ndjson"))
+    retained = exported.read_bytes()
+    descriptor = open_directory(ingress.root)
+    waits: list[float] = []
+
+    def release_after_denial(delay: float) -> None:
+        nonlocal descriptor
+        waits.append(delay)
+        if not persistent and descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+
+    monkeypatch.setattr(cleanup, "sleep", release_after_denial)
+    try:
+        # The original unguarded cleanup really fails on this native handle;
+        # this is not an injected Python PermissionError.
+        with pytest.raises(PermissionError) as denied:
+            shutil.rmtree(filesystem_path(ingress.root))
+        assert denied.value.winerror in {5, 32}
+        if persistent:
+            with pytest.raises(PermissionError):
+                ingress.cleanup()
+            assert ingress.root.is_dir() and ingress.finalized
+            assert len(waits) == len(cleanup._DELETE_RETRY_DELAYS)
+            os.close(descriptor)
+            descriptor = None
+        ingress.cleanup()
+        assert waits and not ingress.root.exists()
+        assert exported.read_bytes() == retained
+        ingress.verify_export(dispatcher)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        ingress.cleanup()
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_native_scratch_cleanup_clears_only_readonly_attribute(
+    tmp_path: Path, directory: bool
+) -> None:
+    from evidenceforge._windows_cleanup import remove_temporary_tree
+
+    root = tmp_path / "owned scratch"
+    root.mkdir()
+    entry = root / "readonly"
+    if directory:
+        entry.mkdir()
+    else:
+        entry.write_text("temporary")
+    os.chmod(entry, stat.S_IREAD)
+    assert entry.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    remove_temporary_tree(root)
+    assert not root.exists()
+
+
+def test_native_readonly_repair_never_changes_junction_target(tmp_path: Path) -> None:
+    from evidenceforge._windows_cleanup_native import clear_readonly_for_removal
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "authored.txt"
+    sentinel.write_text("preserve")
+    junction = tmp_path / "junction"
+    subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(outside)],
+        check=True,
+        capture_output=True,
+    )
+    os.chmod(outside, stat.S_IREAD)
+    try:
+        assert clear_readonly_for_removal(junction) is False
+        assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+        assert sentinel.read_text() == "preserve"
+    finally:
+        os.chmod(outside, stat.S_IWRITE)
+        junction.rmdir()
+
+
+def test_native_readonly_repair_refuses_multiply_linked_file(tmp_path: Path) -> None:
+    from evidenceforge._windows_cleanup_native import clear_readonly_for_removal
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("preserve")
+    linked = tmp_path / "linked.txt"
+    os.link(outside, linked)
+    os.chmod(outside, stat.S_IREAD)
+    try:
+        assert clear_readonly_for_removal(linked) is False
+        assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+        assert outside.read_text() == "preserve"
+    finally:
+        os.chmod(outside, stat.S_IWRITE)
+
+
+def test_native_registered_output_rollback_cleans_readonly_generated_data(tmp_path: Path) -> None:
+    from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
+
+    data = tmp_path / "data"
+    data.mkdir()
+    generated = data / "generated.log"
+    generated.write_text("generated output")
+    os.chmod(generated, stat.S_IREAD)
+    sentinel = tmp_path / "ENVIRONMENT.md"
+    sentinel.write_text("preserve authored collateral")
+    SIDECAR_REGISTRY._remove(data)
+    assert not data.exists()
+    assert sentinel.read_text() == "preserve authored collateral"

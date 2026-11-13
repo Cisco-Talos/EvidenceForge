@@ -1368,3 +1368,118 @@ separate-account ownership, all three cleanup choices and first-launch setup aft
 reset remain manual acceptance. Hosted Windows Server native UI checks establish
 only their stated bounds. The laptop's separate ground-truth agreement failure
 and broader deep-workspace qualification remain open on the durable roadmap.
+
+### Laptop reaches 100 percent; Windows scratch removal denied (November 13)
+
+PR #483 merged as cf61b3a5. Exact-dev CI 43380044677 passes all 33 jobs and
+Installer Builds 43380044794 passes all 11, including all four packaged targets.
+Qualified Windows artifact 14018207579 has independently verified EXE SHA256
+318411d96561b9e0f593f8f6402d7ec42a659a8e4cd34e7263e8e896e5014609.
+The user now reaches Hour 5/5 on the unchanged healthcare scenario, then fails
+inside MacosESIngress.cleanup -> shutil.rmtree -> os.rmdir with WinError 5.
+The denied entry is an empty .efsort directory under the staged private ES ingress
+in the OneDrive-backed workspace. The physical path is already extended; this
+trace does not establish another MAX_PATH failure. Simulated hours completing is
+not successful final bundle publication. No checkpoint was committed for this run.
+
+Read-only laptop inspection first shows ReadOnly, Directory, Archive, ReparsePoint.
+A later os.lstat shows attributes 0x31 and tag 0: the reparse flag has disappeared
+while ReadOnly remains. Do not equate all reparse points with links or claim that
+OneDrive, an ACL, or an open handle is conclusively responsible. The user then
+reproduces deletion refusal on new empty ReadOnly directories in both LocalAppData
+and the OneDrive workspace: attributes 0x11, PermissionError(13), and success after
+clearing only ReadOnly. This establishes the concrete read-only-directory failure
+class independently of a cloud provider; it does not establish who originally set
+that bit. The probe removes only its new empty directories. The failed run and its
+private workspace remain unchanged.
+
+The sorter currently ignores its first rmtree failure and discards its spool path;
+the later ingress cleanup then fails the run on the same leftover directory.
+On codex/windows-ingress-cleanup, retain sorter state until Windows cleanup really
+succeeds. Add bounded native deletion retries (six waits totaling 3.15 seconds),
+preserving persistent and unrelated failures. A ReadOnly repair opens only the
+failed owned entry with OPEN_REPARSE_POINT and changes FileBasicInfo through that
+handle. Preserve ACLs and all other attributes; refuse multiply linked files,
+name-surrogate links and unknown reparse tags. Only the documented Cloud Files tag
+family is eligible alongside ordinary entries. This does not weaken the separate
+protected-storage adapter's strict reparse/ACL rules. POSIX retains its existing
+single-pass cleanup behavior.
+
+Freeze terminal sorted export separately from cleanup. A failed deletion must not
+reapply a potentially non-idempotent projection when close is retried, or accept
+new rows after final export. A portable regression verifies exact unchanged bytes
+and a cleanup-pending state. The same Windows helper covers final checkpoint
+workspace reclamation after its existing ACL/reparse validation, and removal of
+precisely registered installed output during transaction rollback; neither guard
+is relaxed. Native tests include ReadOnly checkpoint content and rollback data.
+
+Portable tests cover transient/partial cleanup, bounded persistent failure,
+unrelated-error refusal, contained attribute repair and all Cloud Files tag variants.
+Native regressions pin real directory handles, prove the old unguarded rmtree fails,
+release the handle and require exact exported bytes, retained state after persistent
+failure and successful retry. Add actual ReadOnly file/directory cleanup plus junction
+target and hardlink protection. Native Windows qualification and the actual laptop's
+cloud-provider acceptance are still pending; mocks are not OneDrive acceptance.
+
+Local validation passes 125 focused cleanup/sorting/ES/behavior/workflow/engine/CLI
+transaction cases, Ruff and formatting. Both old dev and 31c2b223 finish the unchanged
+captured five-hour scenario at seed 42. All 53 manifest-declared files have identical
+hashes, including 44 data/artifact files; each manifest's file hashes are independently
+checked and no checkpoint workspace remains. This is deterministic byte and integrity
+evidence, not a new quality/evaluation verdict. Fresh evidence is retained under
+/tmp/eforge-windows-cleanup-replay-sfmn0rxg/.
+
+Windows-only run 43456130661 passes its native runtime/process stage, including all
+new real ReadOnly, pinned-handle, retry/export, junction/hardlink and checkpoint/
+rollback cases, plus Python/frontend checks. Packaging and installed qualification
+continue. Draft PR #484 targets dev; broader source integration CI has started.
+
+Behavior revision 518 declares no evidence/output change and includes both new
+Windows helpers in the complete behavior surface. Product and storage versions,
+scenario content, output thresholds, tags and publication remain unchanged.
+References: https://docs.python.org/3.12/library/shutil.html#rmtree-example,
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_basic_info,
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-isreparsetagnamesurrogate.
+
+Integration CI 43457721143 exposes an independent Windows display-cache defect:
+test_imported_bundle_identity_requires_unchanged_registered_manifest_and_resolved_bytes
+returns the old published label after a rapid same-size resolved-file rewrite.
+The parallel Windows service run passes on identical code, consistent with the
+timestamp collision being timing-sensitive. A deterministic frozen-metadata control
+reproduces the stale published identity on unchanged baseline dev cf61b3a5, so this
+is not a generation-cleanup regression and the original failing assertion stays.
+
+On Windows, add a bounded streamed content hash to captured source/manifest cache
+stamps before reusing parsed identity. Metadata alone is insufficient: creation time
+does not represent changes, and equal-size rewrites can share last-write stamps.
+Retain parsed-model caching and its callback-free value graph, without retaining
+file bytes in keys; keep POSIX's metadata fast path. The existing 64 MiB source and
+8 MiB manifest limits also bound reads when reported size is stale. New deterministic
+tests freeze every metadata field across same-size edits to both files and require
+unknown/no identity, plus refusal when content grows past a stale size limit.
+All 131 focused source/cache/cleanup/sorting/ES/behavior/workflow cases pass locally;
+the earlier five engine/transaction cases remain unchanged. Add run-source tests to
+the fast native Windows stage and requalify the combined implementation before merge.
+
+Windows installer run 43462494722 passes the combined cleanup/cache native stage
+and builds the EXE, but its maintenance-page automation fails during AllUsers
+navigation. The driver keys Next commands by changing text snapshots, so controls
+being populated or destroyed can queue multiple Next commands for one page. It
+also includes hidden controls. Keep the existing product page order and strict
+maintenance-before-scope assertion. Observe one visible direct child dialog and
+post at most one Next command per native page handle, only after recognized welcome,
+license or maintenance content appears. Never advance a partially loaded or unknown
+scope page. Portable transition tests cover changing content and delayed controls;
+repeat both actual installed-scope navigation checks in native qualification.
+
+The user asks why captured-file content verification is Windows-only. The initial
+scope preserved the POSIX metadata fast path, but that optimization does not establish
+the required unchanged-bytes guarantee. Generalize the bounded streamed SHA256 stamp
+to every host OS. Remove the platform switch and forced-Windows test setup: the
+same-size/frozen-metadata and stale-size-limit regressions now exercise the default
+implementation on macOS, Linux and Windows. Retain the 256-entry parsed-result LRUs,
+without caching file bytes, and existing inspection limits (64 MiB captured source,
+8 MiB manifest). This adds sequential content inspection per lookup on POSIX while
+avoiding repeated YAML/JSON parsing; generated log data is never scanned. Requalify
+the shared implementation on all supported native CI platforms. The separate scratch
+cleanup repair remains Windows-specific, and the P1 scratch-design review is shared.

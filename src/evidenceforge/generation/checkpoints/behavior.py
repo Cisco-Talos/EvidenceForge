@@ -93,6 +93,8 @@ def _surface_paths(package_root: Path) -> tuple[Path, ...]:
         package_root / "generation",
     )
     explicit = (
+        package_root / "_windows_cleanup.py",
+        package_root / "_windows_cleanup_native.py",
         package_root / "_windows_paths.py",
         package_root / "models" / "scenario.py",
         package_root / "output_targets.py",

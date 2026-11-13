@@ -574,3 +574,33 @@ def test_valid_long_output_component_does_not_expand_temporary_names(tmp_path: P
     writer.close()
     assert filesystem_path(output).read_text().splitlines() == ["1|first", "2|second"]
     assert sorted(path.name for path in tmp_path.iterdir()) == [output.name]
+
+
+def test_retry_after_terminal_cleanup_failure_does_not_reproject_exported_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "projected.log"
+    writer = ExternalSortedLineWriter(output, sort_key=_key, buffer_size=1, defer_publication=True)
+    writer.set_export_projection(lambda row: row + "|projected")
+    writer.write("2|second")
+    writer.write("1|first")
+    original_cleanup = writer._cleanup_spool_unlocked
+    attempts = 0
+
+    def cleanup() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("terminal cleanup denied")
+        original_cleanup()
+
+    monkeypatch.setattr(writer, "_cleanup_spool_unlocked", cleanup)
+    with pytest.raises(PermissionError, match="terminal cleanup denied"):
+        writer.close()
+    retained = output.read_bytes()
+    assert retained.splitlines() == [b"1|first|projected", b"2|second|projected"]
+    with pytest.raises(RuntimeError):
+        writer.write("3|too late")
+    writer.close()
+    assert writer._closed and attempts == 2
+    assert output.read_bytes() == retained and writer.event_count == 2

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 517
+current_revision: 518
 history_start_revision: 1
-behavior_surface_sha256: 45b45f516bb490fb7e1d4ddb8def0108e56f04175acc97828fe265d3b2c252d8
+behavior_surface_sha256: 2c2fbb64c1f01a231aa3f2b029e0f3a0b42f81bbffa6d7f2c01d377146531c38
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5952,3 +5952,12 @@ changes:
   formats: []
   summary: Keep LDAP client closure owned by process execution instead of replacing it
     with an earlier network-request timestamp when shell scheduling delays launch.
+- revision: 518
+  id: retain-windows-scratch-cleanup-ownership
+  impact: none
+  domains:
+  - output-publication
+  - temporary-storage
+  formats: []
+  summary: Retry bounded Windows scratch deletion and clear only handle-checked read-only
+    attributes while retaining failed cleanup state, generated evidence and ACL protections.

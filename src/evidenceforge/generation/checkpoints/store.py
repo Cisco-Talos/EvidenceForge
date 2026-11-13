@@ -1173,4 +1173,9 @@ class IncrementalCheckpointStore:
         if not filesystem_path(self.workspace).exists():
             return
         self._validate_protected_directory(self.workspace)
-        shutil.rmtree(filesystem_path(self.workspace))
+        if os.name == "nt":
+            from evidenceforge._windows_cleanup import remove_temporary_tree
+
+            remove_temporary_tree(self.workspace)
+        else:
+            shutil.rmtree(filesystem_path(self.workspace))

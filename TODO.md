@@ -92,6 +92,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   startup timing remains part of desktop acceptance. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
+- [ ] **P1 — Review whether ES ingress sorting scratch is necessary:** Explain why
+  `.eforge-es-ingress/<host>/.efsort-*` exists, what it retains, and whether its
+  intermediate directories/files or a separate sorting pass can be eliminated.
+  Compare alternatives while preserving chronological ES delivery, bounded memory,
+  deterministic output and exact checkpoint/recovery. Treat removal of the need
+  for this scratch as a separate architectural review from the immediate Windows
+  cleanup repair. See the
+  [Windows generation follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-reaches-100-percent-windows-scratch-removal-denied-november-13).
+
 - [ ] **P2 — Complete deep Windows workspace path qualification:** The output/
   checkpoint repair covers the observed long-path generation failure. Extend
   policy-independent native coverage to unusually deep authoring, import/export,

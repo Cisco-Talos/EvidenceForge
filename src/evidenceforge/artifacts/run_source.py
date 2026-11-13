@@ -15,6 +15,7 @@ from evidenceforge.composition.models import GenerationManifestDocument
 from evidenceforge.config.provider import _register_trusted_derived_cache
 
 logger = logging.getLogger(__name__)
+_SourceStamp = tuple[int, int, int, int, str]
 
 
 class CapturedScenario(BaseModel):
@@ -30,19 +31,27 @@ class CapturedScenario(BaseModel):
     status: Literal["draft", "published", "legacy", "unknown"] = "unknown"
 
 
-def _stamp(path: Path, limit: int) -> tuple[int, int, int, int]:
+def _stamp(path: Path, limit: int) -> _SourceStamp:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Captured source is not a regular file")
     info = path.stat()
     if info.st_size > limit:
         raise ValueError("Captured source exceeds the inspection limit")
-    return info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino
+    # Metadata does not prove byte identity on any platform. Verify current
+    # content before reusing parsed identity; never retain file bytes in the LRU.
+    digest = hashlib.sha256()
+    consumed = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(min(1024 * 1024, limit - consumed + 1)):
+            consumed += len(chunk)
+            if consumed > limit:
+                raise ValueError("Captured source exceeds the inspection limit")
+            digest.update(chunk)
+    return info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, digest.hexdigest()
 
 
 @lru_cache(maxsize=256)
-def _read_source(
-    path: Path, expected: str, stamp: tuple[int, int, int, int]
-) -> CapturedScenario | None:
+def _read_source(path: Path, expected: str, stamp: _SourceStamp) -> CapturedScenario | None:
     try:
         content = path.read_bytes()
         if len(content) > 64 * 1024**2 or hashlib.sha256(content).hexdigest() != expected:
@@ -70,7 +79,7 @@ def _read_source(
 
 @lru_cache(maxsize=256)
 def _read_manifest(
-    path: Path, expected: str | None, stamp: tuple[int, int, int, int]
+    path: Path, expected: str | None, stamp: _SourceStamp
 ) -> GenerationManifestDocument | None:
     try:
         content = path.read_bytes()

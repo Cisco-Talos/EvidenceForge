@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -179,7 +180,12 @@ class SidecarRegistry:
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
-            shutil.rmtree(path)
+            if os.name == "nt":
+                from evidenceforge._windows_cleanup import remove_temporary_tree
+
+                remove_temporary_tree(path)
+            else:
+                shutil.rmtree(path)
 
 
 SIDECAR_REGISTRY = SidecarRegistry()

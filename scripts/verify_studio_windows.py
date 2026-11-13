@@ -116,6 +116,35 @@ ConvertTo-Json -InputObject @($links) -Compress
     return [Path(link["path"]) for link in links]
 
 
+class _MaintenanceNavigation:
+    """Advance each recognized native page once, despite changing child controls."""
+
+    def __init__(self) -> None:
+        self.maintenance_seen = False
+        self._advanced_pages: set[int] = set()
+
+    def advance(self, page: int, visible_text: list[str], next_caption: str) -> bool:
+        """Wait for known page content before posting its one Next command."""
+        maintenance = "Install / Reinstall (preserve user data)" in visible_text
+        self.maintenance_seen |= maintenance
+        recognized = (
+            maintenance
+            or any("welcome to" in value.lower() for value in visible_text)
+            or (
+                next_caption == "i agree"
+                and any("license" in value.lower() for value in visible_text)
+            )
+        )
+        if (
+            not recognized
+            or next_caption not in {"next >", "next", "i agree"}
+            or page in self._advanced_pages
+        ):
+            return False
+        self._advanced_pages.add(page)
+        return True
+
+
 def verify_maintenance_navigation(installer: Path, scope: str, destination: Path) -> None:
     """Navigate maintenance before scope, then cancel before any installation action."""
     import ctypes
@@ -132,6 +161,10 @@ def verify_maintenance_navigation(installer: Path, scope: str, destination: Path
         "user32", "GetWindowThreadProcessId", wt.DWORD, [wt.HWND, ctypes.POINTER(wt.DWORD)]
     )
     visible = _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])
+    parent = _function("user32", "GetParent", wt.HWND, [wt.HWND])
+    class_name = _function(
+        "user32", "GetClassNameW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    )
     control = _function("user32", "GetDlgItem", wt.HWND, [wt.HWND, ctypes.c_int])
     send = _function(
         "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
@@ -149,7 +182,8 @@ def verify_maintenance_navigation(installer: Path, scope: str, destination: Path
 
         @callback
         def collect(child: int, parameter: int) -> bool:
-            result.append(child)
+            if visible(child):
+                result.append(child)
             return True
 
         enumerate_children(window, collect, 0)
@@ -198,27 +232,35 @@ def verify_maintenance_navigation(installer: Path, scope: str, destination: Path
                 return everyone, current
 
             deadline = time.monotonic() + 45
-            maintenance = False
+            navigation = _MaintenanceNavigation()
             scope_seen = False
             last_text: list[str] = []
-            advanced: set[tuple[str, ...]] = set()
             while time.monotonic() < deadline and child.poll() is None:
                 for window in windows():
-                    last_text = [text(handle) for handle in children(window)]
-                    everyone, current = scope_radios(window)
+                    pages: list[int] = []
+                    for handle in children(window):
+                        name = ctypes.create_unicode_buffer(256)
+                        class_name(handle, name, len(name))
+                        if parent(handle) == window and name.value == "#32770":
+                            pages.append(handle)
+                    # NSIS destroys/creates child dialogs during transitions. Do not
+                    # treat partially populated controls as another Next opportunity.
+                    if len(pages) != 1:
+                        continue
+                    page = pages[0]
+                    last_text = [text(handle) for handle in children(page)]
+                    everyone, current = scope_radios(page)
                     if everyone and current:
-                        assert maintenance, "Scope page appeared before maintenance"
+                        assert navigation.maintenance_seen, (
+                            f"Scope page appeared before maintenance: {last_text}"
+                        )
                         assert send(everyone if scope == "AllUsers" else current, 0xF0, 0, 0) == 1
                         scope_seen = True
                         break
-                    if "Install / Reinstall (preserve user data)" in last_text:
-                        maintenance = True
                     next_button = control(window, 1)
                     caption = text(next_button).strip().lower() if next_button else ""
-                    signature = tuple(last_text)
-                    if caption in {"next >", "next", "i agree"} and signature not in advanced:
-                        advanced.add(signature)
-                        post(window, 0x111, 1, next_button)
+                    if navigation.advance(page, last_text, caption):
+                        assert post(window, 0x111, 1, next_button), "Could not advance native page"
                 if scope_seen:
                     break
                 time.sleep(0.1)
