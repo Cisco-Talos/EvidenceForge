@@ -87,6 +87,11 @@ without turning `TODO.md` back into a high-conflict work journal.
   migrate these associations. See the
   [Windows laptop follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md).
 
+- [ ] **P3 — Move a workspace from Settings:** Once supported relocation is available,
+  offer an explicit option to move workspace content to a newly selected location,
+  with review and clear progress. Keep opening an existing workspace distinct from
+  moving the current workspace. Depends on the P2 relocation/history work above.
+
 - [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
   NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
   through PR #477. Installed verification and native regression/package evidence
@@ -156,7 +161,7 @@ exact instances and independent restrictions. Validation and comparison evidence
   per-record input protections; verify score equivalence and memory use on large
   datasets. See the [Studio evaluation diagnosis](docs/worklog/2026-11-10-ground-truth-reconciliation.md#live-studio-evaluation-failure-diagnosis).
 
-- [ ] **P1 — Reconcile full mixed-fleet ground-truth acceptance:** The unchanged
+- [ ] **P0 — Reconcile full mixed-fleet ground-truth acceptance (release blocker):** The unchanged
   canonical iteration benchmark fails schema-v5 agreement despite strong blind
   source reviews. Qualify remaining native projection requirements, missing or
   duplicate evidence, capability/filter decisions and timing dependencies against

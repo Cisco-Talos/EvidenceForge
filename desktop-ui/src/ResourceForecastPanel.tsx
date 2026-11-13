@@ -5,12 +5,22 @@ import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { formatBundleSize, formatTime } from "./components";
 import { RequestFeedback, type RequestState } from "./RequestFeedback";
 
-function normalized(path: string): string { return path.replace(/\\/g, "/").replace(/\/$/, ""); }
+function normalized(path: string): string {
+  const canonical = path.replace(/\\/g, "/").replace(/\/$/, "");
+  // Windows drive/UNC paths are case-insensitive; POSIX paths retain their case.
+  return /^[a-z]:[/\\]/i.test(path) || path.startsWith("\\\\") ? canonical.toLowerCase() : canonical;
+}
+
+function destinationFor(snapshot: StudioSnapshot): string {
+  const workspace = normalized(snapshot.settings.workspace);
+  const selected = Object.entries(snapshot.settings.output_parents).find(([path]) => normalized(path) === workspace);
+  return selected?.[1] || `${snapshot.settings.workspace}/runs`;
+}
 
 export function currentPrediction(item: CatalogItem, snapshot: StudioSnapshot): PredictionRecord | undefined {
   if (snapshot.starter_drafts?.includes(item.id)) return undefined;
   const record = snapshot.forecasts?.[item.id];
-  const destination = snapshot.settings.output_parents[snapshot.settings.workspace] || `${snapshot.settings.workspace}/runs`;
+  const destination = destinationFor(snapshot);
   return record && record.source_sha256 === item.source_sha256
     && record.dependency_fingerprint === snapshot.dependencies?.[item.id]?.fingerprint
     && record.result.checkpoint_hours === snapshot.settings.checkpoint_hours
@@ -24,7 +34,7 @@ export function ResourceForecastPanel({ item, snapshot, api, onError, onChanged,
   const [refreshing, setRefreshing] = useState(false);
   const [feedback, setFeedback] = useState<RequestState>({ pending: false });
   const record = currentPrediction(item, snapshot);
-  const identity = `${item.id}:${item.source_sha256}:${snapshot.settings.workspace}:${snapshot.dependencies?.[item.id]?.fingerprint}:${snapshot.settings.checkpoint_hours}:${snapshot.settings.output_parents[snapshot.settings.workspace]}`;
+  const identity = `${item.id}:${item.source_sha256}:${snapshot.settings.workspace}:${snapshot.dependencies?.[item.id]?.fingerprint}:${snapshot.settings.checkpoint_hours}:${destinationFor(snapshot)}`;
   const retained = useRef({ identity, record });
   const currentIdentity = useRef(identity);
   currentIdentity.current = identity;

@@ -181,6 +181,8 @@ def test_windows_build_only_mode_skips_acceptance_and_never_uploads_as_qualified
     for entry in ("workflow_dispatch", "workflow_call"):
         option = preview[True][entry]["inputs"]["build-only"]
         assert option["type"] == "boolean" and option["default"] is False
+        diagnostic = preview[True][entry]["inputs"]["diagnostic-probes"]
+        assert diagnostic["type"] == "boolean" and diagnostic["default"] is False
     jobs = preview["jobs"]
     full_only = "${{ !inputs.build-only }}"
     assert jobs["native-tests"]["if"] == jobs["qualify"]["if"] == full_only
@@ -193,6 +195,9 @@ def test_windows_build_only_mode_skips_acceptance_and_never_uploads_as_qualified
             assert step["if"] == full_only, step["name"]
     build = next(step for step in steps if step.get("id") == "package-build")
     assert "if" not in build and "package_studio_windows.py" in build["run"]
+    diagnostic = next(step for step in steps if step["name"] == "Run focused Windows diagnostics")
+    assert diagnostic["if"] == "${{ inputs.build-only && inputs.diagnostic-probes }}"
+    assert "test_studio_windows_uninstall_ui.py" in diagnostic["run"]
     fast = next(
         step for step in steps if step["name"] == "Upload unqualified Windows test installer"
     )

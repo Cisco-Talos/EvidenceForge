@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sqlite3
@@ -127,7 +128,12 @@ def _inventory(path: Path) -> tuple[FileIdentity, ...]:
                 fs.open_directory(current) if directory else fs.open_file(current, os.O_RDONLY)
             )
             try:
-                fs.require_private(descriptor, allow_read_access=True)
+                try:
+                    fs.require_private(descriptor, allow_read_access=True)
+                except OSError as error:
+                    raise StudioStateError(
+                        f"Cannot safely inspect cleanup path {current}: {error}"
+                    ) from error
             finally:
                 os.close(descriptor)
         # Ownership locks may be acquired after review. They contain no user data;
@@ -207,38 +213,83 @@ def _run_roots(parent: Path) -> tuple[list[Path], list[str]]:
     return runs, preserved
 
 
-def build_plan(locations: UserLocations) -> CleanupPlan:
+def _read_cleanup_settings(path: Path) -> dict[str, object]:
+    """Read owned settings for deletion review, allowing read-only grants, never writers.
+
+    Cleanup does not reopen the running private service. Its owner/mutation policy
+    matches the cleanup inventory; ordinary Studio settings reads remain private.
+    """
+    safe_path(filesystem_path(path))
+    if os.name == "nt":
+        from evidenceforge.utils import windows_filesystem as fs
+
+        descriptor = fs.open_file(path, os.O_RDONLY)
+        try:
+            fs.require_private(descriptor, allow_read_access=True)
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                payload = stream.read(8 * 1024 * 1024 + 1)
+        finally:
+            os.close(descriptor)
+    else:
+        with path.open("rb") as stream:
+            payload = stream.read(8 * 1024 * 1024 + 1)
+    if len(payload) > 8 * 1024 * 1024:
+        raise StudioStateError(f"Cleanup settings exceed the inspection limit: {path}")
+    raw = json.loads(payload)
+    if not isinstance(raw, dict):
+        raise StudioStateError(f"Cleanup settings must contain an object: {path}")
+    return raw
+
+
+def build_plan(locations: UserLocations, categories: set[Category] | None = None) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
     import yaml
 
     from evidenceforge.composition.publisher import PublisherIdentity
-    from evidenceforge.studio.state_upgrade import settings_document
+    from evidenceforge.studio.state_upgrade import decode_settings_document
+
+    selected = set(LABELS) if categories is None else categories
+    if not selected:
+        return CleanupPlan(locations=locations)
 
     candidates: list[tuple[Category, Path]] = [
         ("private", locations.private),
         ("private", locations.local / "org.evidenceforge.studio"),
         ("work", locations.profile / ".eforge/releases"),
     ]
-    candidates.extend(("skills", path) for path in _skill_files(locations.profile))
+    if "skills" in selected:
+        candidates.extend(("skills", path) for path in _skill_files(locations.profile))
     publisher = locations.profile / ".eforge/publisher.yaml"
-    safe_path(filesystem_path(publisher))
-    if filesystem_path(publisher).is_file():
+    if "skills" in selected:
+        safe_path(filesystem_path(publisher))
+    if "skills" in selected and filesystem_path(publisher).is_file():
         PublisherIdentity.model_validate(
             yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
         )
         candidates.append(("skills", publisher))
-    workspaces: set[Path] = {
-        locations.profile / "EvidenceForge",
-        locations.documents / "EvidenceForge",  # Previous preview default remains discoverable.
-    }
+    workspaces: set[Path] = (
+        {
+            locations.profile / "EvidenceForge",
+            locations.documents / "EvidenceForge",  # Previous preview default remains discoverable.
+        }
+        if selected & {"skills", "work"}
+        else set()
+    )
     settings = locations.private / "settings.json"
-    safe_path(filesystem_path(settings))
-    if filesystem_path(settings).is_file():
-        _version, values = settings_document(filesystem_path(settings))
+    if workspaces:
+        safe_path(filesystem_path(settings))
+    values: dict[str, object] = {}
+    if workspaces and filesystem_path(settings).is_file():
+        try:
+            _version, values = decode_settings_document(_read_cleanup_settings(settings))
+        except (OSError, ValueError, EvidenceForgeError) as error:
+            raise StudioStateError(
+                f"Cannot inspect workspace settings {settings}: {error}"
+            ) from error
         workspaces.add(Path(str(values["workspace"])))
         workspaces.update(Path(str(value)) for value in values.get("recent_workspaces", []))
     preserved: list[str] = []
-    if filesystem_path(settings).is_file():
+    if values:
         for output in values.get("output_parents", {}).values():
             preserved.append(f"Custom output parent is preserved: {output}")
     admitted_workspaces: list[Path] = []
@@ -258,7 +309,10 @@ def build_plan(locations: UserLocations) -> CleanupPlan:
             continue
         admitted_workspaces.append(workspace)
         # Only app-managed namespaces; never recursively delete the workspace itself.
-        candidates.extend(("skills", path) for path in _skill_files(workspace))
+        if "skills" in selected:
+            candidates.extend(("skills", path) for path in _skill_files(workspace))
+        if "work" not in selected:
+            continue
         for relative in (
             ".eforge/artifacts",
             ".eforge/studio",
@@ -301,6 +355,8 @@ def build_plan(locations: UserLocations) -> CleanupPlan:
                 preserved.append(f"Unregistered workspace content: {child}")
     targets: list[CleanupTarget] = []
     for category, path in sorted(set(candidates), key=lambda item: (item[0], str(item[1]))):
+        if category not in selected:
+            continue
         entries = _inventory(path)
         if entries:
             targets.append(CleanupTarget(category=category, path=path, entries=entries))

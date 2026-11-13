@@ -182,13 +182,17 @@ def json_bytes(value: BaseModel | dict[str, object]) -> bytes:
 
 def settings_document(path: Path) -> tuple[int, dict[str, object]]:
     """Decode the disk envelope before loading current settings models."""
-    from evidenceforge.studio.state_records_v1 import StudioSettings
-
     if not path.exists():
         from evidenceforge.studio.settings import StudioSettings as CurrentSettings
 
         return 0, CurrentSettings().model_dump(mode="json")
-    raw = read_json(path)
+    return decode_settings_document(read_json(path))
+
+
+def decode_settings_document(raw: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """Validate a settings envelope independently of its caller's file-read policy."""
+    from evidenceforge.studio.state_records_v1 import StudioSettings
+
     version = raw.get("schema_version", 0)
     if type(version) is not int or version not in (0, 1, 2, 3, 4):
         raise StudioStateError(

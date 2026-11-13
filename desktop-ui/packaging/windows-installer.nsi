@@ -466,10 +466,27 @@ FunctionEnd
 ; Uninstaller Pages
 ; 1. Confirm uninstall page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ReviewCleanup
 !insertmacro MUI_UNPAGE_CONFIRM
 
 ; 2. Uninstalling Page
 !insertmacro MUI_UNPAGE_INSTFILES
+
+Function un.ReviewCleanup
+  ; Ask before the uninstall progress page or any application-file deletion.
+  ; Upgrades and silent/passive uninstall always preserve user data.
+  ${IfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+  ${AndIf} $UpdateMode <> 1
+    !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+    nsExec::ExecToStack '"$INSTDIR\runtime\bootstrap\python.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --broker'
+    Pop $0
+    Pop $1
+    ${If} $0 != "0"
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 
 ;Languages
 {{#each languages}}
@@ -796,19 +813,7 @@ Section Uninstall
 
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
-  ; Upgrades and silent/passive uninstall preserve data. Review cleanup under the
-  ; original desktop token, never the UAC administrator's token.
-  ${IfNot} ${Silent}
-  ${AndIf} $PassiveMode <> 1
-  ${AndIf} $UpdateMode <> 1
-    nsExec::ExecToStack '"$INSTDIR\runtime\bootstrap\python.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --broker'
-    Pop $0
-    Pop $1
-    ${If} $0 != "0"
-      SetErrorLevel 1
-      Abort
-    ${EndIf}
-  ${EndIf}
+  ; Account-bound data review completed before entering the progress page.
 
   ; Delete the app directory and its content from disk
   ; Copy main executable

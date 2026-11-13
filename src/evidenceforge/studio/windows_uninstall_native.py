@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.state_io import StudioStateError
-from evidenceforge.studio.windows_uninstall import UserLocations, build_plan
+from evidenceforge.studio.windows_uninstall import CleanupPlan, UserLocations, build_plan
 
 
 def _function(library: str, name: str, result: Any, arguments: list[Any]) -> Any:
@@ -336,7 +336,10 @@ def interactive(expected_account: str | None) -> int:
             raise StudioStateError("Uninstall's original account could not be authenticated")
         from evidenceforge.studio.windows_uninstall_ui import choose
 
-        return choose(build_plan(locations))
+        return choose(
+            CleanupPlan(locations=locations),
+            prepare=lambda categories: build_plan(locations, categories),
+        )
     except (OSError, EvidenceForgeError, ValidationError, ValueError) as error:
         return (
             0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,14 @@ import pytest
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
 from evidenceforge.studio.state_io import StateLock, StudioStateError, private_directory
-from evidenceforge.studio.windows_uninstall import UserLocations, build_plan, describe, execute
+from evidenceforge.studio.windows_uninstall import (
+    Category,
+    CleanupPlan,
+    UserLocations,
+    build_plan,
+    describe,
+    execute,
+)
 
 
 @pytest.fixture
@@ -212,13 +220,17 @@ def test_native_template_orders_maintenance_before_scope_and_preserves_silent_up
     assert template.index("Page custom PageReinstall") < template.index(
         "!insertmacro MULTIUSER_PAGE_INSTALLMODE"
     )
-    section = template[template.index("Section Uninstall") :]
-    cleanup = section.index("windows_uninstall --broker")
-    assert (
-        section.index("CheckIfAppIsRunning") < cleanup < section.index("; Delete the app directory")
-    )
-    assert "${IfNot} ${Silent}" in section[:cleanup]
-    assert "$PassiveMode <> 1" in section[:cleanup] and "$UpdateMode <> 1" in section[:cleanup]
+    assert "MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ReviewCleanup" in template
+    review = template[
+        template.index("Function un.ReviewCleanup") : template.index(
+            "FunctionEnd", template.index("Function un.ReviewCleanup")
+        )
+    ]
+    cleanup = review.index("windows_uninstall --broker")
+    assert review.index("CheckIfAppIsRunning") < cleanup
+    assert "${IfNot} ${Silent}" in review[:cleanup]
+    assert "$PassiveMode <> 1" in review[:cleanup] and "$UpdateMode <> 1" in review[:cleanup]
+    assert "windows_uninstall --broker" not in template[template.index("Section Uninstall") :]
 
 
 def test_nested_complete_and_incomplete_runs_are_selected_but_external_writer_blocks(
@@ -341,3 +353,71 @@ os._exit(0)
     with patch("evidenceforge.studio.state_upgrade.check_workers", side_effect=probe):
         _check_workers_snapshot(database)
     assert _inventory(locations.private) == before
+
+
+def test_private_only_cleanup_does_not_inspect_other_categories(locations: UserLocations) -> None:
+    state = write(locations.private / "saved-state.txt")
+    publisher = write(locations.profile / ".eforge/publisher.yaml", "not: [valid")
+    settings = write(locations.private / "settings.json", "not-json")
+    plan = build_plan(locations, {"private"})
+    assert plan.targets and {target.category for target in plan.targets} == {"private"}
+    assert state.exists() and publisher.exists() and settings.exists()
+    assert build_plan(locations, set()).targets == ()
+
+
+def test_cleanup_dialog_opens_before_inventory_and_prepares_only_selected_categories(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio import windows_uninstall_native as native
+    from evidenceforge.studio import windows_uninstall_ui as ui
+
+    state = write(locations.private / "saved-state.txt")
+    calls: list[set[Category]] = []
+    monkeypatch.setattr(native, "user_locations", lambda: locations)
+
+    def prepare(current: UserLocations, categories: set[Category]) -> CleanupPlan:
+        calls.append(categories)
+        return build_plan(current, categories)
+
+    def choose(plan: CleanupPlan, *, prepare: Callable[[set[Category]], CleanupPlan]) -> int:
+        assert calls == []
+        assert plan.targets == () and plan.locations == locations
+        assert prepare(set()).targets == ()
+        selected = prepare({"private"})
+        assert {target.category for target in selected.targets} == {"private"}
+        return 0
+
+    monkeypatch.setattr(native, "build_plan", prepare)
+    monkeypatch.setattr(ui, "choose", choose)
+    assert native.interactive(locations.account) == 0
+    assert calls == [set(), {"private"}]
+    assert state.read_text() == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows ACL inspection")
+def test_cleanup_settings_allow_read_grants_without_mutating_them(locations: UserLocations) -> None:
+    import subprocess
+
+    from evidenceforge.studio.state_io import atomic_write
+    from evidenceforge.studio.state_upgrade import settings_document
+
+    private_directory(locations.private)
+    settings = locations.private / "settings.json"
+    atomic_write(
+        settings,
+        json.dumps(
+            {
+                "schema_version": 4,
+                "settings": {"workspace": str(locations.profile / "EvidenceForge")},
+            }
+        ).encode(),
+    )
+    subprocess.run(
+        ["icacls", str(settings), "/grant", "*S-1-1-0:(R)"], check=True, capture_output=True
+    )
+    before = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
+    with pytest.raises(PermissionError, match="another principal"):
+        settings_document(settings)
+    assert build_plan(locations, {"work"}).locations == locations
+    after = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
+    assert before == after

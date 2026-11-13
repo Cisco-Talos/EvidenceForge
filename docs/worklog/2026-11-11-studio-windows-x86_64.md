@@ -1776,3 +1776,60 @@ new acceptance CI, regenerate the scenario, change its authored intent, or reque
 another large pasted report as a prerequisite for that testing. The most recent
 frontend workspace-opening feedback commit remains d2a5b12e, pending the next
 installer build; the currently delivered EXE remains exact source 031c77ad.
+
+### Pack handoff, forecast identity and uninstall review follow-up (November 13)
+
+The laptop successfully creates/publishes an industry pack, but the subsequent
+organization authoring chat cannot discover it without browsing the workspace.
+Studio already rescans after its Publish action. The missing boundary is the pack
+chat's selected project root: its working directory is a nested draft directory.
+Supply the explicit workspace and both published/draft inventory commands on every
+chat turn, match names/display names, and keep exact draft references for testing.
+Shared skill source guidance now retains an explicitly selected root across nested
+working-directory changes for standalone Codex and Claude Code too. Their existing
+installed skills need updating; ordinary CLI cwd defaults and root-search rules
+remain unchanged. A regression publishes through Studio, checks the store without
+an extra refresh, and discovers that release plus the organization draft through
+actual CLI subprocesses launched from the nested draft folder.
+
+Dependency display now uses a friendly display name plus Draft for a reusable draft;
+the exact UUID/key and composition identity remain intact. Forecast matching accepts
+case-equivalent Windows drive/UNC paths and slash styles, including output-parent
+map keys. Previously a lowercase drive in settings could reject an uppercase cached
+result, leaving Calculating visible. POSIX paths remain case-sensitive. Align the
+Settings folder-arrow button styling with the existing icon-button style. Add the
+requested P3 Settings move UI backlog, dependent on the existing P2 relocation work;
+promote shared mixed-fleet evidence disagreements to P0 release blockers without
+changing generation, evaluation thresholds or scenario intent in this Windows fix.
+
+Uninstall previously inventories all categories before opening its review window.
+One category's error can therefore hide every choice and force app-only fallback.
+Open an unchecked review first, inventory only selected categories, show the exact
+blocked path, and allow deselection/cancellation without deletion. Move the NSIS
+broker invocation to the confirmation-page leave hook, before uninstall progress
+or application-file deletion. Silent/passive/upgrading paths still preserve data.
+Cleanup settings reads now use the same owner/no-external-writer policy as cleanup
+inventory, allowing read-only grants without modifying ACLs; ordinary Studio settings
+reads retain their strict privacy requirements. This resolves an inconsistent read
+policy, but does not identify the laptop's exact blocked principal/path: no whitelist
+or external-write exception is introduced. Native regressions exercise the lazy
+review, a blocked category, default preservation and unchanged read-only ACLs.
+
+The user cannot provide the old pack-generation command after uninstall. The reported
+WinError 6 is still unconfirmed; do not claim it fixed or bypass checkpoint locking,
+write-through publication or Codex sandbox policy. The remote Windows desktop is
+available, but retained-history recovery has not yet produced the failed command.
+Add opt-in focused Windows uninstall/checkpoint diagnostics to the build-only path;
+these do not enable the full native/service/installer acceptance jobs or qualify the
+result as a tested release. Full CI and genuine Windows 11/UAC desktop acceptance
+remain pending by the user's explicit instruction.
+
+Local checks: generated API types, frontend production build, Ruff check/format and
+whitespace checks pass. Earlier focused checks pass 12 chat context cases, the
+publish/discover CLI regression and draft-label regression, 28 frontend tests, and
+21 uninstall tests (one native ACL test skipped on macOS). Additional combined and
+native evidence will be appended after execution, with the new build's exact identity.
+
+Combined local regression: 103 passed, 3 platform/data skips in 57.71 seconds across
+uninstall, workflow guards, state contracts, imports and artifact lifecycle. The
+three focused frontend files pass 28 tests again. No full acceptance matrix started.

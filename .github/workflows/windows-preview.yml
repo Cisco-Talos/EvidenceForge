@@ -6,12 +6,19 @@ on:
         description: Build an unqualified Windows EXE for the desktop test/fix loop
         type: boolean
         default: false
+      diagnostic-probes:
+        description: Run focused uninstall and checkpoint probes alongside a build-only preview
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       source-ref:
         type: string
         default: ''
       build-only:
+        type: boolean
+        default: false
+      diagnostic-probes:
         type: boolean
         default: false
 permissions:
@@ -120,6 +127,13 @@ jobs:
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows_uninstall.py
           tests/integration/test_studio_windows_uninstall_ui.py
+      - name: Run focused Windows diagnostics
+        if: ${{ inputs.build-only && inputs.diagnostic-probes }}
+        run: >-
+          uv run --no-sync pytest --no-cov
+          tests/unit/test_studio_windows_uninstall.py
+          tests/integration/test_studio_windows_uninstall_ui.py
+          tests/integration/test_windows_checkpoint_io.py
       - name: Cache Windows Rust dependencies and build artifacts
         id: rust-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25

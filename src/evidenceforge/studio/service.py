@@ -4202,6 +4202,19 @@ def create_app(
                 "If this command cannot run or lacks a requested capability, report the blocker; "
                 "do not fall back to another installation or claim equivalent validation."
             )
+            workspace_argument = shell_argument(str(conversation.workspace))
+            configuration_instructions += (
+                f" The workspace explicitly selected by Studio is {workspace_argument}. "
+                "The conversation's working directory is only its draft/discussion folder; "
+                "it is not the pack repository root. For pack discovery and management, "
+                f"use --project-root {workspace_argument} on every related command. "
+                f"Discover published packs with pack list --json --project-root {workspace_argument}; "
+                f"discover reusable drafts with pack drafts --json --project-root {workspace_argument}. "
+                "Match both name and display_name when locating a user-mentioned pack. "
+                "A draft can be consumed for testing through its exact source: draft, draft_id "
+                "and path; its UUID is identity, not a published name or version. "
+                "Use these inventories before browsing files for packs."
+            )
             context_source = (
                 item.path
                 if item is not None and item.kind == "scenario"
@@ -4223,7 +4236,6 @@ def create_app(
                     f"use this explicitly selected configuration: {arguments[0]} {shell_argument(arguments[1])}. "
                     f"Use the selected CLI's info {context_field} --json with that selection "
                     "to inspect the active configuration selection. "
-                    "Pack management continues to use --project-root for this workspace. "
                     "Do not apply the context to authoritative resolved inputs; their configuration is embedded. "
                     "Config edits must target the scope requested by the user, preserving the existing family merge rules."
                 )

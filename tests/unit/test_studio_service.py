@@ -1731,6 +1731,9 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
     started = next(record for record in records if record["method"] == "thread/start")
     assert str(scenario) in started["params"]["developerInstructions"]
     assert shell_command(selected_cli) in started["params"]["developerInstructions"]
+    assert "pack list --json --project-root" in started["params"]["developerInstructions"]
+    assert "pack drafts --json --project-root" in started["params"]["developerInstructions"]
+    assert str(workspace) in started["params"]["developerInstructions"]
     if kind == "scenario":
         assert "info project_root --json" in started["params"]["developerInstructions"]
         assert "info configuration_context" not in started["params"]["developerInstructions"]

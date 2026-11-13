@@ -390,9 +390,13 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                             DependencyRow(
                                 key=member_key,
                                 kind="pack",
-                                label=member_key,
+                                label=f"{member.manifest.display_name or member.manifest.name} · Draft"
+                                if member.source == "draft"
+                                else member_key,
                                 status="available",
-                                detail="Exact pack is available",
+                                detail="Draft pack is available for testing"
+                                if member.source == "draft"
+                                else "Exact pack is available",
                                 source=str(member.root / "pack.yaml"),
                                 digest=member.digest,
                             )

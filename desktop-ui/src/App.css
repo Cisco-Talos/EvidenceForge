@@ -743,7 +743,7 @@ input::placeholder { color: #7189a2; }
 .settings-main input:not([type="checkbox"]) { width: min(360px,100%); }
 .settings-main input.setting-number { width: 84px; }
 .setting-control.path-control input { flex: 1; width: auto; }
-.setting-control.path-control button { min-height: 35px; padding: 0 10px; border: 1px solid #426182; border-radius: 7px; color: #dbe9f9; background: #26405b; }
+.setting-control.path-control button:not(.icon-button) { min-height: 35px; padding: 0 10px; border: 1px solid #426182; border-radius: 7px; color: #dbe9f9; background: #26405b; }
 .setting-control.path-control .copy-path-button { width: 29px; min-height: 29px; height: 29px; padding: 0; border-color: transparent; background: transparent; }
 .setting-control.path-control .copy-path-button:hover { border-color: #426182; background: #26405b; }
 select { min-width: 185px; }
