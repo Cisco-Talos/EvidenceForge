@@ -1,5 +1,6 @@
 """Native bundled-resource reads must not depend on Windows long-path policy."""
 
+import errno
 import os
 import shutil
 from pathlib import Path
@@ -34,7 +35,7 @@ def test_long_runtime_catalogs_preserve_behavior_digest_and_pack_loading(
     def legacy_stat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
         if len(str(path)) >= 260 and not str(path).startswith("\\\\?\\"):
             denied.append(path)
-            raise FileNotFoundError("Legacy Windows path limit")
+            raise FileNotFoundError(errno.ENOENT, "Legacy Windows path limit", str(path))
         return stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", legacy_stat)

@@ -753,3 +753,12 @@ complete updated source digest. Product/storage versions are unchanged. Native
 Windows build/qualification and laptop validation/generation/evaluation remain
 pending for this correction; keep the current installation and scenario for an
 in-place upgrade rather than resetting user data.
+
+The first repair build (`f631b7bc`, run `43333961516`) passes 158 short native
+cases, including both counter/receipt CLI regressions, but the new long-path
+fixture stops at its own negative control: its manually constructed
+FileNotFoundError omitted errno, so pathlib correctly re-raised it instead of
+returning false. Supply ENOENT to model the unavailable legacy path faithfully;
+keep the negative control, full relocated-pack reads and tamper checks intact.
+This correction changes the test fixture only; the implementation digest remains
+`c20bb06c697fe3077e626acbfad3ce71cd17c29233e64e059459253936f5d507`.
