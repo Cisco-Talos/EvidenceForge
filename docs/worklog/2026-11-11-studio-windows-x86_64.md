@@ -1385,9 +1385,13 @@ not successful final bundle publication. No checkpoint was committed for this ru
 Read-only laptop inspection first shows ReadOnly, Directory, Archive, ReparsePoint.
 A later os.lstat shows attributes 0x31 and tag 0: the reparse flag has disappeared
 while ReadOnly remains. Do not equate all reparse points with links or claim that
-OneDrive, an ACL, or an open handle is conclusively responsible. A new-empty-folder
-probe comparing native LocalAppData and the workspace is requested. The failed run
-and its private workspace remain unchanged.
+OneDrive, an ACL, or an open handle is conclusively responsible. The user then
+reproduces deletion refusal on new empty ReadOnly directories in both LocalAppData
+and the OneDrive workspace: attributes 0x11, PermissionError(13), and success after
+clearing only ReadOnly. This establishes the concrete read-only-directory failure
+class independently of a cloud provider; it does not establish who originally set
+that bit. The probe removes only its new empty directories. The failed run and its
+private workspace remain unchanged.
 
 The sorter currently ignores its first rmtree failure and discards its spool path;
 the later ingress cleanup then fails the run on the same leftover directory.
@@ -1416,6 +1420,19 @@ release the handle and require exact exported bytes, retained state after persis
 failure and successful retry. Add actual ReadOnly file/directory cleanup plus junction
 target and hardlink protection. Native Windows qualification and the actual laptop's
 cloud-provider acceptance are still pending; mocks are not OneDrive acceptance.
+
+Local validation passes 125 focused cleanup/sorting/ES/behavior/workflow/engine/CLI
+transaction cases, Ruff and formatting. Both old dev and 31c2b223 finish the unchanged
+captured five-hour scenario at seed 42. All 53 manifest-declared files have identical
+hashes, including 44 data/artifact files; each manifest's file hashes are independently
+checked and no checkpoint workspace remains. This is deterministic byte and integrity
+evidence, not a new quality/evaluation verdict. Fresh evidence is retained under
+/tmp/eforge-windows-cleanup-replay-sfmn0rxg/.
+
+Windows-only run 43456130661 passes its native runtime/process stage, including all
+new real ReadOnly, pinned-handle, retry/export, junction/hardlink and checkpoint/
+rollback cases, plus Python/frontend checks. Packaging and installed qualification
+continue. Draft PR #484 targets dev; broader source integration CI has started.
 
 Behavior revision 518 declares no evidence/output change and includes both new
 Windows helpers in the complete behavior surface. Product and storage versions,
