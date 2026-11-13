@@ -226,6 +226,7 @@ def build_plan(locations: UserLocations) -> CleanupPlan:
         # No arbitrary drive/profile/application roots, external exports or other profiles.
         if (
             not workspace.is_absolute()
+            or ".." in workspace.parts
             or not workspace.is_relative_to(locations.profile)
             or workspace == locations.profile
             or workspace.is_relative_to(locations.local)
@@ -399,7 +400,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                     # when empty, so concurrent new startup data is never removed.
                     from evidenceforge.studio.state_io import private_directory
 
-                    private_directory(destination)
+                    private_directory(filesystem_path(destination))
                     containers.append(destination)
                     for entry in sorted(
                         target.entries, key=lambda item: (not item.directory, item.relative)
@@ -407,7 +408,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                         source = target.path / entry.relative
                         stage = destination / entry.relative
                         if entry.directory:
-                            private_directory(stage)
+                            private_directory(filesystem_path(stage))
                             original_directories.append(source)
                         else:
                             _move(source, stage, directory=False)

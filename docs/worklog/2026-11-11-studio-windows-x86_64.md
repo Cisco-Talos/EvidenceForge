@@ -1283,3 +1283,10 @@ stale creation caption through cross-process GetWindowText. Microsoft documents
 that limitation; use marshalled WM_GETTEXT and assert the selected checkbox state.
 Keep real selected-cleanup and declined-confirmation actions enabled. Reference:
 https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowtextw.
+
+Review also routes private staging-directory creation through filesystem_path.
+Add native legacy-path rejection for the full uninstall inventory/staging/removal
+of a >300-character runtime resource; policy-enabled runner success alone is not
+evidence for an ordinary Windows laptop. Retain logical review paths and preserve
+an unrelated profile file. Reject dot-dot workspace spellings before containment.
+Native UI/ownership gate for ce9c8802 passes all 21 cases; the package build continues.
