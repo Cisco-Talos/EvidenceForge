@@ -1727,3 +1727,52 @@ The focused hook/maintenance/startup gate passes 20 tests, including a simulated
 Frontend production build, Ruff lint/format and diff whitespace checks pass.
 The earlier delivered installer remains exact source 031c77ad; this frontend repair
 will be included in the next installer build. No acceptance CI is started for TODOs.
+
+### Shared evidence disagreements reproduced on macOS (November 13)
+
+The user reports successful generation and evaluation after the latest installer,
+with evidence disagreements still present. The new supplied report is evaluated at
+2026-11-13T20:46:46.809969Z. Normalizing only evaluated_at makes its complete pasted
+text identical to the earlier 19:29 report: 140 failed checks (2 factual, 66
+missing/duplicate, 72 unexpected), ground-truth score 97.10822866487705, overall
+96.33618655842574 and 34,275 records. Both pastes stop at exactly 63,823 bytes,
+mid-finding; neither contains the final acceptance_passed field. Do not manufacture
+a completed JSON report or infer all acceptance gates from the overall score.
+
+Read-only minimal probes on this macOS source checkout confirm three shared code
+inconsistencies using the exact fields visible in the report:
+
+- evaluation.ground_truth_agreement._equal(True, True, 'tls') returns False, as does
+  False/False. Python bool enters the integer branch, which tries int(str(True))
+  and fails. _fields_match returns False for the report's identical SMTP expected
+  and actual dictionaries. This confirms an evaluator false disagreement.
+- events.evidence_projection.native_requirements for zeek_dns retains canonical
+  SRV answer `0 100 88 MG-DC-01.maplegrove.example`, while the existing
+  emitters.zeek_dns.zeek_dns_answer('SRV', ...) returns only the hostname. This
+  reproduces the report's canonical/native projection mismatch on macOS.
+- native_requirements('proxy_access', 'connection', ...) with the report's plain
+  HTTP URL and retained tunnel_status_code=200 requires CONNECT to authority :80
+  plus GET. The proxy emitter's _is_https_request returns False for that same
+  HTTP URL/port and does not enter its CONNECT-generation path. This confirms
+  an internal expectation/rendering mismatch. The repair must reconcile canonical
+  tunnel/transaction ownership and source expectations, not blindly emit another
+  CONNECT row or loosen the evaluator to hide missing real tunnels.
+
+The probes invoke existing pure comparison/projection helpers; no scenario,
+generated bundle, runtime, scoring threshold or production code is modified. They
+are diagnostic reproduction, not a rerun of the supplied exact bundle or a claim
+that every disagreement has the same cause. Ten complete sample findings are
+available in the truncated report. Remaining eCAR/Sysmon unexpected-evidence cases
+say missing_capability/source_rule_filtering despite selected rows; their exact
+canonical facts, frozen expectations, source policy and raw records still need
+bundle-level diagnosis before assigning an owner. Do not claim all 72 are confirmed
+false positives or Windows-independent solely from these samples.
+
+The user explicitly asks whether Windows testing can proceed if these are general
+issues. Confirm that the three reproduced families occur on macOS in platform-neutral
+engine/evaluator code. Defer their repair into the existing P1 mixed-fleet ground-truth
+work and continue Windows installer/Studio function testing separately. Do not start
+new acceptance CI, regenerate the scenario, change its authored intent, or request
+another large pasted report as a prerequisite for that testing. The most recent
+frontend workspace-opening feedback commit remains d2a5b12e, pending the next
+installer build; the currently delivered EXE remains exact source 031c77ad.

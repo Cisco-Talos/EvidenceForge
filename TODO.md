@@ -163,6 +163,11 @@ exact instances and independent restrictions. Validation and comparison evidence
   exact records; repair their owners without lowering the 95% gate or changing
   the workload. Current repairs and residual evidence are in the
   [assessment worklog](docs/worklog/2026-11-11-iteration-test-loops89-98.md).
+  The Windows laptop report also exposes shared SMTP boolean comparison, DNS SRV
+  projection and HTTP proxy CONNECT-expectation defects reproduced on macOS. Track
+  those as general data-quality work, separately from Windows installer/Studio
+  acceptance; remaining capability/filter disagreements still need exact-bundle
+  diagnosis. See the [laptop report analysis](docs/worklog/2026-11-11-studio-windows-x86_64.md#shared-evidence-disagreements-reproduced-on-macos-november-13).
 
 - [ ] **P2 — Remove the shared Linux PID churn floor:** Ten hosts share a
   940-PID ten-minute mode caused by clipping hidden churn to temporal reorder
