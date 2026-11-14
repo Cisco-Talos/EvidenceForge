@@ -295,6 +295,10 @@ def assemble(
             shutil.copytree(payload, bootstrap)
             if not (bootstrap / "pythonw.exe").is_file():
                 raise RuntimeError("Windows uninstall controls require bundled pythonw.exe")
+            if not (
+                bootstrap / "Lib/site-packages/evidenceforge/studio/windows-controls.manifest"
+            ).is_file():
+                raise RuntimeError("Windows uninstall confirmation requires its controls manifest")
         archives[architecture] = {"archive": target.name, "sha256": digest(target)}
         print(f"Assembled {architecture}: {target.stat().st_size / 1024**2:.1f} MiB", flush=True)
     manifest = {

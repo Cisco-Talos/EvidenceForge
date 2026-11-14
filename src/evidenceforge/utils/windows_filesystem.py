@@ -750,8 +750,13 @@ def same_open_file(first: int, second: int) -> bool:
 
 def list_directory(descriptor: int) -> list[str]:
     """Enumerate a pinned directory through its native handle."""
+    return [name for name, _directory in list_directory_types(descriptor)]
+
+
+def list_directory_types(descriptor: int) -> list[tuple[str, bool]]:
+    """Read names and directory flags together without reopening each child."""
     buffer = ctypes.create_string_buffer(65536)
-    names: list[str] = []
+    names: list[tuple[str, bool]] = []
     information = _FILE_ID_BOTH_DIRECTORY_RESTART_INFO
     while True:
         if not _get_info(_handle(descriptor), information, buffer, len(buffer)):
@@ -766,7 +771,7 @@ def list_directory(descriptor: int) -> list[str]:
             start = offset + _DirectoryInformation.FileName.offset
             name = bytes(buffer[start : start + entry.FileNameLength]).decode("utf-16-le")
             if name not in {".", ".."}:
-                names.append(name)
+                names.append((name, bool(entry.FileAttributes & _FILE_ATTRIBUTE_DIRECTORY)))
             if not entry.NextEntryOffset:
                 break
             offset += entry.NextEntryOffset
@@ -780,6 +785,36 @@ class _BasicFileInfo(ctypes.Structure):
         ("changed", ctypes.c_int64),
         ("attributes", wintypes.DWORD),
     ]
+
+
+def open_cleanup_child(parent: int, name: str, *, directory: bool) -> int:
+    """Pin one cleanup entry with deletion rights; never follow a reparse point."""
+    return _open_native(
+        name,
+        root=_handle(parent),
+        flags=os.O_RDONLY,
+        directory=directory,
+        extra_access=0 if directory else _DELETE | 0x100,
+        share_delete=False,
+    )
+
+
+def remove_open_cleanup_entry(descriptor: int) -> None:
+    """Delete the pinned entry once, clearing only its read-only attribute if needed."""
+    basic = _BasicFileInfo()
+    _require(_get_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+    if basic.attributes & 0x1:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode) and metadata.st_nlink != 1:
+            raise PermissionError("Read-only removal refuses multiply linked files")
+        basic.attributes = (basic.attributes & ~0x1) or 0x80
+        _require(_set_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+    delete = wintypes.BYTE(1)
+    _require(
+        _set_info(
+            _handle(descriptor), _FILE_DISPOSITION_INFO, ctypes.byref(delete), ctypes.sizeof(delete)
+        )
+    )
 
 
 def remove_child(

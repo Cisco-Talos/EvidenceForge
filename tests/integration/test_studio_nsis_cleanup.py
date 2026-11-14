@@ -87,7 +87,7 @@ def execute(*args,report_progress,**kwargs):
     def progress(value):
         nonlocal blocked
         report_progress(value)
-        if not blocked and value.total and 0 < value.completed < value.total:
+        if not blocked and value.phase=='removing' and value.completed>0:
             blocked=True
             while not (Path(__file__).parent/'allow-remove').exists():
                 time.sleep(.02)
@@ -268,15 +268,39 @@ SectionEnd
 
                     _wait(lambda: bool(confirmation()), failure)
                     question = confirmation()
-                    assert send(question, 0x400, 0, 0) & 0xFFFF == 7  # DM_GETDEFID: IDNO
+
+                    def cancel_button() -> int:
+                        result = 0
+
+                        @callback_type
+                        def find(handle: int, parameter: int) -> bool:
+                            nonlocal result
+                            identity = _function("user32", "GetDlgCtrlID", ctypes.c_int, [wt.HWND])(
+                                handle
+                            )
+                            if identity == 2:
+                                result = handle
+                            return True
+
+                        _function(
+                            "user32",
+                            "EnumChildWindows",
+                            wt.BOOL,
+                            [wt.HWND, callback_type, wt.LPARAM],
+                        )(question, find, 0)
+                        return result
+
+                    _wait(lambda: bool(cancel_button()), failure)
+                    style = _function("user32", "GetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int])
+                    assert style(cancel_button(), -16) & 0xF == 1  # BS_DEFPUSHBUTTON
                     assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
-                    send(get(question, 7), 0xF5, 0, 0)  # No authorizes no deletion.
+                    send(question, 0x466, 2, 0)  # TDM_CLICK_BUTTON: Cancel
                     _wait(lambda: not confirmation() and bool(enabled(next_button)), failure)
                     assert not (folder / "uninstalled.txt").exists()
                     assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
                     send(next_button, 0xF5, 0, 0)
                     _wait(lambda: bool(confirmation()), failure)
-                    send(get(confirmation(), 6), 0xF5, 0, 0)  # IDYES
+                    send(confirmation(), 0x466, 6, 0)  # TDM_CLICK_BUTTON: Yes
                     page = _function("user32", "GetParent", wt.HWND, [wt.HWND])(
                         controls["Studio settings"]
                     )
@@ -303,7 +327,7 @@ SectionEnd
                         "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
                     )(page, find_progress, 0)
                     assert progress and not edits  # No scrolling text/details pane.
-                    _wait(lambda: 0 < send(progress, 0x408, 0, 0) < 1000, failure)
+                    _wait(lambda: bool(style(progress, -16) & 0x8), failure)  # PBS_MARQUEE
                     assert _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])(progress)
                     rect = _function(
                         "user32", "GetWindowRect", wt.BOOL, [wt.HWND, ctypes.POINTER(wt.RECT)]

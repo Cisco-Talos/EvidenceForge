@@ -109,6 +109,7 @@ class ReviewSession:
                 check_cancelled=check,
                 report_target=report_target,
                 full_cleanup=command.categories == set(LABELS),
+                root_review=True,
             )
 
         def completed(future: Future[CleanupPlan]) -> None:

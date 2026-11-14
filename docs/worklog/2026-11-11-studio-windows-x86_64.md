@@ -2424,3 +2424,53 @@ uninstall scope/confirmation/progress description. The delivered binary remains
 bound to 12d0e75e; no version bump, tags, release publication or PR is requested.
 Install/Upgrade this build before retesting authoring and its new uninstaller;
 no user-data reset is required for the cache regression.
+
+### Bounded uninstall review and one-pass removal (November 14)
+
+The user explicitly requests reducing/eliminating the content pre-scan and repeated
+removal phases, plus a short icon-free confirmation: the question, selected items,
+"This cannot be undone", and Cancel replacing No. Implement a private root-review
+plan used by the native NSIS ReviewSession. It validates only each selected root's
+type/identity/owner/access, never enumerating a complete selected directory. Keep
+selective discovery for mixed/shared skills and custom workspaces. Known publisher
+files need no YAML-content validation just to delete them. Default application-only
+uninstall and independent category boundaries stay unchanged.
+
+Approval now covers the contents of a selected folder when removal reaches them,
+including additions since selection. Before mutation, fence Studio/service/state,
+runtime install/leases, workspace/publication and discoverable run ownership; inspect
+retained jobs and recheck selected root identities. Remove in one no-follow walk
+under the original token, without a recursive rescan, per-file staging, tree copy
+or rollback phase. Windows enforces descendant access; cleanup does not parse every
+descendant ACL or rewrite grants. Open each regular file once with deletion rights,
+clear only ReadOnly when necessary, and delete the exact opened file. Pin directory
+handles during traversal and identity-check their final empty-directory removal.
+Hold protocol lock files until writer fences close, then remove only their small
+empty ancestor skeletons. New startup content after fences close is preserved and
+reported as incomplete cleanup, without another recursive pass. Mid-removal errors
+truthfully report possible partial deletion; no transactional rollback is promised.
+
+The former inventoried/staged execution remains available to the legacy standalone
+review entry point and its compatibility tests; the installed NSIS wizard explicitly
+selects the new path. Mac/Linux Studio implementations and generation behavior are
+unchanged. Native progress now stays in one animated removal operation until complete,
+with no invented percentage or repeated phase resets. The NSIS app-file removal page
+still follows as the standard application uninstall.
+
+Use Windows TaskDialogIndirect with common Yes/Cancel buttons, default IDCANCEL,
+and no main/footer icon. Activate Common Controls v6 using a bundled manifest;
+require that manifest in Windows packaging. A built wheel includes it. The body
+contains no paths, SIDs or preservation paragraphs. Cancel/Escape/close authorize
+no deletion. Keep parent ownership and selection revalidation after confirmation.
+Primary contracts: Microsoft TASKDIALOGCONFIG/TaskDialogIndirect and ACTCTXW;
+the Win32 SDK header packs the task-dialog structures to one byte.
+
+Local focused cleanup/wizard/navigation/channel checks: 51 pass, nine native-only
+skips. Regressions cover no descendant review/staging, one visit per directory,
+current-folder-content approval, replaced roots, active service/run/lease refusal,
+external link safety, exact minimal confirmation, and preservation of newly recreated
+content. Native tests add read-only files/directories, one file open per deletion,
+real shared runtime leases, and real TaskDialog cancellation/default behavior.
+Ruff/diff checks pass. Behavior revision 520/digest remains unchanged. Restart the
+build-only Windows preview with these focused probes; full qualification and 50k+
+laptop timings remain separate evidence.

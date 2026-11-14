@@ -84,6 +84,7 @@ class CleanupPlan(BaseModel):
     workspaces: tuple[Path, ...] = ()
     full_cleanup: bool = False
     control_locks: tuple[Path, ...] = ()
+    root_review: bool = False
 
 
 class CleanupProgress(BaseModel):
@@ -101,7 +102,7 @@ class CleanupProgress(BaseModel):
         title = {
             "checking": "Step 1 of 4: Checking the reviewed files",
             "preparing": "Step 2 of 4: Preparing selected data for removal",
-            "removing": "Step 3 of 4: Removing selected files",
+            "removing": "Removing selected content…",
             "finishing": "Step 4 of 4: Finishing folder cleanup",
             "restoring": "Restoring files after a cleanup error",
             "complete": "Selected data cleanup finished",
@@ -417,6 +418,7 @@ def build_plan(
     check_cancelled: Callable[[], None] = lambda: None,
     report_target: Callable[[Path], None] = lambda path: None,
     full_cleanup: bool = False,
+    root_review: bool = False,
 ) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
     import yaml
@@ -446,9 +448,10 @@ def build_plan(
     if "skills" in selected:
         safe_path(filesystem_path(publisher))
     if "skills" in selected and not full_cleanup and filesystem_path(publisher).is_file():
-        PublisherIdentity.model_validate(
-            yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
-        )
+        if not root_review:
+            PublisherIdentity.model_validate(
+                yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
+            )
         candidates.append(("skills", publisher))
     workspaces: set[Path] = (
         {
@@ -521,9 +524,10 @@ def build_plan(
         project_publisher = workspace / ".eforge/publisher.yaml"
         safe_path(filesystem_path(project_publisher))
         if filesystem_path(project_publisher).is_file():
-            PublisherIdentity.model_validate(
-                yaml.safe_load(filesystem_path(project_publisher).read_text(encoding="utf-8"))
-            )
+            if not root_review:
+                PublisherIdentity.model_validate(
+                    yaml.safe_load(filesystem_path(project_publisher).read_text(encoding="utf-8"))
+                )
             candidates.append(("work", project_publisher))
         for name in ("scenarios", "runs"):
             parent = workspace / name
@@ -557,19 +561,24 @@ def build_plan(
     for category, path in ordered_candidates:
         if category not in selected:
             continue
-        if full_cleanup and any(
+        if (full_cleanup or root_review) and any(
             path.is_relative_to(target.path) for target in targets if target.directory
         ):
             continue
         check_cancelled()
         report_target(path)
-        entries = _inventory(
-            path,
-            check_cancelled,
-            webview_root=locations.local / "org.evidenceforge.studio/EBWebView",
-            record_lock=control_locks.add,
-            private_root=locations.private,
-        )
+        if root_review:
+            from evidenceforge.studio.windows_uninstall_fast import review_root
+
+            entries = review_root(path)
+        else:
+            entries = _inventory(
+                path,
+                check_cancelled,
+                webview_root=locations.local / "org.evidenceforge.studio/EBWebView",
+                record_lock=control_locks.add,
+                private_root=locations.private,
+            )
         if entries:
             targets.append(CleanupTarget(category=category, path=path, entries=entries))
     return CleanupPlan(
@@ -579,6 +588,7 @@ def build_plan(
         workspaces=tuple(admitted_workspaces),
         full_cleanup=full_cleanup,
         control_locks=tuple(sorted(control_locks)),
+        root_review=root_review,
     )
 
 
@@ -624,34 +634,8 @@ def confirmation(plan: CleanupPlan, selected: set[Category]) -> str:
         "Are you sure you want to uninstall Studio and permanently delete the selected content?",
         "",
         *(f"• {label}" for category, label in LABELS.items() if category in selected),
-        "",
-        f"User profile: {plan.locations.profile}",
     ]
-    if "private" in selected:
-        lines.extend(
-            (
-                f"Studio data: {plan.locations.private}",
-                f"Browser data: {plan.locations.local / 'org.evidenceforge.studio'}",
-            )
-        )
-    if "work" in selected:
-        lines.extend(("Workspaces:", *(str(path) for path in plan.workspaces)))
-    if plan.full_cleanup:
-        lines.extend(
-            (
-                "",
-                "All three choices are selected. Entire dedicated EvidenceForge folders and "
-                "everything inside them, including manually added files, will be removed. "
-                "Custom workspace containers retain unrelated content.",
-            )
-        )
-    lines.extend(
-        (
-            "",
-            "Other accounts, Codex/sign-in and unrelated skills will be preserved.",
-            "This cannot be undone. Choose No to return without removing anything.",
-        )
-    )
+    lines.extend(("", "This cannot be undone."))
     return "\n".join(lines)
 
 
@@ -734,6 +718,11 @@ def execute(
 
         if current_user_sid() != plan.locations.account:
             raise StudioStateError("Uninstall account changed after review; cleanup refused")
+    if plan.root_review:
+        from evidenceforge.studio.windows_uninstall_fast import remove_selected
+
+        remove_selected(plan, selected, report_progress=report_progress)
+        return
     from evidenceforge.generation.checkpoints.store import RunLock
 
     targets = [target for target in plan.targets if target.category in selected]

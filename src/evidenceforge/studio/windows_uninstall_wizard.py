@@ -99,10 +99,10 @@ class WizardControls:
         )
 
     def confirm(self, text: str) -> bool:
-        """Require an explicit Yes; No and closing the owned dialog preserve data."""
-        result = message(text, 0x134, self.wizard)  # MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2
-        _require(result)
-        return result == 6  # IDYES
+        """Require an explicit Yes; Cancel/closing the owned dialog preserve data."""
+        from evidenceforge.studio.windows_confirm import confirm_content
+
+        return confirm_content(text, self.wizard)
 
     def error(self, text: str) -> None:
         """Keep the page concise and present actionable failures in an owned dialog."""
@@ -123,7 +123,7 @@ class WizardControls:
             self.bar, 5 if value else 0
         )
         if value:
-            self.progress(CleanupProgress(phase="checking"))
+            self.progress(CleanupProgress(phase="removing"))
 
     def progress(self, value: CleanupProgress) -> None:
         """Use real phase counts, or marquee activity when the total is unknown."""
@@ -333,7 +333,7 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                             connected = False
                         ui.ready(not choices)
                         ui.text(
-                            "Checking the selected content… You can change the choices or cancel."
+                            "Checking selected folders… You can change the choices or cancel."
                             if choices
                             else "All user data and skills will be preserved. Only the application will be uninstalled."
                         )
@@ -382,7 +382,7 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                             if reply.state == "inspecting":
                                 if ui.alive() and selected and not applying:
                                     ui.text(
-                                        "Checking the selected content… You can change the choices or cancel."
+                                        "Checking selected folders… You can change the choices or cancel."
                                     )
                                 continue
                             if reply.state == "removing":

@@ -158,17 +158,24 @@ parents and sign-in data stay. Arbitrary custom workspace containers retain
 selective cleanup and unrelated content.
 
 Clicking **Uninstall** with any content selected opens an **Are you sure?**
-confirmation that summarizes the categories and locations and defaults to **No**.
-Choosing No returns to the choices without starting deletion. Application-only
+confirmation listing only the selected categories, with **Yes / Cancel** buttons
+and **Cancel** selected by default. Choosing Cancel returns to the choices without
+starting deletion. Application-only
 removal does not ask this content question. The page uses a short status line and
-a progress bar rather than a scrolling details pane. Checkbox selection still
-reviews the file set and can take time with many retained runtimes or datasets.
+a progress bar rather than a scrolling details pane. Checkbox selection checks
+the selected roots without enumerating their contents. Shared locations retain
+selective discovery of known EvidenceForge files. Folder approval covers its
+current contents when removal reaches them, including changes since selection.
+Removal uses one pass and one animated progress display, without a separate
+inventory, staging tree or rollback copy. Windows still has to delete each file.
 Deleting synced content may also delete its cloud copies. Canceling before
 confirmation removes no data and cancels application uninstall. Active
 helpers, retained jobs, runtime leases, publishing and run ownership block cleanup;
 cleanup never terminates jobs. Links, junctions, unsafe ownership, unsupported
-filesystems and files changed since review cause refusal. Remaining staged data
-is identified if deletion stops after it starts.
+filesystems and replaced folder roots cause refusal. If removal encounters a
+locked or unsafe entry, it stops and reports that some selected content may already
+be gone. It preserves content recreated after writer fences close rather than
+starting another recursive pass.
 
 For **Everyone**, the app uninstaller may be elevated, but cleanup runs using the
 same-session Windows desktop user's unelevated token and Known Folders. It never

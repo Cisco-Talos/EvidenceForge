@@ -61,6 +61,7 @@ def test_new_selection_cancels_inventory_and_only_latest_receipt_can_execute(
         check_cancelled: Callable[[], None],
         report_target: Callable[[Path], None],
         full_cleanup: bool,
+        root_review: bool,
     ) -> CleanupPlan:
         if categories == {"private"}:
             entered.set()
@@ -291,7 +292,6 @@ def test_declining_content_confirmation_preserves_data_and_allows_retry(tmp_path
         assert sentinel.read_text() == "preserve until confirmed"
         assert not page.finished and not page.applying and not page.progress_updates
         assert "Are you sure" in page.confirmations[0]
-        assert str(locations.private) in page.confirmations[0]
         assert "Studio settings" in page.confirmations[0]
         assert "Authored scenarios" not in page.confirmations[0]
         page.commit = True
@@ -304,23 +304,41 @@ def test_declining_content_confirmation_preserves_data_and_allows_retry(tmp_path
     assert len(page.confirmations) == 2 and page.progress_updates
 
 
-@pytest.mark.parametrize("answer,approved", [(6, True), (7, False), (2, False)])
-def test_confirmation_defaults_to_no_and_only_yes_approves(
+@pytest.mark.parametrize("answer,approved", [(6, True), (2, False)])
+def test_confirmation_defaults_to_cancel_and_only_yes_approves(
     monkeypatch: pytest.MonkeyPatch, answer: int, approved: bool
 ) -> None:
-    from evidenceforge.studio import windows_uninstall_wizard as wizard
+    import ctypes
 
-    calls: list[tuple[str, int, int]] = []
+    from evidenceforge.studio import windows_confirm as dialog
 
-    def message(text: str, flags: int, owner: int) -> int:
-        calls.append((text, flags, owner))
-        return answer
+    calls: list[str] = []
 
-    monkeypatch.setattr(wizard, "message", message)
+    def function(library: str, name: str, result: object, arguments: list[object]) -> Callable:
+        def call(*values: object) -> int:
+            calls.append(name)
+            if name == "TaskDialogIndirect":
+                config = ctypes.cast(values[0], ctypes.POINTER(dialog._TaskDialog)).contents
+                assert config.owner == 123 and config.default_button == 2
+                assert config.buttons == 0xA and not config.icon and not config.footer_icon
+                assert config.instruction == "Question?" and config.content == "Selected content"
+                ctypes.cast(values[1], ctypes.POINTER(ctypes.c_int)).contents.value = answer
+                return 0
+            return 1
+
+        return call
+
+    monkeypatch.setattr(dialog, "_function", function)
     page = object.__new__(WizardControls)
     page.wizard = 123
-    assert page.confirm("Delete selected content?") is approved
-    assert calls == [("Delete selected content?", 0x134, 123)]
+    assert page.confirm("Question?\n\nSelected content") is approved
+    assert calls == [
+        "CreateActCtxW",
+        "ActivateActCtx",
+        "TaskDialogIndirect",
+        "DeactivateActCtx",
+        "ReleaseActCtx",
+    ]
 
 
 def test_selection_changed_during_confirmation_cannot_execute_old_approval(
