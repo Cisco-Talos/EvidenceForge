@@ -527,3 +527,47 @@ def test_large_inventory_pins_ancestry_once_and_cancellation_releases_it(
     relocated = root.with_name("released")
     root.rename(relocated)  # Every pinned handle was released even during cancellation.
     assert len(list(relocated.rglob("*.py"))) == 500
+
+
+def test_removal_reports_each_real_phase_and_finishes_after_selected_data_is_gone(
+    locations: UserLocations,
+) -> None:
+    from evidenceforge.studio.windows_uninstall import CleanupProgress
+
+    private = write(locations.private / "nested/settings.txt")
+    unrelated = write(locations.profile / "unrelated.txt")
+    progress: list[CleanupProgress] = []
+
+    def report(value: CleanupProgress) -> None:
+        progress.append(value)
+        if value.phase == "complete":
+            assert not private.exists()
+            assert unrelated.read_text() == "preserve"
+
+    execute(build_plan(locations, {"private"}), {"private"}, report_progress=report)
+    assert list(dict.fromkeys(value.phase for value in progress)) == [
+        "checking",
+        "preparing",
+        "removing",
+        "finishing",
+        "complete",
+    ]
+    assert any(value.total and 0 < value.completed < value.total for value in progress)
+    assert any(value.phase == "finishing" and value.total is None for value in progress)
+    assert progress[-1].completed == progress[-1].total == 1
+    assert all(value.total is None or value.completed <= value.total for value in progress)
+
+
+def test_losing_progress_display_does_not_interrupt_approved_cleanup(
+    locations: UserLocations,
+) -> None:
+    private = write(locations.private / "settings.txt")
+    calls = 0
+
+    def disconnected(value: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise BrokenPipeError("The display closed")
+
+    execute(build_plan(locations, {"private"}), {"private"}, report_progress=disconnected)
+    assert not private.exists() and calls == 1

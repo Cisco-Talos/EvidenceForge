@@ -19,7 +19,7 @@ import psutil
 
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.state_io import StudioStateError
-from evidenceforge.studio.windows_uninstall import Category
+from evidenceforge.studio.windows_uninstall import Category, CleanupProgress
 from evidenceforge.studio.windows_uninstall_native import _function, _require, user_locations
 from evidenceforge.studio.windows_uninstall_pipe import CleanupPipe
 from evidenceforge.studio.windows_uninstall_session import CleanupReply, serve
@@ -55,11 +55,12 @@ class WizardControls:
     """Access only the NSIS page and controls owned by the verified parent process."""
 
     def __init__(self, wizard: int, page: int, controls: list[int], process: int) -> None:
-        if len(controls) != 4 or psutil.Process().ppid() != process:
+        if len(controls) != 5 or psutil.Process().ppid() != process:
             raise StudioStateError("Cleanup page is not the controller's parent wizard")
         self.wizard, self.page, self.process = wizard, page, process
         self.checks = dict(zip(("private", "skills", "work"), controls[:3], strict=True))
         self.review = controls[3]
+        self.bar = controls[4]
         child = _function("user32", "IsChild", wt.BOOL, [wt.HWND, wt.HWND])
         if _pid(wizard) != process or _pid(page) != process or not child(wizard, page):
             raise StudioStateError("Cleanup page changed its owner")
@@ -85,7 +86,7 @@ class WizardControls:
         }
 
     def text(self, text: str) -> None:
-        buffer = ctypes.create_unicode_buffer(text.replace("\n", "\r\n"))
+        buffer = ctypes.create_unicode_buffer(text.replace("\r\n", "\n").replace("\n", "\r\n"))
         _require(
             _function(
                 "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
@@ -102,6 +103,28 @@ class WizardControls:
         for control in (*self.checks.values(), self.cancel):
             enable(control, not value)
         self.ready(False)
+        _function("user32", "ShowWindow", wt.BOOL, [wt.HWND, ctypes.c_int])(
+            self.bar, 5 if value else 0
+        )
+        if value:
+            self.progress(CleanupProgress(phase="checking"))
+
+    def progress(self, value: CleanupProgress) -> None:
+        """Use real phase counts, or marquee activity when the total is unknown."""
+        get = _function("user32", "GetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int])
+        set_style = _function("user32", "SetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int, wt.LONG])
+        send = _function(
+            "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        )
+        style = get(self.bar, -16)
+        if value.total is None:
+            set_style(self.bar, -16, style | 0x8)  # PBS_MARQUEE
+            send(self.bar, 0x40A, 1, 40)  # PBM_SETMARQUEE
+        else:
+            send(self.bar, 0x40A, 0, 0)
+            set_style(self.bar, -16, style & ~0x8)
+            send(self.bar, 0x406, 0, 1000)  # PBM_SETRANGE32
+            send(self.bar, 0x402, min(1000, value.completed * 1000 // value.total), 0)
 
     def commit_requested(self) -> bool:
         requested = bool(_property(self.page, "Commit"))
@@ -334,6 +357,11 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                         elif reply.revision in (0, revision):
                             if reply.state == "inspecting":
                                 if ui.alive() and selected and not applying:
+                                    ui.text(reply.text)
+                                continue
+                            if reply.state == "removing":
+                                if applying and ui.alive() and reply.progress is not None:
+                                    ui.progress(reply.progress)
                                     ui.text(reply.text)
                                 continue
                             if reply.state == "applied":

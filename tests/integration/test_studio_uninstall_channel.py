@@ -56,7 +56,7 @@ import sys,time
 from concurrent.futures import CancelledError
 from pathlib import Path
 from evidenceforge.studio import windows_uninstall_session as session
-from evidenceforge.studio.windows_uninstall import CleanupPlan,UserLocations
+from evidenceforge.studio.windows_uninstall import CleanupPlan,CleanupProgress,UserLocations
 from evidenceforge.studio.windows_uninstall_pipe import CleanupPipe
 from evidenceforge.utils.windows_filesystem import current_user_sid
 root=Path(sys.argv[3])
@@ -72,7 +72,11 @@ def inspect(locations,categories,*,check_cancelled,report_target):
             raise
     return CleanupPlan(locations=locations)
 session.build_plan=inspect
-session.execute=lambda plan,categories:(root/'approved').touch()
+def execute(plan,categories,*,report_progress):
+    report_progress(CleanupProgress(phase='preparing',completed=1,total=2,path=root))
+    (root/'approved').touch()
+    report_progress(CleanupProgress(phase='complete',completed=1,total=1))
+session.execute=execute
 session.serve(CleanupPipe.client(sys.argv[1],int(sys.argv[2])),locations)
 """
     script = "import sys; sys.path[:] = " + repr(sys.path) + "\n" + script
@@ -126,6 +130,11 @@ session.serve(CleanupPipe.client(sys.argv[1],int(sys.argv[2])),locations)
             assert prepared["revision"] == 2 and (tmp_path / "cancelled").exists()
             assert not (tmp_path / "approved").exists()
             send("execute", 2, [], prepared["plan_id"])
+            update = replies.get(timeout=3)
+            assert update["state"] == "removing"
+            assert update["progress"]["completed"] == 1 and update["progress"]["total"] == 2
+            assert update["progress"]["path"] == str(tmp_path)
+            assert replies.get(timeout=3)["progress"]["phase"] == "complete"
             assert replies.get(timeout=3)["state"] == "applied"
             assert (tmp_path / "approved").exists()
             # Close with the reply reader still pending and the worker waiting

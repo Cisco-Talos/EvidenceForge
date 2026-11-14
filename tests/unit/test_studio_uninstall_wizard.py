@@ -15,7 +15,12 @@ import pytest
 
 from evidenceforge.studio import windows_uninstall_session as session_module
 from evidenceforge.studio.state_io import StudioStateError, private_directory
-from evidenceforge.studio.windows_uninstall import CleanupPlan, UserLocations, build_plan
+from evidenceforge.studio.windows_uninstall import (
+    CleanupPlan,
+    CleanupProgress,
+    UserLocations,
+    build_plan,
+)
 from evidenceforge.studio.windows_uninstall_pipe import CleanupPipe, pipe_name
 from evidenceforge.studio.windows_uninstall_session import (
     CleanupCommand,
@@ -68,7 +73,9 @@ def test_new_selection_cancels_inventory_and_only_latest_receipt_can_execute(
         return CleanupPlan(locations=current)
 
     monkeypatch.setattr(session_module, "build_plan", inspect)
-    monkeypatch.setattr(session_module, "execute", lambda plan, selected: calls.append(selected))
+    monkeypatch.setattr(
+        session_module, "execute", lambda plan, selected, **kwargs: calls.append(selected)
+    )
     session = ReviewSession(locations, replies.put)
     try:
         session.prepare(CleanupCommand(action="prepare", revision=1, categories={"private"}))
@@ -139,12 +146,12 @@ def test_channel_rejects_oversize_before_reading_a_payload(monkeypatch: pytest.M
 
 
 class LocalChannel:
-    execution_pending = False
-
     def __init__(self, locations: UserLocations) -> None:
         self.replies: queue.Queue[CleanupReply] = queue.Queue()
         self.session = ReviewSession(locations, self.replies.put)
         self.replies.put(CleanupReply(state="ready", revision=0, text="ready"))
+        self.execution_pending = False
+        self.execution: threading.Thread | None = None
 
     def send(
         self, action: str, revision: int, categories: set[str], plan_id: str | None = None
@@ -155,12 +162,24 @@ class LocalChannel:
         if action == "prepare":
             self.session.prepare(command)
         elif action == "execute":
-            self.session.apply(command)
+            self.execution_pending = True
+
+            def execute() -> None:
+                try:
+                    self.session.apply(command)
+                finally:
+                    self.execution_pending = False
+
+            self.execution = threading.Thread(target=execute)
+            self.execution.start()
 
     def check(self) -> None:
         pass
 
     def close(self) -> None:
+        if self.execution is not None:
+            self.execution.join(5)
+            assert not self.execution.is_alive()
         self.session.close()
 
 
@@ -172,6 +191,8 @@ class FakePage:
         self.commit = False
         self.finished = False
         self.review = ""
+        self.progress_updates: list[CleanupProgress] = []
+        self.applying = False
 
     def alive(self) -> bool:
         return self.open
@@ -187,6 +208,10 @@ class FakePage:
 
     def busy(self, busy: bool) -> None:
         self.enabled = False
+        self.applying = busy
+
+    def progress(self, value: CleanupProgress) -> None:
+        self.progress_updates.append(value)
 
     def commit_requested(self) -> bool:
         value, self.commit = self.commit, False

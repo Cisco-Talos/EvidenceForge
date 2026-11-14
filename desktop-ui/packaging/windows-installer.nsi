@@ -472,6 +472,7 @@ Var EForgeCleanupPrivate
 Var EForgeCleanupSkills
 Var EForgeCleanupWork
 Var EForgeCleanupReview
+Var EForgeCleanupProgress
 Var EForgeCleanupProcess
 
 UninstPage custom un.EForgeCleanupCreate un.EForgeCleanupLeave
@@ -502,9 +503,12 @@ Function un.EForgeCleanupCreate
   ${NSD_CreateCheckbox} 0 76u 100% 12u "Authored scenarios/packs and generated output in known workspaces"
   Pop $EForgeCleanupWork
   ${NSD_OnClick} $EForgeCleanupWork un.EForgeCleanupChanged
-  nsDialogs::CreateControl EDIT ${WS_VISIBLE}|${WS_CHILD}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_READONLY}|${ES_AUTOVSCROLL} ${WS_EX_CLIENTEDGE} 0 93u 100% 43% "Preparing cleanup controls… You may cancel."
+  nsDialogs::CreateControl EDIT ${WS_VISIBLE}|${WS_CHILD}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_READONLY}|${ES_AUTOVSCROLL} ${WS_EX_CLIENTEDGE} 0 93u 100% 33u "Preparing cleanup controls… You may cancel."
   Pop $EForgeCleanupReview
   SendMessage $EForgeCleanupReview ${EM_SETLIMITTEXT} 0x7ffffffe 0
+  ${NSD_CreateProgressBar} 0 -11u 100% 9u ""
+  Pop $EForgeCleanupProgress
+  ShowWindow $EForgeCleanupProgress ${SW_HIDE}
   GetDlgItem $0 $HWNDPARENT 1
   SendMessage $0 ${WM_SETTEXT} 0 "STR:Uninstall"
   EnableWindow $0 0
@@ -512,7 +516,7 @@ Function un.EForgeCleanupCreate
   System::Call 'kernel32::GetCurrentProcessId()i.r0'
   ; pythonw keeps the controller invisible. It never creates a top-level window.
   ClearErrors
-  Exec '"$INSTDIR\runtime\bootstrap\pythonw.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --wizard-window $HWNDPARENT --page-window $EForgeCleanupPage --wizard-pid $0 --controls $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview'
+  Exec '"$INSTDIR\runtime\bootstrap\pythonw.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --wizard-window $HWNDPARENT --page-window $EForgeCleanupPage --wizard-pid $0 --controls $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview $EForgeCleanupProgress'
   ${If} ${Errors}
     ${NSD_SetText} $EForgeCleanupReview "Cleanup controls could not start. Cancel and reinstall Studio before retrying. No data was removed."
   ${EndIf}

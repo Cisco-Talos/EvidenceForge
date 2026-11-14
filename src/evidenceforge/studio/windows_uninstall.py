@@ -4,25 +4,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import sqlite3
 import stat
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.state_io import StateLock, StudioStateError, open_regular, safe_path
 
 Category = Literal["private", "skills", "work"]
+logger = logging.getLogger(__name__)
 LABELS: dict[Category, str] = {
     "private": "Studio settings, credentials, caches and retained runtimes",
     "skills": "EvidenceForge skills and global publisher identity (also used by the CLI)",
@@ -79,6 +82,71 @@ class CleanupPlan(BaseModel):
     targets: tuple[CleanupTarget, ...] = ()
     preserved: tuple[str, ...] = ()
     workspaces: tuple[Path, ...] = ()
+
+
+class CleanupProgress(BaseModel):
+    """Phase-local work counts; an unknown total is explicitly indeterminate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    phase: Literal["checking", "preparing", "removing", "finishing", "restoring", "complete"]
+    completed: int = Field(default=0, ge=0)
+    total: int | None = Field(default=None, ge=1)
+    path: Path | None = None
+
+    @property
+    def message(self) -> str:
+        """Describe real work without claiming the whole uninstall has finished."""
+        title = {
+            "checking": "Step 1 of 4: Checking the reviewed files",
+            "preparing": "Step 2 of 4: Preparing selected data for removal",
+            "removing": "Step 3 of 4: Removing selected files",
+            "finishing": "Step 4 of 4: Finishing folder cleanup",
+            "restoring": "Restoring files after a cleanup error",
+            "complete": "Selected data cleanup finished",
+        }[self.phase]
+        detail = (
+            f"\n{self.completed:,} of {self.total:,} entries" if self.total else "\nPlease wait…"
+        )
+        return title + detail + (f"\nFolder: {self.path}" if self.path else "")
+
+
+class _CleanupReporter:
+    """Throttle display updates; a lost display must not interrupt approved cleanup."""
+
+    def __init__(self, callback: Callable[[CleanupProgress], None] | None) -> None:
+        self.callback = callback
+        self.phase: str | None = None
+        self.last_update = 0.0
+        self.last_completed = 0
+
+    def update(
+        self,
+        phase: str,
+        completed: int = 0,
+        total: int | None = None,
+        path: Path | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
+        if self.callback is None:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and phase == self.phase
+            and now - self.last_update < 0.25
+            and not (completed > 0 and self.last_completed == 0)
+            and not (total is not None and completed == total)
+        ):
+            return
+        self.phase, self.last_update = phase, now
+        self.last_completed = completed
+        progress = CleanupProgress(phase=phase, completed=completed, total=total, path=path)
+        try:
+            self.callback(progress)
+        except OSError:
+            logger.debug("Uninstall progress display disconnected; completing approved cleanup")
+            self.callback = None
 
 
 def _ownership_lock(path: Path) -> bool:
@@ -541,7 +609,12 @@ def _check_workers_snapshot(database: Path) -> None:
         ) from error
 
 
-def execute(plan: CleanupPlan, selected: set[Category]) -> None:
+def execute(
+    plan: CleanupPlan,
+    selected: set[Category],
+    *,
+    report_progress: Callable[[CleanupProgress], None] | None = None,
+) -> None:
     """Lock/recheck, stage exact selected entries, then remove only that staged inventory."""
     if not selected:
         return
@@ -553,6 +626,9 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
     from evidenceforge.generation.checkpoints.store import RunLock
 
     targets = [target for target in plan.targets if target.category in selected]
+    reporter = _CleanupReporter(report_progress)
+    entry_count = sum(len(target.entries) for target in targets)
+    reporter.update("checking")
     staged: list[tuple[Path, Path]] = []
     containers: list[Path] = []
     original_directories: list[Path] = []
@@ -578,10 +654,26 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
             if filesystem_path(path.parent).is_dir():
                 held.append(stack.enter_context(StateLock(path)))
         _check_workers_snapshot(private / "studio.sqlite")
+        checked = 0
         for target in targets:
+            target_checks = 0
+
+            def checking(current: CleanupTarget = target, base: int = checked) -> None:
+                nonlocal target_checks
+                target_checks += 1
+                # Volatile protocol locks are checked but excluded from the
+                # reviewed entry list. Do not let them inflate the progress total.
+                reporter.update(
+                    "checking",
+                    base + min(target_checks, len(current.entries)),
+                    entry_count or 1,
+                    current.path,
+                )
+
             if (
                 _inventory(
                     target.path,
+                    checking,
                     webview_root=plan.locations.local / "org.evidenceforge.studio/EBWebView",
                 )
                 != target.entries
@@ -589,12 +681,15 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                 raise StudioStateError(
                     f"Files changed after review; reopen uninstall: {target.path}"
                 )
+            checked += len(target.entries)
             for entry in target.entries:
                 if entry.directory and Path(entry.relative).name == ".eforge-generation":
                     lock = RunLock(target.path / entry.relative)
                     lock.acquire()  # Refuses active/remote/uncertain external CLI ownership.
                     stack.callback(lock.release)
         try:
+            prepared = 0
+            reporter.update("preparing", 0, entry_count or 1)
             for target in targets:
                 destination = target.path.with_name(f".eforge-uninstall-{uuid4().hex}")
                 if target.directory:
@@ -617,9 +712,13 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                         else:
                             _move(source, stage, directory=False)
                             staged.append((source, stage))
+                        prepared += 1
+                        reporter.update("preparing", prepared, entry_count or 1, target.path)
                 else:
                     _move(target.path, destination, directory=False)
                     staged.append((target.path, destination))
+                    prepared += 1
+                    reporter.update("preparing", prepared, entry_count or 1, target.path)
             if os.name == "nt":
                 from evidenceforge.utils import windows_filesystem as fs
 
@@ -642,8 +741,11 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                         finally:
                             os.close(parent)
         except (OSError, EvidenceForgeError):
-            for source, destination in reversed(staged):
+            reporter.update("restoring", 0, len(staged) or 1)
+            for index, (source, destination) in enumerate(reversed(staged), 1):
                 _move(destination, source, directory=False)
+                reporter.update("restoring", index, len(staged) or 1, source.parent)
+            reporter.update("restoring", force=True)
             for directory in reversed(containers):
                 if os.name == "nt":
                     from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
@@ -658,14 +760,18 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
         for lock in held:
             if any(lock.path.is_relative_to(target.path) for target in targets if target.directory):
                 lock.path.unlink(missing_ok=True)
-    for _source, destination in staged:
+    reporter.update("removing", 0, len(staged) or 1)
+    for index, (_source, destination) in enumerate(staged, 1):
         try:
             filesystem_path(destination).unlink()
         except OSError as error:
             raise StudioStateError(
                 f"Selected data remains staged at {destination}; close file users and retry: {error}"
             ) from error
+        reporter.update("removing", index, len(staged) or 1, _source.parent)
+    reporter.update("finishing")
     for directory in containers:
+        reporter.update("finishing", path=directory, force=True)
         if os.name == "nt":
             from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
 
@@ -675,6 +781,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
     for directory in sorted(
         set(original_directories), key=lambda item: len(item.parts), reverse=True
     ):
+        reporter.update("finishing", path=directory)
         try:
             filesystem_path(directory).rmdir()  # Never recursively remove fresh/unlisted entries.
         except OSError:
@@ -694,6 +801,7 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
             except OSError:
                 break
             parent = parent.parent
+    reporter.update("complete", 1, 1, force=True)
 
 
 def main() -> None:
@@ -707,7 +815,7 @@ def main() -> None:
     parser.add_argument("--wizard-window", type=int)
     parser.add_argument("--page-window", type=int)
     parser.add_argument("--wizard-pid", type=int)
-    parser.add_argument("--controls", type=int, nargs=4)
+    parser.add_argument("--controls", type=int, nargs=5)
     arguments = parser.parse_args()
     if sys.platform != "win32":
         parser.error("Use this module only from the native Windows uninstaller")

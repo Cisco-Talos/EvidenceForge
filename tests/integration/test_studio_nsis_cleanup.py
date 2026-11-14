@@ -79,7 +79,19 @@ def inspect(*args,check_cancelled,**kwargs):
         time.sleep(.02)
     return original(*args,check_cancelled=check_cancelled,**kwargs)
 session.build_plan=inspect
-run_wizard(WizardControls(int(sys.argv[1]),int(sys.argv[2]),[int(x) for x in sys.argv[4:8]],int(sys.argv[3])),lambda:LocalChannel(locations))
+original_execute=session.execute
+def execute(*args,report_progress,**kwargs):
+    blocked=False
+    def progress(value):
+        nonlocal blocked
+        report_progress(value)
+        if not blocked and value.total and 0 < value.completed < value.total:
+            blocked=True
+            while not (Path(__file__).parent/'allow-remove').exists():
+                time.sleep(.02)
+    return original_execute(*args,report_progress=progress,**kwargs)
+session.execute=execute
+run_wizard(WizardControls(int(sys.argv[1]),int(sys.argv[2]),[int(x) for x in sys.argv[4:9]],int(sys.argv[3])),lambda:LocalChannel(locations))
 """,
         encoding="utf-8",
     )
@@ -94,7 +106,7 @@ run_wizard(WizardControls(int(sys.argv[1]),int(sys.argv[2]),[int(x) for x in sys
     launch = next(line for line in page.splitlines() if line.strip().startswith("Exec "))
     pythonw = Path(getattr(sys, "_base_executable", sys.executable)).with_name("pythonw.exe")
     assert pythonw.is_file(), "The native Python test environment must include pythonw.exe"
-    command = f"""  Exec '\"{pythonw}\" \"{controller}\" $HWNDPARENT $EForgeCleanupPage $0 $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview' """
+    command = f"""  Exec '\"{pythonw}\" \"{controller}\" $HWNDPARENT $EForgeCleanupPage $0 $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview $EForgeCleanupProgress' """
     page = page.replace(launch, command)
     installer = folder / "harness.exe"
     script = folder / "harness.nsi"
@@ -224,6 +236,50 @@ SectionEnd
                     send(controls["Authored scenarios"], 0xF5, 0, 0)
                     _wait(lambda: bool(enabled(next_button)), failure)
                 send(next_button, 0xF5, 0, 0)
+                if mode == "private-and-work":
+                    page = _function("user32", "GetParent", wt.HWND, [wt.HWND])(
+                        controls["Studio settings"]
+                    )
+                    progress = 0
+                    review = 0
+
+                    @callback_type
+                    def find_progress(handle: int, parameter: int) -> bool:
+                        nonlocal progress, review
+                        name = ctypes.create_unicode_buffer(64)
+                        _function(
+                            "user32",
+                            "GetClassNameW",
+                            ctypes.c_int,
+                            [wt.HWND, wt.LPWSTR, ctypes.c_int],
+                        )(handle, name, len(name))
+                        if name.value == "msctls_progress32":
+                            progress = handle
+                        elif name.value.lower() == "edit":
+                            review = handle
+                        return True
+
+                    _function(
+                        "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
+                    )(page, find_progress, 0)
+                    assert progress
+                    _wait(lambda: 0 < send(progress, 0x408, 0, 0) < 1000, failure)
+                    assert _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])(progress)
+                    rect = _function(
+                        "user32", "GetWindowRect", wt.BOOL, [wt.HWND, ctypes.POINTER(wt.RECT)]
+                    )
+                    page_bounds, bar_bounds, review_bounds = wt.RECT(), wt.RECT(), wt.RECT()
+                    assert review and rect(page, ctypes.byref(page_bounds))
+                    assert rect(progress, ctypes.byref(bar_bounds)) and rect(
+                        review, ctypes.byref(review_bounds)
+                    )
+                    assert review_bounds.bottom <= bar_bounds.top
+                    assert (
+                        page_bounds.top <= bar_bounds.top < bar_bounds.bottom <= page_bounds.bottom
+                    )
+                    assert not enabled(next_button) and not enabled(get(window, 2))
+                    assert child.poll() is None and not (folder / "uninstalled.txt").exists()
+                    (folder / "allow-remove").touch()
                 assert child.wait(timeout=20) == 0, failure()
         finally:
             if child.poll() is None:

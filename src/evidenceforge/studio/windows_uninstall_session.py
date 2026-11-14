@@ -17,6 +17,7 @@ from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_uninstall import (
     Category,
     CleanupPlan,
+    CleanupProgress,
     UserLocations,
     build_plan,
     describe,
@@ -38,10 +39,11 @@ class CleanupReply(BaseModel):
     """Only review text and an opaque receipt cross the process boundary."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    state: Literal["ready", "inspecting", "prepared", "applied", "error"]
+    state: Literal["ready", "inspecting", "prepared", "removing", "applied", "error"]
     revision: int = Field(ge=0)
     text: str
     plan_id: str | None = None
+    progress: CleanupProgress | None = None
 
 
 class ReviewSession:
@@ -155,7 +157,15 @@ class ReviewSession:
             plan = self.plan
             self.plan = None  # A receipt is single use, including after a partial failure.
             self.plan_id = None
-        execute(plan, command.categories)
+
+        def progress(value: CleanupProgress) -> None:
+            self.emit(
+                CleanupReply(
+                    state="removing", revision=command.revision, text=value.message, progress=value
+                )
+            )
+
+        execute(plan, command.categories, report_progress=progress)
         self.emit(
             CleanupReply(
                 state="applied",
