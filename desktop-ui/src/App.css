@@ -79,6 +79,7 @@ p { line-height: 1.5; }
 .codex-indicator.ready .codex-indicator-dot { background: #6bdcbe; box-shadow: 0 0 0 4px #6bdcbe20; }
 .codex-indicator.unavailable .codex-indicator-dot { background: #e8bc70; box-shadow: 0 0 0 4px #e8bc7026; }
 .codex-indicator.disconnected .codex-indicator-dot { background: #ef8997; box-shadow: 0 0 0 4px #ef89972b; }
+.codex-indicator.checking .codex-indicator-dot { background: #e8bc70; box-shadow: 0 0 0 4px #e8bc7026; }
 .close-modal.codex-status-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .codex-status-details { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0c1421; font-size: 13px; }
 .codex-status-details > div { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 12px; }
