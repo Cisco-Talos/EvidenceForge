@@ -731,7 +731,7 @@ test("revalidation hides old findings and visibly completes even with identical 
       clock.mockReturnValue(completedAt);
       const previousTime = panel.querySelector(".summary-context")!.textContent;
       await user.click(within(panel).getByRole("button", { name: "Validate", exact: true }));
-      expect(request).toHaveBeenCalledWith("/v1/validate", "POST", { scenario_id: "alpha" }, 180000);
+      expect(request).toHaveBeenCalledWith("/v1/validate", "POST", { scenario_id: "alpha" }, 240000);
       expect(panel.parentElement).toHaveAttribute("aria-busy", "true");
       expect(panel.querySelector(".status")).toBeNull();
       expect(within(panel).getByText("Validating current scenario…")).toBeVisible();
