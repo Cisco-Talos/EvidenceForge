@@ -465,6 +465,7 @@ FunctionEnd
 
 ; Uninstaller Pages: one native page for confirmation, optional choices and review.
 ; EFORGE_CLEANUP_PAGE_BEGIN (also compiled by the focused native harness)
+!define MUI_CUSTOMFUNCTION_UNABORT un.EForgeCleanupAbort
 Var EForgeCleanupPage
 Var EForgeCleanupPrivate
 Var EForgeCleanupSkills
@@ -554,7 +555,7 @@ Function un.EForgeCleanupLeave
   Abort
 FunctionEnd
 
-Function un.onUserAbort
+Function un.EForgeCleanupAbort
   System::Call 'user32::GetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Busy")p.r0'
   ${If} $0 <> 0
     Abort ; An explicitly approved deletion must reach its result before exit.
