@@ -10,6 +10,18 @@ import pytest
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native Windows handle and ACL contracts")
 
 
+def test_native_capability_lookup_does_not_block_configuration_scopes(tmp_path: Path) -> None:
+    from evidenceforge.cli.info import gather_info
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    identity = filesystem.capability_sids("lpacEdgeStableNetworkSandbox")
+    assert identity
+    for _ in range(2):
+        formats = gather_info(field="formats", project_root=tmp_path)["formats"]
+        assert "windows_event_security" in formats
+        assert filesystem.capability_sids("lpacEdgeStableNetworkSandbox") == identity
+
+
 def test_native_pinned_walk_needs_no_ancestor_listing_or_acl_access(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -198,8 +198,10 @@ def _windows_inventory(
 
     entries: list[FileIdentity] = []
     frames: list[tuple[Path, int, Iterator[str]]] = []
+    webview_capabilities: frozenset[str] | None = None
 
     def inspect(relative: Path, descriptor: int) -> bool:
+        nonlocal webview_capabilities
         check_cancelled()
         current = path / relative
         metadata = os.fstat(descriptor)
@@ -208,11 +210,13 @@ def _windows_inventory(
             raise StudioStateError(
                 f"Cleanup refuses a non-file or multiply linked entry: {current}"
             )
-        capabilities = (
-            fs.capability_sids("lpacEdgeStableNetworkSandbox")
-            if webview_root is not None and current.is_relative_to(webview_root)
-            else frozenset()
-        )
+        capabilities: frozenset[str] = frozenset()
+        if webview_root is not None and current.is_relative_to(webview_root):
+            # This OS identity is independent of scenario configuration. Keep it
+            # within this scan, outside the provider's derived-config cache graph.
+            if webview_capabilities is None:
+                webview_capabilities = fs.capability_sids("lpacEdgeStableNetworkSandbox")
+            capabilities = webview_capabilities
         try:
             fs.require_private(
                 descriptor, allow_read_access=True, cleanup_capabilities=capabilities

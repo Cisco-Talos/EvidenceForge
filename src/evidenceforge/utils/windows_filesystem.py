@@ -14,7 +14,6 @@ import secrets
 import stat
 import tempfile
 from ctypes import wintypes
-from functools import cache
 from pathlib import Path, PureWindowsPath
 from threading import RLock
 from typing import Any
@@ -358,7 +357,6 @@ def _private_security_descriptor() -> wintypes.LPVOID:
     return descriptor
 
 
-@cache
 def capability_sids(name: str) -> frozenset[str]:
     """Derive named Windows capability identities; never infer trust from a SID prefix."""
     groups = ctypes.POINTER(wintypes.LPVOID)()

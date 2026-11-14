@@ -489,6 +489,30 @@ def test_webview_capability_modify_is_scoped_and_acl_is_preserved(locations: Use
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Native pinned-directory inventory")
+def test_webview_inventory_derives_capability_once_per_scan(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio.windows_uninstall import _inventory
+    from evidenceforge.utils import windows_filesystem as fs
+
+    webview = locations.local / "org.evidenceforge.studio/EBWebView"
+    for index in range(20):
+        write(webview / f"Default/Cache/Cache_Data/file-{index}")
+    original = fs.capability_sids
+    lookups: list[str] = []
+
+    def derive(name: str) -> frozenset[str]:
+        lookups.append(name)
+        return original(name)
+
+    monkeypatch.setattr(fs, "capability_sids", derive)
+    for scan in range(2):
+        entries = _inventory(webview.parent, webview_root=webview)
+        assert sum(not entry.directory for entry in entries) == 20
+        assert lookups == ["lpacEdgeStableNetworkSandbox"] * (scan + 1)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native pinned-directory inventory")
 def test_large_inventory_pins_ancestry_once_and_cancellation_releases_it(
     locations: UserLocations, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -137,6 +137,7 @@ jobs:
           tests/unit/test_windows_filesystem.py
           tests/integration/test_studio_windows_uninstall_ui.py
           tests/integration/test_windows_checkpoint_io.py
+          tests/integration/test_windows_cli_config.py
           tests/unit/test_studio_record_paths.py
           tests/unit/test_studio_uninstall_wizard.py
           tests/integration/test_studio_uninstall_channel.py
@@ -158,6 +159,7 @@ jobs:
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows.py tests/integration/test_studio_windows_runtime.py
           tests/unit/test_windows_filesystem.py
+          tests/integration/test_windows_cli_config.py
           tests/unit/test_windows_cleanup.py
           tests/unit/test_generation_file_io.py
           tests/unit/test_windows_streams.py
@@ -183,6 +185,12 @@ jobs:
       - name: Run focused NSIS wizard navigation
         if: ${{ !inputs.build-only || inputs.diagnostic-probes }}
         run: uv run --no-sync pytest --no-cov tests/integration/test_studio_nsis_cleanup.py
+      - name: Check bundled CLI configuration from an authoring draft
+        if: ${{ !inputs.build-only || inputs.diagnostic-probes }}
+        run: |
+          $env:EFORGE_TEST_WINDOWS_PYTHON = Join-Path $pwd 'build/studio-windows/resources/bootstrap/python.exe'
+          if (!(Test-Path -LiteralPath $env:EFORGE_TEST_WINDOWS_PYTHON)) { throw 'Bundled Python is missing' }
+          uv run --no-sync pytest --no-cov tests/integration/test_windows_cli_config.py
       - name: Record unqualified build metadata
         if: ${{ inputs.build-only }}
         env:

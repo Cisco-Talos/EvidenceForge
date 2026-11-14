@@ -2333,3 +2333,37 @@ Install this build before using its all-three-category uninstaller to remove the
 old workspace leftovers; the prior successful removal did not establish that
 those leftovers were empty. The final follow-up commit changes tests/worklog
 only, so the delivered executable remains explicitly bound to a5d5ff98.
+
+### Windows authoring configuration-cache regression (November 14)
+
+Laptop testing of runtime 1128fc710858055490d266829348b40009e67efafc265bdd476cb3c613a9dc79
+fails a normal `info formats --project-root` from a scenario draft with
+`Fatal error: untrusted derived cache wrapper discovered`. Environment inspection
+also reports an empty/non-JSON response and validation exits 21. These are
+consistent with one shared configuration-scope failure, not authored YAML defects.
+The capability lookup introduced in bdeb56c33 has an unregistered functools.cache
+wrapper in the Windows filesystem module. Native file/lease operations import
+that module; provider discovery then correctly rejects the unknown owned LRU.
+Prior focused uninstall tests exercised cleanup/ACL behavior but missed the
+interaction with normal CLI configuration scopes.
+
+Remove the global wrapper rather than weakening provider discovery or adding an
+OS capability lookup to the generation-configuration cache registry. Derive the
+named WebView2 capability lazily once per inventory scan and reuse the immutable
+value for all children in that scan. Native regressions require repeated inventory
+calls to keep working after capability lookup, and one derivation per WebView2
+scan. Keep the exact capability/Modify-only restrictions and preservation tests.
+
+Extend focused preview diagnostics with fresh native Python and PowerShell calls
+for formats inventory, validation and Studio's exact environment resolve flags
+from a draft in a path containing spaces, Unicode and an apostrophe. After
+packaging, install this build's actual archived runtime into a temporary private
+cache using its bundled bootstrap, then repeat all three operations through its
+isolated Python, PowerShell and relocatable launcher, with runtime leases active
+and development tools removed from PATH. These bounded smoke checks precede
+artifact upload; full CI/desktop acceptance remains deferred by user request.
+
+Local checks: 43 tests pass, five native-only skips; two focused provider LRU
+trust/value-graph tests pass without changing the provider. Ruff checks/formatting
+and diff checks pass. Behavior manifest remains revision 520 with unchanged digest
+4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a.
