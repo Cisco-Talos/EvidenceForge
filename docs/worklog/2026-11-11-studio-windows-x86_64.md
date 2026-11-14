@@ -2494,3 +2494,33 @@ Match these controls by their visible names inside the already verified owned
 dialog, then retain the real TaskDialog Cancel/Yes messages, no-mutation check,
 default-focus check and final preservation/deletion assertions. This is another
 test-only correction; production code is still eac59e9b's implementation.
+
+Final run 43625251053 succeeds from
+7984f3ebb71a5d2b83418456a114a6343115fcd8: 133 native diagnostics pass in
+68.64 seconds, four compiled NSIS cases pass in 11.55 seconds, and nine actual
+archived-runtime/isolated CLI checks pass in 152.17 seconds. The UI test now
+verifies actual Yes/Cancel labels and focused Cancel through accessibility,
+invokes Cancel and proves preservation, retries Yes, pauses on a real nonzero
+removal callback, checks the visible animated bar/no EDIT pane, then finishes
+and verifies exact selected-root removal and unrelated sign-in preservation.
+Only tests/worklog changed after eac59e9b; a production-path diff across src,
+scripts and desktop-ui is empty. The two failed runs were UI-test assumptions,
+not production dialog changes. Keep full qualification and 50k+ laptop/profile
+timings open; successful hosted Server CI is not Windows 11 desktop acceptance.
+
+Verified MZ header, SHA256 sidecar and exact source/run/target/unsigned/not_run
+receipt, then copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-7984f3eb/.
+EXE size: 72,101,324 bytes; SHA256
+aed2f549dc019bac08c0ee60e9f656522680c208eb63dead4678fa35a8d3ed7c;
+runtime ID be56dce657a66a3caa284f00e912b12e3769f54a9bc89334945285c3a2fc3363.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install/Upgrade this build before testing its new uninstaller. Final follow-up
+changes only this delivery evidence, not the binary's source snapshot. No version
+bump, publication/tag or PR; full CI remains deferred by the user.
+
+Native API references: [TASKDIALOGCONFIG](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/ns-commctrl-taskdialogconfig),
+[ACTCTXW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-actctxw),
+[Win32 SDK task-dialog declarations](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/CommCtrl.h),
+and [UI Automation elements](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement).
