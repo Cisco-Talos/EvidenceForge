@@ -14,6 +14,7 @@ import secrets
 import stat
 import tempfile
 from ctypes import wintypes
+from functools import cache
 from pathlib import Path, PureWindowsPath
 from threading import RLock
 from typing import Any
@@ -357,10 +358,52 @@ def _private_security_descriptor() -> wintypes.LPVOID:
     return descriptor
 
 
+@cache
+def capability_sids(name: str) -> frozenset[str]:
+    """Derive named Windows capability identities; never infer trust from a SID prefix."""
+    groups = ctypes.POINTER(wintypes.LPVOID)()
+    capabilities = ctypes.POINTER(wintypes.LPVOID)()
+    group_count, capability_count = wintypes.DWORD(), wintypes.DWORD()
+    derive = _bind(
+        ctypes.WinDLL("kernelbase", use_last_error=True),
+        "DeriveCapabilitySidsFromName",
+        wintypes.BOOL,
+        [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(ctypes.POINTER(wintypes.LPVOID)),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(ctypes.POINTER(wintypes.LPVOID)),
+            ctypes.POINTER(wintypes.DWORD),
+        ],
+    )
+    try:
+        _require(
+            derive(
+                name,
+                ctypes.byref(groups),
+                ctypes.byref(group_count),
+                ctypes.byref(capabilities),
+                ctypes.byref(capability_count),
+            )
+        )
+        return frozenset(_sid(capabilities[index]) for index in range(capability_count.value))
+    finally:
+        for values, count in ((groups, group_count.value), (capabilities, capability_count.value)):
+            for index in range(count):
+                _local_free(values[index])
+            _local_free(ctypes.cast(values, wintypes.LPVOID))
+
+
 def require_private(
-    descriptor: int, *, ancestry: bool = False, allow_read_access: bool = False
+    descriptor: int,
+    *,
+    ancestry: bool = False,
+    allow_read_access: bool = False,
+    cleanup_capabilities: frozenset[str] = frozenset(),
 ) -> None:
     """Validate native token ownership and private access rights on an opened object."""
+    if cleanup_capabilities and (ancestry or not allow_read_access):
+        raise ValueError("Capability access is permitted only for an explicit cleanup inspection")
     owner = wintypes.LPVOID()
     dacl = wintypes.LPVOID()
     security = wintypes.LPVOID()
@@ -408,6 +451,10 @@ def require_private(
             if ace.AceType != 0:
                 raise PermissionError("Windows protected storage has an unsupported ACL entry")
             principal = _sid(pointer.value + _AllowedAce.SidStart.offset)
+            if principal in cleanup_capabilities and not ace.Mask & ~0xE01301BF:
+                # Browser sandbox data may grant Modify, never security/owner
+                # changes or GenericAll. The actual owner must still be this user.
+                continue
             if principal not in trusted | {"S-1-3-4"} and ace.Mask & mutation:
                 raise PermissionError(
                     "Windows protected storage allows another principal to access it: "
@@ -504,6 +551,7 @@ def _open_native(
     temporary: bool = False,
     write_through: bool = False,
     ancestry: bool = False,
+    share_delete: bool = True,
 ) -> int:
     supported_flags = (
         os.O_RDONLY
@@ -577,7 +625,7 @@ def _open_native(
             ctypes.byref(status),
             None,
             0x80,
-            _FILE_SHARE_READ_WRITE | (0 if directory else _FILE_SHARE_DELETE),
+            _FILE_SHARE_READ_WRITE | (0 if directory or not share_delete else _FILE_SHARE_DELETE),
             disposition,
             options,
             None,
@@ -659,7 +707,7 @@ def open_child(
     flags: int,
     mode: int = 0o600,
     *,
-    directory: bool = False,
+    directory: bool | None = False,
     write_through: bool = False,
 ) -> int:
     """Open or exclusively create a child while retaining its parent identity."""
@@ -670,6 +718,9 @@ def open_child(
         directory=directory,
         private=bool(flags & os.O_CREAT and mode in {0o600, 0o700}),
         write_through=write_through,
+        # Unknown-kind inventory children may be directories. Pin their names
+        # just like an explicit directory open until the descriptor is closed.
+        share_delete=directory is False,
     )
 
 

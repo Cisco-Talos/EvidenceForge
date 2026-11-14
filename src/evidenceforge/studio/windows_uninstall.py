@@ -10,7 +10,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal
@@ -108,13 +108,96 @@ def _ownership_lock(path: Path) -> bool:
     )
 
 
+def _windows_inventory(
+    path: Path, check_cancelled: Callable[[], None], webview_root: Path | None
+) -> tuple[FileIdentity, ...]:
+    """Pin ancestry once, then inspect each child through its opened parent."""
+    from evidenceforge.utils import windows_filesystem as fs
+
+    entries: list[FileIdentity] = []
+    frames: list[tuple[Path, int, Iterator[str]]] = []
+
+    def inspect(relative: Path, descriptor: int) -> bool:
+        check_cancelled()
+        current = path / relative
+        metadata = os.fstat(descriptor)
+        directory = stat.S_ISDIR(metadata.st_mode)
+        if not directory and (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1):
+            raise StudioStateError(
+                f"Cleanup refuses a non-file or multiply linked entry: {current}"
+            )
+        capabilities = (
+            fs.capability_sids("lpacEdgeStableNetworkSandbox")
+            if webview_root is not None and current.is_relative_to(webview_root)
+            else frozenset()
+        )
+        try:
+            fs.require_private(
+                descriptor, allow_read_access=True, cleanup_capabilities=capabilities
+            )
+        except OSError as error:
+            raise StudioStateError(
+                f"Cannot safely inspect cleanup path {current}: {error}"
+            ) from error
+        if directory or not _ownership_lock(current):
+            entries.append(
+                FileIdentity(
+                    relative=relative.as_posix(),
+                    device=metadata.st_dev,
+                    inode=metadata.st_ino,
+                    directory=directory,
+                    size=0 if directory else metadata.st_size,
+                    modified_ns=0 if directory else metadata.st_mtime_ns,
+                )
+            )
+        return directory
+
+    metadata = filesystem_path(path).lstat()
+    descriptor: int | None = (
+        fs.open_directory(path)
+        if stat.S_ISDIR(metadata.st_mode)
+        else fs.open_file(path, os.O_RDONLY)
+    )
+    try:
+        if inspect(Path("."), descriptor):
+            frames.append((Path("."), descriptor, iter(fs.list_directory(descriptor))))
+            descriptor = None
+        while frames:
+            relative, parent, names = frames[-1]
+            name = next(names, None)
+            if name is None:
+                frames.pop()
+                os.close(parent)
+                continue
+            child: int | None = fs.open_child(parent, name, os.O_RDONLY, directory=None)
+            try:
+                child_relative = relative / name
+                if inspect(child_relative, child):
+                    frames.append((child_relative, child, iter(fs.list_directory(child))))
+                    child = None
+            finally:
+                if child is not None:
+                    os.close(child)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        for _relative, parent, _names in reversed(frames):
+            os.close(parent)
+    return tuple(sorted(entries, key=lambda item: item.relative))
+
+
 def _inventory(
-    path: Path, check_cancelled: Callable[[], None] = lambda: None
+    path: Path,
+    check_cancelled: Callable[[], None] = lambda: None,
+    *,
+    webview_root: Path | None = None,
 ) -> tuple[FileIdentity, ...]:
     """Reject links, hard links, foreign/writable objects and unsupported filesystems."""
     safe_path(filesystem_path(path))
     if not filesystem_path(path).exists():
         return ()
+    if os.name == "nt":
+        return _windows_inventory(path, check_cancelled, webview_root)
     entries: list[FileIdentity] = []
     pending = [path]
     while pending:
@@ -125,21 +208,6 @@ def _inventory(
         directory = stat.S_ISDIR(metadata.st_mode)
         if not directory and not stat.S_ISREG(metadata.st_mode):
             raise StudioStateError(f"Cleanup refuses a non-file entry: {current}")
-        if os.name == "nt":
-            from evidenceforge.utils import windows_filesystem as fs
-
-            descriptor = (
-                fs.open_directory(current) if directory else fs.open_file(current, os.O_RDONLY)
-            )
-            try:
-                try:
-                    fs.require_private(descriptor, allow_read_access=True)
-                except OSError as error:
-                    raise StudioStateError(
-                        f"Cannot safely inspect cleanup path {current}: {error}"
-                    ) from error
-            finally:
-                os.close(descriptor)
         # Ownership locks may be acquired after review. They contain no user data;
         # inspect their safety but exclude volatile contents from the snapshot.
         if directory or not _ownership_lock(current):
@@ -249,6 +317,7 @@ def build_plan(
     categories: set[Category] | None = None,
     *,
     check_cancelled: Callable[[], None] = lambda: None,
+    report_target: Callable[[Path], None] = lambda path: None,
 ) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
     import yaml
@@ -367,7 +436,12 @@ def build_plan(
         if category not in selected:
             continue
         check_cancelled()
-        entries = _inventory(path, check_cancelled)
+        report_target(path)
+        entries = _inventory(
+            path,
+            check_cancelled,
+            webview_root=locations.local / "org.evidenceforge.studio/EBWebView",
+        )
         if entries:
             targets.append(CleanupTarget(category=category, path=path, entries=entries))
     return CleanupPlan(
@@ -505,7 +579,13 @@ def execute(plan: CleanupPlan, selected: set[Category]) -> None:
                 held.append(stack.enter_context(StateLock(path)))
         _check_workers_snapshot(private / "studio.sqlite")
         for target in targets:
-            if _inventory(target.path) != target.entries:
+            if (
+                _inventory(
+                    target.path,
+                    webview_root=plan.locations.local / "org.evidenceforge.studio/EBWebView",
+                )
+                != target.entries
+            ):
                 raise StudioStateError(
                     f"Files changed after review; reopen uninstall: {target.path}"
                 )

@@ -132,8 +132,9 @@ jobs:
       - name: Run focused Windows diagnostics
         if: ${{ inputs.build-only && inputs.diagnostic-probes }}
         run: >-
-          uv run --no-sync pytest --no-cov
+          uv run --no-sync pytest --no-cov --durations=10
           tests/unit/test_studio_windows_uninstall.py
+          tests/unit/test_windows_filesystem.py
           tests/integration/test_studio_windows_uninstall_ui.py
           tests/integration/test_windows_checkpoint_io.py
           tests/unit/test_studio_record_paths.py

@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -72,6 +73,11 @@ class ReviewSession:
 
         last_progress = time.monotonic()
         checks = 0
+        current_target: Path | None = None
+
+        def report_target(path: Path) -> None:
+            nonlocal current_target
+            current_target = path
 
         def check() -> None:
             nonlocal last_progress, checks
@@ -84,13 +90,20 @@ class ReviewSession:
                     CleanupReply(
                         state="inspecting",
                         revision=command.revision,
-                        text=f"Inspecting selected data… {checks:,} filesystem entries checked.\nYou can change the choices or cancel. No cleanup has started.",
+                        text=f"Inspecting selected data… {checks:,} filesystem checks completed.\n"
+                        + (f"Folder: {current_target}\n" if current_target else "")
+                        + "Includes selected private data, retained runtimes, skills and workspaces.\nYou can change the choices or cancel. No cleanup has started.",
                     )
                 )
 
         def inspect() -> CleanupPlan:
             check()
-            return build_plan(self.locations, command.categories, check_cancelled=check)
+            return build_plan(
+                self.locations,
+                command.categories,
+                check_cancelled=check,
+                report_target=report_target,
+            )
 
         def completed(future: Future[CleanupPlan]) -> None:
             try:

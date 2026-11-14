@@ -429,3 +429,98 @@ def test_cleanup_settings_allow_read_grants_without_mutating_them(locations: Use
     )
     with pytest.raises(StudioStateError, match="Cannot inspect workspace settings"):
         build_plan(locations, {"work"})
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native WebView2 capability ACLs")
+def test_webview_capability_modify_is_scoped_and_acl_is_preserved(locations: UserLocations) -> None:
+    import subprocess
+
+    from evidenceforge.utils import windows_filesystem as fs
+
+    capability = fs.capability_sids("lpacEdgeStableNetworkSandbox")
+    assert capability == frozenset(
+        {
+            "S-1-15-3-1024-3239966617-1410756637-3494353204-65451782-2225605771-3526040376-1730753648-3419555762"
+        }
+    )
+    sid = next(iter(capability))
+    secret = write(locations.private / "settings-secret.txt")
+    cache = locations.local / "org.evidenceforge.studio/EBWebView/Default/Cache"
+    cached = write(cache / "Cache_Data/item")
+    unrelated = write(locations.local / "unrelated-browser/cache")
+
+    def permissions(path: Path, *arguments: str) -> bytes:
+        return subprocess.run(
+            ["icacls", str(path), *arguments], check=True, capture_output=True
+        ).stdout
+
+    permissions(cache, "/grant", f"*{sid}:(OI)(CI)(M)")
+    before = permissions(cache)
+    plan = build_plan(locations, {"private"})
+    assert permissions(cache) == before  # No ACL repair or stripping browser grants.
+    descriptor = fs.open_directory(cache)
+    try:
+        with pytest.raises(PermissionError, match="another principal"):
+            fs.require_private(descriptor, allow_read_access=True)
+    finally:
+        os.close(descriptor)
+
+    # Identical grants are not accepted on the actual private settings/runtime tree.
+    permissions(secret, "/grant", f"*{sid}:(M)")
+    with pytest.raises(StudioStateError, match="Cannot safely inspect cleanup path"):
+        build_plan(locations, {"private"})
+    permissions(secret, "/remove:g", f"*{sid}")
+
+    unknown = next(iter(fs.capability_sids("EvidenceForgeUnrelatedCleanupProbe")))
+    permissions(cache, "/grant", f"*{unknown}:(M)")
+    with pytest.raises(StudioStateError, match="another principal"):
+        build_plan(locations, {"private"})
+    permissions(cache, "/remove:g", f"*{unknown}")
+    permissions(cache, "/grant:r", f"*{sid}:(F)")
+    with pytest.raises(StudioStateError, match="another principal"):
+        build_plan(locations, {"private"})
+    permissions(cache, "/grant:r", f"*{sid}:(OI)(CI)(M)")
+    execute(plan, {"private"})
+    assert not cached.exists() and not secret.exists()
+    assert unrelated.read_text() == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native pinned-directory inventory")
+def test_large_inventory_pins_ancestry_once_and_cancellation_releases_it(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import CancelledError
+
+    from evidenceforge.studio.windows_uninstall import _inventory
+    from evidenceforge.utils import windows_filesystem as fs
+
+    root = locations.private / "runtimes/retained"
+    for directory in range(20):
+        for index in range(25):
+            write(root / f"pkg-{directory}" / f"file-{index}.py")
+    original = fs.open_directory
+    absolute_opens: list[Path] = []
+
+    def opened(path: Path, *, create: bool = False) -> int:
+        absolute_opens.append(path)
+        return original(path, create=create)
+
+    monkeypatch.setattr(fs, "open_directory", opened)
+    entries = _inventory(root)
+    assert sum(not entry.directory for entry in entries) == 500
+    assert absolute_opens == [root]  # No drive-root traversal for each descendant.
+    checks = 0
+
+    def cancel() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 15:
+            with pytest.raises(PermissionError):
+                root.rename(root.with_name("unexpected-move"))
+            raise CancelledError()
+
+    with pytest.raises(CancelledError):
+        _inventory(root, cancel)
+    relocated = root.with_name("released")
+    root.rename(relocated)  # Every pinned handle was released even during cancellation.
+    assert len(list(relocated.rglob("*.py"))) == 500

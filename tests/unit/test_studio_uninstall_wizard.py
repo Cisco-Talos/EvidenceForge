@@ -50,7 +50,11 @@ def test_new_selection_cancels_inventory_and_only_latest_receipt_can_execute(
     calls: list[set[str]] = []
 
     def inspect(
-        current: UserLocations, categories: set[str], *, check_cancelled: Callable[[], None]
+        current: UserLocations,
+        categories: set[str],
+        *,
+        check_cancelled: Callable[[], None],
+        report_target: Callable[[Path], None],
     ) -> CleanupPlan:
         if categories == {"private"}:
             entered.set()
