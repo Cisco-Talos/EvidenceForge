@@ -86,11 +86,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   dispatch and pointer activation; fix the opening trigger rather than assuming
   user input or merely clearing the overlay after the fact. Cover all platforms.
 
-- [ ] **P3 — Transient validation AbortError after Fix in Chat:** Reproduce and
-  diagnose a revalidation that reports "signal is aborted without reason" before
-  succeeding on retry. Inspect the API's default 15-second timeout, operation
-  duration and cancellation/reconnect behavior; preserve the previous result and
-  provide an actionable error. Do not infer harmlessness solely from a later success.
+- [ ] **P2 — Validation latency and operation lifetime:** The laptop repeatedly
+  reports "signal is aborted without reason" before validation succeeds on retry,
+  including an ordinary validation after reinstall, without Fix in Chat. The API's
+  15-second default was shorter than the CLI's 180-second limit; the next preview
+  allows four minutes and explains timeouts without automatic retry. Profile cold
+  validation/dependency refresh and reconcile late results, cancellation/reconnect
+  and previous-result retention. A larger client allowance is not proof that the
+  underlying latency or operation-lifetime behavior has been resolved. See the
+  [Windows follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#cleanup-pipe-deadlock-and-recurring-validation-abort-november-13).
 
 - [ ] **P2 — Optional native file and folder browsers throughout Studio:** Review every
   file/path entry point, including startup workspace recovery, Settings, imports,

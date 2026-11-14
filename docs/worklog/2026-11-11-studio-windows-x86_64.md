@@ -2094,3 +2094,67 @@ runtime ID 136e359828c28c51486b89b098e4196ce646d3e657cba69cc49d24e4ac8f4a1e.
 Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
 (0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
 No version bump, release publication or tag; no full acceptance claim.
+
+### Cleanup pipe deadlock and recurring validation abort (November 13)
+
+The a7e2fbb8 laptop retest confirms the embedded NSIS panel and independent
+checkboxes have the requested behavior, but selecting all categories leaves
+"Preparing the selected file list" unchanged for minutes, without an inspection
+counter or enabled Uninstall button. Cancel closes the wizard. A read-only process
+check identifies the abandoned worker PID 20888 on pipe
+eacc70acd8d54d6983b69448889ec991 (controller 18276); the user stops only that worker
+after matching its unique pipe ID. No deletion was approved.
+
+Find and reproduce the owning-layer bug: the controller's reply reader leaves a
+synchronous ReadFile pending on the same pipe handle used to send preparation.
+Windows serializes these operations; the request blocks behind its own reply read.
+The original transport test used sequential request/reply traffic, and the NSIS
+page harness used an in-process fixture channel, so neither covered this combined
+path. Test-only source ab2f4bdb, run 43539386526, reproduces exactly:
+"Command blocked behind the pending reply read" (65 existing diagnostics pass,
+the new combined test fails). This is not evidence of a slow directory inventory.
+
+Use FILE_FLAG_OVERLAPPED on both endpoints, with separate OVERLAPPED/event records
+for each outstanding operation. Keep buffers/events alive through completion or
+cancel-and-drain, then close the pipe only after active I/O has completed. Bound
+connect/write waits and require the authenticated worker's ready message within
+the existing startup deadline. Preserve the endpoint SID/PID checks, restrictive
+pipe ACL, exact single-use review receipts, original-account execution and locked
+cleanup engine. The combined native test exercises progress during a pending
+command read, changed-selection cancellation, exact review/apply acknowledgement
+and closing with both endpoints waiting for more traffic. Reference:
+https://learn.microsoft.com/en-us/windows/win32/ipc/synchronous-and-overlapped-input-and-output.
+
+The laptop also repeats validation AbortError after reinstall on an existing
+scenario; immediate revalidation succeeds. Confirm the client allows only 15
+seconds while _validate_source allows 180 seconds. Give scenario validation a
+240-second request budget (CLI time plus dependency checks/result persistence),
+matching the existing explicit long-operation pattern. Translate this client's
+own timeout into a useful uncertain-result message, retain existing error/result
+handling and do not automatically retry. Exact request timing from this laptop
+incident is unavailable: the repeated report warrants P2 profiling of cold
+validation and late-result/operation lifetime, not a claim that increasing the
+budget resolves underlying latency. Frontend tests verify no abort at 16 seconds,
+clear timeout/no retry and the App's explicit validation allowance; 120 focused
+frontend tests pass, followed by all 114 App tests after the final budget change.
+Frontend production build and 59 focused Python tests pass (one Windows-only skip)
+on macOS; repository Ruff checks/formatting pass. Run 43539802472 is superseded
+before diagnostics by the final budget adjustment; the final preview run remains
+build-only plus focused native diagnostics, not full acceptance CI.
+
+Final source b3bd8b172189e2feae28e0431d591cc018889a42, run 43539999661, succeeds:
+66 native diagnostics pass in 28.93 seconds, including the reproduced deadlock
+regression, and all three compiled wizard tests pass in 6.84 seconds. Build-only
+qualification remains not_run. Verify the downloaded installer checksum, source,
+run, target and MZ header, then copy all three artifact files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-b3bd8b17/.
+EXE size: 72,103,258 bytes; SHA256
+73e37b5f3aac791d7a81a813607835a5a060e30d1b4bda460151dfb2f8262b89;
+runtime ID d580326f915b4be91abf77983bd67a8a68e670a1c919d06bc743fbc894461a0f.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install/Upgrade before rerunning validation and uninstall; retain laptop acceptance
+for actual inventory duration, first validation and category removal. The corrected
+transport does not itself optimize recursive inventory: it still checks selected
+file identities/ACLs, including retained runtimes, without reading all log contents.
+No version bump, tag, release publication, PR or full acceptance claim.
