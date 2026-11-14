@@ -127,7 +127,12 @@ SectionEnd
 ''',
         encoding="utf-8-sig",
     )
-    compiled = subprocess.run([str(_maker()), "/V2", str(script)], capture_output=True, text=True)
+    compiled = subprocess.run(
+        [str(_maker()), "/V2", str(script)],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
     subprocess.run([str(installer), "/S", f"/D={folder}"], check=True, timeout=20)
     with subprocess.Popen([str(folder / "uninstall.exe"), f"_?={folder}"]) as child:
