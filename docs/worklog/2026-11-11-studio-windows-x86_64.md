@@ -2474,3 +2474,14 @@ real shared runtime leases, and real TaskDialog cancellation/default behavior.
 Ruff/diff checks pass. Behavior revision 520/digest remains unchanged. Restart the
 build-only Windows preview with these focused probes; full qualification and 50k+
 laptop timings remain separate evidence.
+
+First native run 43623108388 from eac59e9b passes the focused filesystem/cleanup
+diagnostics and builds the installer, but two compiled-wizard cases time out while
+looking for a child HWND with numeric control ID 2. The owned confirmation window
+was found; this does not yet distinguish a virtual/native task-dialog control from
+an error message window. Replace that private control-ID assumption with Windows
+UI Automation inspection of actual button names, text and focus. Require Yes and
+Cancel, reject No/OK, and continue testing real Cancel and Yes using the documented
+TaskDialog button messages. Preserve the config-level default-Cancel/no-icon checks.
+The next run changes only the test and this evidence; production cleanup/dialog
+code remains unchanged. Do not deliver a build with a failing native UI gate.

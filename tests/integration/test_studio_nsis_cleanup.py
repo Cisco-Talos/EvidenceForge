@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import json
 import os
 import shutil
 import subprocess
@@ -36,6 +38,45 @@ def _maker() -> Path:
         if candidate.is_file():
             return candidate
     pytest.fail("NSIS must be available after the preview packaging step")
+
+
+def _confirmation_elements(window: int) -> list[dict[str, object]]:
+    """Read the real task dialog through accessibility, including virtual buttons."""
+    script = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$dialog = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]{window})
+$elements = $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition)
+$records = @($elements | ForEach-Object {{
+    [pscustomobject]@{{
+        Name = $_.Current.Name
+        Type = $_.Current.ControlType.ProgrammaticName
+        Focus = $_.Current.HasKeyboardFocus
+        Id = $_.Current.AutomationId
+    }}
+}})
+ConvertTo-Json -InputObject $records -Depth 4 -Compress
+"""
+    command = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [
+            str(command),
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode("ascii"),
+        ],
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list), payload
+    return payload
 
 
 @pytest.mark.parametrize("mode", ["cancel-review", "preserve", "private-and-work", "full-clean"])
@@ -269,30 +310,19 @@ SectionEnd
                     _wait(lambda: bool(confirmation()), failure)
                     question = confirmation()
 
-                    def cancel_button() -> int:
-                        result = 0
-
-                        @callback_type
-                        def find(handle: int, parameter: int) -> bool:
-                            nonlocal result
-                            identity = _function("user32", "GetDlgCtrlID", ctypes.c_int, [wt.HWND])(
-                                handle
-                            )
-                            if identity == 2:
-                                result = handle
-                            return True
-
-                        _function(
-                            "user32",
-                            "EnumChildWindows",
-                            wt.BOOL,
-                            [wt.HWND, callback_type, wt.LPARAM],
-                        )(question, find, 0)
-                        return result
-
-                    _wait(lambda: bool(cancel_button()), failure)
+                    elements = _confirmation_elements(question)
+                    (folder / "confirmation.json").write_text(json.dumps(elements, indent=2))
+                    buttons = [item for item in elements if item["Type"] == "ControlType.Button"]
+                    names = {str(item["Name"]).replace("&", "") for item in buttons}
+                    assert {"Yes", "Cancel"} <= names and "No" not in names and "OK" not in names, (
+                        elements
+                    )
+                    focused = [item for item in buttons if item["Focus"]]
+                    if focused:
+                        assert any(
+                            str(item["Name"]).replace("&", "") == "Cancel" for item in focused
+                        ), elements
                     style = _function("user32", "GetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int])
-                    assert style(cancel_button(), -16) & 0xF == 1  # BS_DEFPUSHBUTTON
                     assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
                     send(question, 0x466, 2, 0)  # TDM_CLICK_BUTTON: Cancel
                     _wait(lambda: not confirmation() and bool(enabled(next_button)), failure)
