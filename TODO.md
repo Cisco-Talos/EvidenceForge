@@ -72,6 +72,17 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1 — Windows clean uninstall at realistic scale:** Qualify review and removal
+  with 50k+ entries, multiple retained runtimes and an actual WebView2 user-data
+  profile. Avoid unnecessary full-path reopening, repeated scans/staging costs and
+  rescanning unchanged categories; identify the currently inspected folder. Decide
+  whether bounded root/category review can replace a full inventory before enabling
+  Uninstall while retaining writer fencing, verified ownership, no-follow traversal,
+  exact category/account boundaries and preservation of unapproved/new work. Keep
+  browser capability access distinct from protected credentials, without rewriting
+  native browser ACLs. See the
+  [laptop scale/cache follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#large-uninstall-review-webview2-capability-and-codex-startup-display-november-13).
+
 - [ ] **P1 — Windows authoring smoke generation checkpoint rename failure:**
   A draft-local CLI smoke run validates and forecasts, then fails acquiring its run
   lock with WinError 6 in WindowsCheckpointIO.mkdir -> replace_child -> native

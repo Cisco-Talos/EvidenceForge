@@ -2158,3 +2158,97 @@ for actual inventory duration, first validation and category removal. The correc
 transport does not itself optimize recursive inventory: it still checks selected
 file identities/ACLs, including retained runtimes, without reading all log contents.
 No version bump, tag, release publication, PR or full acceptance claim.
+
+### Large uninstall review, WebView2 capability and Codex startup display (November 13)
+
+The b3bd8b17 laptop retest validates an existing scenario without issues, providing
+the first laptop confirmation after the browser timeout change. Codex initially
+looks disconnected; manual Reconnect succeeds, but no initial status detail/timing
+was captured. Inspecting the code confirms a display defect: CodexHealth initially
+has state=checking/availability=disconnected, while CodexStatusIndicator chooses its
+label solely from availability. Show amber "Checking connection" during initial
+checks/reconnect instead of red "Not connected", preserving login gating and actual
+failed-connection diagnostics. Native start and health polling remain unchanged;
+_monitor_codex already retries after each check plus an eight-second sleep. Startup
+initialization/sandbox checks have 15/30-second limits, normal health reads allow
+five seconds, and manual reconnect account checks allow ten. This is not evidence
+that every actual startup connection failure is only timing. The display regression
+checks transition to Ready without invoking Reconnect; all 12 indicator tests and
+the frontend production build pass locally.
+
+The uninstall counter now advances beyond 50k with all categories selected, but
+review remains slow. It counts callback checks across selected private state,
+retained runtime trees, browser data, skills and workspace discovery/inventory,
+not unique workspace files. Windows runtime pruning is deliberately disabled in
+this preview. The code currently inventories every candidate before enabling
+Uninstall, repeats inventory under ownership locks, stages each file, then deletes
+staged contents. Deletion necessarily visits entries, but this preflight/full-path
+reopening overhead is not an inherent requirement of an uninstall confirmation UI.
+Track realistic scale and the larger root/category-review design separately.
+
+The scan then refuses
+AppData/Local/org.evidenceforge.studio/EBWebView/Default/Cache. The user supplies
+the exact ACL: owner/current user ends -1001; another account ending -1008 has only
+inherited read access (0x1200a9). The rejected grant is a capability SID with Modify
+(0x1301bf):
+S-1-15-3-1024-3239966617-1410756637-3494353204-65451782-2225605771-3526040376-1730753648-3419555762.
+Its numeric identity matches lpacEdgeStableNetworkSandbox, consistent with Chromium
+network-service cache grants. This browser profile is not protected Studio settings.
+Use Windows DeriveCapabilitySidsFromName and accept the named capability's Modify
+grant only under this account's fixed org.evidenceforge.studio/EBWebView namespace.
+Keep actual object ownership checks and all other paths strict; reject unknown
+capabilities and grants with GenericAll/WRITE_DAC/WRITE_OWNER. Do not remove grants,
+change owners, grant broad access or apply this exception to settings/runtimes.
+
+Optimize Windows inventory using one verified root traversal and pinned relative
+child opens. Inspect each opened object's native identity/type/link count and ACL;
+retain directory handles down the current branch so ancestry cannot be renamed.
+Do not repeat drive-root walks/path lstat for each file. Close every handle on
+cancellation/failure. Existing POSIX inventory is unchanged. Review progress now
+names its current root and calls the count "filesystem checks completed", explaining
+that selected private/runtime data is included. The snapshot/recheck/removal contract
+is preserved; actual file staging/removal is not redesigned by this optimization.
+
+Native tests replay the exact named capability, verify ACLs remain unchanged,
+refuse that same grant on private settings and refuse unrelated capabilities or
+Full Control grants. A 500-file/20-directory fixture requires one absolute ancestry
+open, tests root pinning during review and confirms cancellation releases handles.
+The focused preview diagnostics now include native filesystem tests and per-test
+timings. Local Python evidence: 59 pass, three Windows-only skips; repository Ruff
+checks/formatting and diff checks pass. Native CI/laptop performance and actual
+profile cleanup remain distinct acceptance evidence.
+
+Primary references: Microsoft WebView2 sandbox/user-data permissions
+(https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/measures),
+DeriveCapabilitySidsFromName
+(https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-derivecapabilitysidsfromname),
+and Chromium network sandbox/cache ACL ownership
+(https://chromium.googlesource.com/chromium/src/+/refs/tags/141.0.7345.0/content/browser/network_sandbox.cc).
+
+Run 43542841897 from 70ec6661 passes 99 focused diagnostics, including the native
+pinned-walk/500-file cancellation test and existing filesystem guards. The exact
+capability test accepts Modify and correctly rejects both an unrelated capability
+and Full Control; its final cleanup then fails because icacls /grant:r does not
+remove the separate non-inheritable Full Control test ACE when restoring an
+inheritable Modify ACE. Fix the fixture to remove the deliberate grant explicitly
+before restoring it. Do not relax the production guard to accept Full Control.
+
+Final run 43543160453 succeeds from
+ad387bde0a20a13e4a0b8f5331942ad1477c781c: 100 focused native diagnostics pass in
+32.22 seconds, followed by all three compiled NSIS wizard cases in 6.72 seconds.
+The large native fixture's 1.65 seconds includes creating 500 files, full inspection
+and cancellation/handle-release checks; it is not a measurement of the laptop's
+50k-entry profile or of complete removal. Keep the P1 scale/design qualification open.
+
+Verified EXE/checksum/receipt source, run, target, unsigned/not_run status and MZ
+header, then copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-ad387bde/.
+EXE size: 72,106,964 bytes; SHA256
+dbe3d912e018954ef10722a7a20c59e1dc3559eee45c1f584e9da85a9d329929;
+runtime ID 6ad76ac7e524fbde071249d3318c452a8fb3e6d060fdfad93ef3c8ec29935c9f.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Close the current uninstaller, Install/Upgrade this build, then retest normal Codex
+startup and optional cleanup. No version bump, PR, publication/tag or full acceptance
+claim; genuine Windows 11/profile cleanup, runtime-scale duration and any actual
+startup Codex failure remain laptop acceptance evidence.
