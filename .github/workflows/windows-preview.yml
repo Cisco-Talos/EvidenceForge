@@ -127,6 +127,8 @@ jobs:
           uv run --no-sync pytest --no-cov
           tests/unit/test_studio_windows_uninstall.py
           tests/integration/test_studio_windows_uninstall_ui.py
+          tests/unit/test_studio_uninstall_wizard.py
+          tests/integration/test_studio_uninstall_channel.py
       - name: Run focused Windows diagnostics
         if: ${{ inputs.build-only && inputs.diagnostic-probes }}
         run: >-
@@ -135,6 +137,8 @@ jobs:
           tests/integration/test_studio_windows_uninstall_ui.py
           tests/integration/test_windows_checkpoint_io.py
           tests/unit/test_studio_record_paths.py
+          tests/unit/test_studio_uninstall_wizard.py
+          tests/integration/test_studio_uninstall_channel.py
       - name: Cache Windows Rust dependencies and build artifacts
         id: rust-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
@@ -175,6 +179,9 @@ jobs:
       - name: Build unsigned dual-scope NSIS preview
         id: package-build
         run: uv run --no-sync python scripts/package_studio_windows.py
+      - name: Run focused NSIS wizard navigation
+        if: ${{ !inputs.build-only || inputs.diagnostic-probes }}
+        run: uv run --no-sync pytest --no-cov tests/integration/test_studio_nsis_cleanup.py
       - name: Record unqualified build metadata
         if: ${{ inputs.build-only }}
         env:

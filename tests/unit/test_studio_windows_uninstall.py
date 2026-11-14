@@ -220,16 +220,15 @@ def test_native_template_orders_maintenance_before_scope_and_preserves_silent_up
     assert template.index("Page custom PageReinstall") < template.index(
         "!insertmacro MULTIUSER_PAGE_INSTALLMODE"
     )
-    assert "MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ReviewCleanup" in template
-    review = template[
-        template.index("Function un.ReviewCleanup") : template.index(
-            "FunctionEnd", template.index("Function un.ReviewCleanup")
-        )
+    page = template[
+        template.index("; EFORGE_CLEANUP_PAGE_BEGIN") : template.index("; EFORGE_CLEANUP_PAGE_END")
     ]
-    cleanup = review.index("windows_uninstall --broker")
-    assert review.index("CheckIfAppIsRunning") < cleanup
-    assert "${IfNot} ${Silent}" in review[:cleanup]
-    assert "$PassiveMode <> 1" in review[:cleanup] and "$UpdateMode <> 1" in review[:cleanup]
+    assert "UninstPage custom un.EForgeCleanupCreate un.EForgeCleanupLeave" in page
+    assert page.count("${NSD_CreateCheckbox}") == 3
+    assert "--wizard-window $HWNDPARENT" in page and "pythonw.exe" in page
+    assert "nsExec::" not in page and "--broker'" not in page
+    assert "$PassiveMode == 1" in page and "$UpdateMode == 1" in page
+    assert "WaitForSingleObject" in page and "EvidenceForge.Cleanup.Done" in page
     assert "windows_uninstall --broker" not in template[template.index("Section Uninstall") :]
 
 

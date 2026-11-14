@@ -198,6 +198,10 @@ def test_windows_build_only_mode_skips_acceptance_and_never_uploads_as_qualified
     diagnostic = next(step for step in steps if step["name"] == "Run focused Windows diagnostics")
     assert diagnostic["if"] == "${{ inputs.build-only && inputs.diagnostic-probes }}"
     assert "test_studio_windows_uninstall_ui.py" in diagnostic["run"]
+    navigation = next(
+        step for step in steps if step["name"] == "Run focused NSIS wizard navigation"
+    )
+    assert navigation["if"] == "${{ !inputs.build-only || inputs.diagnostic-probes }}"
     fast = next(
         step for step in steps if step["name"] == "Upload unqualified Windows test installer"
     )

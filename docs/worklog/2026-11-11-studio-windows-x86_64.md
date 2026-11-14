@@ -1997,3 +1997,51 @@ default preservation first and verify content/history after reinstall, then test
 optional category cleanup on backed-up/disposable content. Do not rerun or repair
 these scenarios merely to repeat the already successful ordinary GUI pipeline.
 This is a roadmap/evidence update; no new installer, full CI or quality-repair claim.
+
+### Embedded uninstall choices and responsive review (November 13)
+
+The laptop user rejects the separate Python cleanup window: choices must be on
+(or before) the NSIS confirmation page, with no separate top-level window. They
+report single-selection-like behavior, inability to clear choices and a long
+spinner that prevents Cancel; they kill Python before uninstalling. Preserve that
+installation/data for retest. The code confirms recursive inventory ran directly
+inside checkbox message handling. Existing native tests used BM_SETCHECK and tiny
+fixtures, missing actual click behavior and realistic inventory cancellation.
+
+Replace the separate window in the installer path with one NSIS nsDialogs page
+containing three stock independent checkboxes, exact path review and the Uninstall/
+Cancel footer. All choices default unchecked. The controller owns no visible
+window; it only updates controls owned by its verified parent NSIS process. A
+read-only inventory runs in a cancellable worker task, with progress/check counts.
+Changed choices invalidate the prior review receipt immediately. Only clicking
+Uninstall with the current reviewed receipt may run the existing locked/revalidated
+cleanup engine. The wizard waits for its owned controller/worker to finish before
+removing app files. Cancel stays responsive during preparation; explicitly approved
+staging/deletion is allowed to reach its result before exit, never killed on an
+uncertain acknowledgement. Silent/passive/upgrade paths preserve data as before.
+
+Retain the original same-session Explorer-token broker. The controller and
+unelevated account worker communicate over a fresh local-only named pipe with a
+restrictive DACL for the target account, controller account, SYSTEM and admins.
+Authenticate endpoint process IDs using the native kernel APIs, validate process
+image/parent and token SID, bound/validate JSON messages, and require an opaque
+single-use plan ID plus exact choices/revision for execution. No reviewed data
+inventory or credentials are passed through shared temporary files. Persistent
+ownership/ACL checks and per-account deletion boundaries are unchanged.
+
+The NSIS page uses the existing stock nsDialogs/System plugins, adding no new
+third-party plugin. Windows payload assembly verifies pythonw.exe is bundled.
+Implementation references: https://nsis.sourceforge.io/Docs/nsDialogs/Readme.html,
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid,
+and https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid.
+
+New tests exercise cancelled real recursive inventory, obsolete/mismatched/reused
+receipts, select-all/select-subset/clear-all with no deletion, bounded pipe framing,
+and native cross-process pipe endpoint identity. A disposable NSIS harness compiles
+the production page/callbacks and uses BM_CLICK rather than forcing state; it tests
+all three choices and clearing, Cancel during a blocked inventory, preservation,
+and selected private/work removal with unselected publisher/unrelated files retained.
+The harness substitutes only its fixture controller launch, keeping page controls,
+styles and NSIS navigation unchanged. Genuine Windows 11/UAC/alternate-account
+acceptance remains a separate user gate. Extend focused preview diagnostics with
+these tests and the compiled harness; full acceptance remains deferred this run.

@@ -293,6 +293,8 @@ def assemble(
             if bootstrap.exists():
                 shutil.rmtree(bootstrap)
             shutil.copytree(payload, bootstrap)
+            if not (bootstrap / "pythonw.exe").is_file():
+                raise RuntimeError("Windows uninstall controls require bundled pythonw.exe")
         archives[architecture] = {"archive": target.name, "sha256": digest(target)}
         print(f"Assembled {architecture}: {target.stat().st_size / 1024**2:.1f} MiB", flush=True)
     manifest = {

@@ -125,7 +125,24 @@ class _ProcessInfo(ctypes.Structure):
     _fields_ = [("process", wt.HANDLE), ("thread", wt.HANDLE), ("pid", wt.DWORD), ("tid", wt.DWORD)]
 
 
-def broker() -> int:
+def _cleanup_arguments(account: str, worker_pipe: str | None, server_pid: int | None) -> list[str]:
+    arguments = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-X",
+        "utf8",
+        "-m",
+        "evidenceforge.studio.windows_uninstall",
+    ]
+    if worker_pipe is None:
+        arguments.append("--interactive")
+    else:
+        arguments.extend(("--worker-pipe", worker_pipe, "--server-pid", str(server_pid)))
+    return [*arguments, "--expected-account", account]
+
+
+def broker(worker_pipe: str | None = None, server_pid: int | None = None) -> int:
     """Run the cleanup dialog using the authenticated, same-session Explorer token."""
     from evidenceforge.utils.windows_filesystem import current_user_sid, process_user_sid
 
@@ -134,6 +151,8 @@ def broker() -> int:
     environment = wt.LPVOID()
     child_started = False
     try:
+        if worker_pipe is not None and server_pid != os.getppid():
+            raise StudioStateError("Uninstall worker must be started by its controller")
         shell = _function("user32", "GetShellWindow", wt.HWND, [])()
         if not shell:
             raise StudioStateError("The original desktop account could not be identified")
@@ -190,18 +209,7 @@ def broker() -> int:
             if current_user_sid() != account:
                 raise StudioStateError("The uninstaller is not running as the desktop account")
             return subprocess.run(
-                [
-                    sys.executable,
-                    "-I",
-                    "-B",
-                    "-X",
-                    "utf8",
-                    "-m",
-                    "evidenceforge.studio.windows_uninstall",
-                    "--interactive",
-                    "--expected-account",
-                    account,
-                ],
+                _cleanup_arguments(account, worker_pipe, server_pid),
                 check=False,
                 creationflags=0x08000000,
             ).returncode
@@ -244,20 +252,7 @@ def broker() -> int:
         )
         account = process_user_sid(pid.value)
         command = ctypes.create_unicode_buffer(
-            subprocess.list2cmdline(
-                [
-                    sys.executable,
-                    "-I",
-                    "-B",
-                    "-X",
-                    "utf8",
-                    "-m",
-                    "evidenceforge.studio.windows_uninstall",
-                    "--interactive",
-                    "--expected-account",
-                    account,
-                ]
-            )
+            subprocess.list2cmdline(_cleanup_arguments(account, worker_pipe, server_pid))
         )
         startup = _StartupInfo()
         startup.cb = ctypes.sizeof(startup)
@@ -304,6 +299,8 @@ def broker() -> int:
         )
         return result.value
     except (OSError, EvidenceForgeError) as error:
+        if worker_pipe is not None:
+            return 2  # The wizard renders errors inline; never open another window.
         if child_started:
             message(
                 f"Uninstall could not confirm that cleanup has finished: {error}. Close its review window and retry.",

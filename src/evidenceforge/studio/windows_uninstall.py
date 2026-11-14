@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal
@@ -107,7 +108,9 @@ def _ownership_lock(path: Path) -> bool:
     )
 
 
-def _inventory(path: Path) -> tuple[FileIdentity, ...]:
+def _inventory(
+    path: Path, check_cancelled: Callable[[], None] = lambda: None
+) -> tuple[FileIdentity, ...]:
     """Reject links, hard links, foreign/writable objects and unsupported filesystems."""
     safe_path(filesystem_path(path))
     if not filesystem_path(path).exists():
@@ -115,6 +118,7 @@ def _inventory(path: Path) -> tuple[FileIdentity, ...]:
     entries: list[FileIdentity] = []
     pending = [path]
     while pending:
+        check_cancelled()
         current = pending.pop()
         safe_path(filesystem_path(current))
         metadata = filesystem_path(current).lstat()
@@ -189,12 +193,15 @@ def _skill_files(profile: Path) -> list[Path]:
     return paths
 
 
-def _run_roots(parent: Path) -> tuple[list[Path], list[str]]:
+def _run_roots(
+    parent: Path, check_cancelled: Callable[[], None] = lambda: None
+) -> tuple[list[Path], list[str]]:
     """Find registered bundles under Studio's nested runs layout, without following links."""
     runs: list[Path] = []
     preserved: list[str] = []
     pending = [parent]
     while pending:
+        check_cancelled()
         current = pending.pop()
         safe_path(filesystem_path(current))
         if current != parent and (
@@ -237,7 +244,12 @@ def _read_cleanup_settings(path: Path) -> dict[str, object]:
     return raw
 
 
-def build_plan(locations: UserLocations, categories: set[Category] | None = None) -> CleanupPlan:
+def build_plan(
+    locations: UserLocations,
+    categories: set[Category] | None = None,
+    *,
+    check_cancelled: Callable[[], None] = lambda: None,
+) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
     import yaml
 
@@ -290,6 +302,7 @@ def build_plan(locations: UserLocations, categories: set[Category] | None = None
             preserved.append(f"Custom output parent is preserved: {output}")
     admitted_workspaces: list[Path] = []
     for workspace in sorted(workspaces):
+        check_cancelled()
         # No arbitrary drive/profile/application roots, external exports or other profiles.
         if (
             not workspace.is_absolute()
@@ -331,7 +344,7 @@ def build_plan(locations: UserLocations, categories: set[Category] | None = None
             if not filesystem_path(parent).is_dir():
                 continue
             if name == "runs":
-                roots, kept = _run_roots(parent)
+                roots, kept = _run_roots(parent, check_cancelled)
                 candidates.extend(("work", root) for root in roots)
                 preserved.extend(kept)
                 continue
@@ -353,7 +366,8 @@ def build_plan(locations: UserLocations, categories: set[Category] | None = None
     for category, path in sorted(set(candidates), key=lambda item: (item[0], str(item[1]))):
         if category not in selected:
             continue
-        entries = _inventory(path)
+        check_cancelled()
+        entries = _inventory(path, check_cancelled)
         if entries:
             targets.append(CleanupTarget(category=category, path=path, entries=entries))
     return CleanupPlan(
@@ -608,11 +622,42 @@ def main() -> None:
     parser.add_argument("--broker", action="store_true")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--expected-account")
+    parser.add_argument("--worker-pipe")
+    parser.add_argument("--server-pid", type=int)
+    parser.add_argument("--wizard-window", type=int)
+    parser.add_argument("--page-window", type=int)
+    parser.add_argument("--wizard-pid", type=int)
+    parser.add_argument("--controls", type=int, nargs=4)
     arguments = parser.parse_args()
-    if sys.platform != "win32" or arguments.broker == arguments.interactive:
+    if sys.platform != "win32":
         parser.error("Use this module only from the native Windows uninstaller")
     from evidenceforge.studio.windows_uninstall_native import broker, interactive
+    from evidenceforge.studio.windows_uninstall_wizard import WizardControls, run_wizard, worker
 
+    if arguments.wizard_window:
+        if arguments.broker or arguments.interactive or arguments.worker_pipe:
+            parser.error("Conflicting uninstall modes")
+        run_wizard(
+            WizardControls(
+                arguments.wizard_window,
+                arguments.page_window,
+                arguments.controls,
+                arguments.wizard_pid,
+            )
+        )
+        return
+    if arguments.worker_pipe:
+        if not arguments.server_pid or arguments.interactive:
+            parser.error("Invalid uninstall worker mode")
+        if arguments.broker:
+            raise SystemExit(broker(arguments.worker_pipe, arguments.server_pid))
+        if not arguments.expected_account:
+            parser.error("Uninstall worker account is required")
+        raise SystemExit(
+            worker(arguments.worker_pipe, arguments.server_pid, arguments.expected_account)
+        )
+    if arguments.broker == arguments.interactive:
+        parser.error("Select one uninstall mode")
     raise SystemExit(broker() if arguments.broker else interactive(arguments.expected_account))
 
 
