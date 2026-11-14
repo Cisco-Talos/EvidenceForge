@@ -24,8 +24,10 @@ pipe.send({'text':'café 汉\\x00end','number':42})
 assert pipe.receive()=={'accepted':True}
 pipe.close()
 """
+    script = "import sys; sys.path[:] = " + repr(sys.path) + "\n" + script
+    python = getattr(sys, "_base_executable", sys.executable)
     try:
-        with subprocess.Popen([sys.executable, "-c", script, identity, str(os.getpid())]) as child:
+        with subprocess.Popen([python, "-c", script, identity, str(os.getpid())]) as child:
             try:
                 server.accept()
                 assert server.peer_pid() == child.pid

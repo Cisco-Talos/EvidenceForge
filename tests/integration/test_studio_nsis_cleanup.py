@@ -47,7 +47,7 @@ def test_real_nsis_choices_and_cancel_remain_independent(tmp_path: Path, mode: s
     folder.mkdir()
     controller = folder / "controller.py"
     controller.write_text(
-        f"import sys; sys.path.insert(0, {str(root)!r})\n"
+        f"import sys; sys.path[:] = {sys.path!r}; sys.path.insert(0, {str(root)!r})\n"
         + """
 import sys,time
 from pathlib import Path
@@ -90,7 +90,7 @@ run_wizard(WizardControls(int(sys.argv[1]),int(sys.argv[2]),[int(x) for x in sys
     # Only replace process launch: the NSIS page, styles, notifications, review and
     # navigation callbacks remain exactly the production template's bytes.
     launch = next(line for line in page.splitlines() if line.strip().startswith("Exec "))
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    pythonw = Path(getattr(sys, "_base_executable", sys.executable)).with_name("pythonw.exe")
     assert pythonw.is_file(), "The native Python test environment must include pythonw.exe"
     command = f"""  Exec '\"{pythonw}\" \"{controller}\" $HWNDPARENT $EForgeCleanupPage $0 $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview' """
     page = page.replace(launch, command)
