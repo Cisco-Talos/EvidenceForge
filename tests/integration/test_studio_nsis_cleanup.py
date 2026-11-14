@@ -203,6 +203,7 @@ SectionEnd
                 for handle in controls.values():
                     send(handle, 0xF5, 0, 0)
                 assert all(send(handle, 0xF0, 0, 0) == 0 for handle in controls.values())
+                _wait(lambda: bool(enabled(next_button)), failure)
                 send(controls["Studio settings"], 0xF5, 0, 0)
                 start = time.monotonic()
                 send(get(window, 2), 0xF5, 0, 0)

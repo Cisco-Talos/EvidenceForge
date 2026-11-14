@@ -300,6 +300,10 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                     if selected and connected and not submitted:
                         channel.send("prepare", revision, selected)
                         submitted = True
+                    # NSIS disables Next immediately on every click. Two clicks
+                    # between polls can restore the same selection, so restore
+                    # eligibility even when no new inventory is needed.
+                    ui.ready(not selected or (receipt is not None and submitted))
                     if ui.commit_requested():
                         ui.ready(False)
                         if not selected:

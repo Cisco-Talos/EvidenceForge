@@ -210,6 +210,10 @@ def test_all_three_choices_can_be_selected_then_cleared_without_deletion(tmp_pat
     thread.start()
     try:
         _wait(lambda: page.enabled)
+        # Native click callbacks disable Next even when a rapid double toggle
+        # restores the same selection before the controller's next poll.
+        page.enabled = False
+        _wait(lambda: page.enabled)
         page.current = {"private", "skills", "work"}
         _wait(
             lambda: (
