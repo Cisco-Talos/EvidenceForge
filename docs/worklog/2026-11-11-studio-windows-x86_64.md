@@ -2399,3 +2399,28 @@ No is the default button, confirm the progress bar remains visible, and find no
 EDIT pane. Local control/cleanup/channel tests pass 36 with seven native-only
 skips before the additional changed-selection regression. The scan redesign
 remains a separate P1 backlog item, not part of this UI/cache build.
+
+Restarted run 43606487457 succeeds from
+12d0e75e3b3ef0d1c519f203cecb71795dc2cdf6. Native diagnostics: 120 pass in
+77.37 seconds, including formats/validation/environment calls through Python
+and PowerShell. Compiled NSIS navigation: four pass in 11.21 seconds, including
+the owned confirmation's default No, decline/retry/Yes flow, no EDIT pane and
+visible intermediate progress. Actual archived runtime installation plus nine
+isolated Python/PowerShell/launcher CLI checks pass in 185.30 seconds with active
+runtime leases and no development tools on PATH. These bounded engineering
+regressions do not establish Codex MXC or Windows 11 desktop acceptance and do not
+replace full CI. Local changed-selection/default-No wizard suite: all ten pass.
+
+Verified the EXE MZ header, SHA256 sidecar and source/run/target/unsigned/not_run
+receipt, then copied the three artifacts byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-12d0e75e/.
+EXE size: 72,115,842 bytes; SHA256
+9926e371c44e942124793291497382433f1300ac440dec970fd9a50ab092a2a1;
+runtime ID f3c3acbc085869027455b2041765dcdf9e934ee4a032f8ef88680abb65567eb9.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+The final follow-up updates only this evidence and the Windows guide's clean
+uninstall scope/confirmation/progress description. The delivered binary remains
+bound to 12d0e75e; no version bump, tags, release publication or PR is requested.
+Install/Upgrade this build before retesting authoring and its new uninstaller;
+no user-data reset is required for the cache regression.

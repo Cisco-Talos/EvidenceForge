@@ -144,14 +144,27 @@ unchecked removes only the application:
   the account's `.agents/skills`, legacy `.codex/skills` and `.claude/commands/eforge`,
   plus `.eforge/publisher.yaml`. This also affects standalone CLI/agent integrations.
   Listed skill files include local edits; unrelated files and skill parents stay.
-- **Authored scenarios/packs and generated output:** exact app-managed folders,
+- **Workspace data:** exact app-managed folders,
   recognized scenario files and run bundles in known workspaces, plus the account's
   imported pack-release library. The workspace
-  root, unrelated files, other accounts and external/custom output parents stay.
+  root, unrelated files, other accounts and external/custom output parents stay
+  when only some cleanup categories are selected.
 
-The review shows the account and exact paths before a separate irreversible-delete
-confirmation. Deleting synced content may also delete its cloud copies. Canceling
-before confirmation removes no data and cancels application uninstall. Active
+Selecting **all three** performs a full clean of dedicated EvidenceForge folders,
+including their unregistered and manually added content: the default and known
+legacy `EvidenceForge` workspace roots, `%USERPROFILE%\.eforge`, both private
+Studio data roots, and the individual EvidenceForge skill folders. Shared agent
+parents and sign-in data stay. Arbitrary custom workspace containers retain
+selective cleanup and unrelated content.
+
+Clicking **Uninstall** with any content selected opens an **Are you sure?**
+confirmation that summarizes the categories and locations and defaults to **No**.
+Choosing No returns to the choices without starting deletion. Application-only
+removal does not ask this content question. The page uses a short status line and
+a progress bar rather than a scrolling details pane. Checkbox selection still
+reviews the file set and can take time with many retained runtimes or datasets.
+Deleting synced content may also delete its cloud copies. Canceling before
+confirmation removes no data and cancels application uninstall. Active
 helpers, retained jobs, runtime leases, publishing and run ownership block cleanup;
 cleanup never terminates jobs. Links, junctions, unsafe ownership, unsupported
 filesystems and files changed since review cause refusal. Remaining staged data
