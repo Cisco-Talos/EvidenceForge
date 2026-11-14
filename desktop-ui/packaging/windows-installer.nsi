@@ -464,7 +464,8 @@ Function RunMainBinary
 FunctionEnd
 
 ; Uninstaller Pages: one native page for confirmation, optional choices and review.
-; EFORGE_CLEANUP_PAGE_BEGIN (also compiled by the focused native harness)
+; EFORGE_CLEANUP_PAGE_BEGIN
+; Also compiled by the focused native harness.
 !define MUI_CUSTOMFUNCTION_UNABORT un.EForgeCleanupAbort
 Var EForgeCleanupPage
 Var EForgeCleanupPrivate
