@@ -618,6 +618,43 @@ def describe(plan: CleanupPlan, selected: set[Category]) -> str:
     return "\r\n".join(lines)
 
 
+def confirmation(plan: CleanupPlan, selected: set[Category]) -> str:
+    """Summarize the exact reviewed choices before authorizing permanent deletion."""
+    lines = [
+        "Are you sure you want to uninstall Studio and permanently delete the selected content?",
+        "",
+        *(f"• {label}" for category, label in LABELS.items() if category in selected),
+        "",
+        f"User profile: {plan.locations.profile}",
+    ]
+    if "private" in selected:
+        lines.extend(
+            (
+                f"Studio data: {plan.locations.private}",
+                f"Browser data: {plan.locations.local / 'org.evidenceforge.studio'}",
+            )
+        )
+    if "work" in selected:
+        lines.extend(("Workspaces:", *(str(path) for path in plan.workspaces)))
+    if plan.full_cleanup:
+        lines.extend(
+            (
+                "",
+                "All three choices are selected. Entire dedicated EvidenceForge folders and "
+                "everything inside them, including manually added files, will be removed. "
+                "Custom workspace containers retain unrelated content.",
+            )
+        )
+    lines.extend(
+        (
+            "",
+            "Other accounts, Codex/sign-in and unrelated skills will be preserved.",
+            "This cannot be undone. Choose No to return without removing anything.",
+        )
+    )
+    return "\n".join(lines)
+
+
 def _move(source: Path, target: Path, *, directory: bool) -> None:
     if os.name == "nt":
         from evidenceforge.utils import windows_filesystem as fs

@@ -241,15 +241,51 @@ SectionEnd
                     _wait(lambda: bool(enabled(next_button)), failure)
                 send(next_button, 0xF5, 0, 0)
                 if mode in {"private-and-work", "full-clean"}:
+
+                    def confirmation() -> int:
+                        found = 0
+
+                        @callback_type
+                        def find_dialog(handle: int, parameter: int) -> bool:
+                            nonlocal found
+                            owner = _function("user32", "GetWindow", wt.HWND, [wt.HWND, wt.UINT])(
+                                handle,
+                                4,  # GW_OWNER
+                            )
+                            title = ctypes.create_unicode_buffer(128)
+                            _function(
+                                "user32",
+                                "GetWindowTextW",
+                                ctypes.c_int,
+                                [wt.HWND, wt.LPWSTR, ctypes.c_int],
+                            )(handle, title, len(title))
+                            if owner == window and title.value == "Uninstall EvidenceForge Studio":
+                                found = handle
+                            return True
+
+                        enum(find_dialog, 0)
+                        return found
+
+                    _wait(lambda: bool(confirmation()), failure)
+                    question = confirmation()
+                    assert send(question, 0x400, 0, 0) & 0xFFFF == 7  # DM_GETDEFID: IDNO
+                    assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
+                    send(get(question, 7), 0xF5, 0, 0)  # No authorizes no deletion.
+                    _wait(lambda: not confirmation() and bool(enabled(next_button)), failure)
+                    assert not (folder / "uninstalled.txt").exists()
+                    assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
+                    send(next_button, 0xF5, 0, 0)
+                    _wait(lambda: bool(confirmation()), failure)
+                    send(get(confirmation(), 6), 0xF5, 0, 0)  # IDYES
                     page = _function("user32", "GetParent", wt.HWND, [wt.HWND])(
                         controls["Studio settings"]
                     )
                     progress = 0
-                    review = 0
+                    edits: list[int] = []
 
                     @callback_type
                     def find_progress(handle: int, parameter: int) -> bool:
-                        nonlocal progress, review
+                        nonlocal progress
                         name = ctypes.create_unicode_buffer(64)
                         _function(
                             "user32",
@@ -260,24 +296,21 @@ SectionEnd
                         if name.value == "msctls_progress32":
                             progress = handle
                         elif name.value.lower() == "edit":
-                            review = handle
+                            edits.append(handle)
                         return True
 
                     _function(
                         "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
                     )(page, find_progress, 0)
-                    assert progress
+                    assert progress and not edits  # No scrolling text/details pane.
                     _wait(lambda: 0 < send(progress, 0x408, 0, 0) < 1000, failure)
                     assert _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])(progress)
                     rect = _function(
                         "user32", "GetWindowRect", wt.BOOL, [wt.HWND, ctypes.POINTER(wt.RECT)]
                     )
-                    page_bounds, bar_bounds, review_bounds = wt.RECT(), wt.RECT(), wt.RECT()
-                    assert review and rect(page, ctypes.byref(page_bounds))
-                    assert rect(progress, ctypes.byref(bar_bounds)) and rect(
-                        review, ctypes.byref(review_bounds)
-                    )
-                    assert review_bounds.bottom <= bar_bounds.top
+                    page_bounds, bar_bounds = wt.RECT(), wt.RECT()
+                    assert rect(page, ctypes.byref(page_bounds))
+                    assert rect(progress, ctypes.byref(bar_bounds))
                     assert (
                         page_bounds.top <= bar_bounds.top < bar_bounds.bottom <= page_bounds.bottom
                     )

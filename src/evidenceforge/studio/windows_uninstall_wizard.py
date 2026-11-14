@@ -20,7 +20,12 @@ import psutil
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_uninstall import Category, CleanupProgress
-from evidenceforge.studio.windows_uninstall_native import _function, _require, user_locations
+from evidenceforge.studio.windows_uninstall_native import (
+    _function,
+    _require,
+    message,
+    user_locations,
+)
 from evidenceforge.studio.windows_uninstall_pipe import CleanupPipe
 from evidenceforge.studio.windows_uninstall_session import CleanupReply, serve
 
@@ -92,6 +97,17 @@ class WizardControls:
                 "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
             )(self.review, 0xC, 0, ctypes.addressof(buffer))
         )
+
+    def confirm(self, text: str) -> bool:
+        """Require an explicit Yes; No and closing the owned dialog preserve data."""
+        result = message(text, 0x134, self.wizard)  # MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2
+        _require(result)
+        return result == 6  # IDYES
+
+    def error(self, text: str) -> None:
+        """Keep the page concise and present actionable failures in an owned dialog."""
+        self.text("Cleanup could not finish. Change the selected options or cancel.")
+        _require(message(text, 0x30, self.wizard))
 
     def ready(self, value: bool) -> None:
         _property(self.page, "Ready", int(value))
@@ -289,18 +305,17 @@ class AccountChannel:
 
 
 def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = AccountChannel) -> None:
-    """Poll native NSIS controls without blocking its event loop or opening windows."""
+    """Drive native NSIS controls and confirm selected content before deletion."""
     channel: Channel | None = None
     revision = 0
     selected: set[Category] | None = None
     receipt: str | None = None
+    confirmation_text = ""
     connected = False
     submitted = False
     applying = False
     try:
-        ui.text(
-            "All user data and skills will be preserved.\n\nSelect optional categories to review their exact deletion paths. Nothing is removed until you click Uninstall."
-        )
+        ui.text("All user data and skills will be preserved unless you select an option above.")
         ui.ready(True)
         while ui.alive() or applying:
             try:
@@ -310,6 +325,7 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                         selected = choices
                         revision += 1
                         receipt = None
+                        confirmation_text = ""
                         submitted = False
                         if not choices and channel is not None:
                             channel.close()
@@ -317,7 +333,7 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                             connected = False
                         ui.ready(not choices)
                         ui.text(
-                            "Preparing the selected file list… You can change the choices or cancel."
+                            "Checking the selected content… You can change the choices or cancel."
                             if choices
                             else "All user data and skills will be preserved. Only the application will be uninstalled."
                         )
@@ -338,7 +354,15 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                                 channel = None
                             ui.finish()
                             return
-                        if receipt is not None and submitted:
+                        if receipt is not None and submitted and confirmation_text:
+                            if not ui.confirm(confirmation_text):
+                                ui.text(
+                                    "Nothing was removed. Change the choices or click Uninstall to try again."
+                                )
+                                ui.ready(True)
+                                continue
+                            if not ui.alive() or ui.choices() != selected:
+                                continue  # Approval cannot cover a changed selection.
                             ui.busy(True)
                             applying = True
                             ui.text(
@@ -357,12 +381,14 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                         elif reply.revision in (0, revision):
                             if reply.state == "inspecting":
                                 if ui.alive() and selected and not applying:
-                                    ui.text(reply.text)
+                                    ui.text(
+                                        "Checking the selected content… You can change the choices or cancel."
+                                    )
                                 continue
                             if reply.state == "removing":
                                 if applying and ui.alive() and reply.progress is not None:
                                     ui.progress(reply.progress)
-                                    ui.text(reply.text)
+                                    ui.text(reply.progress.message.split("\n", 1)[0])
                                 continue
                             if reply.state == "applied":
                                 applying = False
@@ -372,11 +398,15 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                                     ui.finish()
                                 return
                             if reply.state == "prepared":
+                                if not reply.plan_id or not reply.confirmation:
+                                    raise StudioStateError(
+                                        "Cleanup review is missing its confirmation; cancel and retry"
+                                    )
                                 receipt = reply.plan_id
+                                confirmation_text = reply.confirmation
                                 if selected and ui.alive():
                                     ui.text(
-                                        reply.text
-                                        + "\n\nClick Uninstall to permanently remove the listed data and the application."
+                                        "Ready. Click Uninstall to confirm removal of the selected content."
                                     )
                                     ui.ready(True)
                             else:
@@ -390,14 +420,14 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                                 applying = False
                                 if ui.alive():
                                     ui.busy(False)
-                                    ui.text(reply.text)
+                                    ui.error(reply.text)
                 time.sleep(0.05)
             except (OSError, ValueError, EvidenceForgeError, psutil.Error) as error:
                 applying = False
                 receipt = None
                 if ui.alive():
                     ui.busy(False)
-                    ui.text(
+                    ui.error(
                         f"Cleanup could not continue: {error}\n\nUncheck all categories to preserve all data, or cancel. Review any reported partial cleanup before retrying."
                     )
                 else:

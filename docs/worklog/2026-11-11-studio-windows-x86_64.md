@@ -2367,3 +2367,35 @@ Local checks: 43 tests pass, five native-only skips; two focused provider LRU
 trust/value-graph tests pass without changing the provider. Ruff checks/formatting
 and diff checks pass. Behavior manifest remains revision 520 with unchanged digest
 4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a.
+
+While the cache-fix build runs, laptop testing confirms the native progress bar
+works well and the uninstaller otherwise appears to work. The user still sees a
+large per-checkbox review walk and prefers avoiding tens of thousands of checks.
+Whole-root *scope* did not replace the per-file snapshot/recheck/staging algorithm;
+Windows recursive removal also must still visit descendants. Refine the existing
+P1 scale backlog toward cheap dedicated-root review wherever an entire folder is
+selected (including private state alone), selective discovery for mixed/shared
+locations, and guarded streaming removal with visible progress.
+That redesign must make approval/changed-content semantics explicit and retain
+original-account execution, writer fencing, verified root identity and no-follow
+boundaries. It is not included in the cache-regression installer now building.
+
+The user subsequently requests an explicit "are you sure" for any selected content
+and removal of the scrolling details pane while retaining the progress bar, then
+explicitly requests restarting the installer build. Cancel superseded run
+43605925874 from 702c2601; do not deliver that snapshot. Require a native owned
+Yes/No confirmation on the final Uninstall click, defaulting to No. Summarize the
+selected categories, actual profile/data/workspace locations, full-clean/manual
+file scope, and retained unrelated accounts/agent sign-ins. Checkbox changes never
+prompt or authorize mutation; application-only removal does not prompt. Declining
+preserves the single-use review receipt for retry, and choices are rechecked after
+the modal response before execution. Missing confirmation metadata fails closed.
+
+Replace the EDIT/log pane with a plain short status label. Keep native counted/
+marquee progress, show phase names without path/count chatter, and present failures
+in an owned native message so details are not clipped by the short label. Native
+wizard regressions must decline once, prove no mutation, retry and accept, verify
+No is the default button, confirm the progress bar remains visible, and find no
+EDIT pane. Local control/cleanup/channel tests pass 36 with seven native-only
+skips before the additional changed-selection regression. The scan redesign
+remains a separate P1 backlog item, not part of this UI/cache build.

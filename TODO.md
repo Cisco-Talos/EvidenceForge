@@ -75,9 +75,12 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P1 — Windows clean uninstall at realistic scale:** Qualify review and removal
   with 50k+ entries, multiple retained runtimes and an actual WebView2 user-data
   profile. Avoid unnecessary full-path reopening, repeated scans/staging costs and
-  rescanning unchanged categories; identify the currently inspected folder. Decide
-  whether bounded root/category review can replace a full inventory before enabling
-  Uninstall while retaining writer fencing, verified ownership, no-follow traversal,
+  rescanning unchanged categories; identify the currently inspected folder. Prefer
+  bounded root/category review for whole-directory targets, including private state
+  selected alone, so checkbox changes do not enumerate every descendant before
+  enabling Uninstall; retain selective discovery only for mixed/shared locations.
+  Define explicit whole-folder approval and changed-content semantics while retaining
+  writer fencing, verified ownership, no-follow traversal,
   exact category/account boundaries and preservation of unapproved/new work. Keep
   browser capability access distinct from protected credentials, without rewriting
   native browser ACLs. See the

@@ -503,9 +503,8 @@ Function un.EForgeCleanupCreate
   ${NSD_CreateCheckbox} 0 76u 100% 12u "Workspace data (entire dedicated folders when all three are selected)"
   Pop $EForgeCleanupWork
   ${NSD_OnClick} $EForgeCleanupWork un.EForgeCleanupChanged
-  nsDialogs::CreateControl EDIT ${WS_VISIBLE}|${WS_CHILD}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_READONLY}|${ES_AUTOVSCROLL} ${WS_EX_CLIENTEDGE} 0 93u 100% 33u "Preparing cleanup controls… You may cancel."
+  ${NSD_CreateLabel} 0 96u 100% 30u "Preparing cleanup controls… You may cancel."
   Pop $EForgeCleanupReview
-  SendMessage $EForgeCleanupReview ${EM_SETLIMITTEXT} 0x7ffffffe 0
   ${NSD_CreateProgressBar} 0 -11u 100% 9u ""
   Pop $EForgeCleanupProgress
   ShowWindow $EForgeCleanupProgress ${SW_HIDE}

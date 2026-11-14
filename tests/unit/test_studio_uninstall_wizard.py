@@ -27,7 +27,7 @@ from evidenceforge.studio.windows_uninstall_session import (
     CleanupReply,
     ReviewSession,
 )
-from evidenceforge.studio.windows_uninstall_wizard import run_wizard, worker
+from evidenceforge.studio.windows_uninstall_wizard import WizardControls, run_wizard, worker
 
 
 def _locations(tmp_path: Path) -> UserLocations:
@@ -194,6 +194,9 @@ class FakePage:
         self.review = ""
         self.progress_updates: list[CleanupProgress] = []
         self.applying = False
+        self.confirmations: list[str] = []
+        self.confirm_answers: list[bool] = []
+        self.errors: list[str] = []
 
     def alive(self) -> bool:
         return self.open
@@ -206,6 +209,13 @@ class FakePage:
 
     def text(self, text: str) -> None:
         self.review = text
+
+    def confirm(self, text: str) -> bool:
+        self.confirmations.append(text)
+        return self.confirm_answers.pop(0) if self.confirm_answers else True
+
+    def error(self, text: str) -> None:
+        self.errors.append(text)
 
     def busy(self, busy: bool) -> None:
         self.enabled = False
@@ -245,20 +255,9 @@ def test_all_three_choices_can_be_selected_then_cleared_without_deletion(tmp_pat
         page.enabled = False
         _wait(lambda: page.enabled)
         page.current = {"private", "skills", "work"}
-        _wait(
-            lambda: (
-                "DELETE: Studio" in page.review
-                and "DELETE: EvidenceForge skills" in page.review
-                and "DELETE: Authored" in page.review
-            )
-        )
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
         page.current = {"private", "work"}
-        _wait(
-            lambda: (
-                "DELETE: Studio" in page.review
-                and "DELETE: EvidenceForge skills" not in page.review
-            )
-        )
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
         page.current = set()
         _wait(lambda: page.enabled and "Only the application" in page.review)
         page.commit = True
@@ -267,6 +266,96 @@ def test_all_three_choices_can_be_selected_then_cleared_without_deletion(tmp_pat
         page.open = False
         thread.join(5)
     assert not thread.is_alive() and sentinel.read_text() == "preserve"
+    assert page.confirmations == []  # Application-only removal asks no content question.
+
+
+def test_declining_content_confirmation_preserves_data_and_allows_retry(tmp_path: Path) -> None:
+    locations = _locations(tmp_path)
+    private_directory(locations.private)
+    sentinel = locations.private / "sentinel"
+    sentinel.write_text("preserve until confirmed")
+    workspace = locations.profile / "EvidenceForge"
+    workspace.mkdir()
+    unrelated = workspace / "unrelated.txt"
+    unrelated.write_text("preserve")
+    page = FakePage()
+    page.current = {"private"}
+    page.confirm_answers = [False, True]
+    thread = threading.Thread(target=run_wizard, args=(page, lambda: LocalChannel(locations)))
+    thread.start()
+    try:
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
+        assert page.confirmations == []  # Checkbox selection is only read-only review.
+        page.commit = True
+        _wait(lambda: len(page.confirmations) == 1 and page.enabled)
+        assert sentinel.read_text() == "preserve until confirmed"
+        assert not page.finished and not page.applying and not page.progress_updates
+        assert "Are you sure" in page.confirmations[0]
+        assert str(locations.private) in page.confirmations[0]
+        assert "Studio settings" in page.confirmations[0]
+        assert "Authored scenarios" not in page.confirmations[0]
+        page.commit = True
+        _wait(lambda: page.finished)
+    finally:
+        page.open = False
+        thread.join(5)
+    assert not thread.is_alive() and not sentinel.exists()
+    assert unrelated.read_text() == "preserve"
+    assert len(page.confirmations) == 2 and page.progress_updates
+
+
+@pytest.mark.parametrize("answer,approved", [(6, True), (7, False), (2, False)])
+def test_confirmation_defaults_to_no_and_only_yes_approves(
+    monkeypatch: pytest.MonkeyPatch, answer: int, approved: bool
+) -> None:
+    from evidenceforge.studio import windows_uninstall_wizard as wizard
+
+    calls: list[tuple[str, int, int]] = []
+
+    def message(text: str, flags: int, owner: int) -> int:
+        calls.append((text, flags, owner))
+        return answer
+
+    monkeypatch.setattr(wizard, "message", message)
+    page = object.__new__(WizardControls)
+    page.wizard = 123
+    assert page.confirm("Delete selected content?") is approved
+    assert calls == [("Delete selected content?", 0x134, 123)]
+
+
+def test_selection_changed_during_confirmation_cannot_execute_old_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locations = _locations(tmp_path)
+    private_directory(locations.private)
+    sentinel = locations.private / "sentinel"
+    sentinel.write_text("preserve")
+    source = locations.profile / "EvidenceForge/scenarios/test.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("preserve")
+    page = FakePage()
+    page.current = {"private"}
+    confirmed = threading.Event()
+
+    def confirm(text: str) -> bool:
+        page.current = {"work"}
+        confirmed.set()
+        return True
+
+    monkeypatch.setattr(page, "confirm", confirm)
+    thread = threading.Thread(target=run_wizard, args=(page, lambda: LocalChannel(locations)))
+    thread.start()
+    try:
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
+        page.commit = True
+        assert confirmed.wait(3)
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
+        assert sentinel.read_text() == "preserve" and source.read_text() == "preserve"
+        assert not page.applying and not page.finished and not page.progress_updates
+    finally:
+        page.open = False
+        thread.join(5)
+    assert not thread.is_alive()
 
 
 def test_worker_rejects_an_unrelated_controller_before_opening_user_state() -> None:

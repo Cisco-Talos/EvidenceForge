@@ -21,6 +21,7 @@ from evidenceforge.studio.windows_uninstall import (
     CleanupProgress,
     UserLocations,
     build_plan,
+    confirmation,
     describe,
     execute,
 )
@@ -45,6 +46,7 @@ class CleanupReply(BaseModel):
     text: str
     plan_id: str | None = None
     progress: CleanupProgress | None = None
+    confirmation: str = ""
 
 
 class ReviewSession:
@@ -123,6 +125,7 @@ class ReviewSession:
                             revision=command.revision,
                             text=describe(plan, command.categories),
                             plan_id=self.plan_id,
+                            confirmation=confirmation(plan, command.categories),
                         )
                     )
             except CancelledError:
