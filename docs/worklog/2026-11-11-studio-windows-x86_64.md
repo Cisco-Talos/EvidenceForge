@@ -2045,3 +2045,52 @@ The harness substitutes only its fixture controller launch, keeping page control
 styles and NSIS navigation unchanged. Genuine Windows 11/UAC/alternate-account
 acceptance remains a separate user gate. Extend focused preview diagnostics with
 these tests and the compiled harness; full acceptance remains deferred this run.
+
+Focused iteration evidence: run 43533241363 exposed the test environment's Windows
+virtualenv redirector (the real named-pipe peer has a different PID from its
+launcher). Test child processes now use the direct base interpreter, preserving
+strict endpoint PID checks; packaged bootstrap Python already runs directly.
+Run 43533652222 passed all 65 native diagnostics, then caught a duplicate Modern UI
+uninstaller abort callback during packaging. Use its documented
+MUI_CUSTOMFUNCTION_UNABORT hook instead of defining un.onUserAbort directly.
+Runs 43534503910 and 43535583167 built the installer and passed the same diagnostics,
+but caught harness setup mistakes: decoding native compiler output from a Unicode
+path and extracting a trailing comment fragment as an NSIS command. Correct both;
+these runs did not upload an installer as ready for testing.
+
+Code review also identified a rapid check/uncheck edge: native click notifications
+disable Uninstall immediately, but both clicks can occur between controller polls
+and restore the same selection. Reassert eligibility from the current selection
+and exact reviewed receipt each poll. Extend the real-click test to require
+Uninstall to re-enable after clearing all choices, and the controller unit test to
+cover a native notification without a net selection change. Five controller/unit
+tests pass locally after this change; repository Ruff checks and formatting pass.
+
+Run 43536382348 also built successfully and passed all 65 diagnostics. The compiled
+harness then exposed its ordinary argv quoting of NSIS's special _?= tail: with
+spaces, NSIS ignores the override and starts a temporary copy outside the expected
+PID. Use the existing verifier's installer_command for installation and its same
+direct-CreateProcess/unquoted-final-tail convention for the interactive uninstaller.
+Keep the production controller's strict parent/window PID checks intact.
+
+Build-only run 43537272496 succeeds from source
+a7e2fbb879bb0bc1d27bdf17b50239b4963321d1: all 65 focused native diagnostics pass
+in 25.89 seconds, and all three compiled production-page wizard cases pass in 6.56
+seconds. The cases exercise actual checkbox clicks/clearing, Cancel while inventory
+is blocked, all-unchecked application removal, and private/work removal with
+unselected global publisher and unrelated workspace files preserved. The run builds
+and uploads an unsigned NSIS preview with exact-source/checksum metadata; qualification
+is explicitly not_run. Full CI/packaged acceptance and Windows 11 desktop/UAC/
+alternate-account acceptance remain pending. Before laptop retest, install/upgrade
+this build first so it replaces the old installed uninstaller, then choose Uninstall.
+
+Downloaded the EXE/checksum/build receipt and verified source SHA, run ID, target,
+unsigned/unqualified status, MZ executable header and matching installer bytes.
+Copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-a7e2fbb8/. The installer
+is 72,105,322 bytes, SHA256
+140f9469822f854bbac641dd221720a48bcdee1f60ac96f44db24d750c8b681f;
+runtime ID 136e359828c28c51486b89b098e4196ce646d3e657cba69cc49d24e4ac8f4a1e.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+No version bump, release publication or tag; no full acceptance claim.
