@@ -479,7 +479,10 @@ def test_webview_capability_modify_is_scoped_and_acl_is_preserved(locations: Use
     permissions(cache, "/grant:r", f"*{sid}:(F)")
     with pytest.raises(StudioStateError, match="another principal"):
         build_plan(locations, {"private"})
-    permissions(cache, "/grant:r", f"*{sid}:(OI)(CI)(M)")
+    # icacls can retain a separate non-inheritable Full Control ACE when an
+    # inheritable Modify ACE is restored; explicitly remove this test grant.
+    permissions(cache, "/remove:g", f"*{sid}", "/T")
+    permissions(cache, "/grant", f"*{sid}:(OI)(CI)(M)")
     execute(plan, {"private"})
     assert not cached.exists() and not secret.exists()
     assert unrelated.read_text() == "preserve"
