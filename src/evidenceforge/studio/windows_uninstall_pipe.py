@@ -6,6 +6,7 @@ import ctypes
 import json
 import struct
 import threading
+from collections.abc import Callable
 from ctypes import wintypes as wt
 from typing import Any
 from uuid import UUID
@@ -16,17 +17,85 @@ from evidenceforge.studio.windows_uninstall_native import _function, _require
 _LIMIT = 4 * 1024 * 1024
 
 
+class _Overlapped(ctypes.Structure):
+    _fields_ = [
+        ("internal", ctypes.c_size_t),
+        ("internal_high", ctypes.c_size_t),
+        ("offset", wt.DWORD),
+        ("offset_high", wt.DWORD),
+        ("event", wt.HANDLE),
+    ]
+
+
 def pipe_name(identity: str) -> str:
     """Accept only our random local endpoint namespace, never arbitrary pipe paths."""
     return rf"\\.\pipe\EvidenceForge.Uninstall.{UUID(identity).hex}"
 
 
 class CleanupPipe:
-    """Bounded JSON frames on a synchronous local pipe, used off the UI thread."""
+    """Bounded frames with independent overlapped operations in each direction."""
 
     def __init__(self, handle: int) -> None:
         self.handle = handle
         self.lock = threading.Lock()
+        self.condition = threading.Condition()
+        self.active = 0
+        self.closing = False
+
+    def _io(
+        self,
+        start: Callable[[int, _Overlapped, wt.DWORD], int],
+        *,
+        timeout_ms: int = 0xFFFFFFFF,
+        accept_connected: bool = False,
+    ) -> int:
+        """Keep each event/buffer alive until completion, including cancellation."""
+        event = _function(
+            "kernel32", "CreateEventW", wt.HANDLE, [wt.LPVOID, wt.BOOL, wt.BOOL, wt.LPCWSTR]
+        )(None, True, False, None)
+        _require(event)
+        operation = _Overlapped(event=event)
+        transferred = wt.DWORD()
+        registered = False
+        try:
+            with self.condition:
+                if self.closing or not self.handle:
+                    raise BrokenPipeError("Uninstall channel closed")
+                handle = self.handle
+                self.active += 1
+                registered = True
+                # Close cannot cancel before this operation has been submitted.
+                success = start(handle, operation, transferred)
+                error = ctypes.get_last_error() if not success else 0
+            if accept_connected and error == 535:  # ERROR_PIPE_CONNECTED
+                return 0
+            if not success:
+                if error != 997:  # ERROR_IO_PENDING
+                    raise ctypes.WinError(error)
+                wait = _function("kernel32", "WaitForSingleObject", wt.DWORD, [wt.HANDLE, wt.DWORD])
+                result = wait(event, timeout_ms)
+                if result != 0:
+                    _function(
+                        "kernel32", "CancelIoEx", wt.BOOL, [wt.HANDLE, ctypes.POINTER(_Overlapped)]
+                    )(handle, ctypes.byref(operation))
+                    # CancelIoEx requests cancellation; it does not complete it.
+                    wait(event, 0xFFFFFFFF)
+                    raise TimeoutError("Uninstall channel operation did not finish")
+            _require(
+                _function(
+                    "kernel32",
+                    "GetOverlappedResult",
+                    wt.BOOL,
+                    [wt.HANDLE, ctypes.POINTER(_Overlapped), ctypes.POINTER(wt.DWORD), wt.BOOL],
+                )(handle, ctypes.byref(operation), ctypes.byref(transferred), False)
+            )
+            return transferred.value
+        finally:
+            _function("kernel32", "CloseHandle", wt.BOOL, [wt.HANDLE])(event)
+            if registered:
+                with self.condition:
+                    self.active -= 1
+                    self.condition.notify_all()
 
     @classmethod
     def server(cls, identity: str, account: str) -> CleanupPipe:
@@ -68,7 +137,7 @@ class CleanupPipe:
                     wt.DWORD,
                     ctypes.POINTER(Security),
                 ],
-            )(pipe_name(identity), 0x80003, 0x8, 1, 65536, 65536, 0, ctypes.byref(security))
+            )(pipe_name(identity), 0x40080003, 0x8, 1, 65536, 65536, 0, ctypes.byref(security))
             if handle == wt.HANDLE(-1).value:
                 raise ctypes.WinError(ctypes.get_last_error())
             return cls(handle)
@@ -87,7 +156,7 @@ class CleanupPipe:
             "CreateFileW",
             wt.HANDLE,
             [wt.LPCWSTR, wt.DWORD, wt.DWORD, wt.LPVOID, wt.DWORD, wt.DWORD, wt.HANDLE],
-        )(name, 0xC0000000, 0, None, 3, 0, None)
+        )(name, 0xC0000000, 0, None, 3, 0x40000000, None)
         if handle == wt.HANDLE(-1).value:
             raise ctypes.WinError(ctypes.get_last_error())
         result = cls(handle)
@@ -101,11 +170,14 @@ class CleanupPipe:
 
     def accept(self) -> None:
         """Accept one local connection; the caller must authenticate its PID."""
-        connected = _function("kernel32", "ConnectNamedPipe", wt.BOOL, [wt.HANDLE, wt.LPVOID])(
-            self.handle, None
+        connect = _function(
+            "kernel32", "ConnectNamedPipe", wt.BOOL, [wt.HANDLE, ctypes.POINTER(_Overlapped)]
         )
-        if not connected and ctypes.get_last_error() != 535:  # ERROR_PIPE_CONNECTED
-            raise ctypes.WinError(ctypes.get_last_error())
+        self._io(
+            lambda handle, operation, count: connect(handle, ctypes.byref(operation)),
+            timeout_ms=15000,
+            accept_connected=True,
+        )
 
     def peer_pid(self, *, server: bool = False) -> int:
         """Read endpoint identity from the kernel, not from an incoming JSON claim."""
@@ -134,11 +206,15 @@ class CleanupPipe:
         )
         with self.lock:
             while frame:
-                written = wt.DWORD()
-                _require(write(self.handle, frame, len(frame), ctypes.byref(written), None))
-                if not written.value:
+                written = self._io(
+                    lambda handle, operation, count, frame=frame: write(
+                        handle, frame, len(frame), ctypes.byref(count), ctypes.byref(operation)
+                    ),
+                    timeout_ms=10000,
+                )
+                if not written:
                     raise BrokenPipeError("Uninstall channel closed")
-                frame = frame[written.value :]
+                frame = frame[written:]
 
     def _read(self, size: int) -> bytes:
         content = bytearray()
@@ -150,11 +226,14 @@ class CleanupPipe:
         )
         while len(content) < size:
             buffer = ctypes.create_string_buffer(min(size - len(content), 65536))
-            count = wt.DWORD()
-            _require(read(self.handle, buffer, len(buffer), ctypes.byref(count), None))
-            if not count.value:
+            count = self._io(
+                lambda handle, operation, count, buffer=buffer: read(
+                    handle, buffer, len(buffer), ctypes.byref(count), ctypes.byref(operation)
+                )
+            )
+            if not count:
                 raise BrokenPipeError("Uninstall channel closed")
-            content.extend(buffer.raw[: count.value])
+            content.extend(buffer.raw[:count])
         return bytes(content)
 
     def receive(self) -> dict[str, Any]:
@@ -168,7 +247,19 @@ class CleanupPipe:
         return value
 
     def close(self) -> None:
-        """Release the one owned channel handle."""
-        if self.handle:
-            _function("kernel32", "CloseHandle", wt.BOOL, [wt.HANDLE])(self.handle)
-            self.handle = 0
+        """Cancel pending I/O and drain it before releasing the owned handle."""
+        with self.condition:
+            if self.closing:
+                while self.handle:
+                    self.condition.wait()
+                return
+            self.closing = True
+            if self.handle:
+                _function("kernel32", "CancelIoEx", wt.BOOL, [wt.HANDLE, wt.LPVOID])(
+                    self.handle, None
+                )
+                while self.active:
+                    self.condition.wait()
+                _function("kernel32", "CloseHandle", wt.BOOL, [wt.HANDLE])(self.handle)
+                self.handle = 0
+            self.condition.notify_all()

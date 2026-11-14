@@ -145,6 +145,7 @@ class AccountChannel:
         self.pipe = CleanupPipe.server(identity, self.account)
         self.replies: queue.Queue[CleanupReply] = queue.Queue()
         self.connected = threading.Event()
+        self.ready = threading.Event()
         self.closed = threading.Event()
         self.execution_pending = False
         self.started_at = time.monotonic()
@@ -182,6 +183,8 @@ class AccountChannel:
                 self.connected.set()
                 while not self.closed.is_set():
                     reply = CleanupReply.model_validate(self.pipe.receive())
+                    if reply.state == "ready":
+                        self.ready.set()
                     if reply.state in {"applied", "error"}:
                         self.execution_pending = False
                     self.replies.put(reply)
@@ -208,7 +211,7 @@ class AccountChannel:
                 )
             )
         if (
-            not self.connected.is_set()
+            not self.ready.is_set()
             and not self.connection_failed
             and (self.process.poll() is not None or time.monotonic() - self.started_at > 15)
         ):

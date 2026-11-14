@@ -128,7 +128,9 @@ session.serve(CleanupPipe.client(sys.argv[1],int(sys.argv[2])),locations)
             send("execute", 2, [], prepared["plan_id"])
             assert replies.get(timeout=3)["state"] == "applied"
             assert (tmp_path / "approved").exists()
-            send("cancel", 0, [])
+            # Close with the reply reader still pending and the worker waiting
+            # for its next command. Cancellation must drain both ends promptly.
+            server.close()
             assert child.wait(timeout=5) == 0
         finally:
             if child.poll() is None:
