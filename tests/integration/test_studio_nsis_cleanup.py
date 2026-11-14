@@ -130,6 +130,7 @@ def execute(*args,report_progress,**kwargs):
         report_progress(value)
         if not blocked and value.phase=='removing' and value.completed>0:
             blocked=True
+            (Path(__file__).parent/'remove-paused').touch()
             while not (Path(__file__).parent/'allow-remove').exists():
                 time.sleep(.02)
     return original_execute(*args,report_progress=progress,**kwargs)
@@ -312,7 +313,11 @@ SectionEnd
 
                     elements = _confirmation_elements(question)
                     (folder / "confirmation.json").write_text(json.dumps(elements, indent=2))
-                    buttons = [item for item in elements if item["Type"] == "ControlType.Button"]
+                    buttons = [
+                        item
+                        for item in elements
+                        if str(item["Name"]).replace("&", "") in {"Yes", "Cancel", "No", "OK"}
+                    ]
                     names = {str(item["Name"]).replace("&", "") for item in buttons}
                     assert {"Yes", "Cancel"} <= names and "No" not in names and "OK" not in names, (
                         elements
@@ -357,6 +362,7 @@ SectionEnd
                         "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
                     )(page, find_progress, 0)
                     assert progress and not edits  # No scrolling text/details pane.
+                    _wait(lambda: (folder / "remove-paused").exists(), failure)
                     _wait(lambda: bool(style(progress, -16) & 0x8), failure)  # PBS_MARQUEE
                     assert _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])(progress)
                     rect = _function(

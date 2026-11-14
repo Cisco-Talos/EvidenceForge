@@ -2485,3 +2485,12 @@ Cancel, reject No/OK, and continue testing real Cancel and Yes using the documen
 TaskDialog button messages. Preserve the config-level default-Cancel/no-icon checks.
 The next run changes only the test and this evidence; production cleanup/dialog
 code remains unchanged. Do not deliver a build with a failing native UI gate.
+
+Run 43624259655 from 7e12d5a5 confirms the actual dialog displays the exact short
+question, selected categories and irreversibility sentence, with Yes/Cancel and
+Cancel focused. Its accessible command controls report ControlType.Pane and IDs
+CommandButton_6/CommandButton_2; the test incorrectly filtered them to Button.
+Match these controls by their visible names inside the already verified owned
+dialog, then retain the real TaskDialog Cancel/Yes messages, no-mutation check,
+default-focus check and final preservation/deletion assertions. This is another
+test-only correction; production code is still eac59e9b's implementation.
