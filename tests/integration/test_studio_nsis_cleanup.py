@@ -40,6 +40,8 @@ def _maker() -> Path:
 
 @pytest.mark.parametrize("mode", ["cancel-review", "preserve", "private-and-work"])
 def test_real_nsis_choices_and_cancel_remain_independent(tmp_path: Path, mode: str) -> None:
+    from scripts.verify_studio_windows import installer_command
+
     from evidenceforge.studio.windows_uninstall_native import _function
 
     root = Path(__file__).resolve().parents[2]
@@ -134,8 +136,13 @@ SectionEnd
         errors="replace",
     )
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
-    subprocess.run([str(installer), "/S", f"/D={folder}"], check=True, timeout=20)
-    with subprocess.Popen([str(folder / "uninstall.exe"), f"_?={folder}"]) as child:
+    installer_command([str(installer), "/S", f"/D={folder}"])
+    uninstaller = str(folder / "uninstall.exe")
+    # NSIS requires its _?= directory override as an unquoted final tail,
+    # including when it contains spaces. Normal argv quoting ignores the
+    # override and instead starts an unrelated temporary-copy process.
+    arguments = subprocess.list2cmdline([uninstaller]) + f" _?={folder}"
+    with subprocess.Popen(arguments, executable=uninstaller) as child:
         try:
             callback_type = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
             enum = _function("user32", "EnumWindows", wt.BOOL, [callback_type, wt.LPARAM])
@@ -161,7 +168,9 @@ SectionEnd
                 enum(find, 0)
                 return bool(window)
 
-            _wait(attached, "Native uninstaller window not found")
+            _wait(
+                attached, lambda: f"Native uninstaller {child.pid} not found; exit={child.poll()}"
+            )
             controls: dict[str, int] = {}
 
             @callback_type
