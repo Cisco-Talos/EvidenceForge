@@ -128,7 +128,8 @@ export class StudioApi {
 
   async request<T>(path: string, method = "GET", body?: unknown, timeoutMs = 15000): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     let response: Response;
     try {
       response = await fetch(`${this.url}${path}`, {
@@ -142,6 +143,9 @@ export class StudioApi {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       });
+    } catch (error) {
+      if (timedOut) throw new Error(`Studio did not respond within ${timeoutMs / 1000} seconds. It may still be processing this request. Check for an updated result before retrying.`);
+      throw error;
     } finally {
       clearTimeout(timeout);
     }

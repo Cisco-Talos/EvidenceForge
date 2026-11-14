@@ -8,6 +8,42 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
+test("a slow validation can finish after the ordinary request timeout", async () => {
+  vi.useFakeTimers();
+  let complete!: (response: Response) => void;
+  let signal!: AbortSignal;
+  vi.stubGlobal("fetch", vi.fn((_url: string, options: RequestInit) => {
+    signal = options.signal!;
+    return new Promise<Response>((resolve) => { complete = resolve; });
+  }));
+  try {
+    const result = new StudioApi({ url: "http://127.0.0.1:4400", token: "secret" })
+      .request("/v1/validate", "POST", { scenario_id: "scenario" }, 180000);
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(signal.aborted).toBe(false);
+    complete(Response.json({ report: { valid: true } }));
+    await expect(result).resolves.toEqual({ report: { valid: true } });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+test("request timeouts explain the uncertain result without an automatic retry", async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn((_url: string, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    options.signal!.addEventListener("abort", () => reject(new DOMException("signal is aborted without reason", "AbortError")));
+  }));
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const result = new StudioApi({ url: "http://127.0.0.1:4400", token: "secret" })
+      .request("/v1/validate", "POST", {}, 180000);
+    const failure = expect(result).rejects.toThrow("Studio did not respond within 180 seconds. It may still be processing this request. Check for an updated result before retrying.");
+    await vi.advanceTimersByTimeAsync(180000);
+    await failure;
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
 test("startup progress is subscribed before native setup and released on failure", async () => {
   const unlisten = vi.fn();
   const progress = vi.fn();

@@ -529,7 +529,7 @@ function App() {
     setWorkspaceTarget("validation");
     try {
       let result: ValidationResult | undefined;
-      if (target.kind === "scenario") result = await api.request<ValidationResult>("/v1/validate", "POST", { scenario_id: target.id });
+      if (target.kind === "scenario") result = await api.request<ValidationResult>("/v1/validate", "POST", { scenario_id: target.id }, 180000);
       else {
         try {
           const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
