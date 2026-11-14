@@ -2252,3 +2252,84 @@ Close the current uninstaller, Install/Upgrade this build, then retest normal Co
 startup and optional cleanup. No version bump, PR, publication/tag or full acceptance
 claim; genuine Windows 11/profile cleanup, runtime-scale duration and any actual
 startup Codex failure remain laptop acceptance evidence.
+
+### Removal progress, post-uninstall audit and complete dedicated roots (November 13)
+
+Laptop acceptance of ad387bde: filesystem review is nearly instant, the WebView2
+permission error is gone, and all three categories can complete removal. The
+remaining long removal phase has no visible activity; the user requests a progress
+bar and an independent cleanup check. Add a native bar on the existing NSIS page,
+never a new window. Counted phases are checking/preparing/removing; finishing
+directory cleanup uses marquee activity instead of an invented percentage. Updates
+are throttled, include the active path, and remain visible while the original-account
+worker executes. Progress channel loss must not interrupt already-approved cleanup.
+Keep mutation cancellation disabled and wait for owned workers before app removal.
+
+Progress-only source f650f283 passes run 43548526558: 102 focused native diagnostics
+(26.20 seconds) and all three compiled wizard cases (4.70 seconds). The real wizard
+harness pauses execution on actual intermediate progress, checks visible/nonzero
+bar position and nonoverlapping page bounds, then releases cleanup and verifies
+preservation. Real cross-process pipe tests carry progress/complete messages before
+the final acknowledgement. Local focused Python tests pass; full CI stays deferred.
+No installer from this intermediate snapshot is delivered while the subsequent
+whole-root cleanup change is being prepared.
+
+Before reinstall, a read-only PowerShell audit confirms ABSENT for Studio private
+state/runtimes, org.evidenceforge.studio, all nine standard skills under both global
+and project .agents/.codex scopes, Claude's eforge commands, global publisher and
+releases, and managed config/packs/releases/deletions/publisher paths. The workspace
+studio/scenarios containers are empty, but artifacts and runs retain descendants.
+The next bounded listing shows draft/validation folders, a failed run containing
+only .eforge-desktop-job.json, and other run checkpoint/artifacts/data directories.
+The listing does not establish whether deeper remaining directories are empty.
+Do not call the workspace cleanup complete from the private-state/skills success.
+
+The user explicitly requests deleting the complete EvidenceForge top-level folder
+and corresponding dedicated folders elsewhere. Implement a full-clean review when
+all three categories are selected: entire default profile/EvidenceForge and legacy
+Documents/EvidenceForge workspaces, profile/.eforge, both private/WebView2 roots,
+and the known individual eforge-* skill folders/Claude eforge command folder.
+Include manually added/unregistered content inside these dedicated roots; show this
+scope and exact paths in the review before execution. Shared profile/agent/skill
+parents, Codex authentication and unrelated tools stay. Arbitrary custom workspaces
+retain selective namespace cleanup and an explicit preservation note; they are not
+inferred to be wholly disposable from a saved path alone. Fewer selected categories
+keep the existing selective behavior.
+
+Full-clean is an explicit private plan flag, requires the unchanged three-category
+selection at execution, collapses overlapping roots, and carries discovered nested
+protocol locks into fencing/reclamation. Scope private service/lease lock names to
+the actual private root so an identically named workspace file remains ordinary data.
+Continue rechecking the exact snapshot and retaining new/unreviewed files. Remove
+read-only original objects by native identity-checked handle operations that clear
+only ReadOnly, never ACLs; tolerate no links/hardlink attribute mutation. Stop claiming
+full success if a reviewed root remains because of new/locked contents.
+
+Regressions cover failed jobs/unregistered files, manual files inside dedicated
+roots, nested live-lock refusal, shared-agent/auth preservation, arbitrary custom
+workspace preservation, and native read-only files/directories. Extend the compiled
+wizard matrix with all-three full clean while retaining its visible-progress check.
+Local evidence after this change: 64 pass, four native-only skips; Ruff checks,
+formatting and diff checks pass. Generation behavior surface validation still
+matches its declared digest; no generator or version change is made.
+
+Final full-clean source a5d5ff980c94a8e548f3583ba98dac80c67fb529 passes build-only
+run 43549830823: 106 focused native diagnostics (30.39 seconds) and all four
+compiled NSIS wizard cases (9.46 seconds), including full clean and preservation
+of unrelated agent/authentication content. Full cross-platform/desktop acceptance
+is deliberately not run. One additional test-only regression added afterward
+confirms new unreviewed files survive and prevent a false completion report;
+the local full-clean subset passes four tests with one native-only skip.
+
+Verified the downloaded EXE's MZ header, SHA256 sidecar and build receipt against
+the exact source/run/target/unsigned/not_run metadata, then copied all three files
+byte-for-byte to /Users/dabianco/Downloads/EvidenceForge-Windows-build-only-a5d5ff98/.
+EXE size: 72,107,736 bytes; SHA256
+7d972e2693d91e386c24bb99df8e65a877014bbdfb6ba7c2b8d3343fa224f761;
+runtime ID 1128fc710858055490d266829348b40009e67efafc265bdd476cb3c613a9dc79.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install this build before using its all-three-category uninstaller to remove the
+old workspace leftovers; the prior successful removal did not establish that
+those leftovers were empty. The final follow-up commit changes tests/worklog
+only, so the delivered executable remains explicitly bound to a5d5ff98.

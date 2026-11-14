@@ -659,3 +659,27 @@ def test_full_clean_removes_readonly_original_folders_and_files(locations: UserL
     plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
     execute(plan, {"private", "skills", "work"})
     assert not workspace.exists()
+
+
+def test_full_clean_preserves_new_unreviewed_files_and_does_not_claim_completion(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio import windows_uninstall as cleanup
+
+    workspace = locations.profile / "EvidenceForge"
+    old = write(workspace / "reviewed.txt")
+    new = workspace / "new-after-review.txt"
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    original = cleanup._move
+
+    def move(source: Path, target: Path, *, directory: bool) -> None:
+        original(source, target, directory=directory)
+        if source == old:
+            new.write_text("preserve new work")
+
+    monkeypatch.setattr(cleanup, "_move", move)
+    progress: list[cleanup.CleanupProgress] = []
+    with pytest.raises(StudioStateError, match="new or locked contents remain"):
+        execute(plan, {"private", "skills", "work"}, report_progress=progress.append)
+    assert new.read_text() == "preserve new work" and not old.exists()
+    assert all(value.phase != "complete" for value in progress)
