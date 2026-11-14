@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_uninstall import (
+    LABELS,
     Category,
     CleanupPlan,
     CleanupProgress,
@@ -105,6 +106,7 @@ class ReviewSession:
                 command.categories,
                 check_cancelled=check,
                 report_target=report_target,
+                full_cleanup=command.categories == set(LABELS),
             )
 
         def completed(future: Future[CleanupPlan]) -> None:

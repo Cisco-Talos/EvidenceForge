@@ -61,7 +61,7 @@ from evidenceforge.studio.windows_uninstall_pipe import CleanupPipe
 from evidenceforge.utils.windows_filesystem import current_user_sid
 root=Path(sys.argv[3])
 locations=UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid())
-def inspect(locations,categories,*,check_cancelled,report_target):
+def inspect(locations,categories,*,check_cancelled,report_target,full_cleanup):
     if categories=={'private'}:
         try:
             while True:

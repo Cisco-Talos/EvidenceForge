@@ -38,7 +38,7 @@ def _maker() -> Path:
     pytest.fail("NSIS must be available after the preview packaging step")
 
 
-@pytest.mark.parametrize("mode", ["cancel-review", "preserve", "private-and-work"])
+@pytest.mark.parametrize("mode", ["cancel-review", "preserve", "private-and-work", "full-clean"])
 def test_real_nsis_choices_and_cancel_remain_independent(tmp_path: Path, mode: str) -> None:
     from scripts.verify_studio_windows import installer_command
 
@@ -72,6 +72,8 @@ workspace=root/'EvidenceForge'
 (workspace/'unrelated.txt').write_text('preserve')
 (root/'.eforge').mkdir()
 (root/'.eforge/publisher.yaml').write_text('publisher: test\\npublisher_display_name: Test\\n')
+(root/'.codex').mkdir()
+(root/'.codex/auth.json').write_text('preserve sign-in')
 original=session.build_plan
 def inspect(*args,check_cancelled,**kwargs):
     while not (Path(__file__).parent/'allow-review').exists():
@@ -191,7 +193,7 @@ SectionEnd
                 _function(
                     "user32", "GetWindowTextW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]
                 )(handle, text, len(text))
-                for label in ("Studio settings", "EvidenceForge skills", "Authored scenarios"):
+                for label in ("Studio settings", "EvidenceForge skills", "Workspace data"):
                     if text.value.startswith(label):
                         controls[label] = handle
                 return True
@@ -231,12 +233,14 @@ SectionEnd
                 assert child.wait(timeout=5) != 0
                 assert time.monotonic() - start < 5
             else:
-                if mode == "private-and-work":
+                if mode in {"private-and-work", "full-clean"}:
                     send(controls["Studio settings"], 0xF5, 0, 0)
-                    send(controls["Authored scenarios"], 0xF5, 0, 0)
+                    send(controls["Workspace data"], 0xF5, 0, 0)
+                    if mode == "full-clean":
+                        send(controls["EvidenceForge skills"], 0xF5, 0, 0)
                     _wait(lambda: bool(enabled(next_button)), failure)
                 send(next_button, 0xF5, 0, 0)
-                if mode == "private-and-work":
+                if mode in {"private-and-work", "full-clean"}:
                     page = _function("user32", "GetParent", wt.HWND, [wt.HWND])(
                         controls["Studio settings"]
                     )
@@ -287,9 +291,14 @@ SectionEnd
                 child.wait()
     account = folder / "account"
     assert (account / "AppData/Local/EvidenceForge/sentinel.txt").exists() is (
-        mode != "private-and-work"
+        mode not in {"private-and-work", "full-clean"}
     )
-    assert (account / "EvidenceForge/scenarios/test.yaml").exists() is (mode != "private-and-work")
-    assert (account / ".eforge/publisher.yaml").exists()
-    assert (account / "EvidenceForge/unrelated.txt").read_text() == "preserve"
+    assert (account / "EvidenceForge/scenarios/test.yaml").exists() is (
+        mode not in {"private-and-work", "full-clean"}
+    )
+    assert (account / ".eforge/publisher.yaml").exists() is (mode != "full-clean")
+    assert (account / "EvidenceForge/unrelated.txt").exists() is (mode != "full-clean")
+    assert (account / ".codex/auth.json").read_text() == "preserve sign-in"
+    if mode == "full-clean":
+        assert not (account / "EvidenceForge").exists() and not (account / ".eforge").exists()
     assert (folder / "uninstalled.txt").exists() is (mode != "cancel-review")

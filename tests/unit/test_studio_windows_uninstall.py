@@ -571,3 +571,91 @@ def test_losing_progress_display_does_not_interrupt_approved_cleanup(
 
     execute(build_plan(locations, {"private"}), {"private"}, report_progress=disconnected)
     assert not private.exists() and calls == 1
+
+
+def test_full_clean_removes_entire_dedicated_roots_but_preserves_shared_parents(
+    locations: UserLocations,
+) -> None:
+    workspace = locations.profile / "EvidenceForge"
+    write(workspace / "runs/scenario/failed/.eforge-desktop-job.json", "{}")
+    write(workspace / "my-added-notes.txt")
+    write(workspace / "service-start.lock", "ordinary workspace data")
+    write(workspace / ".eforge/artifacts/drafts/industry/test-manufacturing/.keep")
+    write(locations.profile / ".eforge/unrecognized-cli-cache/item")
+    write(locations.private / "runtimes/retained/python.exe")
+    write(locations.local / "org.evidenceforge.studio/EBWebView/cache")
+    write(locations.profile / ".agents/skills/eforge-scenario/custom-notes.txt")
+    write(locations.profile / ".claude/commands/eforge/custom-reference.txt")
+    unrelated = write(locations.profile / ".agents/skills/other-tool/SKILL.md")
+    codex_login = write(locations.profile / ".codex/auth.json", "preserve sign-in")
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    review = describe(plan, {"private", "skills", "work"})
+    assert "FULL CLEAN" in review and "manually added" in review
+    assert {target.path for target in plan.targets if target.category == "work"} == {
+        workspace,
+        locations.profile / ".eforge",
+    }
+    with pytest.raises(StudioStateError, match="choices changed"):
+        execute(plan, {"private"})
+    execute(plan, {"private", "skills", "work"})
+    for path in (
+        workspace,
+        locations.profile / ".eforge",
+        locations.private,
+        locations.local / "org.evidenceforge.studio",
+        locations.profile / ".agents/skills/eforge-scenario",
+        locations.profile / ".claude/commands/eforge",
+    ):
+        assert not path.exists()
+    assert unrelated.exists() and codex_login.read_text() == "preserve sign-in"
+
+
+def test_full_clean_fences_nested_workspace_protocol_locks(locations: UserLocations) -> None:
+    from evidenceforge.studio.state_io import StateLock
+
+    workspace = locations.profile / "EvidenceForge"
+    nested_lock = (
+        workspace / ".eforge/artifacts/drafts/scenario/test/verification/.eforge/studio/owner.lock"
+    )
+    data = write(nested_lock.parent / "saved.json")
+    with StateLock(nested_lock):
+        plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+        assert nested_lock in plan.control_locks
+        with pytest.raises(StudioStateError, match="owns"):
+            execute(plan, {"private", "skills", "work"})
+        assert data.exists()
+    execute(
+        build_plan(locations, {"private", "skills", "work"}, full_cleanup=True),
+        {"private", "skills", "work"},
+    )
+    assert not workspace.exists()
+
+
+def test_full_clean_preserves_arbitrary_custom_workspace_container(
+    locations: UserLocations,
+) -> None:
+    custom = locations.profile / "Shared project"
+    unrelated = write(custom / "unrelated.txt")
+    authored = write(custom / ".eforge/artifacts/draft/source.yaml")
+    write(
+        locations.private / "settings.json",
+        json.dumps({"schema_version": 4, "settings": {"workspace": str(custom)}}),
+    )
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    assert str(custom) in " ".join(plan.preserved)
+    execute(plan, {"private", "skills", "work"})
+    assert unrelated.exists() and not authored.exists() and custom.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only directory/file attributes")
+def test_full_clean_removes_readonly_original_folders_and_files(locations: UserLocations) -> None:
+    import stat
+
+    workspace = locations.profile / "EvidenceForge"
+    source = write(workspace / ".eforge/artifacts/drafts/scenario/test/source.yaml")
+    run = write(workspace / "runs/scenario/failed/data/file.log")
+    for path in (source, run, source.parent, source.parent.parent, run.parent, workspace):
+        os.chmod(path, stat.S_IREAD)
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    execute(plan, {"private", "skills", "work"})
+    assert not workspace.exists()

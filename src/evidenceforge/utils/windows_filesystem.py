@@ -774,16 +774,33 @@ def list_directory(descriptor: int) -> list[str]:
             offset += entry.NextEntryOffset
 
 
+class _BasicFileInfo(ctypes.Structure):
+    _fields_ = [
+        ("created", ctypes.c_int64),
+        ("accessed", ctypes.c_int64),
+        ("written", ctypes.c_int64),
+        ("changed", ctypes.c_int64),
+        ("attributes", wintypes.DWORD),
+    ]
+
+
 def remove_child(
     parent: int,
     name: str,
     *,
     directory: bool = False,
     expected_identity: tuple[int, int] | None = None,
+    clear_readonly: bool = False,
 ) -> None:
     """Delete the opened child through its handle, rejecting reparse points."""
+    if clear_readonly and expected_identity is None:
+        raise ValueError("Read-only removal requires the reviewed object's identity")
     descriptor = _open_native(
-        name, root=_handle(parent), flags=os.O_RDONLY, directory=directory, extra_access=_DELETE
+        name,
+        root=_handle(parent),
+        flags=os.O_RDONLY,
+        directory=directory,
+        extra_access=_DELETE | (0x100 if clear_readonly else 0),
     )
     try:
         metadata = os.fstat(descriptor)
@@ -792,6 +809,13 @@ def remove_child(
             and (int(metadata.st_dev), int(metadata.st_ino)) != expected_identity
         ):
             raise OSError("Windows file identity changed before deletion")
+        if clear_readonly and metadata.st_file_attributes & 0x1:
+            if not directory and metadata.st_nlink != 1:
+                raise PermissionError("Read-only removal refuses multiply linked files")
+            basic = _BasicFileInfo()
+            _require(_get_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+            basic.attributes = (basic.attributes & ~0x1) or 0x80
+            _require(_set_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
         delete = wintypes.BYTE(1)
         _require(
             _set_info(

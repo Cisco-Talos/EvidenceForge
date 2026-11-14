@@ -492,7 +492,7 @@ Function un.EForgeCleanupCreate
   ${EndIf}
   ${NSD_CreateLabel} 0 0 100% 20u "Uninstalling from: $INSTDIR"
   Pop $0
-  ${NSD_CreateLabel} 0 22u 100% 22u "Leave everything unchecked to keep your data. Selected data will be permanently removed."
+  ${NSD_CreateLabel} 0 22u 100% 22u "Selected data is permanently removed. Check all three for entire EvidenceForge folders; keep all unchecked to preserve data."
   Pop $0
   ${NSD_CreateCheckbox} 0 46u 100% 12u "Studio settings, credentials, caches and retained runtimes"
   Pop $EForgeCleanupPrivate
@@ -500,7 +500,7 @@ Function un.EForgeCleanupCreate
   ${NSD_CreateCheckbox} 0 61u 100% 12u "EvidenceForge skills and global publisher identity (also used by the CLI)"
   Pop $EForgeCleanupSkills
   ${NSD_OnClick} $EForgeCleanupSkills un.EForgeCleanupChanged
-  ${NSD_CreateCheckbox} 0 76u 100% 12u "Authored scenarios/packs and generated output in known workspaces"
+  ${NSD_CreateCheckbox} 0 76u 100% 12u "Workspace data (entire dedicated folders when all three are selected)"
   Pop $EForgeCleanupWork
   ${NSD_OnClick} $EForgeCleanupWork un.EForgeCleanupChanged
   nsDialogs::CreateControl EDIT ${WS_VISIBLE}|${WS_CHILD}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_READONLY}|${ES_AUTOVSCROLL} ${WS_EX_CLIENTEDGE} 0 93u 100% 33u "Preparing cleanup controls… You may cancel."

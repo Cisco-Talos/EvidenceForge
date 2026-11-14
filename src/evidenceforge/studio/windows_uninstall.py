@@ -82,6 +82,8 @@ class CleanupPlan(BaseModel):
     targets: tuple[CleanupTarget, ...] = ()
     preserved: tuple[str, ...] = ()
     workspaces: tuple[Path, ...] = ()
+    full_cleanup: bool = False
+    control_locks: tuple[Path, ...] = ()
 
 
 class CleanupProgress(BaseModel):
@@ -149,17 +151,25 @@ class _CleanupReporter:
             self.callback = None
 
 
-def _ownership_lock(path: Path) -> bool:
+def _ownership_lock(path: Path, private_root: Path | None = None) -> bool:
     """Recognize reserved protocol files, not arbitrary authored .lock files."""
     return (
         (
-            path.parent.name == "EvidenceForge"
+            (path.parent == private_root if private_root else path.parent.name == "EvidenceForge")
             and path.name in {"service-start.lock", "service-instance.lock", "studio-data.lock"}
         )
-        or (path.parent.name == "runtimes" and path.name == "install.lock")
+        or (
+            (
+                path.parent == private_root / "runtimes"
+                if private_root
+                else path.parent.name == "runtimes"
+            )
+            and path.name == "install.lock"
+        )
         or (
             path.parent.name == "leases"
             and path.parent.parent.name == "runtimes"
+            and (private_root is None or path.parent == private_root / "runtimes/leases")
             and path.suffix == ".lock"
         )
         or (
@@ -177,7 +187,11 @@ def _ownership_lock(path: Path) -> bool:
 
 
 def _windows_inventory(
-    path: Path, check_cancelled: Callable[[], None], webview_root: Path | None
+    path: Path,
+    check_cancelled: Callable[[], None],
+    webview_root: Path | None,
+    record_lock: Callable[[Path], None],
+    private_root: Path | None,
 ) -> tuple[FileIdentity, ...]:
     """Pin ancestry once, then inspect each child through its opened parent."""
     from evidenceforge.utils import windows_filesystem as fs
@@ -207,7 +221,9 @@ def _windows_inventory(
             raise StudioStateError(
                 f"Cannot safely inspect cleanup path {current}: {error}"
             ) from error
-        if directory or not _ownership_lock(current):
+        if not directory and _ownership_lock(current, private_root):
+            record_lock(current)
+        else:
             entries.append(
                 FileIdentity(
                     relative=relative.as_posix(),
@@ -259,13 +275,15 @@ def _inventory(
     check_cancelled: Callable[[], None] = lambda: None,
     *,
     webview_root: Path | None = None,
+    record_lock: Callable[[Path], None] = lambda path: None,
+    private_root: Path | None = None,
 ) -> tuple[FileIdentity, ...]:
     """Reject links, hard links, foreign/writable objects and unsupported filesystems."""
     safe_path(filesystem_path(path))
     if not filesystem_path(path).exists():
         return ()
     if os.name == "nt":
-        return _windows_inventory(path, check_cancelled, webview_root)
+        return _windows_inventory(path, check_cancelled, webview_root, record_lock, private_root)
     entries: list[FileIdentity] = []
     pending = [path]
     while pending:
@@ -278,7 +296,9 @@ def _inventory(
             raise StudioStateError(f"Cleanup refuses a non-file entry: {current}")
         # Ownership locks may be acquired after review. They contain no user data;
         # inspect their safety but exclude volatile contents from the snapshot.
-        if directory or not _ownership_lock(current):
+        if not directory and _ownership_lock(current, private_root):
+            record_lock(current)
+        else:
             entries.append(
                 FileIdentity(
                     relative=current.relative_to(path).as_posix(),
@@ -297,7 +317,7 @@ def _inventory(
     return tuple(sorted(entries, key=lambda item: item.relative))
 
 
-def _skill_files(profile: Path) -> list[Path]:
+def _skill_files(profile: Path, *, complete_roots: bool = False) -> list[Path]:
     """Identify only EvidenceForge's known files, preserving other skills and additions."""
     from evidenceforge.cli.install_skills import (
         _collect_command_files,
@@ -310,6 +330,12 @@ def _skill_files(profile: Path) -> list[Path]:
     manifest = _collect_source_files(_get_data_root())
     commands = _collect_command_files(manifest)
     references = _collect_reference_files(manifest)
+    if complete_roots:
+        return [profile / ".claude/commands/eforge"] + [
+            profile / agent / "skills" / f"eforge-{name}"
+            for agent in (".agents", ".codex")
+            for name in commands
+        ]
     paths = [profile / ".claude/commands/eforge" / relative for relative in manifest]
     for parent in (profile / ".agents/skills", profile / ".codex/skills"):
         for name in commands:
@@ -386,6 +412,7 @@ def build_plan(
     *,
     check_cancelled: Callable[[], None] = lambda: None,
     report_target: Callable[[Path], None] = lambda path: None,
+    full_cleanup: bool = False,
 ) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
     import yaml
@@ -394,20 +421,27 @@ def build_plan(
     from evidenceforge.studio.state_upgrade import decode_settings_document
 
     selected = set(LABELS) if categories is None else categories
+    if full_cleanup and selected != set(LABELS):
+        raise StudioStateError("Full cleanup requires all three categories to be selected")
     if not selected:
         return CleanupPlan(locations=locations)
 
     candidates: list[tuple[Category, Path]] = [
         ("private", locations.private),
         ("private", locations.local / "org.evidenceforge.studio"),
-        ("work", locations.profile / ".eforge/releases"),
     ]
+    candidates.append(
+        ("work", locations.profile / (".eforge" if full_cleanup else ".eforge/releases"))
+    )
     if "skills" in selected:
-        candidates.extend(("skills", path) for path in _skill_files(locations.profile))
+        candidates.extend(
+            ("skills", path)
+            for path in _skill_files(locations.profile, complete_roots=full_cleanup)
+        )
     publisher = locations.profile / ".eforge/publisher.yaml"
     if "skills" in selected:
         safe_path(filesystem_path(publisher))
-    if "skills" in selected and filesystem_path(publisher).is_file():
+    if "skills" in selected and not full_cleanup and filesystem_path(publisher).is_file():
         PublisherIdentity.model_validate(
             yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
         )
@@ -454,9 +488,21 @@ def build_plan(
         if not filesystem_path(workspace).is_dir():
             continue
         admitted_workspaces.append(workspace)
+        if full_cleanup and workspace in {
+            locations.profile / "EvidenceForge",
+            locations.documents / "EvidenceForge",
+        }:
+            candidates.append(("work", workspace))
+            continue
+        if full_cleanup:
+            preserved.append(
+                f"Custom workspace keeps its container and unrecognized files: {workspace}"
+            )
         # Only app-managed namespaces; never recursively delete the workspace itself.
         if "skills" in selected:
-            candidates.extend(("skills", path) for path in _skill_files(workspace))
+            candidates.extend(
+                ("skills", path) for path in _skill_files(workspace, complete_roots=full_cleanup)
+            )
         if "work" not in selected:
             continue
         for relative in (
@@ -500,8 +546,16 @@ def build_plan(
                         continue
                 preserved.append(f"Unregistered workspace content: {child}")
     targets: list[CleanupTarget] = []
-    for category, path in sorted(set(candidates), key=lambda item: (item[0], str(item[1]))):
+    control_locks: set[Path] = set()
+    ordered_candidates = sorted(
+        set(candidates), key=lambda item: (len(item[1].parts), str(item[1]))
+    )
+    for category, path in ordered_candidates:
         if category not in selected:
+            continue
+        if full_cleanup and any(
+            path.is_relative_to(target.path) for target in targets if target.directory
+        ):
             continue
         check_cancelled()
         report_target(path)
@@ -509,6 +563,8 @@ def build_plan(
             path,
             check_cancelled,
             webview_root=locations.local / "org.evidenceforge.studio/EBWebView",
+            record_lock=control_locks.add,
+            private_root=locations.private,
         )
         if entries:
             targets.append(CleanupTarget(category=category, path=path, entries=entries))
@@ -517,6 +573,8 @@ def build_plan(
         targets=tuple(targets),
         preserved=tuple(preserved),
         workspaces=tuple(admitted_workspaces),
+        full_cleanup=full_cleanup,
+        control_locks=tuple(sorted(control_locks)),
     )
 
 
@@ -530,6 +588,14 @@ def describe(plan: CleanupPlan, selected: set[Category]) -> str:
     ]
     if not selected:
         lines.append("All user data and skills will be preserved (the default).")
+    if plan.full_cleanup:
+        lines.extend(
+            (
+                "",
+                "FULL CLEAN: Entire listed EvidenceForge folders and all their contents will be removed, including manually added files.",
+                "Shared application/agent parents and unrelated custom workspace content stay.",
+            )
+        )
     for category, label in LABELS.items():
         if category not in selected:
             continue
@@ -538,7 +604,9 @@ def describe(plan: CleanupPlan, selected: set[Category]) -> str:
         lines.extend(paths or ["No matching data was found."])
         if category == "skills":
             lines.append(
-                "Known EvidenceForge skill files include any local edits. Other files stay."
+                "Entire listed EvidenceForge skill folders, including local additions, will be removed."
+                if plan.full_cleanup
+                else "Known EvidenceForge skill files include any local edits. Other files stay."
             )
     if plan.preserved:
         lines.extend(("", "PRESERVE / not included:", *plan.preserved))
@@ -618,6 +686,8 @@ def execute(
     """Lock/recheck, stage exact selected entries, then remove only that staged inventory."""
     if not selected:
         return
+    if plan.full_cleanup and selected != set(LABELS):
+        raise StudioStateError("Full cleanup choices changed; review the folders again")
     if os.name == "nt":
         from evidenceforge.utils.windows_filesystem import current_user_sid
 
@@ -632,6 +702,13 @@ def execute(
     staged: list[tuple[Path, Path]] = []
     containers: list[Path] = []
     original_directories: list[Path] = []
+    directory_identities: dict[Path, tuple[int, int]] = {}
+    file_identities = {
+        target.path / entry.relative: (entry.device, entry.inode)
+        for target in targets
+        for entry in target.entries
+        if not entry.directory
+    }
     held: list[StateLock] = []
     with ExitStack() as stack:
         private = plan.locations.private
@@ -650,6 +727,12 @@ def execute(
                     workspace / ".eforge/artifacts/publication.lock",
                 )
             )
+        locks.extend(
+            path
+            for path in plan.control_locks
+            if path.parent.name != ".eforge-generation"
+            and any(path.is_relative_to(target.path) for target in targets if target.directory)
+        )
         for path in sorted(set(locks)):
             if filesystem_path(path.parent).is_dir():
                 held.append(stack.enter_context(StateLock(path)))
@@ -675,6 +758,7 @@ def execute(
                     target.path,
                     checking,
                     webview_root=plan.locations.local / "org.evidenceforge.studio/EBWebView",
+                    private_root=plan.locations.private,
                 )
                 != target.entries
             ):
@@ -709,6 +793,7 @@ def execute(
                         if entry.directory:
                             private_directory(filesystem_path(stage))
                             original_directories.append(source)
+                            directory_identities[source] = (entry.device, entry.inode)
                         else:
                             _move(source, stage, directory=False)
                             staged.append((source, stage))
@@ -763,7 +848,21 @@ def execute(
     reporter.update("removing", 0, len(staged) or 1)
     for index, (_source, destination) in enumerate(staged, 1):
         try:
-            filesystem_path(destination).unlink()
+            if os.name == "nt":
+                from evidenceforge.utils import windows_filesystem as fs
+
+                parent = fs.open_directory(destination.parent)
+                try:
+                    fs.remove_child(
+                        parent,
+                        destination.name,
+                        expected_identity=file_identities[_source],
+                        clear_readonly=True,
+                    )
+                finally:
+                    os.close(parent)
+            else:
+                filesystem_path(destination).unlink()
         except OSError as error:
             raise StudioStateError(
                 f"Selected data remains staged at {destination}; close file users and retry: {error}"
@@ -783,7 +882,22 @@ def execute(
     ):
         reporter.update("finishing", path=directory)
         try:
-            filesystem_path(directory).rmdir()  # Never recursively remove fresh/unlisted entries.
+            if os.name == "nt":
+                from evidenceforge.utils import windows_filesystem as fs
+
+                parent = fs.open_directory(directory.parent)
+                try:
+                    fs.remove_child(
+                        parent,
+                        directory.name,
+                        directory=True,
+                        expected_identity=directory_identities[directory],
+                        clear_readonly=True,
+                    )
+                finally:
+                    os.close(parent)
+            else:
+                filesystem_path(directory).rmdir()  # Never remove fresh/unlisted contents.
         except OSError:
             pass
     # Remove empty owned containers only; never shared parents or unrelated files.
@@ -801,6 +915,16 @@ def execute(
             except OSError:
                 break
             parent = parent.parent
+    if plan.full_cleanup:
+        remaining = [
+            str(target.path) for target in targets if filesystem_path(target.path).exists()
+        ]
+        if remaining:
+            raise StudioStateError(
+                "Reviewed data was removed, but new or locked contents remain at: "
+                + "; ".join(remaining)
+                + ". These contents were preserved. Review cleanup again."
+            )
     reporter.update("complete", 1, 1, force=True)
 
 
