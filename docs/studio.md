@@ -360,7 +360,9 @@ The sidebar lists your projects under **Projects**. Select one to show only its 
 or drag a row onto a project to move it there. **Scenarios** and **Packs** are single sortable tables:
 click a column heading, or use **Views** to sort by name, by most recently updated, or grouped by
 project. Groups are headings, never collapsed folders. **Filter** holds every filter for the current
-library, including hidden items, previous versions, and pack type, author, version and location.
+library, including hidden items and pack type, author, version and location. Each scenario or pack
+appears once, headlined by its newest release; select its **+N** expander to list its other versions
+and drafts.
 **Views** also applies and saves named views of a search, its filters, the ordering and the project.
 Studio rescans workspace files when you open a library or return to the app; use **Refresh library**
 in the command menu (⌘K) to rescan immediately. Bundles and asset lists use the same Search, Filter
@@ -424,7 +426,9 @@ incomplete jobs already appear in Bundles.
 
 ## Author, revise, and share
 
-Use conversations to create or revise scenario and pack content. **Packs → New** creates either
+Use conversations to create or revise scenario and pack content. A message sent while Codex is
+working waits in the queue; select **Steer now** on a queued message to send it into the running
+turn immediately. It returns to the queue if the turn has already finished. **Packs → New** creates either
 industry or organization content. **Assets** offers structured editing for supported categories;
 Schema 3 draft edits retain the same draft identity. Use **Duplicate…** for a separate identity.
 
@@ -525,8 +529,8 @@ creates a release in the local workspace; it does not upload to GitHub or a remo
 The release replaces its completed draft in the library, keeping the same project assignment,
 conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
 that revision creates another immutable version. Independent drafts remain available. Libraries
-show the latest published version by default. Return to the **Scenarios** or **Packs** library and
-select **Filter → Show previous versions (N)** to reveal older versions.
+show one row per scenario or pack, headlined by the latest published version. Select the row's **+N**
+expander in **Scenarios** or **Packs** to reveal its drafts and older versions.
 Open an older version's row to inspect it, discuss it read-only, run it or create a new draft.
 The toggle appears when the current library filters include multiple published versions in the
 same family; it does not change their files or dependency references.

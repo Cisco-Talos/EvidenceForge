@@ -735,6 +735,11 @@ Studio-wide rewrite unless the task asks for it.
 - Projects are navigated from the sidebar. Libraries (scenarios, packs, bundles, assets) render as a
   flat, sortable table that shows items immediately. Grouping is an opt-in view and never starts
   collapsed.
+- Libraries show one row per artifact family (`artifactFamilies` in `src/artifactGrouping.ts`):
+  the newest published release, else the newest versioned file, else the latest draft, with a
+  `FamilyToggle` expander for other versions. Do not list each version as its own top-level row.
+- Hide views with the `hidden` attribute; a global `[hidden] { display: none !important }` rule
+  keeps component display rules from overriding it.
 - Every library uses one toolbar pattern: `Search` · `Filter ▾` (a popover holding all facets,
   including hidden items and previous versions) · `Views ▾` · result count, with page-specific
   actions at the far right. Build it from `LibraryToolbar`, `LibraryFilters` and `ViewsMenu`

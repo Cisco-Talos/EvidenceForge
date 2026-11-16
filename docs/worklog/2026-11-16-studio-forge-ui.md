@@ -84,6 +84,19 @@ Ready for review as a PR into `dev`. Before merging:
     endpoint; per-kind actions stay in the History menu.
   - **Bundles:** the flat list is the default. Family grouping is the `project` order, labeled
     "Group by scenario". Run rows carry "Open scenario" through `JobCard.extraActions`.
+- **Native feedback fixes (2026-11-16):**
+  - **Chat appeared not to open:** "New conversation" and "Continue" seemed to do nothing. The chat
+    did open, but `.workspace-sections.overview-grid { display: grid }` overrode
+    `.workspace-sections[hidden]` (equal specificity, later in the file), leaving the cards
+    visible above it. jsdom tests could not see this. A global `[hidden]` rule plus a stylesheet
+    guard test now prevent it.
+  - **Version families:** they replace the previous-versions filter and reuse the saved
+    `expanded_groups` field for open families. Packs without a publisher stay separate identities
+    by design.
+  - **Steer now:** queued-message steering is a service operation (`ChatService.steer_queued`) so
+    a failed steer cannot lose the message.
+  - **Projects:** projects for packs predate this branch; the redesign only moved them into the
+    sidebar.
 - **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
   remains on the startup, maintenance and About screens and switches artwork per theme.
 
