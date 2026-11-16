@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { UpgradeStatus } from "./api";
+import { BrandLogo } from "./StudioBrand";
 
 export function StateMaintenance({ status, onRetry, onRestore, onWorkspace, requestError }: {
   status: UpgradeStatus;
@@ -13,7 +14,7 @@ export function StateMaintenance({ status, onRetry, onRestore, onWorkspace, requ
   const startup = status.operation === "startup";
   const awaitingAcceptance = !startup && status.state === "pending" && !status.error;
   return <div className="boot-screen state-maintenance">
-    <img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" />
+    <BrandLogo className="boot-logo" />
     <h1>{awaitingAcceptance ? "Studio update required" : status.state === "restored" ? "Previous UI state restored" : status.state === "blocked" || status.state === "failed" ? "Studio needs attention" : "Preparing Studio"}</h1>
     {status.warning && <p role="alert" className="upgrade-warning">{status.warning}</p>}
     <p role="status">{status.phase}{!startup && busy && status.completed_steps > 0 ? ` · Step ${status.completed_steps} of ${status.total_steps}` : ""}</p>
