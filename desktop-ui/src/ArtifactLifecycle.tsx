@@ -1,10 +1,11 @@
 import { artifactFilename } from "./artifactNaming";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
-import { StudioApiError, type CatalogItem, type StudioApi } from "./api";
+import { StudioApiError, type CatalogItem, type Project, type StudioApi } from "./api";
 import type { components } from "./generated/studio";
 import { Modal } from "./Modal";
 import { SavedPath } from "./RevealInFinder";
+import { ErrorBanner } from "./Feedback";
 
 type Finding = { severity?: string; field_path?: string; message?: string };
 
@@ -27,6 +28,9 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
   const [warnings, setWarnings] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [copyingExample, setCopyingExample] = useState(false);
+  const [draftProjectId, setDraftProjectId] = useState("");
+  const [draftProjects, setDraftProjects] = useState<Project[]>([]);
   useEffect(() => {
     setInfo(null); setInspectionError(""); setActionError(""); setFindings([]); closePublication();
   }, [item.id]);
@@ -53,6 +57,13 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
   function closePublication() {
     setPublishing(false); setPublicationReview(null); setPublicationError(""); setPublicationIssues([]); setWarnings(false);
   }
+  async function beginDraft() {
+    if (!info?.example_source) { await action("draft"); return; }
+    setBusy(true); setActionError(""); setDraftProjectId("");
+    try { setDraftProjects(await api.request<Project[]>("/v1/projects")); setCopyingExample(true); }
+    catch (failure) { setActionError(String(failure)); }
+    finally { setBusy(false); }
+  }
   async function action(operation: "draft" | "upgrade" | "publish" | "recover") {
     if (operation === "publish" && !publicationReview) return;
     setBusy(true); setActionError("");
@@ -60,8 +71,9 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
     try {
       const result = await api.request<{ path: string; findings?: Finding[] }>(`/v1/items/${item.id}/lifecycle`, "POST", {
         action: operation, expected_digest: operation === "publish" ? publicationReview?.digest : info?.digest, ...(operation === "publish" ? { version: version || null, accept_warnings: warnings } : {}),
+        ...(operation === "draft" && info?.example_source ? { project_id: draftProjectId || null } : {}),
       }, 180000);
-      setFindings(result.findings || []); closePublication(); await onChanged(); setRefresh((value) => value + 1);
+      setFindings(result.findings || []); closePublication(); setCopyingExample(false); await onChanged(); setRefresh((value) => value + 1);
       await onOpen?.(result.path);
     } catch (failure) {
       const message = String(failure);
@@ -95,7 +107,7 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
     ...(onProperties ? [{ id: "versions", label: "Versions", group: "inspect" as const, run: onProperties }] : []),
     { id: "publish", label: "Publish locally…", group: "work", disabled: unavailable || metadata?.status !== "draft" || !!awaitingAuthoring, reason: statusReason || (awaitingAuthoring ? "Continue authoring before publication" : "Create a draft before publication"), run: () => reviewPublication(true) },
     { id: "upgrade", label: "Upgrade to latest schema", group: "work", disabled: unavailable || !info?.upgrade_available, reason: statusReason || "This artifact already uses the latest supported schema", run: () => action("upgrade") },
-    { id: "draft", label: "New draft", group: "manage", disabled: unavailable || metadata?.status === "draft", reason: statusReason || "This artifact is already a draft", run: () => action("draft") },
+    { id: "draft", label: "New draft", group: "manage", disabled: unavailable || metadata?.status === "draft", reason: statusReason || "This artifact is already a draft", run: beginDraft },
     { id: "recover", label: "Recover into draft", group: "manage", disabled: busy || disabled || !error.includes("modified"), reason: busy || disabled ? statusReason : "Recovery applies to a modified immutable release", run: () => action("recover") },
     { id: "export-release", label: "Export release…", group: "manage", disabled: unavailable || metadata?.status !== "published", reason: statusReason || "Publish this draft before exporting its release", run: exportRelease },
   ];
@@ -104,7 +116,11 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
       <input id={versionId} disabled={busy || disabled} value={version} onChange={(event) => setVersion(event.target.value)} placeholder="X.Y.Z" pattern="\d+\.\d+\.\d+" aria-describedby={`${versionId}-help`} />
       <span id={`${versionId}-help`} className="muted small">Defaults to the next unused patch version, starting at 1.0.0. You can edit it before publishing.</span>
     </div>{publicationError.includes("review publication warnings") && <label><input type="checkbox" checked={warnings} onChange={(event) => setWarnings(event.target.checked)} />I have reviewed the reported validation warnings</label>}{publicationError && <div className="error-text" role="alert"><p>{publicationError.includes("publisher identity is required") ? "Set up your publisher identity in Settings → Workspace, then reopen publication to review the suggested version." : publicationError}</p>{!!publicationIssues.length && <ul>{publicationIssues.map((issue, index) => <li key={index}><strong>{issue.field_path || "Scenario"}</strong>: {issue.message}</li>)}</ul>}</div>}</Modal>;
-  if (renderActions) return <>{renderActions(lifecycleActions)}{publicationDialog}</>;
+  const exampleDialog = copyingExample && <Modal title="New draft from example" description="Creates your own editable copy under your publisher settings. The example stays unchanged." size="sm" busy={busy} onClose={() => { if (!busy) setCopyingExample(false); }} onSubmit={() => void action("draft")} actions={<><button type="button" className="button-quiet" disabled={busy} onClick={() => setCopyingExample(false)}>Cancel</button><button type="submit" className="button-primary" disabled={busy}>{busy ? "Creating…" : "Create draft"}</button></>}>
+    <label className="modal-field">Project<select value={draftProjectId} disabled={busy} onChange={(event) => setDraftProjectId(event.target.value)}><option value="">Ungrouped</option>{draftProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    {actionError && <ErrorBanner>{actionError}</ErrorBanner>}
+  </Modal>;
+  if (renderActions) return <>{renderActions(lifecycleActions)}{publicationDialog}{exampleDialog}</>;
   return <section className={`artifact-lifecycle ${compact ? "artifact-version-bar" : "surface"}`} aria-label="Versions and publication">
     <header>{!compact && <h2>Versions & publication</h2>}<span>{metadata?.status === "published" ? `Published ${metadata.version}` : metadata?.status === "draft" ? "Draft" : "Legacy source"}</span></header>
     {error && <p className="error-text" role="alert">{error}</p>}
@@ -112,5 +128,6 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
     {!!findings.length && <div role="status"><p>Upgrade validation findings</p><ul>{findings.map((finding, index) => <li key={index}>{finding.severity}: {finding.message}</li>)}</ul></div>}
     <div className="job-actions"><ActionShortcut action={lifecycleActions.find((entry) => entry.id === (metadata?.status === "draft" ? "publish" : "draft"))!} primary={metadata?.status === "draft"} /><ObjectMenu label="Versions and publication actions" actions={lifecycleActions} /></div>
     {publicationDialog}
+    {exampleDialog}
   </section>;
 }

@@ -1681,7 +1681,7 @@ class TestNetworkValidation:
         assert not any(issue.severity == "error" for issue in issues)
         messages = [issue.message for issue in issues]
         assert any("configured without sensors" in message for message in messages)
-        assert any("no firewall sensor" in message for message in messages)
+        assert not any("no firewall sensor" in message for message in messages)
         assert not any(
             "Segment 'workstations' has systems but no sensor" in message for message in messages
         )
@@ -2275,7 +2275,7 @@ class TestProxyOutputTopology:
 
         assert not any(issue.severity == "error" for issue in issues)
         assert any("configured without sensors" in issue.message for issue in issues)
-        assert any("no firewall sensor" in issue.message for issue in issues)
+        assert not any("no firewall sensor" in issue.message for issue in issues)
 
     def test_proxy_access_without_proxy_config_warns_transparent_default(self):
         """proxy_access with no environment.proxy warns that transparent is the default."""

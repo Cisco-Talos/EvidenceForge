@@ -1,0 +1,250 @@
+name: northstar-stolen-credentials
+description: Distinguish password spraying and stolen IT credentials from ordinary clinical access, then
+  follow RDP, service installation and SMB collection.
+status: published
+
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: northstar-stolen-credentials
+  draft_id: 2d6ccb16-9a71-4a5c-ab54-9b3b5027cb83
+  digest: 0b68d46505a3ce3ea8a19fa571668a192cfaef2c3614856eee969b3341e4fe50
+display_name: Northstar Health - Stolen Credentials
+schema_version: '3.0'
+composition:
+  organization:
+    source: path
+    publisher: evidenceforge
+    name: northstar-health
+    version: 1.1.0
+    path: ../dependencies/evidenceforge/organization/northstar-health/1.1.0
+environment:
+  network:
+    sensors:
+    - type: network
+      name: northstar-core-span
+      monitoring_segments:
+      - clinical_lan
+      - server_lan
+      placement: span
+      log_formats:
+      - zeek
+    - type: firewall
+      name: northstar-edge-fw
+      monitoring_segments:
+      - clinical_lan
+      - server_lan
+      placement: tap
+      log_formats:
+      - cisco_asa
+      default_action: permit
+      deny_ratio: 1.0
+  storage:
+    file_sets:
+    - id: clinical-cache
+      system: NSH-CLIN-01
+      root: C:\ProgramData\DeviceHealth
+      preset: software
+      population: small
+      seed_files:
+      - ref: service-package
+        path: devicehealth-service.exe
+        size_bytes: 98304
+        tags:
+        - software
+time_window:
+  start: '2026-11-09T15:00:00Z'
+  duration: 8h
+  warmup: 1h
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: cisco_asa
+  destination: ./output
+  compression: false
+release_notes: Initial bundled training example.
+generation_seed: 4201
+observation_profile: complete
+storyline:
+- id: existing-foothold
+  time: +1h
+  actor: maya.patel
+  system: NSH-CLIN-01
+  activity: An existing clinical-workstation foothold enumerates domain users; initial entry is outside
+    scope.
+  events:
+  - type: logon
+    logon_type: 2
+    description: Existing user-session context for the source foothold.
+  - type: process
+    process_name: C:\Windows\System32\net.exe
+    command_line: net.exe user /domain
+- id: credential-spray
+  time: +1h5m
+  actor: daniel.kim
+  system: NSH-IT-01
+  activity: The clinical workstation tries several known accounts and eventually authenticates as an IT
+    operator.
+  events:
+  - type: credential_spray
+    source_ip: 10.42.10.21
+    pattern: spray
+    target_accounts:
+    - daniel.kim
+    - ethan.brooks
+    - sofia.martinez
+    - jordan.lee
+    logon_type: 3
+    interval: 17s
+    count: 16
+    jitter: 0.4
+    success:
+      account: daniel.kim
+      after: 13
+- id: explicit-it-credentials
+  time: +1h14m
+  actor: maya.patel
+  system: NSH-CLIN-01
+  activity: The source foothold supplies the stolen IT credentials for remote administration.
+  events:
+  - type: explicit_credentials
+    target_username: daniel.kim
+    target_server: NSH-FILE-01
+    process_name: C:\Windows\System32\mstsc.exe
+    source_ip: 10.42.10.21
+- id: rdp-file-server
+  time: +1h16m
+  actor: daniel.kim
+  system: NSH-FILE-01
+  activity: The stolen IT account opens an RDP session from the clinical workstation.
+  events:
+  - type: rdp_session
+    source_ip: 10.42.10.21
+    technique: T1021.001
+- id: internal-discovery
+  time: +1h20m
+  actor: daniel.kim
+  system: NSH-FILE-01
+  activity: The remote session probes management and file-sharing ports on internal servers.
+  events:
+  - type: port_scan
+    target_ips:
+    - 10.42.20.10
+    - 10.42.20.30
+    - 10.42.20.40
+    ports:
+    - 22
+    - 445
+    - 3389
+    scan_rate: 3.5
+- id: stage-service
+  time: +1h28m
+  actor: daniel.kim
+  system: NSH-CLIN-01
+  activity: The stolen operator credentials copy a service package to the file server's administrative
+    share.
+  events:
+  - type: smb_activity
+    operation: copy
+    purpose: administrative
+    source:
+      type: client
+      file_set: clinical-cache
+      file_ref: service-package
+    destination:
+      type: share
+      share: NSH-FILE-01.c_admin
+      path: ProgramData\DeviceHealth\service.exe
+    smb_principal: daniel.kim
+    path_style: unc
+- id: remote-service
+  time: +1h31m
+  actor: daniel.kim
+  system: NSH-FILE-01
+  activity: Remote service control installs the staged package under a maintenance-style name.
+  events:
+  - type: service_installed
+    service_name: DeviceHealthCache
+    service_file_name: C:\ProgramData\DeviceHealth\service.exe
+    service_account: LocalSystem
+    source_ip: 10.42.10.21
+- id: clinical-share-browse
+  time: +1h42m
+  actor: daniel.kim
+  system: NSH-CLIN-01
+  activity: The stolen account enumerates the clinical file share from the foothold workstation.
+  events:
+  - type: smb_activity
+    operation: browse
+    purpose: collection
+    target:
+      type: share
+      share: NSH-FILE-01.clinical_ops
+    path_style: unc
+    smb_principal: daniel.kim
+- id: clinical-collection
+  time: +1h46m
+  actor: daniel.kim
+  system: NSH-CLIN-01
+  activity: Clinical documents are copied to a local staging directory using valid IT read permissions.
+  events:
+  - type: smb_activity
+    operation: copy
+    purpose: collection
+    source:
+      type: share
+      share: NSH-FILE-01.clinical_ops
+      selector:
+        extensions:
+        - .xlsx
+        - .csv
+        - .docx
+    destination:
+      type: client
+      directory: C:\ProgramData\DeviceHealth\Reports
+    batch:
+      count: 6
+      duration: 40s
+    path_style: unc
+    smb_principal: daniel.kim
+red_herrings:
+- id: approved-linux-access
+  time: +35m
+  actor: jordan.lee
+  system: NSH-CLIN-LNX-01
+  activity: A clinical coordinator reads the ordinary mounted clinical share.
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: NSH-FILE-01.clinical_ops
+      selector:
+        extensions:
+        - .xlsx
+        - .csv
+        - .docx
+    batch:
+      count: 1
+    mapping: clinical_ops_drive
+    path_style: mounted
+    client_access: cifs_mount
+  explanation: Expected Linux-to-Windows clinical access, with the coordinator's assigned endpoint and
+    own credential.
+- id: approved-admin-rdp
+  time: +4h
+  actor: ethan.brooks
+  system: NSH-FILE-01
+  activity: The second IT operator opens a routine administration session from the IT workstation.
+  events:
+  - type: rdp_session
+    source_ip: 10.42.10.32
+  explanation: Normal IT-to-server access; the earlier RDP source is a clinical workstation and follows
+    a credential campaign.
+scenario_version: 1.0.0
+configuration_context: ../configuration/context.yaml

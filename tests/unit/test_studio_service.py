@@ -838,7 +838,18 @@ def test_projects_group_scenarios_without_moving_files(tmp_path: Path, monkeypat
         assert alpha.is_file()
         client.post("/v1/library/refresh", headers=headers)
         snapshot = client.get("/v1/bootstrap", headers=headers).json()
-        assert [project["id"] for project in snapshot["projects"]] == [project_id]
+        assert {project["name"] for project in snapshot["projects"]} == {
+            "Example Scenarios",
+            "Incident response",
+        }
+        assert (
+            next(
+                project["id"]
+                for project in snapshot["projects"]
+                if project["name"] == "Incident response"
+            )
+            == project_id
+        )
         assert (
             next(item for item in snapshot["items"] if item["name"] == "alpha")["project_id"]
             == project_id
@@ -890,7 +901,9 @@ def test_projects_group_scenarios_without_moving_files(tmp_path: Path, monkeypat
             )["draft_project_id"]
             is None
         )
-        assert client.get("/v1/projects", headers=headers).json() == []
+        assert [
+            project["name"] for project in client.get("/v1/projects", headers=headers).json()
+        ] == ["Example Scenarios"]
         assert (
             next(
                 item
@@ -902,7 +915,7 @@ def test_projects_group_scenarios_without_moving_files(tmp_path: Path, monkeypat
         assert alpha.is_file()
     reopened = StudioStore(paths.database_file)
     try:
-        assert reopened.projects(workspace) == []
+        assert [project.name for project in reopened.projects(workspace)] == ["Example Scenarios"]
         assert reopened.item(items["alpha"]["id"]).project_id is None
     finally:
         reopened.close()

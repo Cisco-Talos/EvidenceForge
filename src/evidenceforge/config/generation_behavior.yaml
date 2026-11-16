@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 520
+current_revision: 522
 history_start_revision: 1
-behavior_surface_sha256: 4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a
+behavior_surface_sha256: a3e5ba02803490c1506b6a2203e4ea2534bded4b6337a3e6e9a87f25164cdd9b
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5979,3 +5979,34 @@ changes:
   formats: []
   summary: Share bounded Windows removal and per-entry read-only repair across owned
     staging and journal trees without changing evidence bytes or protected storage policy.
+- revision: 521
+  id: resolve-multipart-content-and-preflight-native-shells
+  impact: localized
+  domains:
+  - file-content
+  - http
+  - macos
+  formats:
+  - ecar
+  - zeek_files
+  - zeek_http
+  - macos_endpoint_security
+  summary: Resolve authored multipart sizes from retained host/principal/path content,
+    including command-created archives; preflight the installed shell required by a
+    native Mac root foothold.
+- revision: 522
+  id: align-source-projections-and-visible-lifecycle-clocks
+  impact: localized
+  domains:
+  - ground-truth
+  - source-observation
+  - process-lifecycle
+  formats:
+  - ecar
+  - windows_event_security
+  - zeek_ocsp
+  - syslog
+  - cisco_asa
+  summary: Retain OCSP analyzer facts, qualify source roles and phases, publish browser
+    exits and persistent SMB firewall lifecycles, qualify SMB endpoint roles, and advance
+    endpoint process clocks only for SMB phases actually rendered.

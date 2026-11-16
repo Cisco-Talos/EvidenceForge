@@ -125,6 +125,7 @@ def macos_launch_issues(
 ) -> tuple[MacosLaunchIssue, ...]:
     """Check reachable baseline apps and installed authored targets before sampling."""
     from evidenceforge.generation.activity.helpers import _get_os_category
+    from evidenceforge.generation.world_model import WorldModel
 
     candidates: set[tuple[str, str, str]] = set()
     hosts = {
@@ -132,6 +133,12 @@ def macos_launch_issues(
         for host in scenario.environment.systems
         if _get_os_category(host.os) == "macos"
     }
+    if hosts and profile.preexisting_root_shell is not None:
+        world = WorldModel(scenario, scenario.environment.domain or "")
+        candidates.update(
+            (hostname, "root", profile.preexisting_root_shell.image)
+            for hostname in world.preexisting_macos_root_shell_hosts
+        )
     for hostname in hosts:
         for user in scenario.environment.users:
             user_profile = registry.user_profile_for(hostname, user.username, "macos")

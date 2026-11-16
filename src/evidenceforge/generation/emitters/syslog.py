@@ -1783,11 +1783,14 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Return whether this occurrence has a Linux-native syslog projection."""
-        if self._is_samba_lifecycle_event(event):
-            return True
-        if self._is_samba_audit_event(event):
-            return self._samba_audit_enabled(event)
-        return event.syslog is not None and self._linux_host(event) is not None
+        from evidenceforge.events.evidence_source_rules import (
+            semantic_source_admission,
+            source_admission_facts,
+        )
+
+        return semantic_source_admission(
+            "syslog", str(event.event_type), source_admission_facts(event)
+        )
 
     @staticmethod
     def _is_samba_server(event: CanonicalOccurrence) -> bool:

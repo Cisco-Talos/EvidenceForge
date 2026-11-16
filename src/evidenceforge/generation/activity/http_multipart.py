@@ -439,6 +439,7 @@ def apply_http_multipart_specs(
     response_body_assertion: int | None = None,
     client_family: str | None = None,
     source_sizes: Mapping[str, int] | None = None,
+    request_source_sizes: Mapping[str, int] | None = None,
 ) -> HttpContext:
     """Attach authored multipart entities and their exact outer byte counts."""
 
@@ -460,7 +461,7 @@ def apply_http_multipart_specs(
             user_agent=http.user_agent,
             client_family=client_family,
             asserted_body_len=request_body_assertion,
-            source_sizes=source_sizes,
+            source_sizes=request_source_sizes if request_source_sizes is not None else source_sizes,
         )
         request_body_len = request_context.body_len
         request_content_type = f"{request_context.media_type}; boundary={request_context.boundary}"

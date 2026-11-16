@@ -32,6 +32,7 @@ Sub-scores (weights sum to 1.0):
 """
 
 import ipaddress
+import itertools
 import logging
 import ntpath
 import re
@@ -263,10 +264,17 @@ class CausalityScorer(DimensionScorer):
             for action in self._canonical_agreement.actions:
                 by_step[action.storyline_id].extend(bindings.get(action.intent_id, []))
             for event in resolved:
+                email_traces = (
+                    self._search_for_email_event(event, "email_message", records)
+                    if "email_message" in event.event_types
+                    else ()
+                )
                 event.traces = bounded_list(
                     bounded_map(
                         (record_identity(record), record)
-                        for record in by_step.get(event.storyline_id, [])
+                        for record in itertools.chain(
+                            by_step.get(event.storyline_id, []), email_traces
+                        )
                     ).values()
                 )
         vis = VisibilityModel(scenario, enabled)
@@ -3547,14 +3555,19 @@ class CausalityScorer(DimensionScorer):
     ) -> SubScore:
         if getattr(self, "_canonical_agreement", None) is not None:
             actions = self._canonical_agreement.actions
-            total = sum(action.fact_checks for action in actions)
+            delegated = sum(action.policy_only_checks for action in actions)
+            total = sum(action.fact_checks for action in actions) - delegated
             found = sum(action.found for action in actions)
             return SubScore(
                 name="Storyline Trace Coverage",
                 key="storyline_trace_coverage",
                 weight=0.10,
-                score=100 * found / total if total else 100,
-                details=f"{found}/{total} canonical source projections have evidence; expected gaps excluded",
+                score=100 * found / total if total else None,
+                skipped=total == 0,
+                details=(
+                    f"{found}/{total} canonical source projections have evidence; expected gaps "
+                    f"and {delegated} verified policy-filtered candidate projections excluded"
+                ),
             )
         if not resolved:
             return SubScore(

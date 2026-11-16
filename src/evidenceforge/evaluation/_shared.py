@@ -33,6 +33,7 @@ from evidenceforge.evaluation.storage import bounded_set
 # Formats that carry user attribution
 _USER_FIELD_MAP: dict[str, list[str]] = {
     "windows_event_security": ["TargetUserName", "SubjectUserName"],
+    "windows_event_sysmon": ["User"],
     "bash_history": ["username"],
     "zsh_history": ["username"],
     "ecar": ["principal"],
@@ -59,11 +60,15 @@ def _extract_username(record: ParsedRecord) -> str | None:
     for uf in user_fields:
         val = fields.get(uf)
         if val and isinstance(val, str) and val != "-":
-            return val.lower()
+            return (val.rsplit("\\", 1)[-1] if fmt == "windows_event_sysmon" else val).lower()
 
     # Syslog: try to extract from message
     if fmt == "syslog":
         msg = fields.get("message", "")
+        if fields.get("app_name") in {"cron", "anacron"} and msg.startswith("("):
+            user, separator, _command = msg[1:].partition(") CMD ")
+            if separator and user and not any(character.isspace() for character in user):
+                return user.lower()
         for pattern_prefix in ["for ", "user="]:
             idx = msg.find(pattern_prefix)
             if idx >= 0:

@@ -3,7 +3,7 @@
 Studio prepares its persistent UI state before opening a normal session. The first adoption
 upgrade recognizes supported unversioned Studio data, preserves it in a verified recovery
 package, and adds version markers without moving existing content. New installations initialize
-at version 1 without an upgrade backup or compatibility warning.
+at the current contract versions without an upgrade backup or compatibility warning.
 
 This covers the Studio database and its saved JSON, settings, workspace/library organization,
 project and conversation associations, job metadata, imported-bundle references, and Studio's
@@ -53,6 +53,13 @@ checksums. The database ledger records immutable migration IDs, checksums, appli
 provenance and application timestamps. Workspace receipts are namespaced by workspace identity.
 Workspaces are prepared on selection, so unavailable unrelated workspaces do not block opening
 a supported workspace.
+
+Database version 4 adds example-installation enrollment, exact installed identities, removal
+exclusions and pending installation/index intents. Its migration creates an empty table: upgrading
+an existing user's state never enrolls a workspace automatically. New first-run enrollment is
+persisted before workspace initialization completes. Installation failures leave ordinary Studio
+features usable and can be retried from Settings. Published scenario files remain governed by
+their existing portable release contracts rather than by the Studio database.
 
 Packages live in `studio-upgrades/` beneath the private data directory, outside cache and runtime
 installations. User data locations and routine backup instructions are listed in the

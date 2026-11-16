@@ -2700,6 +2700,31 @@ class StorylineMixin:
             wire_filename=wire_filename,
         )
 
+    def _http_multipart_source_sizes(
+        self,
+        spec: Any,
+        *,
+        source_ip: str,
+        principal: str,
+    ) -> dict[str, int]:
+        """Resolve file sizes from exact canonical host/principal/path placements."""
+        registry = getattr(getattr(self, "dispatcher", None), "local_artifact_registry", None)
+        system = getattr(self.activity_generator, "_ip_to_system", {}).get(source_ip)
+        if registry is None or system is None or spec is None:
+            return {}
+        from evidenceforge.models.http import HttpMultipartEntitySpec
+
+        if isinstance(spec, dict):
+            spec = HttpMultipartEntitySpec.model_validate(spec)
+        sizes: dict[str, int] = {}
+        for path in spec.local_source_paths():
+            record = registry.resolve_record_for_execution_path(
+                system.hostname, principal, path, _get_os_category(system.os)
+            )
+            if record is not None:
+                sizes[path] = record.content.size_bytes
+        return sizes
+
     @staticmethod
     def _http_request_multipart_from_command(
         command_line: str,

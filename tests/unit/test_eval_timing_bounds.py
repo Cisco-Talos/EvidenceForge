@@ -115,110 +115,31 @@ def _storyline_event(offset_seconds: int, activity: str, idx: int = 0) -> dict:
 
 
 class TestAttackChainTiming:
-    def test_no_storyline_returns_100(self):
-        """Scenario with no storyline events → perfect score with 'No consecutive' detail."""
-        scenario = _make_scenario(storyline=[])
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 100.0
-        assert "No consecutive" in result.details or result.details
+    def test_unrelated_steps_do_not_acquire_implicit_deadlines(self):
+        for gap in (0, 2, 60, 32700):
+            scenario = _make_scenario(
+                storyline=[
+                    _storyline_event(0, "Initial access", 0),
+                    _storyline_event(gap, "exfiltration lateral_movement", 1),
+                ]
+            )
+            result = TemporalRealismScorer()._score_attack_chain_timing(scenario)
+            assert result.skipped and result.score is None
 
-    def test_single_storyline_event_returns_100(self):
-        """One event → no pairs to evaluate → perfect score."""
-        storyline = [_storyline_event(0, "Initial access", idx=0)]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 100.0
+    def test_typed_parent_order_is_checked(self):
+        for child_time, expected in ((2, 100.0), (-2, 0.0)):
+            parent = _storyline_event(0, "Any prose", 0)
+            parent["events"][0]["process_ref"] = "parent"
+            child = _storyline_event(child_time, "Different prose", 1)
+            child["events"][0]["parent_ref"] = "parent"
+            scenario = _make_scenario(storyline=[parent, child])
+            result = TemporalRealismScorer()._score_attack_chain_timing(scenario)
+            assert result.score == expected and not result.skipped
 
-    def test_two_events_60s_apart_default_bounds_in_range(self):
-        """Default bounds: min=5, max=7200. Gap of 60s is within range → score=100."""
-        storyline = [
-            _storyline_event(0, "Initial recon step", idx=0),
-            _storyline_event(60, "Execute payload", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 100.0
-
-    def test_two_events_0s_apart_violates_default_min(self):
-        """Same timestamp → elapsed=0s < min=5s → fails → score=0.0."""
-        storyline = [
-            _storyline_event(0, "Recon step A", idx=0),
-            _storyline_event(0, "Recon step B", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 0.0
-        assert len(result.sample_failures) >= 1
-
-    def test_lateral_movement_keyword_min30_gap15_fails(self):
-        """'lateral_movement' override: min=30, max=3600. Gap of 15s < 30 → fails."""
-        storyline = [
-            _storyline_event(0, "Initial access", idx=0),
-            _storyline_event(15, "lateral_movement to DC-01", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 0.0
-        assert result.sample_failures
-
-    def test_lateral_movement_keyword_in_range_passes(self):
-        """'lateral_movement' override: min=30, max=3600. Gap of 120s → in range."""
-        storyline = [
-            _storyline_event(0, "Initial access", idx=0),
-            _storyline_event(120, "lateral_movement to DC-01", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 100.0
-
-    def test_exfiltration_keyword_3600s_gap_passes(self):
-        """'exfiltration' override: min=60, max=86400. Gap of 3600s → passes."""
-        storyline = [
-            _storyline_event(0, "lateral_movement done", idx=0),
-            _storyline_event(3600, "exfiltration via HTTPS", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 100.0
-
-    def test_exfiltration_keyword_30s_gap_fails(self):
-        """'exfiltration' override: min=60. Gap of 30s < 60 → fails."""
-        storyline = [
-            _storyline_event(0, "lateral_movement done", idx=0),
-            _storyline_event(30, "exfiltration of documents", idx=1),
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.score == 0.0
-
-    def test_mixed_pairs_partial_score(self):
-        """Two pairs: one in-bounds (default), one too-fast → 50% score."""
-        storyline = [
-            _storyline_event(0, "initial access", idx=0),
-            _storyline_event(60, "run payload", idx=1),  # 60s gap — in default bounds
-            _storyline_event(60, "second payload", idx=2),  # 0s gap — violates default min=5
-        ]
-        scenario = _make_scenario(storyline=storyline)
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        # 1 of 2 pairs in bounds → 50.0
-        assert result.score == 50.0
-
-    def test_score_key_and_weight(self):
-        """Returned SubScore must carry the right key and weight."""
-        scenario = _make_scenario(storyline=[])
-        scorer = TemporalRealismScorer()
-        result = scorer._score_attack_chain_timing(scenario)
-        assert result.key == "attack_chain_timing"
-        assert abs(result.weight - 0.15) < 1e-6
+    def test_empty_storyline_is_unmeasured(self):
+        result = TemporalRealismScorer()._score_attack_chain_timing(_make_scenario([]))
+        assert result.skipped and result.score is None
+        assert result.key == "attack_chain_timing" and result.weight == 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +230,15 @@ class TestDiurnalPattern:
         result = scorer._score_diurnal_pattern({}, scenario)
         assert result.key == "diurnal_pattern"
         assert result.name == "Diurnal Pattern"
+
+
+def test_process_reference_timing_is_scoped_to_actor_and_system() -> None:
+    first = _storyline_event(0, "First parent", 0)
+    first["events"][0]["process_ref"] = "worker"
+    child = _storyline_event(2, "First child", 1)
+    child["events"][0]["parent_ref"] = "worker"
+    unrelated = _storyline_event(3600, "Another actor's parent", 2)
+    unrelated["actor"] = "someone_else"
+    unrelated["events"][0]["process_ref"] = "worker"
+    scenario = _make_scenario(storyline=[first, child, unrelated])
+    assert TemporalRealismScorer()._score_attack_chain_timing(scenario).score == 100

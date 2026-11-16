@@ -71,8 +71,10 @@ pairs:
     format_a: web_access
     format_b: zeek_http
     pivot_key:
-      a_fields: [client_ip, path, timestamp_bucket_10s]
-      b_fields: ["id.orig_h", uri, ts_bucket_10s]
+      a_fields: [client_ip, method, path, timestamp_bucket_10s]
+      b_fields: ["id.orig_h", method, uri, ts_bucket_10s]
+      time_window_seconds: 2
+      matching: one_to_one
     agree_on:
       - a_field: status_code
         b_field: status_code
@@ -87,8 +89,10 @@ pairs:
     condition_b:
       method_not: CONNECT
     pivot_key:
-      a_fields: [client_ip, url, timestamp_bucket_10s]
-      b_fields: ["id.orig_h", uri, ts_bucket_10s]
+      a_fields: [client_ip, method, url, timestamp_bucket_10s]
+      b_fields: ["id.orig_h", method, uri, ts_bucket_10s]
+      time_window_seconds: 2
+      matching: one_to_one
     agree_on:
       - a_field: status_code
         b_field: status_code

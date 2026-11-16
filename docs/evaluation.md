@@ -51,12 +51,31 @@ process RSS. Elapsed phase timings are exposed through progress callbacks and be
   source restrictions, bundle integrity, or scenario-comparison checks.
 - Persistent caching, parallel workers, and generation/evaluation overlap are outside this change.
 
+## Scoring policy and applicability
+
+Evaluation rules and source-verification contracts come from the installed engine. Bundles
+retain their frozen scenario and generation inputs; those inputs do not restore an older
+version of the evaluator. Corrected evaluation rules can therefore change a retained bundle's
+score after an engine upgrade, without changing the bundle or its authored scenario.
+
+Unavailable evidence is reported explicitly. HTTP comparisons require a uniquely identifiable
+transaction, and incomplete OCSP captures cannot prove a missing analyzer response. Stateful IDS
+suppression is checked against exact sensor/signature counts and the ordered alert digest.
+Typed process references supply causal timing constraints; unrelated adjacent storyline steps
+do not imply a deadline. Service cadence requires enough starts of the same identified task,
+and distribution references apply only to their declared host populations. Organic anomaly
+rates use eligible background observations and exclude matched authored injections.
+
 ## Verification
 
 The evaluator's regression oracle in `tests/fixtures/eval/reference-f93a25bf.json` was produced by
 an untouched export of pre-change dev commit `f93a25bf`, using the tracked good corpus and retail
-scenario. Tests compare both new memory and forced-spill paths against that saved report, excluding
-only `evaluated_at` and the additive resource diagnostic.
+scenario. That historical report is retained. The reviewed replacement,
+`tests/fixtures/eval/reference-example-validation-fixes.json`, records the intentional
+applicability, anomaly-population and unmeasured-timing corrections described in the
+[example validation worklog](worklog/2026-11-16-example-validation-fixes.md).
+Tests compare both memory and forced-spill paths against the replacement report, excluding
+only `evaluated_at` and resource diagnostics.
 
 The implementation worklog records larger retained-bundle old/new comparisons, memory and timing
 measurements, including performance limitations. Fresh-process measurements include integrity

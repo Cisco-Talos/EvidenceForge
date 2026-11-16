@@ -3,7 +3,9 @@
 
 """Tests for engine-owned runtime file/content identity preparation."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,11 +23,48 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactRegistryCensus,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.runtime_content import (
     RuntimeArtifactDescriptor,
     RuntimeContentIdentityManager,
     RuntimeContentOwnerError,
 )
+from evidenceforge.models.http import HttpMultipartEntitySpec
+from evidenceforge.models.scenario import System
+
+
+@pytest.mark.parametrize(
+    ("hostname", "principal", "expected"),
+    [("WS-01", "alice", True), ("WS-02", "alice", False), ("WS-01", "bob", False)],
+)
+def test_multipart_sizes_use_exact_retained_file_placement(
+    hostname: str, principal: str, expected: bool
+) -> None:
+    path = r"C:\Temp\board-review.zip"
+    registry = LocalArtifactVersionRegistry()
+    manager = RuntimeContentIdentityManager(registry)
+    descriptor = replace(
+        _descriptor(hostname=hostname, principal=principal, native_path=path),
+        executable=False,
+        architecture=None,
+        size_bytes=777,
+        mime_type="application/zip",
+    )
+    token = manager.prepare_publication(descriptor, datetime(2026, 11, 9, tzinfo=UTC))
+    with registry.prepared_publication(token) as publication:
+        publication.commit()
+    system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+    runtime = SimpleNamespace(
+        dispatcher=SimpleNamespace(local_artifact_registry=registry),
+        activity_generator=SimpleNamespace(_ip_to_system={system.ip: system}),
+    )
+    spec = HttpMultipartEntitySpec.model_validate(
+        {"parts": [{"name": "file", "local_source_path": path}]}
+    )
+    sizes = StorylineMixin._http_multipart_source_sizes(
+        runtime, spec, source_ip=system.ip, principal="alice"
+    )
+    assert sizes == ({path: 777} if expected else {})
 
 
 def _descriptor(

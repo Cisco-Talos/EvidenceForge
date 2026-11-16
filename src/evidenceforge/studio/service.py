@@ -127,6 +127,15 @@ from evidenceforge.studio.contexts import (
     project_overlay_root,
 )
 from evidenceforge.studio.environment import EnvironmentReport, inspect_environment, overlay_files
+from evidenceforge.studio.examples import (
+    ExamplesInstallRequest,
+    ExamplesStatus,
+    enroll_examples,
+    examples_status,
+    install_examples,
+    is_example,
+    reconcile_examples,
+)
 from evidenceforge.studio.forecasts import PredictionRecord, prediction_key, run_prediction
 from evidenceforge.studio.imports import (
     DependencyHealth,
@@ -262,6 +271,7 @@ class ScenarioCloneRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, pattern=SCENARIO_NAME_PATTERN)
+    project_id: str | None = None
 
 
 class PackPublisherStatus(BaseModel):
@@ -789,6 +799,7 @@ class StudioSnapshot(BaseModel):
     artifact_groups: dict[str, ArtifactGroup] = Field(default_factory=dict)
     missing_sources: list[str] = Field(default_factory=list)
     starter_drafts: list[str] = Field(default_factory=list)
+    example_sources: list[str] = Field(default_factory=list)
     source_paths: dict[str, list[Path]] = Field(default_factory=dict)
     projects: list[Project]
     folders: list[str]
@@ -864,10 +875,11 @@ class StudioService:
             self.workspace_coordinator.apply(self.workspace_coordinator.status.operation_id)
         if self.workspace_coordinator.status.state == "ready":
             self.workspace_coordinator.acquire_ready()
+        self.store = StudioStore(paths.database_file)
         if initializing_default:
+            enroll_examples(self.store, self.settings.workspace)
             coordinator.journal.workspace_initialized = True
             coordinator.persist()
-        self.store = StudioStore(paths.database_file)
         startup_phase("workspace_prepared")
         if self.workspace_coordinator.status.state == "ready":
             self.store.record_workspace_migrations(self.workspace_coordinator.layout)
@@ -926,7 +938,7 @@ class StudioService:
         )
         if self.workspace_coordinator and self.workspace_coordinator.status.state == "ready":
             startup_phase("workspace_scan")
-            await self.scan(resolve_drafts=False)
+            await self.scan(resolve_drafts=False, update_examples=True)
             startup_phase("workspace_indexed")
         await asyncio.to_thread(self.runtime_cleanup.successful_launch)
         await self.clean_runtimes()
@@ -1447,9 +1459,19 @@ class StudioService:
         self.store.save_control(intent)
         self.intent = intent
 
-    async def scan(self, *, resolve_drafts: bool = True) -> list[CatalogItem]:
+    async def scan(
+        self,
+        *,
+        resolve_drafts: bool = True,
+        update_examples: bool = False,
+        manual_examples: bool = False,
+    ) -> list[CatalogItem]:
         """Discover authoritative YAML without blocking the event loop."""
         async with self.library_lock:
+            if update_examples:
+                await asyncio.to_thread(
+                    install_examples, self.store, self.settings.workspace, manual=manual_examples
+                )
             return await self._scan(resolve_drafts=resolve_drafts)
 
     async def ensure_scenario_draft(self, conversation: Conversation) -> CatalogItem:
@@ -1526,6 +1548,8 @@ class StudioService:
             return items
 
         items = await asyncio.to_thread(discover)
+        await asyncio.to_thread(reconcile_examples, self.store, workspace)
+        items = [self.store.item(item.id) or item for item in items]
         from evidenceforge.artifacts.completion import published_draft_sources
 
         completed = await asyncio.to_thread(
@@ -1704,6 +1728,12 @@ class StudioService:
         starters = [
             item.id for item in items if item.kind == "scenario" and is_starter_draft(item.path)
         ]
+        example_state = self.store.example_installation(workspace)
+        example_paths = (
+            {record.path for record in example_state.installed.values() if record.indexed}
+            if example_state
+            else set()
+        )
         return {
             "seq": self.store.latest_seq(),
             "settings": json.loads(self.settings.model_dump_json()),
@@ -1712,6 +1742,7 @@ class StudioService:
             "runtime_cleanup": self.runtime_cleanup.report.model_dump(mode="json"),
             "items": [json.loads(item.model_dump_json()) for item in items],
             "starter_drafts": starters,
+            "example_sources": [item.id for item in items if item.path in example_paths],
             "missing_sources": [
                 item.id for item in items if item.kind == "scenario" and not item.path.is_file()
             ],
@@ -3297,20 +3328,36 @@ def create_app(
             or item.workspace.resolve() != workspace.resolve()
         ):
             raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+        example = is_example(studio.store, workspace, item.path)
+        project_id = request.project_id if example else item.project_id
+        project = studio.store.project(project_id) if project_id else None
+        if project_id and (project is None or project.workspace != workspace):
+            raise HTTPException(status_code=404, detail="Choose a project in the current workspace")
         try:
-            cloned_path = await asyncio.to_thread(
-                clone_scenario, item.path, workspace, request.name.strip()
-            )
+            if example:
+                from evidenceforge.artifacts.lifecycle import create_draft
+
+                cloned_path = await asyncio.to_thread(
+                    create_draft,
+                    item.path,
+                    project_root=workspace,
+                    name=request.name.strip(),
+                    inherit_publisher=False,
+                )
+            else:
+                cloned_path = await asyncio.to_thread(
+                    clone_scenario, item.path, workspace, request.name.strip()
+                )
         except FileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (OSError, UnicodeError, ValueError) as exc:
+        except (OSError, UnicodeError, ValueError, EvidenceForgeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             copy_scenario_configuration(
                 item.path,
                 cloned_path,
                 workspace,
-                studio.store.project(item.project_id) if item.project_id else None,
+                project,
             )
         except (OSError, ValueError, ConfigurationError) as exc:
             remove_owned_tree(cloned_path.parent)
@@ -3322,8 +3369,8 @@ def create_app(
         if source is None:
             raise HTTPException(status_code=500, detail="Cloned scenario could not be indexed")
         cloned = studio.store.upsert_item(workspace, "scenario", source)
-        if item.project_id is not None:
-            cloned.project_id = item.project_id
+        if project_id is not None:
+            cloned.project_id = project_id
             studio.store.save_item(cloned)
         await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
         await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
@@ -3598,6 +3645,10 @@ def create_app(
     async def delete_project(
         project_id: str, studio: StudioService = Depends(authorized)
     ) -> dict[str, int | str]:
+        async with studio.library_lock:
+            return await delete_project_locked(project_id, studio)
+
+    async def delete_project_locked(project_id: str, studio: StudioService) -> dict[str, int | str]:
         project = studio.store.project(project_id)
         if project is None or project.workspace.resolve() != studio.settings.workspace.resolve():
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3734,11 +3785,29 @@ def create_app(
         recent = [previous, *studio.settings.recent_workspaces]
         studio.settings.recent_workspaces = list(dict.fromkeys(recent))[:10]
         studio.settings_store.save(studio.settings)
-        await studio.scan(resolve_drafts=False)
+        await studio.scan(resolve_drafts=False, update_examples=True)
         if studio.job_task is None:
             await studio.start()
         await studio.emit(str(studio.settings.workspace), "workspace.selected", {})
         return studio.snapshot()
+
+    @app.get("/v1/examples")
+    async def get_examples(studio: StudioService = Depends(authorized)) -> ExamplesStatus:
+        return await asyncio.to_thread(examples_status, studio.store, studio.settings.workspace)
+
+    @app.post("/v1/examples/install")
+    async def add_examples(
+        request: ExamplesInstallRequest, studio: StudioService = Depends(authorized)
+    ) -> ExamplesStatus:
+        async with studio.workspace_selection_lock, studio.asset_lock:
+            if request.workspace.resolve() != studio.settings.workspace.resolve():
+                raise HTTPException(status_code=409, detail="Workspace changed; reopen Settings")
+            await studio.scan(update_examples=True, manual_examples=True)
+            status = await asyncio.to_thread(
+                examples_status, studio.store, studio.settings.workspace
+            )
+            await studio.emit(str(studio.settings.workspace), "examples.updated", {})
+            return status
 
     @app.get("/v1/settings")
     def settings(studio: StudioService = Depends(authorized)) -> StudioSettings:

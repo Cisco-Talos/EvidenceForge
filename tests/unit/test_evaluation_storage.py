@@ -152,13 +152,13 @@ def test_fixture_evaluation_equivalent_with_forced_spill(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("budget", [1, 256 * 1024 * 1024])
-def test_report_matches_pre_change_dev_snapshot(tmp_path: Path, budget: int) -> None:
-    """The oracle was produced by untouched dev f93a25bf, not another new-engine path."""
+def test_report_matches_reviewed_validator_repairs_snapshot(tmp_path: Path, budget: int) -> None:
+    """The reviewed score changes are documented in the example-validation worklog."""
     import json
 
     root = Path(__file__).parents[1] / "fixtures"
     scenario = Scenario(**load_yaml(root / "scenarios/retail-store-ftp-attack.yaml"))
-    expected = json.loads((root / "eval/reference-f93a25bf.json").read_text())
+    expected = json.loads((root / "eval/reference-example-validation-fixes.json").read_text())
     actual = (
         EvaluationEngine(
             root / "eval/good", scenario, memory_budget_bytes=budget, scratch_dir=tmp_path

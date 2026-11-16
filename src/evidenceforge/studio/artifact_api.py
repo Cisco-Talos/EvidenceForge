@@ -49,6 +49,7 @@ from evidenceforge.studio.display_names import (
     suggest_description,
     suggest_display_name,
 )
+from evidenceforge.studio.examples import is_example
 from evidenceforge.studio.release_notes import (
     ReleaseNotesContext,
     ReleaseNotesPreview,
@@ -72,6 +73,7 @@ class ArtifactInfo(BaseModel):
     versions: list[dict[str, Any]] = Field(default_factory=list)
     suggested_version: str | None = None
     starter_draft: bool = False
+    example_source: bool = False
     name_consumers: list[AffectedItem] = Field(default_factory=list)
     name_review_problems: list[str] = Field(default_factory=list)
     model_config = ConfigDict(extra="forbid")
@@ -91,6 +93,7 @@ class ArtifactAction(BaseModel):
     ]
     name: str | None = None
     publisher: str | None = None
+    project_id: str | None = None
     version: str | None = None
     bump: Literal["patch", "minor", "major"] = "patch"
     accept_warnings: bool = False
@@ -355,6 +358,7 @@ def register_artifact_routes(
                 versions=versions,
                 suggested_version=suggested_version,
                 starter_draft=item.kind == "scenario" and is_starter_draft(item.path),
+                example_source=is_example(studio.store, item.workspace, item.path),
                 name_consumers=name_consumers,
                 name_review_problems=name_review_problems,
             )
@@ -368,6 +372,17 @@ def register_artifact_routes(
         item = catalog_source(item_id, studio)
         async with studio.asset_lock:
             try:
+                example_draft = request.action == "draft" and is_example(
+                    studio.store, item.workspace, item.path
+                )
+                destination_project = None
+                if example_draft and request.project_id:
+                    destination_project = studio.store.project(request.project_id)
+                    if (
+                        destination_project is None
+                        or destination_project.workspace != item.workspace
+                    ):
+                        raise ArtifactError("Choose a project in the current workspace")
                 findings = []
                 if request.expected_digest and request.action != "recover":
                     if inspect_artifact(item.path)["digest"] != request.expected_digest:
@@ -379,6 +394,7 @@ def register_artifact_routes(
                         project_root=item.workspace,
                         name=request.name,
                         publisher=request.publisher,
+                        inherit_publisher=not example_draft,
                         display_name=request.display_name,
                         upgrade=request.action == "upgrade",
                         recover=request.action == "recover",
@@ -468,7 +484,13 @@ def register_artifact_routes(
                     ),
                     None,
                 )
-                if found is not None and found.project_id is None and item.project_id is not None:
+                if found is not None and example_draft:
+                    from evidenceforge.studio.contexts import configure_scenario
+
+                    configure_scenario(result, item.workspace, destination_project)
+                    found.project_id = destination_project.id if destination_project else None
+                    studio.store.save_item(found)
+                elif found is not None and found.project_id is None and item.project_id is not None:
                     found.project_id = item.project_id
                     studio.store.save_item(found)
                 await studio.emit(item.id, "artifact.updated", {"path": str(result)})

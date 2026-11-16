@@ -9,6 +9,22 @@ afterEach(() => cleanup());
 const item = { id: "draft", kind: "scenario", name: "test", path: "/workspace/scenario.yaml", version: "", source_sha256: "snapshot" } as CatalogItem;
 const lifecycle = { status: "draft", draft_id: "885e4e69-02ac-4916-8c3d-bd1a85a7d168", parents: [], release_notes: "Original note" };
 
+test("official example drafts offer a destination defaulting to Ungrouped", async () => {
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (path === "/v1/projects") return [{ id: "mine", name: "My exercises" }];
+    if (method === "POST") return { path: "/workspace/my-draft/scenario.yaml" };
+    return { lifecycle: { status: "published", publisher: "evidenceforge", version: "1.0.0" }, example_source: true, digest: "official", versions: [] };
+  });
+  render(<ArtifactLifecycle item={item} api={{ request } as unknown as StudioApi} onChanged={async () => undefined} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "New draft" }));
+  const dialog = await screen.findByRole("dialog", { name: "New draft from example" });
+  expect(within(dialog).getByRole("combobox", { name: "Project" })).toHaveValue("");
+  await user.selectOptions(within(dialog).getByRole("combobox"), "mine");
+  await user.click(within(dialog).getByRole("button", { name: "Create draft" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/items/draft/lifecycle", "POST", expect.objectContaining({ action: "draft", project_id: "mine" }), 180000));
+});
+
 test("compact lifecycle controls delegate metadata editing to Properties", async () => {
   fixture();
   await screen.findByRole("button", { name: "Publish locally…" });

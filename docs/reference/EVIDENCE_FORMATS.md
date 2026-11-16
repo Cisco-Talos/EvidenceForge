@@ -222,7 +222,7 @@ event as a separate record on Linux.
 | 4648 | Explicit Credentials | Lateral Movement | Fires when RunAs, PsExec, WMIC, or scheduled tasks use alternate credentials. Emitted on the source system. |
 | 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside the target-host 4624 for elevated accounts. Privilege lists are selected from data-driven service/admin/UAC profiles in `windows_auth_realism.yaml`. |
 | 4688 | Process Created | Execution | Version 2. Includes CommandLine, ParentProcessName, MandatoryLabel. TokenElevationType indicates UAC status. |
-| 4689 | Process Exited | Execution | Paired with 4688. Status always 0x0. |
+| 4689 | Process Exited | Execution | Paired with 4688, including browser exits when admitted by collection policy. Status always 0x0. |
 | 4697 | Service Installed | Persistence | ServiceFileName can contain full command lines. ServiceType 0x10=Own Process. |
 | 4698 | Scheduled Task Created | Persistence | TaskContent contains HTML-escaped XML task definition. |
 | 4699 | Scheduled Task Deleted | Persistence | Same field structure as 4698. |
@@ -357,6 +357,11 @@ Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
 
 Modeled successful SSH and RDP sessions have complete terminal ownership: their source client and target receiver/session processes terminate, and the target `USER_SESSION/LOGOUT` is emitted exactly once even when initial source publication loses its return or an SSH channel is retired by a long watermark. Watermark retirement transfers authenticated ownership only; it does not itself render endpoint or session close rows.
+
+SMB server FILE rows and client-local FILE companions use separate endpoint collection
+envelopes and OS-native paths. Reusing an SMB application channel can produce new FILE
+evidence without another FLOW. Source timing advances process frontiers only for phases
+that the particular endpoint actually renders.
 
 For bounded Linux foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
 

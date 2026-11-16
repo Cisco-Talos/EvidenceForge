@@ -94,19 +94,34 @@ def read_archive(path: Path) -> tuple[ReleaseReceipt, dict[str, bytes]]:
     return receipt, files
 
 
-def import_release(path: Path, *, project_root: Path) -> Path:
+def release_destination(receipt: ReleaseReceipt, *, project_root: Path) -> Path:
+    """Return the canonical import container for an exact published identity."""
+    return (
+        artifact_root(project_root)
+        / "releases"
+        / str(receipt.lifecycle.publisher)
+        / receipt.kind
+        / storage_name(receipt.name)
+        / str(receipt.lifecycle.version)
+    )
+
+
+def import_release(
+    path: Path,
+    *,
+    project_root: Path,
+    restore_deleted: bool = False,
+    allow_hardlinks: bool = False,
+) -> Path:
     """Idempotently import exact contents; reject identity/version conflicts."""
-    receipt, files = read_archive(path)
+    if path.is_dir():
+        receipt = verify_release(path, allow_hardlinks=allow_hardlinks)
+        files = snapshot_tree(path, allow_hardlinks=allow_hardlinks)
+    else:
+        receipt, files = read_archive(path)
     lifecycle = receipt.lifecycle
     with _publication_lock(project_root):
-        target = (
-            artifact_root(project_root)
-            / "releases"
-            / str(lifecycle.publisher)
-            / receipt.kind
-            / storage_name(receipt.name)
-            / str(lifecycle.version)
-        )
+        target = release_destination(receipt, project_root=project_root)
         if target.exists():
             existing = verify_release(target)
             if existing.digest != receipt.digest:
@@ -117,7 +132,13 @@ def import_release(path: Path, *, project_root: Path) -> Path:
         if lifecycle.version in _used_versions(
             project_root, kind=receipt.kind, name=receipt.name, publisher=str(lifecycle.publisher)
         ):
-            raise ArtifactError("release identity/version conflicts with an existing legacy pack")
+            from .removal import deleted_release_digests
+
+            digests = deleted_release_digests(project_root, receipt)
+            if not restore_deleted or digests != {receipt.digest}:
+                raise ArtifactError(
+                    "release identity/version is reserved; restoration requires its original digest"
+                )
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         staging = Path(tempfile.mkdtemp(prefix=".import-", dir=target.parent))
         try:

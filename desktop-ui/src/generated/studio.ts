@@ -1002,6 +1002,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/examples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Examples */
+        get: operations["get_examples_v1_examples_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/examples/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Examples */
+        post: operations["add_examples_v1_examples_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings": {
         parameters: {
             query?: never;
@@ -2086,6 +2120,8 @@ export interface components {
             name?: string | null;
             /** Publisher */
             publisher?: string | null;
+            /** Project Id */
+            project_id?: string | null;
             /** Version */
             version?: string | null;
             /**
@@ -2178,6 +2214,11 @@ export interface components {
              * @default false
              */
             starter_draft: boolean;
+            /**
+             * Example Source
+             * @default false
+             */
+            example_source: boolean;
             /** Name Consumers */
             name_consumers?: components["schemas"]["AffectedItem"][];
             /** Name Review Problems */
@@ -3296,6 +3337,45 @@ export interface components {
         EvaluationRequest: {
             /** Generation Id */
             generation_id: string;
+        };
+        /**
+         * ExamplesInstallRequest
+         * @description Bind a Settings action to the workspace the user was viewing.
+         */
+        ExamplesInstallRequest: {
+            /**
+             * Workspace
+             * Format: path
+             */
+            workspace: string;
+        };
+        /**
+         * ExamplesStatus
+         * @description Settings presentation for the current workspace and bundled collection.
+         */
+        ExamplesStatus: {
+            /**
+             * Directory
+             * Format: path
+             */
+            directory: string;
+            /**
+             * Bundled Releases
+             * @default 0
+             */
+            bundled_releases: number;
+            /**
+             * Automatic Updates
+             * @default false
+             */
+            automatic_updates: boolean;
+            /** Project Id */
+            project_id?: string | null;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
         };
         /**
          * ExportLocation
@@ -4599,6 +4679,8 @@ export interface components {
         ScenarioCloneRequest: {
             /** Name */
             name: string;
+            /** Project Id */
+            project_id?: string | null;
         };
         /**
          * ScenarioDeleteRequest
@@ -5052,6 +5134,8 @@ export interface components {
             missing_sources?: string[];
             /** Starter Drafts */
             starter_drafts?: string[];
+            /** Example Sources */
+            example_sources?: string[];
             /** Source Paths */
             source_paths?: {
                 [key: string]: string[];
@@ -7638,6 +7722,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_examples_v1_examples_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExamplesStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_examples_v1_examples_install_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExamplesInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExamplesStatus"];
                 };
             };
             /** @description Validation Error */

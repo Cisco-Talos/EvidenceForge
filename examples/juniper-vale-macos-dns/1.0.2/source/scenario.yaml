@@ -1,0 +1,342 @@
+name: juniper-vale-macos-dns
+description: Correlate explicit system LaunchDaemon persistence and interpreter execution with DNS-encoded
+  data leaving an engineering Mac, across an intentional process-attribution gap.
+status: published
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: juniper-vale-macos-dns
+  version: 1.0.1
+  digest: a32a2a0009d8fa04492940933082c55d2bf04943c5c0d3c02578d9e5b8ee67c6
+- kind: scenario
+  publisher: evidenceforge
+  name: juniper-vale-macos-dns
+  draft_id: 9920df89-f043-40b0-8ea6-c9fc80c8ba8e
+  digest: 87e55990832b8974f3601b648ed065f99b4856ebd830baa8f5eca553e2b91d70
+display_name: Kestrel Ridge Engineering - macOS Persistence and DNS
+schema_version: '3.0'
+composition:
+  industries:
+  - source: path
+    publisher: evidenceforge
+    name: technology
+    version: 1.0.0
+    path: ../dependencies/evidenceforge/industry/technology/1.0.0
+environment:
+  description: Kestrel Ridge Engineering, a fictional four-person engineering group with managed Apple
+    Silicon Macs and private Linux infrastructure.
+  timezone:
+    default: America/New_York
+  users:
+  - username: alex.archer
+    full_name: Alex Archer
+    email: alex.archer@kestrelridge.example
+    persona: evidenceforge/technology:platform_engineer
+    primary_system: KR-MAC-01
+    groups:
+    - Engineering
+  - username: linh.nguyen
+    full_name: Linh Nguyen
+    email: linh.nguyen@kestrelridge.example
+    persona: evidenceforge/technology:platform_engineer
+    primary_system: KR-MAC-02
+    groups:
+    - Engineering
+  - username: mateo.reyes
+    full_name: Mateo Reyes
+    email: mateo.reyes@kestrelridge.example
+    persona: developer
+    primary_system: KR-MAC-03
+    groups:
+    - Engineering
+  - username: nadia.shah
+    full_name: Nadia Shah
+    email: nadia.shah@kestrelridge.example
+    persona: sysadmin
+    primary_system: KR-MAC-04
+    groups:
+    - Engineering
+  systems:
+  - hostname: KR-MAC-01
+    ip: 10.88.10.21
+    os: macOS 27
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: alex.archer
+    architecture: arm64
+    os_build: 26A100
+  - hostname: KR-MAC-02
+    ip: 10.88.10.22
+    os: macOS 27
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: linh.nguyen
+    architecture: arm64
+    os_build: 26A100
+  - hostname: KR-MAC-03
+    ip: 10.88.10.23
+    os: macOS 27
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: mateo.reyes
+    architecture: arm64
+    os_build: 26A100
+  - hostname: KR-MAC-04
+    ip: 10.88.10.24
+    os: macOS 27
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: nadia.shah
+    architecture: arm64
+    os_build: 26A100
+  - hostname: KR-DNS-01
+    ip: 10.88.20.10
+    os: Linux Ubuntu 24.04
+    roles:
+    - dns_server
+    type: server
+    services:
+    - dns
+    - ssh
+  - hostname: KR-REPO-01
+    ip: 10.88.20.20
+    os: Linux Ubuntu 24.04
+    roles:
+    - web_server
+    - app_server
+    type: server
+    services:
+    - nginx
+    - ssh
+  groups:
+  - name: Engineering
+    members:
+    - alex.archer
+    - linh.nguyen
+    - mateo.reyes
+    - nadia.shah
+  network:
+    segments:
+    - name: engineering
+      cidr: 10.88.10.0/24
+      exposure: internal
+    - name: infrastructure
+      cidr: 10.88.20.0/24
+      exposure: internal
+    sensors:
+    - type: network
+      name: kestrel-core-span
+      monitoring_segments:
+      - engineering
+      - infrastructure
+      placement: span
+      log_formats:
+      - zeek
+    public_cidrs: []
+  network_identities:
+  - id: update-service
+    hosts:
+    - updates.kestrel-tools.example
+    ips:
+    - 198.51.100.88
+    tags: []
+    dns: true
+  - id: diagnostic-zone
+    hosts:
+    - telemetry.kr-diagnostics.example
+    ips:
+    - 198.51.100.89
+    tags: []
+    dns: true
+  storage:
+    file_sets:
+    - id: kr-updater-payload
+      system: KR-MAC-01
+      root: /Library/Application Support/KestrelTools
+      preset: software
+      population: small
+      seed_files:
+      - ref: dns-agent-script
+        path: agent.py
+        size_bytes: 2048
+        tags:
+        - software
+  deployment_overrides:
+  - system: KR-MAC-01
+    user_applications:
+    - user: alex.archer
+      applications: &id001
+      - macos-terminal
+      - macos-zsh
+      - chrome
+      - vscode
+      - curl
+      - pip
+  - system: KR-MAC-02
+    user_applications:
+    - user: linh.nguyen
+      applications: *id001
+  - system: KR-MAC-03
+    user_applications:
+    - user: mateo.reyes
+      applications: *id001
+  - system: KR-MAC-04
+    user_applications:
+    - user: nadia.shah
+      applications: *id001
+time_window:
+  start: '2026-11-09T14:00:00Z'
+  duration: 8h
+  warmup: 1h
+baseline_activity:
+  description: Normal business activity mixed with routine administration.
+  intensity: medium
+  variation: high
+  suspicious_noise: low
+output:
+  logs:
+  - format: macos_endpoint_security
+  - format: macos_unified_log
+  - format: ecar
+  - format: zsh_history
+  - format: zeek
+  - format: syslog
+  - format: web_access
+  destination: ./output
+  compression: false
+release_notes: Rename the organization to Kestrel Ridge Engineering and update its
+  domains, host prefixes and updater artifacts consistently; retain the existing scenario
+  family and learning objectives.
+generation_seed: 8801
+observation_profile: complete
+storyline:
+- id: preexisting-root-foothold
+  time: +10m
+  actor: root
+  system: KR-MAC-01
+  activity: An already elevated foothold starts a working shell; initial access and elevation precede
+    the collected exercise.
+  events:
+  - type: process
+    process_name: /bin/zsh
+    command_line: /bin/zsh
+    process_ref: elevated-caller
+    supplementary: none
+- id: launch-definition
+  time: +2h
+  actor: root
+  system: KR-MAC-01
+  activity: The elevated foothold writes a software-updater-style system LaunchDaemon definition.
+  events:
+  - type: macos_launch_item
+    operation: write
+    label: com.kestreltools.update-agent
+    caller_ref: elevated-caller
+    path: /Library/LaunchDaemons/com.kestreltools.update-agent.plist
+    program: /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+    arguments:
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+    - /Library/Application Support/KestrelTools/agent.py
+    size_bytes: 1024
+    run_at_load: false
+    technique: T1543.004
+- id: launch-registration
+  time: +2h2m
+  actor: root
+  system: KR-MAC-01
+  activity: The system-domain definition is registered separately from its first activation.
+  events:
+  - type: macos_launch_item
+    operation: bootstrap
+    label: com.kestreltools.update-agent
+    caller_ref: elevated-caller
+    path: /Library/LaunchDaemons/com.kestreltools.update-agent.plist
+- id: explicit-start
+  time: +2h5m
+  actor: root
+  system: KR-MAC-01
+  activity: An explicit activation starts the installed Python interpreter and previously staged script
+    through launchd and xpcproxy, without an inferred shell or helper tree.
+  events:
+  - type: macos_launch_item
+    operation: activate
+    label: com.kestreltools.update-agent
+    caller_ref: elevated-caller
+    process_ref: dns-agent
+- id: encoded-dns-channel
+  time: +2h7m
+  actor: root
+  system: KR-MAC-01
+  activity: The host sends encoded synthetic engineering data in TXT-query labels; collection does not
+    establish the originating payload PID.
+  events:
+  - type: dns_tunnel
+    base_domain: telemetry.kr-diagnostics.example
+    encoding: base32
+    qtype: TXT
+    label_length: 30
+    payload: KR-ENG|project=FieldKit|release=2026-Q4|review=design-snapshot|classification=synthetic-training
+    interval: 23s
+    duration: 35m
+    jitter: 0.35
+    technique: T1071.004
+- id: remove-launch-file
+  time: +3h
+  actor: root
+  system: KR-MAC-01
+  activity: The plist is removed while the loaded definition remains registered.
+  events:
+  - type: macos_launch_item
+    operation: remove
+    label: com.kestreltools.update-agent
+    caller_ref: elevated-caller
+    path: /Library/LaunchDaemons/com.kestreltools.update-agent.plist
+- id: stop-loaded-job
+  time: +3h5m
+  actor: root
+  system: KR-MAC-01
+  activity: The loaded job is explicitly unloaded; removal alone did not stop its retained process group.
+  events:
+  - type: macos_launch_item
+    operation: unload
+    label: com.kestreltools.update-agent
+    caller_ref: elevated-caller
+red_herrings:
+- id: approved-status-check
+  time: +4h
+  actor: nadia.shah
+  system: KR-MAC-04
+  activity: An engineer checks the ordinary software-update endpoint.
+  events:
+  - type: process
+    process_name: /opt/homebrew/opt/curl/bin/curl
+    command_line: /opt/homebrew/opt/curl/bin/curl --head https://updates.kestrel-tools.example/status
+    supplementary: none
+  - type: connection
+    dst_ip: 198.51.100.88
+    dst_port: 443
+    hostname: updates.kestrel-tools.example
+    service: https
+    method: HEAD
+    uri: /status
+    status_code: 200
+    response_body_len: 0
+    user_agent: curl/8.23.0
+  explanation: An ordinary update check on another assigned Mac uses short HTTPS traffic, with no new
+    system job or sustained encoded TXT series.
+macos_process_coverage: complete
+configuration_context: ../configuration/context.yaml
+scenario_version: 1.0.2

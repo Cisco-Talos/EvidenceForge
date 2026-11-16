@@ -1787,6 +1787,13 @@ authored `request_body_len`/`response_body_len` alongside multipart is an exact
 assertion and a mismatch is rejected; profile body-size ranges are mutually
 exclusive with multipart.
 
+File-backed authored connection and beacon requests can obtain their decoded size from an
+earlier modeled command-created file, including `Compress-Archive`. The shared canonical
+artifact registry owns that size and resolves it by source host, principal and native path;
+generation never reads a real file at the authored path. Unknown sizes still require an explicit
+leaf size or a solvable exact outer body length. Request-side sizes do not describe files on the
+response host.
+
 ```yaml
 - type: connection
   dst_ip: 45.33.32.30

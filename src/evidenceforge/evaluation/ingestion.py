@@ -15,6 +15,7 @@ from evidenceforge.evaluation.pillars.plausibility import (
     _extract_event_type,
     _get_pivot_key_b,
     _matches_condition,
+    distribution_profile_applies,
 )
 from evidenceforge.evaluation.pillars.timing import (
     _extract_system_service,
@@ -68,6 +69,7 @@ class IngestionStatistics:
         self.failed_logons = bounded_counter()
         self.distributions = bounded_counter_groups()
         self.profiles = load_rules_file("distributions.yaml")
+        self.scenario = scenario
         self.system_accounts = {account.lower() for account in BUILTIN_ACCOUNTS}
         self.process_total = 0
 
@@ -105,6 +107,8 @@ class IngestionStatistics:
             if target and target != "-":
                 self.failed_logons[(target.lower(), int(record.timestamp.timestamp()) // 600)] += 1
         for index, profile in enumerate(self.profiles.get(format_name, ())):
+            if not distribution_profile_applies(record, profile, self.scenario):
+                continue
             value = record.fields.get(profile["field"])
             if value is not None:
                 self.distributions[(format_name, index)][

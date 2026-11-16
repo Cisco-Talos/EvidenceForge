@@ -444,7 +444,13 @@ def has_catalog_entry(exe_basename: str, os_category: str) -> bool:
     return False
 
 
-def resolve_image_path(exe_basename: str, os_category: str = "windows", username: str = "") -> str:
+def resolve_image_path(
+    exe_basename: str,
+    os_category: str = "windows",
+    username: str = "",
+    *,
+    allow_fallback: bool = True,
+) -> str:
     """Resolve a bare executable name to its correct full filesystem path.
 
     Lookup order:
@@ -459,6 +465,8 @@ def resolve_image_path(exe_basename: str, os_category: str = "windows", username
         username: Optional username for profile-scoped apps (Teams, OneDrive).
             If empty and the path contains {username}, the bare basename is
             returned unchanged to avoid fabricating paths.
+        allow_fallback: Guess a conventional directory when no known mapping exists.
+            Disable for validation comparisons to leave unknown basenames unchanged.
     """
     global _CACHED_PATH_INDEX
     if _CACHED_PATH_INDEX is None:
@@ -501,6 +509,8 @@ def resolve_image_path(exe_basename: str, os_category: str = "windows", username
         return sys_path
 
     # 4. Last resort — assume System32 (Windows) or /usr/bin (Linux)
+    if not allow_fallback:
+        return exe_basename
     if os_category == "linux":
         return f"/usr/bin/{exe_basename}"
     return rf"C:\Windows\System32\{exe_basename}"

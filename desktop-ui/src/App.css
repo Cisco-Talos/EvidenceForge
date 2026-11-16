@@ -240,7 +240,7 @@ p { line-height: 1.5; }
 .scenario-open { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; padding: 4px 0; text-align: left; border: 0; background: transparent; color: inherit; }
 .scenario-symbol { display: grid; place-items: center; flex: none; width: 31px; height: 35px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--accent); background: var(--surface-3); }
 .scenario-row-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-.scenario-row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.scenario-row-title { display: flex; align-items: center; gap: 4px 8px; min-width: 0; }
 .scenario-row-title strong { font-size: var(--text-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%; }
 .scenario-project { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; color: var(--text-2); font-size: var(--text-xs); padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-3); }
 .scenario-project > svg { flex: none; }

@@ -102,6 +102,14 @@ _CONTEXT_FIELDS: dict[str, tuple[str, ...]] = {
         "link_local",
     ),
     "dns": ("query", "query_type", "answers", "TTLs", "rcode", "rejected", "trans_id", "rtt"),
+    "ocsp": (
+        "id",
+        "hash_algorithm",
+        "issuer_name_hash",
+        "issuer_key_hash",
+        "serial_number",
+        "cert_status",
+    ),
     "file": ("path", "action", "pid", "previous_path"),
     "registry": ("key", "value", "value_type", "action", "pid"),
     "firewall": ("action", "access_group", "src_interface", "dst_interface", "enforcing_entities"),
@@ -203,7 +211,7 @@ def _json_value(value: object) -> JsonValue:
 def _facts(event: CanonicalOccurrence) -> dict[str, JsonValue]:
     result: dict[str, JsonValue] = {}
     for name, names in _CONTEXT_FIELDS.items():
-        owner = event.protocol if name in {"http", "proxy", "ssl"} else event
+        owner = event.protocol if name in {"http", "proxy", "ssl", "ocsp"} else event
         context = getattr(owner, name, None)
         if context is not None:
             result[name] = {

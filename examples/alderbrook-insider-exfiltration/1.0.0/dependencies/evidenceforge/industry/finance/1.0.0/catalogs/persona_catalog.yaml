@@ -1,0 +1,12 @@
+persona_catalog:
+  finance_operations:
+    name: finance_operations
+    description: "Finance operations specialist handling close, reconciliation, and reporting."
+    typical_activities:
+      - "Review general-ledger exceptions"
+      - "Reconcile payment and settlement reports"
+      - "Prepare month-end workbooks"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Excel", "Chrome", "Outlook"]
+    risk_profile: medium
+    browsing_intensity: normal

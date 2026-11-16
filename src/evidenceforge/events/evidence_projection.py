@@ -95,7 +95,9 @@ def host_routes(format_name: str, kind: str, facts: dict) -> list[tuple[str, str
         return []
     src = facts.get("src_host") or {}
     dst = facts.get("dst_host") or {}
-    if format_name == "ecar" and kind == "connection":
+    if format_name == "ecar" and (
+        kind == "connection" or facts.get("smb") and kind.startswith("smb_")
+    ):
         hosts = [(src, "source_endpoint"), (dst, "destination_endpoint")]
     elif format_name == "web_access":
         hosts = [(dst, "host")]
@@ -330,6 +332,29 @@ def native_requirements(
                 "rcptto": smtp.get("rcptto"),
                 "last_reply": smtp.get("last_reply"),
             }
+        elif format_name == "zeek_ocsp" and facts.get("ocsp"):
+            ocsp = facts["ocsp"]
+            canonical = str(ocsp["id"])
+            return [
+                NativeEvidenceRequirement(
+                    selector={"id": identifiers.get("file:" + canonical, canonical)},
+                    required={
+                        native: ocsp[semantic]
+                        for native, semantic in (
+                            ("hashAlgorithm", "hash_algorithm"),
+                            ("issuerNameHash", "issuer_name_hash"),
+                            ("issuerKeyHash", "issuer_key_hash"),
+                            ("serialNumber", "serial_number"),
+                            ("certStatus", "cert_status"),
+                        )
+                        if semantic in ocsp
+                    },
+                    timing="interval",
+                    expected="present"
+                    if file_views.get(canonical, {}).get("analyzers_visible", True)
+                    else "absent",
+                )
+            ]
         elif format_name in {"zeek_pe", "zeek_x509"}:
             context = "pe_analyses" if format_name == "zeek_pe" else "x509_chain"
             field = "id"
@@ -506,10 +531,23 @@ def native_requirements(
         elif obj == "FILE":
             file = facts.get("file") or facts.get("smb") or {}
             required = {
-                "file_path": file.get("path") or file.get("client_path")
+                "file_path": file.get("path") or file.get("local_path") or file.get("client_path")
                 if role != "destination_endpoint"
                 else file.get("server_path")
             }
+            if facts.get("smb") and role == "source_endpoint":
+                phase = file.get("phase")
+                copying = file.get("operation") in {"copy", "move"} and file.get("local_path")
+                action = (
+                    ("READ" if phase == "write" else "CREATE")
+                    if copying and phase in {"read", "write"}
+                    else "CREATE"
+                    if phase == "write" and file.get("operation") == "create"
+                    else "READ"
+                    if phase == "directory_enumeration"
+                    else action
+                )
+                selector["action"] = action
         elif obj == "REGISTRY":
             required = {
                 "registry_key": (facts.get("registry") or {}).get("key"),

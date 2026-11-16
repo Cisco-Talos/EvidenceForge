@@ -2876,23 +2876,6 @@ class ScenarioValidator:
                 )
             )
 
-        firewall_sensors = [sensor for sensor in sensors if sensor.type == "firewall"]
-        if network and not firewall_sensors:
-            self.issues.append(
-                ValidationIssue(
-                    severity="info",
-                    field_path="environment.network.sensors",
-                    message=(
-                        "Network topology has no firewall sensor; firewall policy, NAT, "
-                        "deny baseline, and Cisco ASA evidence will not be modeled"
-                    ),
-                    suggestion=(
-                        "Add a sensor entry with type: firewall and log_formats: [cisco_asa] "
-                        "when the lab should include firewall control or ASA logs."
-                    ),
-                )
-            )
-
         sensor_format_sets = [(sensor, expand_formats(sensor.log_formats)) for sensor in sensors]
 
         for fmt in sorted(expanded_output_formats & zeek_formats):
@@ -3519,7 +3502,7 @@ class ScenarioValidator:
                         resolved = (
                             basename
                             if os_cat == "macos" and not has_catalog_entry(basename, os_cat)
-                            else resolve_image_path(basename, os_cat)
+                            else resolve_image_path(basename, os_cat, allow_fallback=False)
                         )
                         if resolved != basename and resolved.lower() != process_name.lower():
                             self.issues.append(

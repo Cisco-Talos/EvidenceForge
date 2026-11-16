@@ -200,6 +200,7 @@ def inventory(database: Path) -> dict[str, list[tuple[object, ...]]]:
         "chat_inputs",
         "chat_controls",
         "chat_preferences",
+        "example_installations",
     ):
         result.setdefault(table, [])
     return result

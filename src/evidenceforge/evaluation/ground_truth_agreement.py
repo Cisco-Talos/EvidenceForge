@@ -42,6 +42,7 @@ from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import EvaluationError
 from evidenceforge.models.scenario import EmailDistributionGroup, EmailMessageEventSpec
 
+from .dns_answers import dns_answer_values
 from .finding_samples import FindingSamples
 from .parsers import ParsedRecord, RecordCorpus
 from .process_commands import process_commands_agree
@@ -52,6 +53,7 @@ from .storage import (
     bounded_groups,
     bounded_list,
     bounded_map,
+    bounded_set,
     current_workspace,
     record_identity,
 )
@@ -73,6 +75,8 @@ class ActionAgreement(BaseModel):
     fact_errors: int = 0
     timing_checks: int = 0
     timing_errors: int = 0
+    policy_checks: int = 0
+    policy_only_checks: int = 0
     score: float = 100.0
     zero_check_reason: str | None = None
 
@@ -281,6 +285,8 @@ class _RecordIndex:
             .get(row.kind, {})
             .get(fmt)
         )
+        if fmt in {"bash_history", "zsh_history", "web_access", "proxy_access"}:
+            quantum = 1_000_000
         if quantum and timing == "point":
             start = (int(anchor.timestamp() * 1_000_000) // quantum) * quantum / 1_000_000
             end = ((int(anchor.timestamp() * 1_000_000) // quantum) + 1) * quantum / 1_000_000
@@ -326,6 +332,12 @@ def _short_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | Non
 
 
 def _equal(actual: object, expected: object, key: str) -> bool:
+    if isinstance(expected, bool):
+        if isinstance(actual, bool):
+            return actual is expected
+        if isinstance(actual, str) and actual.casefold() in {"true", "false", "t", "f"}:
+            return (actual.casefold() in {"true", "t"}) is expected
+        return False
     if isinstance(actual, str) and isinstance(expected, str) and actual == expected:
         return True
     if key.casefold() in {"sha256", "sha1", "md5", "fingerprint"}:
@@ -386,11 +398,48 @@ def _field_value(fields: dict, path: str) -> object:
 
 
 def _fields_match(record: ParsedRecord, fields: dict) -> bool:
-
     return all(
-        any(_equal(_field_value(record.fields, alias), expected, alias) for alias in key.split("|"))
+        any(
+            _equal(
+                dns_answer_values(record, _field_value(record.fields, alias))
+                if alias == "answers"
+                else _field_value(record.fields, alias),
+                expected,
+                alias,
+            )
+            for alias in key.split("|")
+        )
         for key, expected in fields.items()
     )
+
+
+def _operation_selector(
+    selector: dict,
+    required: dict,
+    fmt: str,
+    facts: dict | None = None,
+    seed: int = 42,
+    role: str | None = None,
+) -> dict:
+    """Refine broad Windows audit selectors by stable file identity, not values."""
+    refined = dict(selector)
+    if fmt == "ecar" and selector.get("object") == "FILE" and required.get("file_path"):
+        refined["file_path"] = required["file_path"]
+        smb = (facts or {}).get("smb") or {}
+        file_id = smb.get("local_file_id") if role == "source_endpoint" else smb.get("file_id")
+        if file_id:
+            refined["objectID"] = file_id
+    if fmt == "windows_event_security" and selector.get("EventID") in {5145, 4656, 4663}:
+        for key in ("ObjectName", "RelativeTargetName"):
+            if key in required:
+                refined[key] = required[key]
+    if fmt == "windows_event_security" and selector.get("EventID") in {4656, 4663, 4658}:
+        smb = (facts or {}).get("smb") or {}
+        if smb.get("handle_id") or smb.get("tree_id"):
+            from evidenceforge.events.evidence_source_rules import windows_smb_handle_id
+
+            refined["HandleId"] = windows_smb_handle_id(smb, seed)
+    return refined
 
 
 def _email_recipients_match(
@@ -583,6 +632,11 @@ def _expectation_errors(
     known["capability"] = source.policy.capabilities.covers(
         required_capabilities(expectation.format, row.kind, row.facts, expectation.role)
     )
+    from evidenceforge.events.evidence_source_rules import semantic_source_admission
+
+    known["capability"] = known["capability"] and semantic_source_admission(
+        expectation.format, row.kind, row.facts, expectation.source_host
+    )
     from evidenceforge.events.evidence_source_rules import native_projection_applicable
 
     if (
@@ -596,7 +650,10 @@ def _expectation_errors(
     if expectation.format in {"ecar", "cisco_asa"} and (
         expectation.format == "ecar"
         and (row.facts.get("firewall") or {}).get("action") == "deny"
-        or (row.facts.get("network") or {}).get("application_layer_only")
+        or (
+            (row.facts.get("network") or {}).get("application_layer_only")
+            and (expectation.format == "cisco_asa" or row.kind == "connection")
+        )
     ):
         known["capability"] = False
     if descriptor.owner is SourceOwnerKind.SENSOR:
@@ -633,6 +690,7 @@ def _expectation_errors(
             *row.facts.get("file_transfers", []),
             *row.facts.get("x509_chain", []),
             *row.facts.get("pe_analyses", []),
+            *([row.facts["ocsp"]] if row.facts.get("ocsp") else []),
         ]:
             canonical = item.get("fuid") or item.get("id")
             if canonical and expectation.identifiers.get("file:" + canonical) != sensor_identifier(
@@ -911,6 +969,9 @@ def evaluate_ground_truth(
     }
     samples = FindingSamples()
     limitations: set[str] = set()
+    from .ids_policy import verified_filtered_signatures
+
+    verified_ids = verified_filtered_signatures(document, records)
     counts: Counter[str] = Counter()
     bindings = bounded_groups()
     workspace = current_workspace()
@@ -935,8 +996,63 @@ def evaluate_ground_truth(
     from .source_timing_proof import TimingPoints
 
     timing_points = TimingPoints()
+    owned_records = bounded_set()
     if document.event_stream is not None:
         for point in read_ground_truth_occurrences(root, document.event_stream):
+            for source in point.source_expectations:
+                if source.expected != "present":
+                    continue
+                try:
+                    requirements = native_requirements(
+                        source.format,
+                        point.kind,
+                        point.facts,
+                        source.identifiers,
+                        source.role,
+                        (
+                            document.expectation_contract.source_rules.get("windows_event_sysmon")
+                            if document.expectation_contract
+                            else None
+                        ),
+                        scenario.generation_seed,
+                        source_view=point.source_views[source.source_instance].model_dump(
+                            mode="json"
+                        )
+                        if source.source_instance in point.source_views
+                        else None,
+                    )
+                except (ValueError, KeyError):
+                    # The main pass reports unsupported or malformed contracts.
+                    continue
+                for requirement in requirements:
+                    if requirement.expected != "present":
+                        continue
+                    selected = bounded_list(
+                        record
+                        for record in index.candidates(
+                            point, source, requirement.selector, requirement.timing
+                        )
+                        if _fields_match(
+                            record,
+                            _operation_selector(
+                                requirement.selector,
+                                requirement.required,
+                                source.format,
+                                point.facts,
+                                scenario.generation_seed,
+                                source.role,
+                            ),
+                        )
+                    )
+                    if len(selected) < requirement.minimum or (
+                        requirement.maximum is not None and len(selected) > requirement.maximum
+                    ):
+                        continue
+                    for record in selected:
+                        if _fields_match(record, requirement.required) and all(
+                            value in record.raw for value in requirement.contains
+                        ):
+                            owned_records.add(record_identity(record))
             for source in point.source_expectations:
                 if source.format != "ecar":
                     continue
@@ -1298,14 +1414,14 @@ def evaluate_ground_truth(
         actual_pairs = [
             (item.source_instance, item.format, item.role) for item in row.source_expectations
         ]
-        for pair in expected_pairs - set(actual_pairs):
+        for pair in sorted(expected_pairs - set(actual_pairs)):
             action.incorrect += 1
             fail(action, "missing_source_expectation", row, details=pair)
         if len(actual_pairs) != len(set(actual_pairs)):
             action.incorrect += 1
             fail(action, "duplicate_source_expectation", row)
         gap_formats = {gap.format for gap in row.coverage_gaps}
-        for fmt in formats - {fmt for _, fmt, _ in expected_pairs} - gap_formats:
+        for fmt in sorted(formats - {fmt for _, fmt, _ in expected_pairs} - gap_formats):
             action.incorrect += 1
             fail(action, "missing_coverage_gap", row, details=fmt)
         if (
@@ -1340,6 +1456,16 @@ def evaluate_ground_truth(
             ):
                 semantic_errors[row.intent_id].add("authored_http_status_disagreement")
         for expectation in row.source_expectations:
+            if (
+                expectation.format == "ecar"
+                and expectation.role == "host"
+                and row.facts.get("smb")
+                and row.kind.startswith("smb_")
+            ):
+                limitations.add(
+                    "Earlier SMB source contracts lack separate endpoint roles and admission "
+                    "decisions; regenerate for complete source verification."
+                )
             errors = _expectation_errors(row, expectation, scenario, inventory)
             if expectation.format == "ecar" and (
                 row.kind.startswith("process_") or row.kind == "system_process_create"
@@ -1452,12 +1578,60 @@ def evaluate_ground_truth(
             time_ok = True
             cardinality_ok = True
             requirement_diagnostics = []
+            policy_verified = (
+                expectation.format == "snort_alert"
+                and expectation.expected == "present"
+                and bool(row.facts.get("ids_alerts"))
+                and any(
+                    (expectation.source_host, int(item.get("gid", 1)), int(item["sid"]))
+                    in verified_ids
+                    for item in row.facts["ids_alerts"]
+                )
+            )
+            if policy_verified:
+                action.policy_checks += 1
+                limitations.add(
+                    "Policy-filtered IDS candidates are verified by exact sensor/signature "
+                    "counts and alert digests, not individual candidate timestamps."
+                )
+            policy_only = policy_verified and all(
+                (
+                    expectation.source_host,
+                    int(requirement.selector.get("gid", 1)),
+                    int(requirement.selector.get("sid", 0)),
+                )
+                in verified_ids
+                for requirement in requirements
+            )
+            action.policy_only_checks += int(policy_only)
             for requirement in requirements:
+                if (
+                    policy_verified
+                    and (
+                        expectation.source_host,
+                        int(requirement.selector.get("gid", 1)),
+                        int(requirement.selector.get("sid", 0)),
+                    )
+                    in verified_ids
+                ):
+                    continue
                 candidates = index.candidates(
                     row, expectation, requirement.selector, requirement.timing
                 )
                 selected = bounded_list(
-                    record for record in candidates if _fields_match(record, requirement.selector)
+                    record
+                    for record in candidates
+                    if _fields_match(
+                        record,
+                        _operation_selector(
+                            requirement.selector,
+                            requirement.required,
+                            expectation.format,
+                            row.facts,
+                            scenario.generation_seed,
+                            expectation.role,
+                        ),
+                    )
                 )
                 matched = bounded_list(
                     record
@@ -1508,6 +1682,7 @@ def evaluate_ground_truth(
                         record
                         for record in selected
                         if all(value in record.raw for value in requirement.contains)
+                        and record_identity(record) not in owned_records
                     )
                     continue
                 if requirement.expected == "absent":
@@ -1571,7 +1746,7 @@ def evaluate_ground_truth(
                     errors.append("unexpected_evidence")
             else:
                 action.fact_checks += 1
-                action.timing_checks += 1
+                action.timing_checks += int(not policy_only)
                 if found:
                     action.found += 1
                 if not facts_ok:
@@ -1582,7 +1757,7 @@ def evaluate_ground_truth(
                     errors.append("timing_disagreement")
                 if not cardinality_ok:
                     errors.append("missing_or_duplicate_evidence")
-                if not found:
+                if not found and not policy_only:
                     errors.append("missing_evidence")
             if errors:
                 action.incorrect += 1

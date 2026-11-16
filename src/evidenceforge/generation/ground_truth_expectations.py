@@ -277,6 +277,11 @@ class GroundTruthExpectationPlanner:
                     capable = source.policy.capabilities.covers(
                         required_capabilities(fmt, str(event.event_type), facts, role)
                     )
+                    from evidenceforge.events.evidence_source_rules import semantic_source_admission
+
+                    capable = capable and semantic_source_admission(
+                        fmt, str(event.event_type), facts, host
+                    )
                     capability_reason = "missing_capability"
                     if fmt == "zeek_http" and network is not None and network.service == "ssl":
                         capable = False
@@ -287,7 +292,11 @@ class GroundTruthExpectationPlanner:
                             and event.firewall is not None
                             and event.firewall.action == "deny"
                         )
-                        or (network is not None and network.application_layer_only)
+                        or (
+                            network is not None
+                            and network.application_layer_only
+                            and (fmt == "cisco_asa" or str(event.event_type) == "connection")
+                        )
                     ):
                         capable = False
                     if target is not None:
@@ -480,6 +489,7 @@ class GroundTruthExpectationPlanner:
                                 *facts.get("file_transfers", []),
                                 *facts.get("x509_chain", []),
                                 *facts.get("pe_analyses", []),
+                                *([facts["ocsp"]] if facts.get("ocsp") else []),
                             ]:
                                 canonical = item.get("fuid") or item.get("id")
                                 if canonical:

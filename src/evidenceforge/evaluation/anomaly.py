@@ -27,18 +27,18 @@ Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 """
 
 from collections import Counter
+from collections.abc import Iterable, Iterator, Set
 from datetime import UTC
-from itertools import chain
 from zoneinfo import ZoneInfo
 
 from evidenceforge.evaluation._shared import _extract_username
 from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
 from evidenceforge.evaluation.storage import (
     bounded_counter,
-    bounded_list,
     bounded_nsmallest,
     bounded_set,
     current_workspace,
+    record_identity,
 )
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.rng import _stable_seed
@@ -119,6 +119,9 @@ def _build_failed_logon_bursts(
 def detect_anomalies(
     records: RecordCorpus,
     scenario: Scenario,
+    *,
+    excluded_record_ids: Set[int] = frozenset(),
+    diagnostics: dict[str, int] | None = None,
 ) -> tuple[int, int]:
     """Detect organic anomalous events in background noise.
 
@@ -132,8 +135,8 @@ def detect_anomalies(
     # Build context
     persona_hours = _build_persona_hours(scenario)
     service_ports = _build_service_ports(scenario)
-    process_freq = _build_process_frequency(records)
-    failed_logon_bursts = _build_failed_logon_bursts(records)
+    process_freq = bounded_counter()
+    failed_counts = bounded_counter()
 
     # Resolve scenario timezone for off-hours comparison
     tz_name = "UTC"
@@ -144,24 +147,84 @@ def detect_anomalies(
     except (KeyError, ValueError):
         scenario_tz = UTC
 
-    # Preserve the existing statistical sample, without materializing/sorting the corpus.
-    all_valid = (
-        (format_name, record)
-        for format_name, record_list in records.items()
-        for record in record_list
-        if not record.parse_errors
-    )
-    from itertools import islice
+    priorities = {"windows_event_sysmon": 3, "windows_event_security": 2, "ecar": 1}
+    preferred: dict[str, int] = {}
+    for fmt, rows in records.items():
+        for record in rows:
+            if record.parse_errors or record_identity(record) in excluded_record_ids:
+                continue
+            if _is_process_start(record, fmt):
+                host = str(
+                    record.source_host
+                    or record.fields.get("hostname")
+                    or record.fields.get("Computer")
+                    or ""
+                ).casefold()
+                preferred[host] = max(preferred.get(host, 0), priorities.get(fmt, 0))
 
-    first = bounded_list(islice(all_valid, 5001))
-    sample = _stable_record_sample(chain(first, all_valid), 5000) if len(first) > 5000 else first
+    def eligible_records() -> Iterator[tuple[str, ParsedRecord]]:
+        for fmt, rows in records.items():
+            for record in rows:
+                if record.parse_errors or record_identity(record) in excluded_record_ids:
+                    continue
+                if not _anomaly_eligible(record, fmt):
+                    continue
+                host = str(
+                    record.source_host
+                    or record.fields.get("hostname")
+                    or record.fields.get("Computer")
+                    or ""
+                ).casefold()
+                if _is_process_start(record, fmt) and priorities.get(fmt, 0) != preferred.get(
+                    host, 0
+                ):
+                    continue
+                if diagnostics is not None:
+                    diagnostics["eligible"] = diagnostics.get("eligible", 0) + 1
+                process = _extract_process_key(record, fmt)
+                if process:
+                    process_freq[process] += 1
+                if (
+                    fmt == "windows_event_security"
+                    and record.fields.get("EventID") == 4625
+                    and record.timestamp
+                ):
+                    failed_counts[
+                        (
+                            str(record.fields.get("TargetUserName", "")).lower(),
+                            int(record.timestamp.timestamp()) // 600,
+                        )
+                    ] += 1
+                yield fmt, record
+
+    sample = _stable_record_sample(eligible_records(), 5000)
+    process_freq.evaluation_total = sum(process_freq.values())
+    failed_logon_bursts = bounded_set(key for key, count in failed_counts.items() if count >= 3)
 
     total = len(sample)
     anomalous = 0
+    canonical_hosts = {
+        host.hostname.casefold(): host.hostname for host in scenario.environment.systems
+    }
 
     for format_name, record in sample:
+        from evidenceforge.utils.time import get_system_timezone
+
+        hostname = record.source_host or str(
+            record.fields.get("hostname") or record.fields.get("Computer") or ""
+        )
+        short_host = hostname.split(".")[0]
+        local_zone = (
+            ZoneInfo(
+                get_system_timezone(
+                    canonical_hosts.get(short_host.casefold(), short_host), scenario.environment
+                )
+            )
+            if hostname
+            else scenario_tz
+        )
         is_anomalous = (
-            _is_off_hours(record, persona_hours, scenario_tz)
+            _is_off_hours(record, persona_hours, local_zone)
             or _is_failed_operation(record, format_name, failed_logon_bursts)
             or _is_rare_process(record, format_name, process_freq)
             or _is_unexpected_port(record, format_name, service_ports)
@@ -172,8 +235,41 @@ def detect_anomalies(
     return anomalous, total
 
 
+def _is_process_start(record: ParsedRecord, fmt: str) -> bool:
+    f = record.fields
+    return (
+        fmt == "windows_event_security"
+        and f.get("EventID") == 4688
+        or fmt == "windows_event_sysmon"
+        and f.get("EventID") == 1
+        or fmt == "ecar"
+        and f.get("object") == "PROCESS"
+        and f.get("action") == "CREATE"
+    )
+
+
+def _anomaly_eligible(record: ParsedRecord, fmt: str) -> bool:
+    """Require observable facts consumed by at least one anomaly detector."""
+    if _is_process_start(record, fmt):
+        return True
+    if fmt == "windows_event_security":
+        return record.fields.get("EventID") in {4624, 4625}
+    if fmt == "ecar":
+        return (
+            record.fields.get("object") == "USER_SESSION" and record.fields.get("action") == "LOGIN"
+        )
+    return fmt in {
+        "zeek_conn",
+        "web_access",
+        "proxy_access",
+        "syslog",
+        "bash_history",
+        "zsh_history",
+    }
+
+
 def _stable_record_sample(
-    records: list[tuple[str, ParsedRecord]],
+    records: Iterable[tuple[str, ParsedRecord]],
     max_sample: int,
 ) -> list[tuple[str, ParsedRecord]]:
     """Return a deterministic pseudo-random sample independent of input ordering."""
@@ -259,11 +355,13 @@ def _extract_process_key(record: ParsedRecord, fmt: str) -> str | None:
     f = record.fields
     if fmt == "windows_event_security" and f.get("EventID") == 4688:
         return f.get("NewProcessName", "")
-    if fmt == "bash_history":
+    if fmt in {"bash_history", "zsh_history"}:
         cmd = f.get("command", "")
         return cmd.split()[0] if cmd else None
     if fmt == "ecar" and f.get("object") == "PROCESS":
         return f.get("image_path", "")
+    if fmt == "windows_event_sysmon" and f.get("EventID") == 1:
+        return f.get("Image", "")
     return None
 
 
@@ -288,7 +386,7 @@ def _is_off_hours(
         return False
     ts = record.timestamp
     if scenario_tz is not None:
-        ts = ts.astimezone(scenario_tz)
+        ts = ts.replace(tzinfo=scenario_tz) if ts.tzinfo is None else ts.astimezone(scenario_tz)
     local_hour = ts.hour
     # Only flag deep off-hours (midnight-5am) not covered by work hours
     deep_off_hours = {0, 1, 2, 3, 4, 5}

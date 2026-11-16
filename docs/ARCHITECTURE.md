@@ -607,6 +607,13 @@ provider-selected authentication contracts, then owns SMB sessions, trees, handl
 file operations, storage mutations, and directional file observations across Windows
 and Linux. Generic TCP/445 connections are transport-only.
 
+Persistent SMB publication includes the ASA participant for the physical transport when
+firewall traversal and collection policy admit it. Application-channel reuse does not
+publish another firewall connection. Endpoint SMB file projections use distinct source
+and destination roles; their collection envelopes and actual phase clocks govern
+client companions and server-local rows independently. Pure admission predicates are
+shared with source-expectation capture and independently applied during evaluation.
+
 The SMB contract preserves three identities instead of collapsing them: the local application
 actor/process, the SMB credential principal, and the server-side effective identity. Per-user
 mappings resolve a principal through the identity directory; fixed mappings and event-level

@@ -123,6 +123,15 @@ Ready for review as a PR into `dev`. Before merging:
   `modal-form` versus the inner `<form>`) that hid form dialog panels. It is fixed and covered by
   a test.
 
+- **Merge with dev's bundled examples (2026-11-16):** dev added example-only UI in the old style.
+  It is now restyled: the example Project picker lives in the shared Duplicate `Modal`, and
+  "New draft from example" is a shared `Modal` form. Settings → Example scenarios is now one
+  setting row with one-sentence help, path, copy and `FolderOpen` buttons, and an
+  Install/Update button. It shows an `ErrorBanner` with retry, and success shows as a toast.
+  The Settings folder buttons also moved from `ArrowUpRight` to `FolderOpen`. The user decided
+  against an "Example" badge, because membership in the Example Scenarios project already says
+  so. Long example titles now truncate so the version badge stays inline.
+
 ## References
 
 - Review and static mockups (not tracked): `/tmp/evidenceforge-studio-review/`, containing

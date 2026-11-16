@@ -12,10 +12,46 @@ from types import SimpleNamespace
 import pytest
 
 from evidenceforge.config.provider import effective_config_scope
+from evidenceforge.generation.activity.macos_execution_metadata import (
+    load_macos_execution_metadata_profile,
+)
+from evidenceforge.generation.deployment_compiler import compile_native_deployment_registry
 from evidenceforge.generation.engine.baseline import BaselineMixin
-from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
+from evidenceforge.generation.macos_launch_support import (
+    macos_launch_issues,
+    resolve_macos_launch_support,
+)
+from evidenceforge.generation.world_model import WorldModel
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import Scenario
 from tests.unit.test_macos_finder_generation import _finder_engine
+
+
+@pytest.mark.parametrize("retain_os_installation", [False, True])
+def test_root_foothold_requires_its_installed_bootstrap_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retain_os_installation: bool
+) -> None:
+    engine = _finder_engine(tmp_path, monkeypatch, native=True, root_foothold=True)
+    try:
+        raw = engine.scenario.model_dump(mode="json", exclude_none=True)
+        if not retain_os_installation:
+            raw["environment"]["deployment_overrides"][0]["applications"] = ["macos-reference-app"]
+        scenario = Scenario.model_validate(raw)
+        with effective_config_scope(engine.compiled_scenario.effective_config):
+            registry = compile_native_deployment_registry(scenario, WorldModel(scenario, ""))
+            profile = load_macos_execution_metadata_profile()
+            assert profile is not None
+            issues = macos_launch_issues(scenario, registry, profile)
+        shell_issues = [
+            issue for issue in issues if issue.username == "root" and issue.image == "/bin/sh"
+        ]
+        if retain_os_installation:
+            assert not shell_issues
+        else:
+            assert len(shell_issues) == 1
+            assert shell_issues[0].issues == ("executable_not_installed",)
+    finally:
+        engine._close_emitters()
 
 
 def test_complete_preflight_rejects_unknown_app_metadata_before_any_process(
