@@ -5,33 +5,26 @@
 Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`).
 - **Phase 1 (complete):** design tokens and light/dark themes.
 - **Phase 2 (complete):** the consistency refactor.
-- **Phases 3–4:** not started.
+- **Phase 3 (complete):** the library restructure.
+- **Phase 4:** not started.
 
 The binding rules for this work live in `AGENTS.md` § Studio UI Design Patterns.
 
 ## Current Handoff
 
-Next: Phase 3, the library.
-- Move projects into the sidebar, replacing the in-page Projects rail.
-- Use one flat, sortable library table for Scenarios, Packs, Bundles and Assets; grouping becomes an
-  opt-in view that never opens collapsed.
-- Use one Search · Filter ▾ · Views ▾ · count toolbar, folding in the Hidden and previous-versions
-  toggles and the Bundles status/project selects.
-- Refresh the library automatically and drop the manual "Refresh library" button.
-- Remove the eyebrow, large `h1` and tagline page intros.
-
-Then Phase 4:
-- The workspace readiness pipeline (Author → Environment → Validate → Generate → Evaluate), with
-  one next-step button derived from `scenarioStates`/`environmentState`.
+Next: Phase 4, the scenario workspace.
+- A readiness pipeline (Author → Environment → Validate → Generate → Evaluate), with one next-step
+  button derived from `scenarioStates`/`environmentState`.
 - Tabs instead of accordions, with header facts (path, version, digests) moved to Properties.
 - Job center becomes an Activity timeline.
 
 Still open from earlier phases:
-- Spacing values are not yet on the 4px scale.
-- There is no Settings → Appearance control yet. `setThemePreference()` exists in `src/theme.ts`;
-  persisting the choice needs a `StudioSettings` field in the service.
-- Workspace section headers still use icon-only `OperationStatus` next to their titles. Phase 4's
-  pipeline replaces them.
+- **Bundles:** it uses the shared toolbar and Filter popover, and its scenario groups start
+  expanded. It is not yet a flat `LibraryTable` of runs, because each group holds expandable
+  `JobCard`s with diagnostics. Flattening it means a run row plus a details drawer.
+- **Spacing:** values are not yet on the 4px scale.
+- **Appearance:** there is no Settings → Appearance control yet.
+- **Workspace headers:** section headers still use icon-only `OperationStatus`.
 
 ## Decisions
 
@@ -65,13 +58,29 @@ Still open from earlier phases:
 - **Reveal in Finder:** uses `revealItemInDir` from `@tauri-apps/plugin-opener`. Its default
   permission set already allows it, so no new Tauri command was needed. `revealAction()` adds it
   beside Copy path; `SavedPath` and the export toasts offer it after a save.
+- **Library (Phase 3):**
+  - **Projects:** they moved into the sidebar, and its rows are drop targets.
+  - **Tables:** Scenarios and Packs render through `LibraryTable`, with column widths per table
+    class. A container query drops secondary columns, and it sets the widths on the rows because a
+    container query cannot restyle its own container.
+  - **Grouping:** "Group by project" is the `project` sort. It reuses the saved-view `sort` field,
+    so it needs no schema change. Group headings are static and accept drops.
+  - **Leftover state:** `expanded_groups` is still saved but no longer drives scenario or pack
+    layout.
+  - **Pack order:** pack families are ordered by their newest release's title, then by name,
+    publisher and newest version.
+  - **Page titles:** they are the top bar's `h1`.
+  - **Refresh:** automatic on library entry and on focus (15s throttle), with "Refresh library"
+    in ⌘K.
 - **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
   remains on the startup, maintenance and About screens and switches artwork per theme.
 
 ## Validation
 
-- **Latest run (Phase 2):** `npm test` passes, 39 files and 393 tests. `npm run build` passes,
-  with the existing chunk-size warning.
+- **Latest run (Phase 3):** `npm test` passes, 39 files and 393 tests. `npm run build` passes.
+- **Phase 3 captures:** the library, project scoping, grouped view, Views menu, Filter popover,
+  Packs, Bundles and Job center, all in both themes, plus a 900px-wide window. The narrow capture
+  caught the container-query column bug.
 - **Preview service:** run an isolated preview service with `EFORGE_STUDIO_HOME` and
   `EFORGE_STUDIO_DEFAULT_WORKSPACE` under `/tmp`.
 - **Vite port:** do not use port 1420. The user's own Tauri dev server may hold `[::1]:1420`.

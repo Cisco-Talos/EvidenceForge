@@ -53,7 +53,8 @@ test("large lists are bounded and reuse numbered pagination; details load only o
   expect(screen.queryByText("Alice Original")).not.toBeInTheDocument();
   await user.type(screen.getByRole("textbox", { name: "Search assets" }), "user1004");
   await screen.findByText("1–1 of 1 assets");
-  expect(screen.getByText("1 matching · 1,005 total")).toBeVisible();
+  expect(screen.getByText("1 matching asset")).toBeVisible();
+  expect(screen.getByText("1,005 total")).toBeVisible();
 }, 10000);
 
 test("origin badges are graphical and explain their color on keyboard focus", async () => {
@@ -118,7 +119,8 @@ test("application platform dictionaries show nested fields and save exact nested
   await user.click(await screen.findByRole("button", { name: "Browser" }));
   expect(await screen.findByText("C:\\Browser\\browser.exe")).toBeVisible();
   expect(screen.getByText("Windows")).toBeVisible();
-  expect(screen.getAllByRole("textbox")).toHaveLength(2);
+  // Only the search box is a textbox; the source filter lives in the Filter popover.
+  expect(screen.getAllByRole("textbox")).toHaveLength(1);
   await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
   const image = screen.getByRole("textbox", { name: "Platforms / Windows / Image Path *" });
   await user.clear(image); await user.type(image, "C:\\Browser\\browser-v2.exe");

@@ -347,9 +347,17 @@ For a first run:
 4. Start generation from **Runs**, then monitor it there or in the job center.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
 
-Libraries support projects, search, filters, sorting, duplication, and remembered expanded/collapsed
-views. Scenario conversations open a dedicated chat view. The **Properties…** menu exposes
-scenario, pack, and bundle metadata, titles, notes, version history, and validation provenance.
+The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
+or drag a row onto a project to move it there. **Scenarios** and **Packs** are single sortable tables:
+click a column heading, or use **Views** to sort by name, by most recently updated, or grouped by
+project. Groups are headings, never collapsed folders. **Filter** holds every filter for the current
+library, including hidden items, previous versions, and pack type, author, version and location.
+**Views** also applies and saves named views of a search, its filters, the ordering and the project.
+Studio rescans workspace files when you open a library or return to the app; use **Refresh library**
+in the command menu (⌘K) to rescan immediately. Bundles and asset lists use the same Search, Filter
+and count toolbar. Scenario conversations open a dedicated chat view. The **Properties…** menu
+exposes scenario, pack, and bundle metadata, titles, notes, version history, and validation
+provenance.
 
 ### Appearance and conventions
 
@@ -507,7 +515,7 @@ The release replaces its completed draft in the library, keeping the same projec
 conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
 that revision creates another immutable version. Independent drafts remain available. Libraries
 show the latest published version by default. Return to the **Scenarios** or **Packs** library and
-select **Show previous versions (N)** beside the search/filter controls to reveal older versions.
+select **Filter → Show previous versions (N)** to reveal older versions.
 Open an older version's row to inspect it, discuss it read-only, run it or create a new draft.
 The toggle appears when the current library filters include multiple published versions in the
 same family; it does not change their files or dependency references.
@@ -547,7 +555,7 @@ findings are unchanged. If validation cannot finish, the failure message appears
 with any previous results labeled separately.
 
 Pack validation and Environment refresh use the same spinner and check-time feedback.
-Library refresh keeps the list visible and confirms completion. Resource-forecast and
+Library refresh keeps the list visible; a refresh started from the command menu confirms completion. Resource-forecast and
 log refreshes retain the previous estimate or preview, label it while updating, and
 show failures inline. Import review and optional prepared-scenario validation hide
 superseded findings while checking; reviews show **Ready to import** or **Needs attention**.

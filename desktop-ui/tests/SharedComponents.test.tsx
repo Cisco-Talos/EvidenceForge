@@ -7,6 +7,8 @@ import { ConfirmModal, Modal } from "../src/Modal";
 import { EmptyState, ErrorBanner } from "../src/Feedback";
 import { JobStatusPill, StatusPill, summarizeStates } from "../src/StatusPill";
 import type { OperationState } from "../src/ScenarioStates";
+import { groupRows, sortRows } from "../src/LibraryTable";
+import { LibraryFilters } from "../src/LibraryToolbar";
 
 const tauri = vi.hoisted(() => ({ native: false, reveal: vi.fn(async () => undefined) }));
 vi.mock("@tauri-apps/api/core", async (original) => ({ ...(await original<object>()), isTauri: () => tauri.native }));
@@ -100,4 +102,34 @@ test("Reveal in Finder is offered only in the native app and reveals the exact p
   expect(screen.getByText("Saved to /exports/alpha.zip")).toBeVisible();
   await userEvent.setup().click(screen.getByRole("button", { name: "Reveal in Finder" }));
   expect(tauri.reveal).toHaveBeenLastCalledWith("/exports/alpha.zip");
+});
+
+test("library rows sort by name, recency or project, and group only when ordered by project", () => {
+  const rows = [
+    { id: "b", name: "bravo", updated: 3, project: "Ungrouped", groupId: "ungrouped" },
+    { id: "a", name: "Alpha", updated: 1, project: "Casework", groupId: "case" },
+    { id: "c", name: "charlie", updated: 2, project: "Casework", groupId: "case" },
+  ];
+  expect(sortRows(rows, "name").map((row) => row.id)).toEqual(["a", "b", "c"]);
+  expect(sortRows(rows, "updated").map((row) => row.id)).toEqual(["b", "c", "a"]);
+  const grouped = groupRows(sortRows(rows, "project"), "project");
+  expect(grouped.map((group) => [group.name, group.rows.map((row) => row.id)])).toEqual([["Casework", ["a", "c"]], ["Ungrouped", ["b"]]]);
+  expect(groupRows(rows, "name")).toEqual([{ id: "", name: "", rows }]);
+});
+
+test("library filters count active facets and toggles and reset them together", async () => {
+  const user = userEvent.setup();
+  const onReset = vi.fn();
+  const onType = vi.fn();
+  render(<LibraryFilters label="Filter packs" onReset={onReset}
+    facets={[{ id: "type", label: "Pack type", allLabel: "All types", value: "industry_pack", options: [{ value: "industry_pack", label: "Industry" }], onChange: onType },
+      { id: "source", label: "Asset source", placeholder: "Pack or source file…", value: "", onChange: vi.fn() }]}
+    toggles={[{ id: "hidden", label: "Include hidden packs", checked: true, onChange: vi.fn() }]} />);
+  expect(screen.getByRole("button", { name: "Filter packs" })).toHaveTextContent("Filter2");
+  await user.click(screen.getByRole("button", { name: "Filter packs" }));
+  expect(screen.getByRole("textbox", { name: "Asset source" })).toHaveAttribute("placeholder", "Pack or source file…");
+  await user.selectOptions(screen.getByRole("combobox", { name: "Pack type" }), "");
+  expect(onType).toHaveBeenCalledWith("");
+  await user.click(screen.getByRole("button", { name: "Reset filters" }));
+  expect(onReset).toHaveBeenCalledOnce();
 });

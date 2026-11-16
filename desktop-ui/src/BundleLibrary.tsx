@@ -6,6 +6,7 @@ import type { CatalogItem, ImportedBundle, StudioApi, StudioSnapshot } from "./a
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { ActionShortcut, ObjectMenu, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
 import { Modal } from "./Modal";
+import { LibraryFilters, LibraryToolbar } from "./LibraryToolbar";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard } from "./components";
@@ -91,6 +92,8 @@ function BundleGroupRow({ group, snapshot, sizes, api, onError, onChanged, onOpe
     { id: "collapse", label: "Collapse all runs", group: "inspect", disabled: !listExpanded, reason: "Expand the run list first", run: () => expand("none") },
     { id: "scenario", label: "Open scenario", group: "inspect", disabled: !sourceActions.length, reason: "The original scenario is no longer in the library", ...(sourceActions.length > 1 ? { children: sourceActions } : { run: sourceActions[0]?.run }) },
   ];
+  // Groups start expanded; collapsing one is the reader's choice for this session.
+  useEffect(() => { if (row.current) row.current.open = true; }, []);
   return <details ref={row} className="bundle-group job-group" onToggle={(event) => setListExpanded(event.currentTarget.open)}>
     <summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{group.name}{disambiguate && group.publisher && <small className="bundle-publisher">{group.publisher}</small>}</strong><span>{group.jobs.length + group.imports.length}</span><small className="group-summary"><HeaderSummary summary={bundleSummary(group.jobs, group.imports, sizes)} /></small><ObjectMenu label={`Bundle group actions for ${group.name}${disambiguate ? ` (${group.publisher || "unassigned"})` : ""}`} actions={actions} /></summary>
     <div className="job-list">{orderedBundles(group.jobs, group.imports).map((entry) => entry.kind === "job"
@@ -164,8 +167,14 @@ export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onO
     } catch (error) { onError(String(error)); }
   }
 
-  return <div className="page bundle-page"><div className="page-intro"><div><span className="eyebrow">GENERATED OUTPUT</span><h1>Bundles</h1><p>Inspect, export, and manage Studio runs and imported CLI bundles.</p></div><div className="bundle-page-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={16} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={17} /> Import bundle</button></div></div>
-    <div className="bundle-toolbar"><div className="search-box"><Search size={17} /><input aria-label="Search bundles" placeholder="Search scenarios or run IDs…" value={search} onChange={(event) => setSearch(event.target.value)} /></div><label>Status<select aria-label="Filter bundles by status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label><label>Project<select aria-label="Filter bundles by project" value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All projects</option><option value="ungrouped">Ungrouped</option>{snapshot.projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><span className="result-count">{visibleCount} {visibleCount === 1 ? "bundle" : "bundles"}</span></div>
+  return <div className="page bundle-page">
+    <LibraryToolbar search={search} onSearch={setSearch} searchLabel="Search bundles" placeholder="Search scenarios or run IDs…" count={visibleCount} noun={["bundle", "bundles"]}
+      filters={<LibraryFilters label="Filter bundles" onReset={() => { setStatus("all"); setProject("all"); }} facets={[
+        { id: "status", label: "Bundle status", allLabel: "All statuses", value: status === "all" ? "" : status, options: [{ value: "complete", label: "Complete" }, { value: "incomplete", label: "Incomplete" }], onChange: (value) => setStatus(value || "all") },
+        { id: "project", label: "Bundle project", allLabel: "All projects", value: project === "all" ? "" : project, options: [{ value: "ungrouped", label: "Ungrouped" }, ...snapshot.projects.map((entry) => ({ value: entry.id, label: entry.name }))], onChange: (value) => setProject(value || "all") },
+      ]} />}>
+      <div className="toolbar-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={15} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={15} /> Import bundle</button></div>
+    </LibraryToolbar>
     {groups.length ? <div className="bundle-groups">{groups.map((group) => <BundleGroupRow key={group.key} group={group} snapshot={snapshot} sizes={sizes} api={api} onError={onError} onChanged={onChanged} onOpenScenario={onOpenScenario} disambiguate={groups.filter((entry) => entry.name === group.name).length > 1} />)}</div> : <EmptyState icon={<FolderOpen size={28} />} title={generations.length + imports.length ? "No matching bundles" : "No bundles yet"}>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</EmptyState>}
     {importPath !== null && <Modal title="Import an existing bundle" ariaLabel="Import bundle" description="Studio indexes a complete generation folder for viewing and export; its files stay where they are." busy={working} onClose={() => setImportPath(null)} onSubmit={() => void importBundle()} actions={<><button type="button" className="button-quiet" disabled={working} onClick={() => setImportPath(null)}>Cancel</button><button type="submit" className="button-primary" disabled={working || !importPath.trim()}>{working ? "Importing…" : "Import bundle"}</button></>}><label className="modal-field">Bundle folder<input autoFocus aria-label="Bundle folder" name="bundle-folder" autoComplete="off" value={importPath} onChange={(event) => setImportPath(event.target.value)} /></label>{isTauri() && <button type="button" className="button-quiet" onClick={() => void chooseFolder()}><FolderOpen size={16} /> Browse…</button>}</Modal>}
   </div>;

@@ -120,6 +120,34 @@ async function expandLibraryGroups(selector = ".scenario-group") {
   }
 }
 
+/** Pick a library ordering from the Views menu. */
+async function chooseSort(user: ReturnType<typeof userEvent.setup>, label: "Name A–Z" | "Recently updated" | "Group by project") {
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  await user.click(await screen.findByRole("menuitemradio", { name: label }));
+}
+
+/** The ordering currently checked in the Views menu. */
+async function currentSort(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  const checked = screen.getAllByRole("menuitemradio").find((entry) => entry.getAttribute("aria-checked") === "true")?.textContent;
+  await user.keyboard("{Escape}");
+  return checked;
+}
+
+/** Open the saved-views dialog from the Views menu. */
+async function manageViews(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Save or manage views…" }));
+  return screen.getByRole("dialog", { name: "Saved views" });
+}
+
+/** Toggle a checkbox inside a library Filter popover, then close it. */
+async function toggleFilter(user: ReturnType<typeof userEvent.setup>, filters: string, option: RegExp) {
+  await user.click(screen.getByRole("button", { name: filters }));
+  await user.click(await screen.findByRole("checkbox", { name: option }));
+  await user.keyboard("{Escape}");
+}
+
 async function renderExpandedApp() {
   const view = render(<App />);
   await act(async () => {});
@@ -127,31 +155,36 @@ async function renderExpandedApp() {
   return view;
 }
 
-test("library refresh keeps the library visible and reports completion and request failures", async () => {
+test("the library refreshes from the command menu and quietly when Studio regains focus", async () => {
   const request = vi.mocked(useStudio().api!.request);
   const original = request.getMockImplementation()!;
   let finish!: (value: object) => void;
   let fail!: (error: Error) => void;
   request.mockImplementation((...args: Parameters<StudioApi["request"]>) => args[0] === "/v1/library/refresh"
     ? new Promise((resolve, reject) => { finish = resolve; fail = reject; }) : original(...args));
+  const refreshes = () => request.mock.calls.filter(([path]) => path === "/v1/library/refresh").length;
+  const now = Date.now();
   try {
     await renderExpandedApp();
     const user = userEvent.setup();
-    const button = screen.getByRole("button", { name: "Refresh library" });
-    await user.click(button);
-    expect(button).toHaveTextContent("Refreshing…");
-    expect(button).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Refresh library" })).toBeNull();
+    const fromMenu = async () => { await user.keyboard("{Meta>}k{/Meta}"); await user.click(await screen.findByRole("option", { name: /Refresh library/ })); };
+    await fromMenu();
     expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
     await act(async () => finish({}));
     expect(screen.getByText("Library refreshed.")).toBeVisible();
-    expect(button).toBeEnabled();
-    await user.click(button);
+    await fromMenu();
     await act(async () => fail(new Error("Cannot scan workspace")));
-    expect(screen.getByRole("alert")).toHaveTextContent("Cannot scan workspace");
     expect(screen.getByText("The previous library contents remain visible.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
-    expect(button).toBeEnabled();
-  } finally { request.mockImplementation(original); }
+    const before = refreshes();
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    expect(refreshes()).toBe(before);
+    vi.spyOn(Date, "now").mockReturnValue(now + 60_000);
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    expect(refreshes()).toBe(before + 1);
+    await act(async () => finish({}));
+  } finally { vi.mocked(Date.now).mockRestore?.(); request.mockImplementation(original); }
 });
 
 test("an artifact has the same ordered actions and availability in its library and workspace", async () => {
@@ -420,7 +453,7 @@ test("hidden items can be revealed and unhidden from the library", async () => {
     await renderExpandedApp();
     const user = userEvent.setup();
     expect(screen.queryByText("Bravo", { selector: ".scenario-row-title strong" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Show hidden items" }));
+    await toggleFilter(user, "Filter scenarios", /Include hidden scenarios \(1\)/);
     expect(screen.getByText("Bravo", { selector: ".scenario-row-title strong" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Options for Bravo" }));
     await user.click(screen.getByRole("menuitem", { name: "Show in library" }));
@@ -441,14 +474,14 @@ test("saved views store and restore library search and filters", async () => {
   try {
     await renderExpandedApp();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    const dialog = screen.getByRole("dialog", { name: "Saved views" });
-    await user.click(within(dialog).getByRole("button", { name: "Apply saved view Ungrouped review" }));
+    await user.click(screen.getByRole("button", { name: "Views" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Apply saved view Ungrouped review" }));
     expect((screen.getByRole("textbox", { name: "Search scenarios" }) as HTMLInputElement).value).toBe("Alpha");
-    expect(screen.getByRole("button", { name: "Hide hidden items" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Filter scenarios" }));
+    expect(screen.getByRole("checkbox", { name: /Include hidden scenarios/ })).toBeChecked();
+    await user.keyboard("{Escape}");
     expect(screen.getByRole("button", { name: "Ungrouped" }).className).toContain("active");
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    const reopened = screen.getByRole("dialog", { name: "Saved views" });
+    const reopened = await manageViews(user);
     await user.type(within(reopened).getByRole("textbox", { name: "Saved view name" }), "Review set");
     await user.click(within(reopened).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -482,16 +515,15 @@ test("packs use shared projects, author filters, and saved views instead of fold
     await expandLibraryGroups(".pack-group");
     expect(screen.queryByRole("button", { name: "Filter by folder" })).toBeNull();
     expect(screen.getByText("By Talos")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    await user.click(screen.getByRole("button", { name: "Apply saved view Talos packs" }));
+    await user.click(screen.getByRole("button", { name: "Views" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Apply saved view Talos packs" }));
     expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Bravo 2.0" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Filter packs" }));
     expect((screen.getByRole("combobox", { name: "Pack author" }) as HTMLSelectElement).value).toBe("talos");
     expect((screen.getByRole("combobox", { name: "Pack location" }) as HTMLSelectElement).value).toBe("workspace");
-    await user.click(screen.getByRole("button", { name: "Close pack filters" }));
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    const dialog = screen.getByRole("dialog", { name: "Saved views" });
+    await user.click(screen.getByRole("button", { name: "Close filter packs" }));
+    const dialog = await manageViews(user);
     await user.type(within(dialog).getByRole("textbox", { name: "Saved view name" }), "Training items");
     await user.click(within(dialog).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -1193,7 +1225,9 @@ test("bundle library groups runs by scenario and filters their status", async ()
     await expandLibraryGroups(".bundle-group");
     expect(screen.getByRole("heading", { name: "Bundles" })).toBeTruthy();
     expect([...container.querySelectorAll(".bundle-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Alpha", "Bravo"]);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Filter bundles by status" }), "complete");
+    await user.click(screen.getByRole("button", { name: "Filter bundles" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Bundle status" }), "complete");
+    await user.keyboard("{Escape}");
     expect(container.querySelectorAll(".bundle-group")).toHaveLength(1);
     expect(screen.getByText("Run #complete")).toBeTruthy();
     expect(screen.getByText("2.0 MB", { selector: ".bundle-size" })).toBeTruthy();
@@ -1587,7 +1621,7 @@ test("evaluations only offer history deletion and active generations offer neith
   expect(screen.getByRole("menuitem", { name: "Delete bundle…" })).toHaveAttribute("data-disabled");
 });
 
-test("Packs combines both types in stable sections, retains filters, and opens the exact pack", async () => {
+test("Packs lists both types in one table with a Type column, retains filters, and opens the exact pack", async () => {
   const originalItems = snapshot.items;
   const pack = { ...originalItems[0], id: "industry", kind: "industry_pack" as const, name: "Sector", description: "Industry defaults", version: "1.0.0" };
   const org = { ...pack, id: "org", kind: "organization_pack" as const, name: "Team", description: "Organization environment", version: "2.0.0" };
@@ -1599,15 +1633,13 @@ test("Packs combines both types in stable sections, retains filters, and opens t
     expect(within(nav).queryByRole("button", { name: "Industry packs" })).toBeNull();
     await user.click(within(nav).getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
-    expect([...container.querySelectorAll(".pack-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Industry packs", "Organization packs"]);
-    expect(screen.getByRole("button", { name: "Open Sector 1.0.0" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open Team 2.0.0" })).toBeTruthy();
-    const group = container.querySelector(".pack-group") as HTMLDetailsElement;
-    await user.click(group.querySelector("summary")!);
-    expect(group.open).toBe(false);
+    expect(container.querySelector(".pack-group")).toBeNull();
+    const typeOf = (label: string) => screen.getByRole("button", { name: label }).closest(".pack-row")!.querySelector(".col-type")!.textContent;
+    expect(typeOf("Open Sector 1.0.0")).toBe("Industry");
+    expect(typeOf("Open Team 2.0.0")).toBe("Organization");
     await user.click(screen.getByRole("button", { name: "Filter packs" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Pack type" }), "organization_pack");
-    await user.click(screen.getByRole("button", { name: "Close pack filters" }));
+    await user.click(screen.getByRole("button", { name: "Close filter packs" }));
     expect(screen.queryByRole("button", { name: "Open Sector 1.0.0" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Open Team 2.0.0" }));
     expect(screen.getByRole("heading", { name: "Team" })).toBeTruthy();
@@ -1809,7 +1841,7 @@ test("draft scenarios can be dragged into a project and renamed from their works
 });
 
 
-test("scenario rows show their project on the title line and retain explicit sorting during progress updates", async () => {
+test("scenario rows show their project in its own column and retain explicit sorting during progress updates", async () => {
   const originalItems = snapshot.items;
   const originalProjects = snapshot.projects;
   const originalJobs = snapshot.jobs;
@@ -1821,15 +1853,15 @@ test("scenario rows show their project on the title line and retain explicit sor
     const order = () => Array.from(container.querySelectorAll(".scenario-row-title strong")).map((node) => node.textContent);
     await waitFor(() => expect(useStudio().api!.libraryPreferences).toHaveBeenCalled());
     const row = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row")!;
-    expect(row.querySelector(".scenario-row-title .scenario-project")?.textContent).toBe("Casework");
+    expect(row.querySelector(".col-project")?.textContent).toBe("Casework");
     expect(order()).toEqual(["Alpha", "Bravo"]);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort scenarios" }), "updated");
+    await chooseSort(user, "Recently updated");
     expect(order()).toEqual(["Bravo", "Alpha"]);
     await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ sort: "updated" })));
     snapshot.jobs = originalJobs.map((job) => ({ ...job, progress: { ...job.progress!, completed_hours: 7 } }));
     rerender(<App />);
     expect(order()).toEqual(["Bravo", "Alpha"]);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort scenarios" }), "project");
+    await chooseSort(user, "Group by project");
     expect(order()).toEqual(["Alpha", "Bravo"]);
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.jobs = originalJobs; }
 });
@@ -1840,7 +1872,7 @@ test("library restores workspace view and can disable recall in Settings", async
   await renderExpandedApp();
   const user = userEvent.setup();
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Search scenarios" })).toHaveValue("Alpha"));
-  expect(screen.getByRole("combobox", { name: "Sort scenarios" })).toHaveValue("updated");
+  expect(await currentSort(user)).toBe("Recently updated");
   expect(screen.getByRole("button", { name: "Ungrouped" }).classList.contains("active")).toBe(true);
   await user.click(screen.getByRole("button", { name: "Settings" }));
   const checkbox = screen.getByRole("checkbox", { name: "Remember library views" });
@@ -1860,7 +1892,7 @@ test("delayed library recall preserves a search typed while loading preferences"
   await user.type(screen.getByRole("textbox", { name: "Search scenarios" }), "Bravo");
   await act(async () => resolve({ remember_view: true, scenarios: { search: "Alpha", sort: "updated" } }));
   expect(screen.getByRole("textbox", { name: "Search scenarios" })).toHaveValue("Bravo");
-  expect(screen.getByRole("combobox", { name: "Sort scenarios" })).toHaveValue("updated");
+  expect(await currentSort(user)).toBe("Recently updated");
   await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ search: "Bravo", sort: "updated" })));
 });
 
@@ -1914,38 +1946,35 @@ test("queued run freshness uses captured dependency identity, not its later star
   expect(scenarioStates(item, base)[1].state).toBe("success");
 });
 
-test("scenario projects start collapsed and a saved view restores their independent open states", async () => {
+test("grouping by project shows every scenario under static headings and saved views keep the ordering", async () => {
   const originalItems = snapshot.items;
   const originalProjects = snapshot.projects;
   const originalViews = snapshot.views;
   snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
   snapshot.items = [{ ...originalItems[0], project_id: "case" }, originalItems[1]];
-  snapshot.views = [{ name: "Casework open", kind: "scenario", search: "", folder: null, project_id: null, ungrouped: false, show_hidden: false, expanded_groups: ["case"] }];
+  snapshot.views = [{ name: "By project", kind: "scenario", search: "", folder: null, project_id: null, ungrouped: false, show_hidden: false, sort: "project" }];
   try {
     const { container } = render(<App />);
     await act(async () => {});
     const user = userEvent.setup();
-    const groups = () => [...container.querySelectorAll<HTMLDetailsElement>(".scenario-group")];
-    expect(groups()).toHaveLength(2);
-    expect(groups().every((group) => !group.open)).toBe(true);
-    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).not.toBeVisible();
-    const ungrouped = container.querySelector<HTMLDetailsElement>(".scenario-group:last-child")!;
-    await user.click(ungrouped.querySelector("summary")!);
-    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    await user.click(screen.getByRole("button", { name: "Apply saved view Casework open" }));
-    expect(groups().map((group) => group.open)).toEqual([true, false]);
+    expect(container.querySelector("details.scenario-group")).toBeNull();
+    expect(container.querySelectorAll(".library-group-heading")).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).not.toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Saved views" }));
-    await user.type(screen.getByRole("textbox", { name: "Saved view name" }), "Project layout");
-    await user.click(screen.getByRole("button", { name: "Save view" }));
-    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/views", "POST", expect.objectContaining({ expanded_groups: ["case"] })));
-    await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ expanded_groups: ["case"] })));
+    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Views" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Apply saved view By project" }));
+    expect([...container.querySelectorAll(".library-group-heading strong")].map((node) => node.textContent)).toEqual(["Casework", "Ungrouped"]);
+    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).toBeVisible();
+    const dialog = await manageViews(user);
+    await user.type(within(dialog).getByRole("textbox", { name: "Saved view name" }), "Project layout");
+    await user.click(within(dialog).getByRole("button", { name: "Save view" }));
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/views", "POST", expect.objectContaining({ sort: "project" })));
+    await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ sort: "project" })));
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.views = originalViews; }
 });
 
-test("a collapsed project header accepts a scenario drop without opening it", async () => {
+test("a project heading in the grouped library accepts a scenario drop", async () => {
   const originalItems = snapshot.items;
   const originalProjects = snapshot.projects;
   snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
@@ -1954,22 +1983,19 @@ test("a collapsed project header accepts a scenario drop without opening it", as
     const { container } = render(<App />);
     await act(async () => {});
     const user = userEvent.setup();
-    const groups = [...container.querySelectorAll<HTMLDetailsElement>(".scenario-group")];
-    await user.click(groups[1].querySelector("summary")!);
+    await chooseSort(user, "Group by project");
+    const heading = [...container.querySelectorAll(".library-group-heading")].find((node) => node.textContent?.startsWith("Casework"))!;
     const values = new Map<string, string>();
     const transfer = { types: ["application/x-evidenceforge-item"], effectAllowed: "", dropEffect: "", setData: (key: string, value: string) => values.set(key, value), getData: (key: string) => values.get(key) || "" };
     fireEvent.dragStart(screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row")!, { dataTransfer: transfer });
-    const target = groups[0].querySelector("summary")!;
-    fireEvent.dragOver(target, { dataTransfer: transfer });
-    expect(groups[0]).toHaveClass("drop-target");
-    expect(groups[0].open).toBe(false);
-    fireEvent.drop(target, { dataTransfer: transfer });
+    fireEvent.dragOver(heading, { dataTransfer: transfer });
+    expect(heading).toHaveClass("drop-target");
+    fireEvent.drop(heading, { dataTransfer: transfer });
     await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "case" }));
-    expect(groups[0].open).toBe(false);
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; }
 });
 
-test("pack and bundle groups begin collapsed with visible counts and independent toggles", async () => {
+test("packs list in one table and bundle groups start expanded with visible counts and independent toggles", async () => {
   const originalItems = snapshot.items;
   snapshot.items = [...originalItems, { ...originalItems[0], id: "pack", kind: "industry_pack" }, { ...originalItems[1], id: "org", kind: "organization_pack" }];
   try {
@@ -1977,25 +2003,19 @@ test("pack and bundle groups begin collapsed with visible counts and independent
     await act(async () => {});
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
-    const packs = [...container.querySelectorAll<HTMLDetailsElement>(".pack-group")];
-    expect(packs).toHaveLength(2);
-    expect(packs.every((group) => !group.open)).toBe(true);
-    expect(packs[0].querySelector("summary")).toHaveTextContent("Industry packs1");
-    expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).not.toBeVisible();
-    await user.click(packs[0].querySelector("summary")!);
+    expect(container.querySelector(".pack-group")).toBeNull();
     expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeVisible();
-    expect(packs[1].open).toBe(false);
+    expect(screen.getByRole("button", { name: "Open Bravo 2.0" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Bundles" }));
     const bundles = [...container.querySelectorAll<HTMLDetailsElement>(".bundle-group")];
     expect(bundles).toHaveLength(2);
-    expect(bundles.every((group) => !group.open)).toBe(true);
+    expect(bundles.every((group) => group.open)).toBe(true);
     expect(bundles[0].querySelector("summary")).toHaveTextContent("Alpha1");
     await user.click(bundles[0].querySelector("summary")!);
-    expect(bundles[0].open).toBe(true);
-    expect(bundles[1].open).toBe(false);
+    expect(bundles[0].open).toBe(false);
+    expect(bundles[1].open).toBe(true);
   } finally { snapshot.items = originalItems; }
 });
-
 
 test("Continue and the conversation list share newest-first recency order for this scenario only", async () => {
   const original = snapshot.conversations;
@@ -2494,9 +2514,9 @@ test("scenario library shows the latest release and exposes previous versions on
     expect(screen.getByRole("button", { name: "Open scenario Active draft" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Show previous versions (1)" }));
+    await toggleFilter(user, "Filter scenarios", /Show previous versions \(1\)/);
     expect(screen.getByRole("button", { name: "Open scenario Previous release" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Hide previous versions" }));
+    await toggleFilter(user, "Filter scenarios", /Show previous versions/);
     expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
   } finally {
     snapshot.items = originalItems;

@@ -736,8 +736,14 @@ Studio-wide rewrite unless the task asks for it.
   flat, sortable table that shows items immediately. Grouping is an opt-in view and never starts
   collapsed.
 - Every library uses one toolbar pattern: `Search` · `Filter ▾` (a popover holding all facets,
-  including hidden items and previous versions) · `Views ▾` · result count. Do not add inline
-  filter selects or new toggle buttons to the toolbar.
+  including hidden items and previous versions) · `Views ▾` · result count, with page-specific
+  actions at the far right. Build it from `LibraryToolbar`, `LibraryFilters` and `ViewsMenu`
+  (`src/LibraryToolbar.tsx`), and render rows inside `LibraryTable` (`src/LibraryTable.tsx`) with
+  column widths in CSS on the table class. Do not add inline filter selects or new toggle buttons to
+  the toolbar.
+- Page titles live in the top bar as the page's `h1`; primary page actions (New scenario, New pack)
+  sit beside it. Libraries refresh automatically on entry and focus; do not add manual refresh
+  buttons.
 - The scenario workspace shows readiness as a labeled pipeline (Author → Environment → Validate →
   Generate → Evaluate). It promotes exactly one next action as the primary button. Derive step
   state from the existing `scenarioStates`/`environmentState` helpers; do not add parallel

@@ -37,8 +37,7 @@ test("versions, relocated draft runs and imports share one family with captured 
   const { container } = setup();
   expect(container.querySelectorAll(".bundle-group")).toHaveLength(1);
   const group = container.querySelector<HTMLDetailsElement>(".bundle-group")!;
-  expect(group.open).toBe(false);
-  await userEvent.setup().click(group.querySelector("summary")!);
+  expect(group.open).toBe(true);
   const labels = [...group.querySelectorAll(".job-row .scenario-version")].map((node) => node.textContent);
   expect(labels).toEqual(["v2.0.0", "v1.0.0", "v1.0.0", "Draft", "v1.0.0"]);
   expect(screen.getByText("5 bundles")).toBeVisible();
@@ -53,7 +52,7 @@ test("bundle group menus contain navigation and disclosure actions and leave gen
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Bundle group actions for test-1" }));
   expect(screen.getAllByRole("menuitem").map((item) => item.getAttribute("aria-label"))).toEqual(["Open latest run", "Expand all runs", "Collapse all runs", "Open scenario"]);
-  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).not.toHaveAttribute("data-disabled");
   expect(screen.queryByRole("menuitem", { name: /Validate|Forecast|Generate|Publish|Delete scenario|New conversation/ })).toBeNull();
   await user.click(screen.getByRole("menuitem", { name: "Expand all runs" }));
   expect([...container.querySelectorAll<HTMLDetailsElement>(".job-list > .job-row")].every((row) => row.open)).toBe(true);
