@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, ArrowUpRight, Check, Folder, MessageSquareText } from "lucide-react";
+import { Activity, ArrowUpRight, Check, Folder, MessageSquareText, Palette } from "lucide-react";
+import { setThemePreference, useThemePreference, type ThemePreference } from "./theme";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
@@ -8,7 +9,7 @@ import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
 import { codexAccountIdentity, useCodexAccount, type CodexStatus } from "./CodexAccount";
 
-type Tab = "workspace" | "jobs" | "tools";
+type Tab = "workspace" | "jobs" | "tools" | "appearance";
 
 export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus, api, onSaved, onError }: {
   settings: StudioSettings;
@@ -20,6 +21,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
   onError: (message: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("workspace");
+  const appearance = useThemePreference();
   const [draft, setDraft] = useState<StudioSettings>(settings);
   const [savedSettings, setSavedSettings] = useState<StudioSettings>(settings);
   const [saving, setSaving] = useState(false);
@@ -133,8 +135,14 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
       <button className={tab === "workspace" ? "active" : ""} onClick={() => setTab("workspace")}><Folder size={16} /> Workspace</button>
       <button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}><Activity size={16} /> Jobs</button>
       <button className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><MessageSquareText size={16} /> Authoring & tools</button>
+      <button className={tab === "appearance" ? "active" : ""} onClick={() => setTab("appearance")}><Palette size={16} /> Appearance</button>
     </div>
     <div className="settings-main">
+      {tab === "appearance" && <>
+        <div className="section-heading"><div><h2>Appearance</h2><p>How Studio looks on this Mac. Changes apply immediately to every Studio window.</p></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Theme</strong><Help text="System follows the macOS light or dark setting and switches when it changes." /></div>
+          <div className="segmented" role="radiogroup" aria-label="Theme">{(["system", "light", "dark"] as ThemePreference[]).map((value) => <button key={value} type="button" role="radio" aria-checked={appearance === value} aria-pressed={appearance === value} onClick={() => setThemePreference(value)}>{value === "system" ? "System" : value === "light" ? "Light" : "Dark"}</button>)}</div></div>
+      </>}
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
         <PublisherSetup key={settings.workspace} workspace={settings.workspace} status={publisherStatus} api={api} onSaved={onSaved} />

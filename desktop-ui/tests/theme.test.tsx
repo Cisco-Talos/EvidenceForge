@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { StudioBrand } from "../src/StudioBrand";
-import { setThemePreference, startTheme } from "../src/theme";
+import { setThemePreference, startTheme, THEME_STORAGE_KEY, themePreference } from "../src/theme";
 
 type Listener = () => void;
 
@@ -22,6 +22,7 @@ afterEach(() => {
   setThemePreference("system");
   vi.unstubAllGlobals();
   delete document.documentElement.dataset.theme;
+  window.localStorage.removeItem(THEME_STORAGE_KEY);
 });
 
 test("startTheme follows the system appearance until a preference overrides it", () => {
@@ -53,4 +54,20 @@ test("full brand logo switches artwork with the theme and the sidebar brand stay
   expect(screen.queryByAltText("EvidenceForge")).not.toBeInTheDocument();
   expect(screen.getByText("EvidenceForge")).toBeInTheDocument();
   expect(screen.getByText("Studio")).toBeInTheDocument();
+});
+
+test("an explicit appearance persists, restores on launch and follows other Studio windows", () => {
+  mockSystemAppearance(false);
+  setThemePreference("light");
+  expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  setThemePreference("system");
+  expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+  window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+  const stop = startTheme();
+  expect(themePreference()).toBe("light");
+  expect(document.documentElement.dataset.theme).toBe("light");
+  window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+  act(() => { window.dispatchEvent(new StorageEvent("storage", { key: THEME_STORAGE_KEY })); });
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  stop();
 });

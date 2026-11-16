@@ -9,7 +9,7 @@ if (/\bLinux\b/.test(navigator.userAgent)) {
   document.documentElement.dataset.platform = "linux";
 }
 
-// Follow the macOS light/dark appearance until Settings offers an explicit choice.
+// Apply the saved appearance (System follows macOS light/dark).
 startTheme();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
