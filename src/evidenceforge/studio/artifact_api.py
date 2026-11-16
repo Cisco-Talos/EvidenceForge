@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.background import BackgroundTask
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.artifacts.lifecycle import (
     ArtifactError,
     create_draft,
@@ -484,7 +485,6 @@ def register_artifact_routes(
 
     @app.get("/v1/items/{item_id}/release")
     async def export(item_id: str, studio: Any = Depends(authorized)) -> FileResponse:
-        import shutil
         import tempfile
 
         item = catalog_source(item_id, studio)
@@ -494,10 +494,12 @@ def register_artifact_routes(
             target = temporary / f"{storage_name(item.name)}-{item.version}{extension}"
             await asyncio.to_thread(export_release, item.path, target)
             return FileResponse(
-                target, filename=target.name, background=BackgroundTask(shutil.rmtree, temporary)
+                target,
+                filename=target.name,
+                background=BackgroundTask(remove_owned_tree, temporary),
             )
         except (ArtifactError, OSError, ValueError) as exc:
-            shutil.rmtree(temporary)
+            remove_owned_tree(temporary)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/v1/artifacts/import")

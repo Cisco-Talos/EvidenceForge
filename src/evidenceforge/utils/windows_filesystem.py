@@ -357,10 +357,51 @@ def _private_security_descriptor() -> wintypes.LPVOID:
     return descriptor
 
 
+def capability_sids(name: str) -> frozenset[str]:
+    """Derive named Windows capability identities; never infer trust from a SID prefix."""
+    groups = ctypes.POINTER(wintypes.LPVOID)()
+    capabilities = ctypes.POINTER(wintypes.LPVOID)()
+    group_count, capability_count = wintypes.DWORD(), wintypes.DWORD()
+    derive = _bind(
+        ctypes.WinDLL("kernelbase", use_last_error=True),
+        "DeriveCapabilitySidsFromName",
+        wintypes.BOOL,
+        [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(ctypes.POINTER(wintypes.LPVOID)),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(ctypes.POINTER(wintypes.LPVOID)),
+            ctypes.POINTER(wintypes.DWORD),
+        ],
+    )
+    try:
+        _require(
+            derive(
+                name,
+                ctypes.byref(groups),
+                ctypes.byref(group_count),
+                ctypes.byref(capabilities),
+                ctypes.byref(capability_count),
+            )
+        )
+        return frozenset(_sid(capabilities[index]) for index in range(capability_count.value))
+    finally:
+        for values, count in ((groups, group_count.value), (capabilities, capability_count.value)):
+            for index in range(count):
+                _local_free(values[index])
+            _local_free(ctypes.cast(values, wintypes.LPVOID))
+
+
 def require_private(
-    descriptor: int, *, ancestry: bool = False, allow_read_access: bool = False
+    descriptor: int,
+    *,
+    ancestry: bool = False,
+    allow_read_access: bool = False,
+    cleanup_capabilities: frozenset[str] = frozenset(),
 ) -> None:
     """Validate native token ownership and private access rights on an opened object."""
+    if cleanup_capabilities and (ancestry or not allow_read_access):
+        raise ValueError("Capability access is permitted only for an explicit cleanup inspection")
     owner = wintypes.LPVOID()
     dacl = wintypes.LPVOID()
     security = wintypes.LPVOID()
@@ -408,6 +449,10 @@ def require_private(
             if ace.AceType != 0:
                 raise PermissionError("Windows protected storage has an unsupported ACL entry")
             principal = _sid(pointer.value + _AllowedAce.SidStart.offset)
+            if principal in cleanup_capabilities and not ace.Mask & ~0xE01301BF:
+                # Browser sandbox data may grant Modify, never security/owner
+                # changes or GenericAll. The actual owner must still be this user.
+                continue
             if principal not in trusted | {"S-1-3-4"} and ace.Mask & mutation:
                 raise PermissionError(
                     "Windows protected storage allows another principal to access it: "
@@ -504,6 +549,7 @@ def _open_native(
     temporary: bool = False,
     write_through: bool = False,
     ancestry: bool = False,
+    share_delete: bool = True,
 ) -> int:
     supported_flags = (
         os.O_RDONLY
@@ -577,7 +623,7 @@ def _open_native(
             ctypes.byref(status),
             None,
             0x80,
-            _FILE_SHARE_READ_WRITE | (0 if directory else _FILE_SHARE_DELETE),
+            _FILE_SHARE_READ_WRITE | (0 if directory or not share_delete else _FILE_SHARE_DELETE),
             disposition,
             options,
             None,
@@ -659,7 +705,7 @@ def open_child(
     flags: int,
     mode: int = 0o600,
     *,
-    directory: bool = False,
+    directory: bool | None = False,
     write_through: bool = False,
 ) -> int:
     """Open or exclusively create a child while retaining its parent identity."""
@@ -670,6 +716,9 @@ def open_child(
         directory=directory,
         private=bool(flags & os.O_CREAT and mode in {0o600, 0o700}),
         write_through=write_through,
+        # Unknown-kind inventory children may be directories. Pin their names
+        # just like an explicit directory open until the descriptor is closed.
+        share_delete=directory is False,
     )
 
 
@@ -701,8 +750,13 @@ def same_open_file(first: int, second: int) -> bool:
 
 def list_directory(descriptor: int) -> list[str]:
     """Enumerate a pinned directory through its native handle."""
+    return [name for name, _directory in list_directory_types(descriptor)]
+
+
+def list_directory_types(descriptor: int) -> list[tuple[str, bool]]:
+    """Read names and directory flags together without reopening each child."""
     buffer = ctypes.create_string_buffer(65536)
-    names: list[str] = []
+    names: list[tuple[str, bool]] = []
     information = _FILE_ID_BOTH_DIRECTORY_RESTART_INFO
     while True:
         if not _get_info(_handle(descriptor), information, buffer, len(buffer)):
@@ -717,10 +771,50 @@ def list_directory(descriptor: int) -> list[str]:
             start = offset + _DirectoryInformation.FileName.offset
             name = bytes(buffer[start : start + entry.FileNameLength]).decode("utf-16-le")
             if name not in {".", ".."}:
-                names.append(name)
+                names.append((name, bool(entry.FileAttributes & _FILE_ATTRIBUTE_DIRECTORY)))
             if not entry.NextEntryOffset:
                 break
             offset += entry.NextEntryOffset
+
+
+class _BasicFileInfo(ctypes.Structure):
+    _fields_ = [
+        ("created", ctypes.c_int64),
+        ("accessed", ctypes.c_int64),
+        ("written", ctypes.c_int64),
+        ("changed", ctypes.c_int64),
+        ("attributes", wintypes.DWORD),
+    ]
+
+
+def open_cleanup_child(parent: int, name: str, *, directory: bool) -> int:
+    """Pin one cleanup entry with deletion rights; never follow a reparse point."""
+    return _open_native(
+        name,
+        root=_handle(parent),
+        flags=os.O_RDONLY,
+        directory=directory,
+        extra_access=0 if directory else _DELETE | 0x100,
+        share_delete=False,
+    )
+
+
+def remove_open_cleanup_entry(descriptor: int) -> None:
+    """Delete the pinned entry once, clearing only its read-only attribute if needed."""
+    basic = _BasicFileInfo()
+    _require(_get_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+    if basic.attributes & 0x1:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode) and metadata.st_nlink != 1:
+            raise PermissionError("Read-only removal refuses multiply linked files")
+        basic.attributes = (basic.attributes & ~0x1) or 0x80
+        _require(_set_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+    delete = wintypes.BYTE(1)
+    _require(
+        _set_info(
+            _handle(descriptor), _FILE_DISPOSITION_INFO, ctypes.byref(delete), ctypes.sizeof(delete)
+        )
+    )
 
 
 def remove_child(
@@ -729,10 +823,17 @@ def remove_child(
     *,
     directory: bool = False,
     expected_identity: tuple[int, int] | None = None,
+    clear_readonly: bool = False,
 ) -> None:
     """Delete the opened child through its handle, rejecting reparse points."""
+    if clear_readonly and expected_identity is None:
+        raise ValueError("Read-only removal requires the reviewed object's identity")
     descriptor = _open_native(
-        name, root=_handle(parent), flags=os.O_RDONLY, directory=directory, extra_access=_DELETE
+        name,
+        root=_handle(parent),
+        flags=os.O_RDONLY,
+        directory=directory,
+        extra_access=_DELETE | (0x100 if clear_readonly else 0),
     )
     try:
         metadata = os.fstat(descriptor)
@@ -741,6 +842,13 @@ def remove_child(
             and (int(metadata.st_dev), int(metadata.st_ino)) != expected_identity
         ):
             raise OSError("Windows file identity changed before deletion")
+        if clear_readonly and metadata.st_file_attributes & 0x1:
+            if not directory and metadata.st_nlink != 1:
+                raise PermissionError("Read-only removal refuses multiply linked files")
+            basic = _BasicFileInfo()
+            _require(_get_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+            basic.attributes = (basic.attributes & ~0x1) or 0x80
+            _require(_set_info(_handle(descriptor), 0, ctypes.byref(basic), ctypes.sizeof(basic)))
         delete = wintypes.BYTE(1)
         _require(
             _set_info(

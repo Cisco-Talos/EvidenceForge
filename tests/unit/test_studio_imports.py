@@ -784,3 +784,28 @@ def test_pack_subset_ignores_unselected_conflict_and_assigns_only_new_copies(
         )
         assert imported["name"] == "healthcare"
         assert imported["imported"]
+
+
+def test_dependency_draft_label_keeps_uuid_out_of_the_display_name(tmp_path: Path) -> None:
+    from evidenceforge.artifacts.lifecycle import create_draft
+    from evidenceforge.composition.packs import parse_pack_cli_reference
+    from evidenceforge.schema import update_top_level
+
+    repository = PackRepository(tmp_path)
+    original = repository.create_skeleton(
+        "organization", "test-factory", "1.0.0", publisher="testing", publisher_display_name="Tests"
+    )
+    draft = create_draft(original / "pack.yaml", project_root=tmp_path)
+    draft.write_bytes(
+        update_top_level(draft.read_bytes(), {"display_name": "Factory Organization"})
+    )
+    reference, _kind = parse_pack_cli_reference(str(draft))
+    scenario = _scenario(
+        tmp_path / "scenario.yaml",
+        {"organization": reference.model_dump(mode="json", exclude_none=True)},
+    )
+    health = dependency_health(scenario, tmp_path)
+    row = next(row for row in health.rows if row.kind == "pack" and row.status == "available")
+    assert row.label == "Factory Organization · Draft"
+    assert row.key.startswith("draft-")
+    assert "available for testing" in row.detail

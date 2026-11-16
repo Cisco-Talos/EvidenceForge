@@ -22,6 +22,19 @@ on related inspection, validation, resolution, and generation commands. Otherwis
 
 An authoritative resolved scenario is self-contained; do not pass a project root for it.
 
+Keep the selected project context while working on nested drafts. A draft folder is an
+authoring target, not a replacement project root. If you change directories into a draft,
+run project-level commands from the established workspace again; when the user or calling
+application supplied an explicit root, repeat that root on every related command. This
+applies equally in Studio, standalone Codex and Claude Code.
+
+For pack discovery, use `eforge pack list --json` for published/legacy packs and
+`eforge pack drafts --json` for Schema 3 drafts, with the same project selection.
+Match the user's requested `name` or `display_name` against these inventories. A newly
+published pack is available from the filesystem immediately; no Studio refresh is needed
+by the CLI. Drafts can be used for testing with their exact draft ID and path, without
+pretending they are published versions. Never infer a different root by walking parents.
+
 Never search parents, siblings, the home directory, an installed tool, or a source tree for
 `.eforge`, scenario files, or a supposedly better project root. A scenario elsewhere on disk does
 not implicitly select a neighboring or ancestor `.eforge`. The source checkout affects whether to

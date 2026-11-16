@@ -529,7 +529,8 @@ function App() {
     setWorkspaceTarget("validation");
     try {
       let result: ValidationResult | undefined;
-      if (target.kind === "scenario") result = await api.request<ValidationResult>("/v1/validate", "POST", { scenario_id: target.id });
+      // The CLI allows 180 seconds; leave time for dependency checks and saving its result.
+      if (target.kind === "scenario") result = await api.request<ValidationResult>("/v1/validate", "POST", { scenario_id: target.id }, 240000);
       else {
         try {
           const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
@@ -822,6 +823,7 @@ function App() {
     if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); }
   }
 
+  if (studio.openingWorkspace) return <StartupScreen progress={{ title: "Opening workspace", detail: "Checking workspace storage and loading your scenario library…", percent: null }} error={null} />;
   if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
   if (!snapshot || !api) return <StartupScreen progress={studio.startup} error={studio.error} />;
 

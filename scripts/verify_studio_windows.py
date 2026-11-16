@@ -125,7 +125,7 @@ class _MaintenanceNavigation:
 
     def advance(self, page: int, visible_text: list[str], next_caption: str) -> bool:
         """Wait for known page content before posting its one Next command."""
-        maintenance = "Install / Reinstall (preserve user data)" in visible_text
+        maintenance = "Install / Upgrade (preserve user data)" in visible_text
         self.maintenance_seen |= maintenance
         recognized = (
             maintenance

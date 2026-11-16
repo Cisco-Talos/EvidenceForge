@@ -19,12 +19,13 @@ export function CodexStatusIndicator({ health, api, activeTurns, reconnecting, c
   const reportError = useCallback((message: string) => { setError(message); onError(message); }, [onError]);
   const availability = health.availability || (health.state === "connected" || health.state === "stalled" ? "unavailable" : "disconnected");
   const { login, loginPending, loginStarting } = useCodexAccount(api, open && availability !== "disconnected", reportError);
-  const label = labels[availability];
+  const checking = health.state === "checking" || reconnecting;
+  const label = checking ? "Checking connection" : labels[availability];
   const connected = availability !== "disconnected";
   return <Dialog.Root open={open} onOpenChange={setOpen}>
     <Tooltip.Root>
       <Tooltip.Trigger asChild><Dialog.Trigger asChild>
-        <button className={`codex-indicator ${availability}`} aria-label={`Codex ${label.toLowerCase()}: ${health.detail}`}>
+        <button className={`codex-indicator ${availability}${checking ? " checking" : ""}`} aria-label={`Codex ${label.toLowerCase()}: ${health.detail}`}>
           <span className="codex-indicator-dot" />
         </button>
       </Dialog.Trigger></Tooltip.Trigger>
@@ -36,8 +37,8 @@ export function CodexStatusIndicator({ health, api, activeTurns, reconnecting, c
       <Dialog.Title>Codex status</Dialog.Title>
       <Dialog.Description>{health.detail}</Dialog.Description>
       <dl className="codex-status-details">
-        <div><dt>Connection</dt><dd>{connected ? "Connected" : "Not connected"}</dd></div>
-        <div><dt>Account</dt><dd>{health.account_label || (connected ? "Checking account…" : "Unavailable while disconnected")}</dd></div>
+        <div><dt>Connection</dt><dd>{checking ? "Checking connection…" : connected ? "Connected" : "Not connected"}</dd></div>
+        <div><dt>Account</dt><dd>{health.account_label || (checking || connected ? "Checking account…" : "Unavailable while disconnected")}</dd></div>
         <div><dt>Work status</dt><dd>{label}</dd></div>
       </dl>
       {loginPending && <p role="status">Complete login in your browser. Waiting for sign-in…</p>}

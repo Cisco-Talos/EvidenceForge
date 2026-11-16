@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+
+from evidenceforge._windows_cleanup import remove_owned_tree
 
 from .lifecycle import (
     MAX_BYTES,
@@ -59,7 +60,7 @@ def export_release(source: Path, destination: Path) -> Path:
             os.fsync(stream.fileno())
         return destination
     finally:
-        shutil.rmtree(temporary)
+        remove_owned_tree(temporary)
 
 
 def read_archive(path: Path) -> tuple[ReleaseReceipt, dict[str, bytes]]:
@@ -89,7 +90,7 @@ def read_archive(path: Path) -> tuple[ReleaseReceipt, dict[str, bytes]]:
         _write_files(staging, files)
         receipt = verify_release(staging)
     finally:
-        shutil.rmtree(staging)
+        remove_owned_tree(staging)
     return receipt, files
 
 
@@ -125,5 +126,5 @@ def import_release(path: Path, *, project_root: Path) -> Path:
             _publish_directory(staging, target)
         finally:
             if staging.exists():
-                shutil.rmtree(staging)
+                remove_owned_tree(staging)
     return target / receipt.entrypoint

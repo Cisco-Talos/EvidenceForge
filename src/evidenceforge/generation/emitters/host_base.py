@@ -56,6 +56,7 @@ from evidenceforge.generation.emitters.base import (
     stage_exact_publication_row,
 )
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.file_io import open_generated_file
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,7 @@ class _SingleHostWriter:
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Exact host admission changed on retry")
                 mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
-                with open(filesystem_path(self.output_path), mode) as output:
+                with open_generated_file(self.output_path, mode) as output:
                     output.seek(offset)
                     retained_payload = output.read(payload_length)
                     if retained_payload == payload:
@@ -264,13 +265,13 @@ class _SingleHostWriter:
             filesystem_path(self.output_path).exists()
             and filesystem_path(self.output_path).stat().st_size
         ):
-            with filesystem_path(self.output_path).open("rb") as stream:
+            with open_generated_file(self.output_path, "rb") as stream:
                 retained = stream.read(len(payload))
             if retained != payload:
                 raise ExactPublicationError("Host writer found a conflicting existing header")
             self._header_written = True
             return
-        with filesystem_path(self.output_path).open("wb") as stream:
+        with open_generated_file(self.output_path, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
@@ -340,7 +341,7 @@ class _SingleHostWriter:
             self.buffer.sort(key=self._sort_key)
         self._write_header_unlocked()
         filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
-        with open(filesystem_path(self.output_path), "a", encoding="utf-8", newline="\n") as f:
+        with open_generated_file(self.output_path, "a", encoding="utf-8", newline="\n") as f:
             for entry in self.buffer:
                 f.write(entry)
                 if not entry.endswith("\n"):
@@ -369,7 +370,7 @@ class _SingleHostWriter:
             if pending_digest != digest or payload_length != len(payload):
                 raise ExactPublicationError("Host writer footer changed during retry")
             mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
-            with filesystem_path(self.output_path).open(mode) as output:
+            with open_generated_file(self.output_path, mode) as output:
                 output.seek(offset)
                 retained = output.read(payload_length)
                 if retained == payload:

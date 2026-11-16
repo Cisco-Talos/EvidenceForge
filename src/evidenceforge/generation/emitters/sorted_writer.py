@@ -23,6 +23,7 @@ from evidenceforge.generation.emitters.base import (
     fsync_directory,
     stage_exact_publication_row,
 )
+from evidenceforge.generation.file_io import open_generated_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +490,7 @@ class ExternalSortedLineWriter:
             self._merge_runs_unlocked(self._run_paths, merge_path, export=True)
             # Windows FlushFileBuffers requires a writable handle. Keep the
             # existing read-only POSIX flush path unchanged.
-            with merge_path.open("r+b" if os.name == "nt" else "rb") as stream:
+            with open_generated_file(merge_path, "r+b" if os.name == "nt" else "rb") as stream:
                 os.fsync(stream.fileno())
             os.replace(merge_path, filesystem_path(self.output_path))
             fsync_directory(self.output_path.parent)
@@ -623,7 +624,7 @@ class ExternalSortedLineWriter:
             return
         self._buffer.sort(key=self._sort_key)
         run_path = self._next_run_path_unlocked()
-        with filesystem_path(run_path).open("w", encoding="utf-8", newline="\n") as stream:
+        with open_generated_file(run_path, "w", encoding="utf-8", newline="\n") as stream:
             for line in self._buffer:
                 stream.write(line)
                 stream.write("\n")
@@ -682,7 +683,7 @@ class ExternalSortedLineWriter:
         heap: list[tuple[Any, int, str]] = []
         try:
             for index, path in enumerate(paths):
-                stream = filesystem_path(path).open("r", encoding="utf-8")
+                stream = open_generated_file(path, "r", encoding="utf-8")
                 streams.append(stream)
                 line = self._read_line(stream)
                 if line is not None:
@@ -700,7 +701,7 @@ class ExternalSortedLineWriter:
     def _merge_runs_unlocked(
         self, paths: Sequence[Path], destination: Path, *, export: bool = False
     ) -> None:
-        with filesystem_path(destination).open("w", encoding="utf-8", newline="\n") as stream:
+        with open_generated_file(destination, "w", encoding="utf-8", newline="\n") as stream:
             for line in self._iter_merged_lines(paths):
                 if export and self._export_projection is not None:
                     line = self._export_projection(line)

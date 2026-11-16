@@ -331,3 +331,82 @@ def test_present_schema_marker_is_authoritative_across_compiler_cli_and_import(
             tmp_path / "workspace",
             tmp_path / "cache",
         )
+
+
+def test_publish_is_immediately_discoverable_from_another_draft_without_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import subprocess
+    import sys
+
+    workspace = tmp_path / "workspace with spaces"
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    set_publisher(
+        workspace,
+        PublisherIdentity(publisher="testing", publisher_display_name="Tests"),
+        scope="project",
+        force=False,
+    )
+    app = create_app(_paths(tmp_path / "private"), "lifecycle")
+    with TestClient(app) as client:
+        created = client.post(
+            "/v1/packs",
+            headers=HEADERS,
+            json={
+                "kind": "industry_pack",
+                "name": "test-manufacturing",
+                "display_name": "Manufacturing Test Industry",
+                "description": "Publication discovery fixture",
+            },
+        )
+        assert created.status_code == 200, created.text
+        item = created.json()["item"]
+        published = client.post(
+            f"/v1/items/{item['id']}/lifecycle",
+            headers=HEADERS,
+            json={"action": "publish", "accept_warnings": True},
+        )
+        assert published.status_code == 200, published.text
+        assert any(
+            row.path == Path(published.json()["path"])
+            for row in app.state.studio.store.items(workspace)
+        )
+        created_org = client.post(
+            "/v1/packs",
+            headers=HEADERS,
+            json={
+                "kind": "organization_pack",
+                "name": "test-factory",
+                "display_name": "Factory Test Organization",
+                "description": "Consumer draft fixture",
+            },
+        )
+        assert created_org.status_code == 200, created_org.text
+        directory = Path(created_org.json()["item"]["path"]).parent
+        for command in ("list", "drafts"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "evidenceforge",
+                    "pack",
+                    command,
+                    "--json",
+                    "--project-root",
+                    str(workspace),
+                ],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr + result.stdout
+            payload = json.loads(result.stdout)
+            records = payload["packs"] if command == "list" else payload
+            expected = (
+                "Manufacturing Test Industry" if command == "list" else "Factory Test Organization"
+            )
+            assert any(row.get("display_name") == expected for row in records)

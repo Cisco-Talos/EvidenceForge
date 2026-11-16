@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
 from glob import escape
 from pathlib import Path
 from typing import Any
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.artifacts.run_source import captured_scenario
 from evidenceforge.composition.artifacts import write_resolved_scenario
 from evidenceforge.composition.compiler import compile_scenario
@@ -105,7 +105,7 @@ def queue_studio_generation(
     except (OSError, ValueError, EvidenceForgeError, sqlite3.Error):
         # These directories have just been reserved and have never been published to a worker.
         if snapshot_directory.is_dir():
-            shutil.rmtree(snapshot_directory)
+            remove_owned_tree(snapshot_directory)
         (job.output_root / ".eforge-desktop-job.json").unlink(missing_ok=True)
         job.output_root.rmdir()
         raise

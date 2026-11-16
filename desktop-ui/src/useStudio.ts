@@ -20,6 +20,7 @@ import {
 
 export interface StudioState {
   startup?: StartupProgress;
+  openingWorkspace: string | null;
   maintenance: UpgradeStatus | null;
   upgradeNotice: string | null;
   clearUpgradeNotice: () => void;
@@ -104,6 +105,7 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
 export function useStudio(): StudioState {
   const [startup, setStartup] = useState<StartupProgress>({ title: "Starting Studio", detail: "Connecting to the local service…", percent: null });
   const [maintenance, setMaintenance] = useState<UpgradeStatus | null>(null);
+  const [openingWorkspace, setOpeningWorkspace] = useState<string | null>(null);
   const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
   const [recoveryRevision, setRecoveryRevision] = useState(0);
   const [api, setApi] = useState<StudioApi | null>(null);
@@ -116,6 +118,7 @@ export function useStudio(): StudioState {
   const observedOperation = useRef<string | null>(null);
   const acceptedOperations = useRef(new Set<string>());
   const recoveryInFlight = useRef(false);
+  const workspaceSelectionInFlight = useRef(false);
   const eventListeners = useRef(new Set<(event: StudioEvent) => void>());
   const clearUpgradeNotice = useCallback(() => setUpgradeNotice(null), []);
 
@@ -149,11 +152,20 @@ export function useStudio(): StudioState {
   }, [maintenance]);
 
   const selectRecoveryWorkspace = useCallback(async (path: string) => {
-    if (!apiRef.current) return;
+    if (!apiRef.current || workspaceSelectionInFlight.current || !path.trim()) return;
+    workspaceSelectionInFlight.current = true;
+    setError(null);
+    setOpeningWorkspace(path);
     try {
-      await apiRef.current.request("/v1/workspaces/select", "POST", { path });
+      await apiRef.current.request("/v1/workspaces/select", "POST", { path }, 180000);
+      setMaintenance(null);
+      setSnapshot(null);
       setRecoveryRevision((current) => current + 1);
-    } catch (failure) { setError(String(failure)); setRecoveryRevision((current) => current + 1); }
+    } catch (failure) {
+      setOpeningWorkspace(null);
+      setError(String(failure));
+      setRecoveryRevision((current) => current + 1);
+    } finally { workspaceSelectionInFlight.current = false; }
   }, []);
 
   useEffect(() => {
@@ -170,6 +182,7 @@ export function useStudio(): StudioState {
         const status = await client.request<UpgradeStatus>("/v1/state/status");
         if (disposed) return;
         if (status.state !== "ready") {
+          setOpeningWorkspace(null);
           observedOperation.current = status.operation_id;
           const starting = status.state === "pending" && !status.error && acceptedOperations.current.has(status.operation_id);
           setMaintenance(starting ? { ...status, state: "running", phase: "Starting upgrade" } : status);
@@ -191,6 +204,7 @@ export function useStudio(): StudioState {
         apiRef.current = client;
         setApi(client);
         setSnapshot(initial);
+        setOpeningWorkspace(null);
         setError(null);
 
         socketRef.current = client.subscribe(
@@ -221,6 +235,7 @@ export function useStudio(): StudioState {
         if (!disposed) {
           setLiveState("disconnected");
           setError(String(failure));
+          setOpeningWorkspace(null);
           scheduleReconnect();
         }
       }
@@ -252,5 +267,5 @@ export function useStudio(): StudioState {
     return () => clearInterval(timer);
   }, [api]);
 
-  return { api, snapshot, error, liveState, validations, subscribeEvents, reload, maintenance, upgradeNotice, clearUpgradeNotice, recoverState, selectRecoveryWorkspace, startup };
+  return { api, snapshot, error, liveState, validations, subscribeEvents, reload, maintenance, openingWorkspace, upgradeNotice, clearUpgradeNotice, recoverState, selectRecoveryWorkspace, startup };
 }

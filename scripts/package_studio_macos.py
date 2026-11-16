@@ -293,6 +293,12 @@ def assemble(
             if bootstrap.exists():
                 shutil.rmtree(bootstrap)
             shutil.copytree(payload, bootstrap)
+            if not (bootstrap / "pythonw.exe").is_file():
+                raise RuntimeError("Windows uninstall controls require bundled pythonw.exe")
+            if not (
+                bootstrap / "Lib/site-packages/evidenceforge/studio/windows-controls.manifest"
+            ).is_file():
+                raise RuntimeError("Windows uninstall confirmation requires its controls manifest")
         archives[architecture] = {"archive": target.name, "sha256": digest(target)}
         print(f"Assembled {architecture}: {target.stat().st_size / 1024**2:.1f} MiB", flush=True)
     manifest = {
@@ -313,6 +319,8 @@ def assemble(
                 "nsis": {
                     "installMode": "both",
                     "compression": "zlib",
+                    "installerIcon": str(root / "desktop-ui/src-tauri/icons/icon.ico"),
+                    "uninstallerIcon": str(root / "desktop-ui/src-tauri/icons/icon.ico"),
                     "template": str(root / "desktop-ui/packaging/windows-installer.nsi"),
                     "installerHooks": str(root / "desktop-ui/packaging/windows-hooks.nsh"),
                 },

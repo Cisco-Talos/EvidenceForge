@@ -18,6 +18,7 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.artifacts.scaffolds import scaffold_fingerprint, scenario_scaffold
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.naming import storage_name, validate_display_name, validate_name
@@ -905,7 +906,7 @@ def create_draft(
             _publish_directory(staging, target)
     finally:
         if staging.exists():
-            shutil.rmtree(staging)
+            remove_owned_tree(staging)
     return target / "source" / entry
 
 
@@ -995,7 +996,7 @@ def create_new_draft(
             _publish_directory(staging, target)
     finally:
         if staging.exists():
-            shutil.rmtree(staging)
+            remove_owned_tree(staging)
     return target / "source" / entry
 
 
@@ -1421,7 +1422,7 @@ def publish(
             _publish_directory(staging, destination)
         finally:
             if staging.exists():
-                shutil.rmtree(staging)
+                remove_owned_tree(staging)
     return destination / receipt.entrypoint
 
 

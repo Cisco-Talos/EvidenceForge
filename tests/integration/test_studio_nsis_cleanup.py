@@ -1,0 +1,397 @@
+"""Compile the real NSIS page and exercise its real checkbox/Cancel controls."""
+
+from __future__ import annotations
+
+import base64
+import ctypes
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from collections.abc import Callable
+from ctypes import wintypes as wt
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Native NSIS wizard")
+
+
+def _wait(predicate: Callable[[], bool], failure: str | Callable[[], str]) -> None:
+    deadline = time.monotonic() + 25
+    while not predicate():
+        assert time.monotonic() < deadline, failure() if callable(failure) else failure
+        time.sleep(0.03)
+
+
+def _maker() -> Path:
+    found = shutil.which("makensis")
+    if found:
+        return Path(found)
+    candidates = [
+        Path(os.environ["LOCALAPPDATA"]) / "tauri/NSIS/makensis.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "NSIS/makensis.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    pytest.fail("NSIS must be available after the preview packaging step")
+
+
+def _confirmation_elements(window: int) -> list[dict[str, object]]:
+    """Read the real task dialog through accessibility, including virtual buttons."""
+    script = f"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$dialog = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]{window})
+$elements = $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition)
+$records = @($elements | ForEach-Object {{
+    [pscustomobject]@{{
+        Name = $_.Current.Name
+        Type = $_.Current.ControlType.ProgrammaticName
+        Focus = $_.Current.HasKeyboardFocus
+        Id = $_.Current.AutomationId
+    }}
+}})
+ConvertTo-Json -InputObject $records -Depth 4 -Compress
+"""
+    command = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [
+            str(command),
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode("ascii"),
+        ],
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list), payload
+    return payload
+
+
+@pytest.mark.parametrize("mode", ["cancel-review", "preserve", "private-and-work", "full-clean"])
+def test_real_nsis_choices_and_cancel_remain_independent(tmp_path: Path, mode: str) -> None:
+    from scripts.verify_studio_windows import installer_command
+
+    from evidenceforge.studio.windows_uninstall_native import _function
+
+    root = Path(__file__).resolve().parents[2]
+    folder = tmp_path / "native wizard ü 汉"
+    folder.mkdir()
+    controller = folder / "controller.py"
+    controller.write_text(
+        f"import sys; sys.path[:] = {sys.path!r}; sys.path.insert(0, {str(root)!r})\n"
+        + """
+import sys,time
+from pathlib import Path
+sys.stderr=open(Path(__file__).with_suffix('.log'),'w',buffering=1)
+sys.stdout=sys.stderr
+from evidenceforge.studio import windows_uninstall_session as session
+from evidenceforge.studio.state_io import private_directory
+from evidenceforge.studio.windows_uninstall import UserLocations
+from evidenceforge.studio.windows_uninstall_wizard import WizardControls,run_wizard
+from evidenceforge.utils.windows_filesystem import current_user_sid
+from tests.unit.test_studio_uninstall_wizard import LocalChannel
+root=Path(__file__).parent/'account'
+private_directory(root)
+locations=UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid())
+private_directory(locations.private)
+(locations.private/'sentinel.txt').write_text('private')
+workspace=root/'EvidenceForge'
+(workspace/'scenarios').mkdir(parents=True)
+(workspace/'scenarios/test.yaml').write_text('name: test\\nschema_version: "3.0"\\n')
+(workspace/'unrelated.txt').write_text('preserve')
+(root/'.eforge').mkdir()
+(root/'.eforge/publisher.yaml').write_text('publisher: test\\npublisher_display_name: Test\\n')
+(root/'.codex').mkdir()
+(root/'.codex/auth.json').write_text('preserve sign-in')
+original=session.build_plan
+def inspect(*args,check_cancelled,**kwargs):
+    while not (Path(__file__).parent/'allow-review').exists():
+        check_cancelled()
+        time.sleep(.02)
+    return original(*args,check_cancelled=check_cancelled,**kwargs)
+session.build_plan=inspect
+original_execute=session.execute
+def execute(*args,report_progress,**kwargs):
+    blocked=False
+    def progress(value):
+        nonlocal blocked
+        report_progress(value)
+        if not blocked and value.phase=='removing' and value.completed>0:
+            blocked=True
+            (Path(__file__).parent/'remove-paused').touch()
+            while not (Path(__file__).parent/'allow-remove').exists():
+                time.sleep(.02)
+    return original_execute(*args,report_progress=progress,**kwargs)
+session.execute=execute
+run_wizard(WizardControls(int(sys.argv[1]),int(sys.argv[2]),[int(x) for x in sys.argv[4:9]],int(sys.argv[3])),lambda:LocalChannel(locations))
+""",
+        encoding="utf-8",
+    )
+    if mode != "cancel-review":
+        (folder / "allow-review").touch()
+    template = (root / "desktop-ui/packaging/windows-installer.nsi").read_text()
+    page = template.split("; EFORGE_CLEANUP_PAGE_BEGIN", 1)[1].split(
+        "; EFORGE_CLEANUP_PAGE_END", 1
+    )[0]
+    # Only replace process launch: the NSIS page, styles, notifications, review and
+    # navigation callbacks remain exactly the production template's bytes.
+    launch = next(line for line in page.splitlines() if line.strip().startswith("Exec "))
+    pythonw = Path(getattr(sys, "_base_executable", sys.executable)).with_name("pythonw.exe")
+    assert pythonw.is_file(), "The native Python test environment must include pythonw.exe"
+    command = f"""  Exec '\"{pythonw}\" \"{controller}\" $HWNDPARENT $EForgeCleanupPage $0 $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview $EForgeCleanupProgress' """
+    page = page.replace(launch, command)
+    installer = folder / "harness.exe"
+    script = folder / "harness.nsi"
+    script.write_text(
+        f'''
+Unicode true
+!include MUI2.nsh
+!include nsDialogs.nsh
+!include LogicLib.nsh
+!include WinMessages.nsh
+Name "EvidenceForge Cleanup Harness"
+OutFile "{installer}"
+InstallDir "{folder}"
+RequestExecutionLevel user
+Var PassiveMode
+Var UpdateMode
+!define MAINBINARYNAME Studio
+!define PRODUCTNAME "EvidenceForge Studio"
+!macro CheckIfAppIsRunning binary name
+!macroend
+{page}
+!insertmacro MUI_LANGUAGE English
+Section
+  WriteUninstaller "$INSTDIR\\uninstall.exe"
+SectionEnd
+Section Uninstall
+  FileOpen $0 "$INSTDIR\\uninstalled.txt" w
+  FileWrite $0 "application-only test marker"
+  FileClose $0
+  SetAutoClose true
+SectionEnd
+''',
+        encoding="utf-8-sig",
+    )
+    compiled = subprocess.run(
+        [str(_maker()), "/V2", str(script)],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    installer_command([str(installer), "/S", f"/D={folder}"])
+    uninstaller = str(folder / "uninstall.exe")
+    # NSIS requires its _?= directory override as an unquoted final tail,
+    # including when it contains spaces. Normal argv quoting ignores the
+    # override and instead starts an unrelated temporary-copy process.
+    arguments = subprocess.list2cmdline([uninstaller]) + f" _?={folder}"
+    with subprocess.Popen(arguments, executable=uninstaller) as child:
+        try:
+            callback_type = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+            enum = _function("user32", "EnumWindows", wt.BOOL, [callback_type, wt.LPARAM])
+            pid_for = _function(
+                "user32", "GetWindowThreadProcessId", wt.DWORD, [wt.HWND, ctypes.POINTER(wt.DWORD)]
+            )
+            window = 0
+
+            @callback_type
+            def find(handle: int, parameter: int) -> bool:
+                nonlocal window
+                pid = wt.DWORD()
+                pid_for(handle, ctypes.byref(pid))
+                name = ctypes.create_unicode_buffer(64)
+                _function(
+                    "user32", "GetClassNameW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]
+                )(handle, name, len(name))
+                if pid.value == child.pid and name.value == "#32770":
+                    window = handle
+                return True
+
+            def attached() -> bool:
+                enum(find, 0)
+                return bool(window)
+
+            _wait(
+                attached, lambda: f"Native uninstaller {child.pid} not found; exit={child.poll()}"
+            )
+            controls: dict[str, int] = {}
+
+            @callback_type
+            def collect(handle: int, parameter: int) -> bool:
+                text = ctypes.create_unicode_buffer(1024)
+                _function(
+                    "user32", "GetWindowTextW", ctypes.c_int, [wt.HWND, wt.LPWSTR, ctypes.c_int]
+                )(handle, text, len(text))
+                for label in ("Studio settings", "EvidenceForge skills", "Workspace data"):
+                    if text.value.startswith(label):
+                        controls[label] = handle
+                return True
+
+            def found() -> bool:
+                _function(
+                    "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
+                )(window, collect, 0)
+                return len(controls) == 3
+
+            _wait(found, "Native cleanup checkboxes were not created")
+            _function("user32", "SetForegroundWindow", wt.BOOL, [wt.HWND])(window)
+            send = _function(
+                "user32", "SendMessageW", ctypes.c_ssize_t, [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+            )
+            get = _function("user32", "GetDlgItem", wt.HWND, [wt.HWND, ctypes.c_int])
+            enabled = _function("user32", "IsWindowEnabled", wt.BOOL, [wt.HWND])
+            next_button = get(window, 1)
+
+            def failure() -> str:
+                log = controller.with_suffix(".log")
+                return log.read_text() if log.exists() else "Controller did not start"
+
+            _wait(lambda: bool(enabled(next_button)), failure)
+            assert all(send(handle, 0xF0, 0, 0) == 0 for handle in controls.values())
+            if mode == "cancel-review":
+                for handle in controls.values():
+                    send(handle, 0xF5, 0, 0)  # BM_CLICK, not BM_SETCHECK.
+                assert all(send(handle, 0xF0, 0, 0) == 1 for handle in controls.values())
+                for handle in controls.values():
+                    send(handle, 0xF5, 0, 0)
+                assert all(send(handle, 0xF0, 0, 0) == 0 for handle in controls.values())
+                _wait(lambda: bool(enabled(next_button)), failure)
+                send(controls["Studio settings"], 0xF5, 0, 0)
+                start = time.monotonic()
+                send(get(window, 2), 0xF5, 0, 0)
+                assert child.wait(timeout=5) != 0
+                assert time.monotonic() - start < 5
+            else:
+                if mode in {"private-and-work", "full-clean"}:
+                    send(controls["Studio settings"], 0xF5, 0, 0)
+                    send(controls["Workspace data"], 0xF5, 0, 0)
+                    if mode == "full-clean":
+                        send(controls["EvidenceForge skills"], 0xF5, 0, 0)
+                    _wait(lambda: bool(enabled(next_button)), failure)
+                send(next_button, 0xF5, 0, 0)
+                if mode in {"private-and-work", "full-clean"}:
+
+                    def confirmation() -> int:
+                        found = 0
+
+                        @callback_type
+                        def find_dialog(handle: int, parameter: int) -> bool:
+                            nonlocal found
+                            owner = _function("user32", "GetWindow", wt.HWND, [wt.HWND, wt.UINT])(
+                                handle,
+                                4,  # GW_OWNER
+                            )
+                            title = ctypes.create_unicode_buffer(128)
+                            _function(
+                                "user32",
+                                "GetWindowTextW",
+                                ctypes.c_int,
+                                [wt.HWND, wt.LPWSTR, ctypes.c_int],
+                            )(handle, title, len(title))
+                            if owner == window and title.value == "Uninstall EvidenceForge Studio":
+                                found = handle
+                            return True
+
+                        enum(find_dialog, 0)
+                        return found
+
+                    _wait(lambda: bool(confirmation()), failure)
+                    question = confirmation()
+
+                    elements = _confirmation_elements(question)
+                    (folder / "confirmation.json").write_text(json.dumps(elements, indent=2))
+                    buttons = [
+                        item
+                        for item in elements
+                        if str(item["Name"]).replace("&", "") in {"Yes", "Cancel", "No", "OK"}
+                    ]
+                    names = {str(item["Name"]).replace("&", "") for item in buttons}
+                    assert {"Yes", "Cancel"} <= names and "No" not in names and "OK" not in names, (
+                        elements
+                    )
+                    focused = [item for item in buttons if item["Focus"]]
+                    if focused:
+                        assert any(
+                            str(item["Name"]).replace("&", "") == "Cancel" for item in focused
+                        ), elements
+                    style = _function("user32", "GetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int])
+                    assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
+                    send(question, 0x466, 2, 0)  # TDM_CLICK_BUTTON: Cancel
+                    _wait(lambda: not confirmation() and bool(enabled(next_button)), failure)
+                    assert not (folder / "uninstalled.txt").exists()
+                    assert (folder / "account/AppData/Local/EvidenceForge/sentinel.txt").exists()
+                    send(next_button, 0xF5, 0, 0)
+                    _wait(lambda: bool(confirmation()), failure)
+                    send(confirmation(), 0x466, 6, 0)  # TDM_CLICK_BUTTON: Yes
+                    page = _function("user32", "GetParent", wt.HWND, [wt.HWND])(
+                        controls["Studio settings"]
+                    )
+                    progress = 0
+                    edits: list[int] = []
+
+                    @callback_type
+                    def find_progress(handle: int, parameter: int) -> bool:
+                        nonlocal progress
+                        name = ctypes.create_unicode_buffer(64)
+                        _function(
+                            "user32",
+                            "GetClassNameW",
+                            ctypes.c_int,
+                            [wt.HWND, wt.LPWSTR, ctypes.c_int],
+                        )(handle, name, len(name))
+                        if name.value == "msctls_progress32":
+                            progress = handle
+                        elif name.value.lower() == "edit":
+                            edits.append(handle)
+                        return True
+
+                    _function(
+                        "user32", "EnumChildWindows", wt.BOOL, [wt.HWND, callback_type, wt.LPARAM]
+                    )(page, find_progress, 0)
+                    assert progress and not edits  # No scrolling text/details pane.
+                    _wait(lambda: (folder / "remove-paused").exists(), failure)
+                    _wait(lambda: bool(style(progress, -16) & 0x8), failure)  # PBS_MARQUEE
+                    assert _function("user32", "IsWindowVisible", wt.BOOL, [wt.HWND])(progress)
+                    rect = _function(
+                        "user32", "GetWindowRect", wt.BOOL, [wt.HWND, ctypes.POINTER(wt.RECT)]
+                    )
+                    page_bounds, bar_bounds = wt.RECT(), wt.RECT()
+                    assert rect(page, ctypes.byref(page_bounds))
+                    assert rect(progress, ctypes.byref(bar_bounds))
+                    assert (
+                        page_bounds.top <= bar_bounds.top < bar_bounds.bottom <= page_bounds.bottom
+                    )
+                    assert not enabled(next_button) and not enabled(get(window, 2))
+                    assert child.poll() is None and not (folder / "uninstalled.txt").exists()
+                    (folder / "allow-remove").touch()
+                assert child.wait(timeout=20) == 0, failure()
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+    account = folder / "account"
+    assert (account / "AppData/Local/EvidenceForge/sentinel.txt").exists() is (
+        mode not in {"private-and-work", "full-clean"}
+    )
+    assert (account / "EvidenceForge/scenarios/test.yaml").exists() is (
+        mode not in {"private-and-work", "full-clean"}
+    )
+    assert (account / ".eforge/publisher.yaml").exists() is (mode != "full-clean")
+    assert (account / "EvidenceForge/unrelated.txt").exists() is (mode != "full-clean")
+    assert (account / ".codex/auth.json").read_text() == "preserve sign-in"
+    if mode == "full-clean":
+        assert not (account / "EvidenceForge").exists() and not (account / ".eforge").exists()
+    assert (folder / "uninstalled.txt").exists() is (mode != "cancel-review")

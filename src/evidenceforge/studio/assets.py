@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +16,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_core import to_jsonable_python
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.composition.accounts import (
     AccountTransition,
     account_directory_effects,
@@ -1102,7 +1102,7 @@ def save_asset(source: Path, workspace: Path, inventory: Inventory, edit: AssetE
                     raise FileExistsError("Draft changed during validation; refresh and review")
                 _write_atomic(target, content)
             finally:
-                shutil.rmtree(staged)
+                remove_owned_tree(staged)
             return AssetSaved(path=source)
         path = PackRepository(workspace).copy(
             pack,

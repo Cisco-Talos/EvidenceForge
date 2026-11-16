@@ -18,7 +18,7 @@ def test_unknown_or_initializing_scope_page_never_advances() -> None:
     assert not navigation.advance(101, [], "next >")
     assert not navigation.advance(101, [], "i agree")
     assert not navigation.advance(101, ["Choose what you want to do."], "next >")
-    assert navigation.advance(101, ["Install / Reinstall (preserve user data)"], "next >")
+    assert navigation.advance(101, ["Install / Upgrade (preserve user data)"], "next >")
     assert navigation.maintenance_seen
     assert not navigation.advance(202, [], "next >")
     assert not navigation.advance(202, ["Install for anyone using this computer"], "next >")
@@ -27,7 +27,7 @@ def test_unknown_or_initializing_scope_page_never_advances() -> None:
 
 def test_unavailable_next_caption_does_not_consume_page_transition() -> None:
     navigation = _MaintenanceNavigation()
-    content = ["Install / Reinstall (preserve user data)"]
+    content = ["Install / Upgrade (preserve user data)"]
     assert not navigation.advance(101, content, "")
     assert navigation.advance(101, content, "next >")
     assert not navigation.advance(101, content, "next >")

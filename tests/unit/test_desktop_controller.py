@@ -229,6 +229,84 @@ def test_kill_deletes_only_marked_incomplete_app_bundle(tmp_path: Path) -> None:
     assert complete.output_root.exists() and imported.output_root.exists()
 
 
+@pytest.mark.parametrize("complete", [False, True])
+def test_bundle_delete_retains_ownership_after_partial_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete: bool
+) -> None:
+    job = _generation(tmp_path, "owned", status="completed" if complete else "stopped")
+    marker = job.output_root / ".eforge-desktop-job.json"
+    marker.write_text(json.dumps({"job_id": job.id}))
+    manifest = job.output_root / "GENERATION_MANIFEST.json"
+    if complete:
+        manifest.write_text("{}")
+    objects = job.output_root / ".eforge-generation" / "objects" / "resolved" / "8b"
+    objects.mkdir(parents=True)
+    (objects / "object.yaml").write_text("frozen input")
+    remove = controller._delete_owned_complete if complete else controller._delete_owned_incomplete
+    real_remove = controller.remove_owned_tree
+
+    def fail(path: Path) -> None:
+        (objects / "object.yaml").unlink()
+        raise PermissionError("blocked directory")
+
+    monkeypatch.setattr(controller, "remove_owned_tree", fail)
+    with pytest.raises(PermissionError, match="blocked directory"):
+        remove(job)
+    assert json.loads(marker.read_text()) == {"job_id": job.id}
+    assert manifest.exists() == complete
+    monkeypatch.setattr(controller, "remove_owned_tree", real_remove)
+    assert remove(job)
+    assert not job.output_root.exists()
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_bundle_delete_restores_receipts_when_final_directory_removal_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete: bool
+) -> None:
+    job = _generation(tmp_path, "owned", status="completed" if complete else "stopped")
+    marker = job.output_root / ".eforge-desktop-job.json"
+    marker.write_text(json.dumps({"job_id": job.id}))
+    manifest = job.output_root / "GENERATION_MANIFEST.json"
+    if complete:
+        manifest.write_text("{}")
+    remove = controller._delete_owned_complete if complete else controller._delete_owned_incomplete
+    real_remove = controller.remove_empty_owned_directory
+
+    def fail(path: Path) -> None:
+        assert not marker.exists() and not manifest.exists()
+        raise PermissionError("blocked empty root")
+
+    monkeypatch.setattr(controller, "remove_empty_owned_directory", fail)
+    with pytest.raises(PermissionError, match="blocked empty root"):
+        remove(job)
+    assert json.loads(marker.read_text()) == {"job_id": job.id}
+    assert manifest.exists() == complete
+    monkeypatch.setattr(controller, "remove_empty_owned_directory", real_remove)
+    assert remove(job)
+
+
+def test_bundle_delete_never_restores_receipts_into_a_replacement_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = _generation(tmp_path, "owned", status="stopped")
+    marker = job.output_root / ".eforge-desktop-job.json"
+    marker.write_text(json.dumps({"job_id": job.id}))
+    held = job.output_root.with_name("held")
+
+    def replace(path: Path) -> None:
+        path.rename(held)
+        path.mkdir()
+        (path / "unrelated.txt").write_text("do not change")
+        raise PermissionError("root replaced")
+
+    monkeypatch.setattr(controller, "remove_empty_owned_directory", replace)
+    with pytest.raises(PermissionError, match="root replaced"):
+        controller._delete_owned_incomplete(job)
+    assert not marker.exists()
+    assert (job.output_root / "unrelated.txt").read_text() == "do not change"
+    assert not controller._delete_owned_incomplete(job)
+
+
 def test_pause_setting_rejects_new_checkpoint_disabled_run(tmp_path: Path) -> None:
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text("version: '1.0'\n", encoding="utf-8")

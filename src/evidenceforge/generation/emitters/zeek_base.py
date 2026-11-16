@@ -48,6 +48,7 @@ from queue import Empty
 from threading import Condition, Lock, get_ident
 from typing import Any
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.events.evidence_source_rules import (
     native_zeek_connection_history as native_zeek_connection_history,
 )
@@ -69,6 +70,7 @@ from evidenceforge.generation.emitters.base import (
     stage_exact_publication_row,
 )
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.file_io import open_generated_file
 from evidenceforge.generation.network_observation import (
     compatibility_network_source_duration,
     compatibility_network_source_time,
@@ -290,17 +292,21 @@ class _SingleZeekWriter:
                         raise ExactPublicationError("Exact sensor publication row changed on retry")
                     return
                 self._flush_unlocked()
-                self.output_path.parent.mkdir(parents=True, exist_ok=True)
+                filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
                 pending = self._exact_file_pending.get(key)
                 if pending is None:
-                    offset = self.output_path.stat().st_size if self.output_path.exists() else 0
+                    offset = (
+                        filesystem_path(self.output_path).stat().st_size
+                        if filesystem_path(self.output_path).exists()
+                        else 0
+                    )
                     pending = (digest, offset, len(payload))
                     self._exact_file_pending[key] = pending
                 pending_digest, offset, payload_length = pending
                 if pending_digest != digest or payload_length != len(payload):
                     raise ExactPublicationError("Exact sensor admission changed on retry")
-                mode = "r+b" if self.output_path.exists() else "w+b"
-                with open(self.output_path, mode) as output:
+                mode = "r+b" if filesystem_path(self.output_path).exists() else "w+b"
+                with open_generated_file(self.output_path, mode) as output:
                     output.seek(offset)
                     retained_payload = output.read(payload_length)
                     if retained_payload == payload:
@@ -382,11 +388,14 @@ class _SingleZeekWriter:
             self._require_open_locked()
             with self._lock:
                 self._flush_unlocked()
-                if not self._sort_before_flush or not self.output_path.exists():
+                if not self._sort_before_flush or not filesystem_path(self.output_path).exists():
                     return
-                lines = self.output_path.read_text(encoding="utf-8").splitlines()
+                with open_generated_file(self.output_path, "r", encoding="utf-8") as stream:
+                    lines = stream.read().splitlines()
                 lines.sort(key=self._sort_key or (lambda line: line))
-                with self.output_path.open("w", encoding="utf-8", newline="\n") as stream:
+                with open_generated_file(
+                    self.output_path, "w", encoding="utf-8", newline="\n"
+                ) as stream:
                     for line in lines:
                         stream.write(line)
                         stream.write("\n")
@@ -399,8 +408,8 @@ class _SingleZeekWriter:
                 self.buffer.sort(key=self._sort_key)
             else:
                 self.buffer.sort()
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.output_path, "a", encoding="utf-8") as f:
+        filesystem_path(self.output_path.parent).mkdir(parents=True, exist_ok=True)
+        with open_generated_file(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
                 f.write(entry)
                 if not entry.endswith("\n"):

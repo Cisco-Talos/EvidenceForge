@@ -71,3 +71,20 @@ test("forecast refresh retains the estimate, reports failure inline, and support
   expect(screen.getByRole("status")).toHaveTextContent("Checked");
   expect(screen.queryByText("Previous estimate is shown below.")).toBeNull();
 });
+
+test("Windows forecasts match drive casing, path separators and saved workspace keys", () => {
+  const workspace = "c:\\Users\\david\\EvidenceForge";
+  const windows = { ...record, result: { ...record.result, destination: "C:\\Users\\david\\EvidenceForge\\runs" } } as PredictionRecord;
+  const state = { ...snapshot, settings: { ...snapshot.settings, workspace }, forecasts: { scenario: windows } } as StudioSnapshot;
+  expect(currentPrediction(item, state)).toBe(windows);
+  const custom = { ...windows, result: { ...windows.result, destination: "D:\\Data\\Studio runs" } } as PredictionRecord;
+  expect(currentPrediction(item, { ...state, settings: { ...state.settings, output_parents: { "C:/Users/david/EvidenceForge": "d:/data/Studio runs" } }, forecasts: { scenario: custom } })).toBe(custom);
+  const unavailable = { ...windows, result: { ...windows.result, available: false, error: "Resource probe failed" } } as PredictionRecord;
+  render(<ResourceForecastPanel item={item} snapshot={{ ...state, forecasts: { scenario: unavailable } }} api={{} as StudioApi} onChanged={async () => undefined} onError={vi.fn()} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Resource probe failed");
+  expect(screen.queryByText(/Calculating an estimate/)).not.toBeInTheDocument();
+});
+
+test("POSIX forecast destinations remain case-sensitive", () => {
+  expect(currentPrediction(item, { ...snapshot, settings: { ...snapshot.settings, output_parents: { "/workspace": "/Workspace/runs" } } })).toBeUndefined();
+});

@@ -72,6 +72,58 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1 — Windows install/uninstall field-test acceptance:** On November 16 the
+  user accepted the tested installation and uninstall flows after the laptop
+  test/fix loop, including optional content cleanup, responsive review and removal
+  progress. This closes the reported functional/performance blocker for the tested
+  profile; no numeric timing benchmark or untested account/scope matrix is claimed.
+  Full CI and remaining Windows desktop qualification stay separate. See the
+  [acceptance record](docs/worklog/2026-11-11-studio-windows-x86_64.md#windows-installuninstall-user-acceptance-november-16).
+
+- [ ] **P1 — Windows authoring smoke generation checkpoint rename failure:**
+  A draft-local CLI smoke run validates and forecasts, then fails acquiring its run
+  lock with WinError 6 in WindowsCheckpointIO.mkdir -> replace_child -> native
+  directory rename. Reproduce under Studio's Windows authoring sandbox and identify
+  the rejected handle/operation without weakening isolation, locks or durability.
+  Ordinary Studio generation succeeds; that does not qualify this separate path.
+  See the [laptop trace](docs/worklog/2026-11-11-studio-windows-x86_64.md#successful-scenario-pipeline-with-authoring-and-ui-follow-ups-november-13).
+
+- [ ] **P2 — Unrequested command menu after New Scenario:** Reproduce the repeated
+  laptop report that creating a scenario opens its chat with the command menu over
+  it, without the user invoking a shortcut. Inspect modal dismissal/focus, keyboard
+  dispatch and pointer activation; fix the opening trigger rather than assuming
+  user input or merely clearing the overlay after the fact. Cover all platforms.
+
+- [ ] **P2 — Validation latency and operation lifetime:** The laptop repeatedly
+  reports "signal is aborted without reason" before validation succeeds on retry,
+  including an ordinary validation after reinstall, without Fix in Chat. The API's
+  15-second default was shorter than the CLI's 180-second limit; the next preview
+  allows four minutes and explains timeouts without automatic retry. Profile cold
+  validation/dependency refresh and reconcile late results, cancellation/reconnect
+  and previous-result retention. A larger client allowance is not proof that the
+  underlying latency or operation-lifetime behavior has been resolved. See the
+  [Windows follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#cleanup-pipe-deadlock-and-recurring-validation-abort-november-13).
+
+- [ ] **P2 — Optional native file and folder browsers throughout Studio:** Review every
+  file/path entry point, including startup workspace recovery, Settings, imports,
+  exports and executable selection. Offer an appropriate optional file/folder chooser
+  on macOS, Linux and Windows while retaining direct path entry. This is deferred UI
+  work; do not bundle it into the immediate workspace-opening feedback repair.
+
+- [ ] **P2 — Supported Studio workspace relocation:** Provide a reviewed move/relink
+  workflow on all platforms that preserves scenario/pack registrations, projects,
+  conversations, validation history, generated runs and evaluations. Account for
+  absolute paths, Codex sessions, private metadata and retained checkpoints; preserve
+  immutable provenance. Back up state, block active writers and handle destination
+  conflicts and interrupted moves. Selecting another workspace currently does not
+  migrate these associations. See the
+  [Windows laptop follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [ ] **P3 — Move a workspace from Settings:** Once supported relocation is available,
+  offer an explicit option to move workspace content to a newly selected location,
+  with review and clear progress. Keep opening an existing workspace distinct from
+  moving the current workspace. Depends on the P2 relocation/history work above.
+
 - [x] **P1 — Windows x86_64 Studio CI preview:** Implemented the unsigned dual-scope
   NSIS installer, standalone payload, private runtimes and native Studio/recovery gates
   through PR #477. Installed verification and native regression/package evidence
@@ -111,9 +163,15 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
-  Exercise all three optional uninstall cleanup choices and subsequent fresh setup;
-  verify default preservation and cleanup ownership when another administrator elevates.
+  The user accepted the tested install/uninstall flows on November 16; retain
+  untested scope/UAC combinations, subsequent fresh setup as applicable, and cleanup
+  ownership when another administrator elevates as explicit qualification checks.
   Genuine separate-account isolation remains required before claiming that capability.
+  Laptop test/fix iterations may use explicit unqualified build-only Windows previews;
+  full CI and installer qualification remain required before declaring testing complete.
+  Qualify the local `%USERPROFILE%\EvidenceForge` default, separate run destinations,
+  retained legacy workspace paths and retryable deletion of read-only checkpoint trees.
+  Cloud-synced active workspaces/run folders remain outside the local-NTFS baseline.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   This preview excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
@@ -136,13 +194,18 @@ exact instances and independent restrictions. Validation and comparison evidence
   per-record input protections; verify score equivalence and memory use on large
   datasets. See the [Studio evaluation diagnosis](docs/worklog/2026-11-10-ground-truth-reconciliation.md#live-studio-evaluation-failure-diagnosis).
 
-- [ ] **P1 — Reconcile full mixed-fleet ground-truth acceptance:** The unchanged
+- [ ] **P0 — Reconcile full mixed-fleet ground-truth acceptance (release blocker):** The unchanged
   canonical iteration benchmark fails schema-v5 agreement despite strong blind
   source reviews. Qualify remaining native projection requirements, missing or
   duplicate evidence, capability/filter decisions and timing dependencies against
   exact records; repair their owners without lowering the 95% gate or changing
   the workload. Current repairs and residual evidence are in the
   [assessment worklog](docs/worklog/2026-11-11-iteration-test-loops89-98.md).
+  The Windows laptop report also exposes shared SMTP boolean comparison, DNS SRV
+  projection and HTTP proxy CONNECT-expectation defects reproduced on macOS. Track
+  those as general data-quality work, separately from Windows installer/Studio
+  acceptance; remaining capability/filter disagreements still need exact-bundle
+  diagnosis. See the [laptop report analysis](docs/worklog/2026-11-11-studio-windows-x86_64.md#shared-evidence-disagreements-reproduced-on-macos-november-13).
 
 - [ ] **P2 — Remove the shared Linux PID churn floor:** Ten hosts share a
   940-PID ten-minute mode caused by clipping hidden churn to temporal reorder

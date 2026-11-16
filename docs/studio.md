@@ -104,10 +104,22 @@ its disposable Windows runner exercises both installation scopes and writes a
 verification report alongside the artifact. The verifier refuses to run on an
 ordinary workstation or one with an existing Studio installation.
 
-During development, **Windows Studio Preview** runs Windows-only checks/builds on
-each push to `codex/studio-windows-x86_64`, with dependency/build caches and
-cancellation of superseded runs. Normal integration runs the full cross-platform
-CI gates; the preview remains independently available through Installer Builds.
+During development, dispatch **Windows Studio Preview** on a feature branch. Its
+default mode runs native Windows checks and installer qualification. For rapid
+laptop test/fix iterations, select the explicit `build-only` option:
+
+```sh
+gh workflow run windows-preview.yml --ref YOUR_FEATURE_BRANCH -f build-only=true
+```
+
+This mode builds the unsigned EXE and checksum without running acceptance suites.
+It uploads `unqualified-windows-installer-x86_64`, with `.build.json` metadata
+identifying the source commit, runtime payload, toolchain and `qualification: not_run`.
+The normal qualified artifact remains `preview-installer-windows-x86_64` and requires
+both native service/recovery and installed-scope verification. Dependency/build
+caches and cancellation of superseded runs apply to both modes. Run full
+cross-platform CI and qualified installer checks before declaring testing complete;
+normal PR integration gates and Installer Builds retain their existing defaults.
 
 Windows 11 interactive testing must still cover downloaded-file trust controls,
 both scopes, cancelled UAC, separate administrator credentials and intended-user
@@ -132,18 +144,38 @@ unchecked removes only the application:
   the account's `.agents/skills`, legacy `.codex/skills` and `.claude/commands/eforge`,
   plus `.eforge/publisher.yaml`. This also affects standalone CLI/agent integrations.
   Listed skill files include local edits; unrelated files and skill parents stay.
-- **Authored scenarios/packs and generated output:** exact app-managed folders,
+- **Workspace data:** exact app-managed folders,
   recognized scenario files and run bundles in known workspaces, plus the account's
   imported pack-release library. The workspace
-  root, unrelated files, other accounts and external/custom output parents stay.
+  root, unrelated files, other accounts and external/custom output parents stay
+  when only some cleanup categories are selected.
 
-The review shows the account and exact paths before a separate irreversible-delete
-confirmation. Deleting synced content may also delete its cloud copies. Canceling
-before confirmation removes no data and cancels application uninstall. Active
+Selecting **all three** performs a full clean of dedicated EvidenceForge folders,
+including their unregistered and manually added content: the default and known
+legacy `EvidenceForge` workspace roots, `%USERPROFILE%\.eforge`, both private
+Studio data roots, and the individual EvidenceForge skill folders. Shared agent
+parents and sign-in data stay. Arbitrary custom workspace containers retain
+selective cleanup and unrelated content.
+
+Clicking **Uninstall** with any content selected opens an **Are you sure?**
+confirmation listing only the selected categories, with **Yes / Cancel** buttons
+and **Cancel** selected by default. Choosing Cancel returns to the choices without
+starting deletion. Application-only
+removal does not ask this content question. The page uses a short status line and
+a progress bar rather than a scrolling details pane. Checkbox selection checks
+the selected roots without enumerating their contents. Shared locations retain
+selective discovery of known EvidenceForge files. Folder approval covers its
+current contents when removal reaches them, including changes since selection.
+Removal uses one pass and one animated progress display, without a separate
+inventory, staging tree or rollback copy. Windows still has to delete each file.
+Deleting synced content may also delete its cloud copies. Canceling before
+confirmation removes no data and cancels application uninstall. Active
 helpers, retained jobs, runtime leases, publishing and run ownership block cleanup;
 cleanup never terminates jobs. Links, junctions, unsafe ownership, unsupported
-filesystems and files changed since review cause refusal. Remaining staged data
-is identified if deletion stops after it starts.
+filesystems and replaced folder roots cause refusal. If removal encounters a
+locked or unsafe entry, it stops and reports that some selected content may already
+be gone. It preserves content recreated after writer fences close rather than
+starting another recursive pass.
 
 For **Everyone**, the app uninstaller may be elevated, but cleanup runs using the
 same-session Windows desktop user's unelevated token and Known Folders. It never
@@ -275,11 +307,36 @@ is idle and retry the failed command.
 
 ## Start with a workspace
 
-Studio creates a default workspace in your Documents directory named `EvidenceForge`.
-On Linux it uses the Documents directory configured through XDG; if no distinct Documents
-directory is configured, it uses `~/EvidenceForge`.
+On Windows, Studio creates new workspaces in `%USERPROFILE%\EvidenceForge`
+(typically `C:\Users\<user>\EvidenceForge`), outside Documents folder backup.
+On macOS the default is `~/Documents/EvidenceForge`. On Linux it uses the Documents
+directory configured through XDG; if no distinct Documents directory is configured,
+it uses `~/EvidenceForge`. Saved workspace choices and explicit overrides stay unchanged.
 Use **Settings → Workspace** to select another location. Workspace selection is independent of
 where Studio was launched. Projects organize library entries within a workspace.
+
+**Generated runs folder** selects a separate destination for new generations in the active
+workspace; leave it empty to use `<workspace>/runs`. Saving it does not move existing runs,
+change their recovery paths or detach their history. Resource forecasts use the same saved
+destination. To keep an existing OneDrive scenario library while testing locally, set this
+field to `C:\Users\<user>\EvidenceForge\runs`, then save settings before starting a new run.
+
+Use a local disk for active generation and checkpoints. The Windows preview's storage
+baseline is local NTFS; OneDrive and other cloud-synced active workspaces/run folders are
+unsupported for active use in this preview. Large datasets and the creation/deletion of
+checkpoint objects can trigger
+heavy synchronization, transient sharing conflicts and OneDrive bulk-deletion prompts.
+Documents folder backup can redirect the Windows Documents known folder into OneDrive even
+when a separate physical `C:\Users\<user>\Documents` folder exists. Studio does not disable
+sync safeguards or migrate files automatically. Back up completed bundles and authored work.
+Relocating a whole workspace with its Studio history is not currently supported. Selecting
+the copied folder registers a different workspace: source files can be rediscovered, but
+conversations, validation results, project associations and job history in the private
+Studio database remain associated with the original location. Copied run folders are not
+automatically reattached to that history, and saved jobs/checkpoints can contain absolute
+paths. Preserve the private Studio data and copied files rather than editing database paths
+or immutable run metadata manually. Custom run destinations remain
+preserved by clean uninstall and should be managed/backed up separately.
 
 For a first run:
 

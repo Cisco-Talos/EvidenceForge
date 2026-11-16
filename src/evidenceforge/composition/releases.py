@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 import yaml
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.models.exceptions import PackError
 
 from .models import PackReference
@@ -241,7 +242,7 @@ def _validate_archive_pack_graph(validated: ValidatedEFPack) -> None:
                 f".efpack contains unrelated releases outside the root closure: {extras}"
             )
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        remove_owned_tree(staging, ignore_errors=True)
 
 
 def _validate_locked_closure(
@@ -396,10 +397,10 @@ def import_efpack(
                 published.append(destination)
         except OSError as exc:
             for destination in reversed(published):
-                shutil.rmtree(destination, ignore_errors=True)
+                remove_owned_tree(destination, ignore_errors=True)
             raise PackError(f"unable to publish .efpack release closure: {exc}") from exc
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        remove_owned_tree(staging, ignore_errors=True)
     return {"scope": scope, "root": validated.root, "members": list(validated.members)}
 
 
@@ -501,12 +502,12 @@ def hydrate_release(
             published.append(destination)
     except (OSError, PackError) as exc:
         for destination in reversed(published):
-            shutil.rmtree(destination, ignore_errors=True)
+            remove_owned_tree(destination, ignore_errors=True)
         if isinstance(exc, PackError):
             raise
         raise PackError(f"unable to hydrate release closure: {exc}") from exc
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        remove_owned_tree(staging, ignore_errors=True)
     return {
         "reference": reference,
         "scope": scope,

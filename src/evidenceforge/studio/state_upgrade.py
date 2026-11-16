@@ -49,6 +49,7 @@ from evidenceforge.studio.state_migrations import (
     FilesystemMigration,
     ordered_chain,
 )
+from evidenceforge.studio.state_settings_document import decode_settings_document
 
 logger = logging.getLogger(__name__)
 
@@ -182,32 +183,11 @@ def json_bytes(value: BaseModel | dict[str, object]) -> bytes:
 
 def settings_document(path: Path) -> tuple[int, dict[str, object]]:
     """Decode the disk envelope before loading current settings models."""
-    from evidenceforge.studio.state_records_v1 import StudioSettings
-
     if not path.exists():
         from evidenceforge.studio.settings import StudioSettings as CurrentSettings
 
         return 0, CurrentSettings().model_dump(mode="json")
-    raw = read_json(path)
-    version = raw.get("schema_version", 0)
-    if type(version) is not int or version not in (0, 1, 2, 3, 4):
-        raise StudioStateError(
-            f"Unsupported Studio settings version {version}; use a compatible release"
-        )
-    if version >= 1:
-        if set(raw) != {"schema_version", "settings"} or not isinstance(raw["settings"], dict):
-            raise StudioStateError("Invalid versioned Studio settings envelope")
-        values = raw["settings"]
-    else:
-        values = raw
-    if version == 2:
-        from evidenceforge.studio.state_records_v3 import StudioSettings
-    elif version == 3:
-        from evidenceforge.studio.state_settings_v3 import StudioSettings
-    elif version == 4:
-        from evidenceforge.studio.state_settings_v4 import StudioSettings
-    StudioSettings.model_validate(values)
-    return version, values
+    return decode_settings_document(read_json(path))
 
 
 def check_workers(database: Path) -> None:

@@ -278,7 +278,7 @@ Function PageReinstall
   ${IfNot} ${Silent}
   ${AndIf} $PassiveMode <> 1
     StrCpy $R1 "Studio is already installed. Choose an action before selecting the installation scope."
-    StrCpy $R2 "Install / Reinstall (preserve user data)"
+    StrCpy $R2 "Install / Upgrade (preserve user data)"
     StrCpy $R3 "Uninstall"
     !insertmacro MUI_HEADER_TEXT "EvidenceForge Studio maintenance" "Choose what you want to do."
   ${EndIf}
@@ -463,13 +463,109 @@ Function RunMainBinary
   ; Studio must be launched normally after the elevated installer exits.
 FunctionEnd
 
-; Uninstaller Pages
-; 1. Confirm uninstall page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
-!insertmacro MUI_UNPAGE_CONFIRM
+; Uninstaller Pages: one native page for confirmation, optional choices and review.
+; EFORGE_CLEANUP_PAGE_BEGIN
+; Also compiled by the focused native harness.
+!define MUI_CUSTOMFUNCTION_UNABORT un.EForgeCleanupAbort
+Var EForgeCleanupPage
+Var EForgeCleanupPrivate
+Var EForgeCleanupSkills
+Var EForgeCleanupWork
+Var EForgeCleanupReview
+Var EForgeCleanupProgress
+Var EForgeCleanupProcess
 
-; 2. Uninstalling Page
+UninstPage custom un.EForgeCleanupCreate un.EForgeCleanupLeave
 !insertmacro MUI_UNPAGE_INSTFILES
+
+Function un.EForgeCleanupCreate
+  ${If} ${Silent}
+  ${OrIf} $PassiveMode == 1
+  ${OrIf} $UpdateMode == 1
+    Abort
+  ${EndIf}
+  !insertmacro MUI_HEADER_TEXT "Uninstall EvidenceForge Studio" "Review the application and optional user data removal."
+  nsDialogs::Create 1018
+  Pop $EForgeCleanupPage
+  ${If} $EForgeCleanupPage == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateLabel} 0 0 100% 20u "Uninstalling from: $INSTDIR"
+  Pop $0
+  ${NSD_CreateLabel} 0 22u 100% 22u "Selected data is permanently removed. Check all three for entire EvidenceForge folders; keep all unchecked to preserve data."
+  Pop $0
+  ${NSD_CreateCheckbox} 0 46u 100% 12u "Studio settings, credentials, caches and retained runtimes"
+  Pop $EForgeCleanupPrivate
+  ${NSD_OnClick} $EForgeCleanupPrivate un.EForgeCleanupChanged
+  ${NSD_CreateCheckbox} 0 61u 100% 12u "EvidenceForge skills and global publisher identity (also used by the CLI)"
+  Pop $EForgeCleanupSkills
+  ${NSD_OnClick} $EForgeCleanupSkills un.EForgeCleanupChanged
+  ${NSD_CreateCheckbox} 0 76u 100% 12u "Workspace data (entire dedicated folders when all three are selected)"
+  Pop $EForgeCleanupWork
+  ${NSD_OnClick} $EForgeCleanupWork un.EForgeCleanupChanged
+  ${NSD_CreateLabel} 0 96u 100% 30u "Preparing cleanup controls… You may cancel."
+  Pop $EForgeCleanupReview
+  ${NSD_CreateProgressBar} 0 -11u 100% 9u ""
+  Pop $EForgeCleanupProgress
+  ShowWindow $EForgeCleanupProgress ${SW_HIDE}
+  GetDlgItem $0 $HWNDPARENT 1
+  SendMessage $0 ${WM_SETTEXT} 0 "STR:Uninstall"
+  EnableWindow $0 0
+  StrCpy $EForgeCleanupProcess 0
+  System::Call 'kernel32::GetCurrentProcessId()i.r0'
+  ; pythonw keeps the controller invisible. It never creates a top-level window.
+  ClearErrors
+  Exec '"$INSTDIR\runtime\bootstrap\pythonw.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --wizard-window $HWNDPARENT --page-window $EForgeCleanupPage --wizard-pid $0 --controls $EForgeCleanupPrivate $EForgeCleanupSkills $EForgeCleanupWork $EForgeCleanupReview $EForgeCleanupProgress'
+  ${If} ${Errors}
+    ${NSD_SetText} $EForgeCleanupReview "Cleanup controls could not start. Cancel and reinstall Studio before retrying. No data was removed."
+  ${EndIf}
+  nsDialogs::Show
+FunctionEnd
+
+Function un.EForgeCleanupChanged
+  Pop $0
+  System::Call 'user32::SetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Ready", p 0)i.r0'
+  GetDlgItem $0 $HWNDPARENT 1
+  EnableWindow $0 0
+FunctionEnd
+
+Function un.EForgeCleanupLeave
+  System::Call 'user32::GetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Done")p.r0'
+  ${If} $0 <> 0
+    ; The controller and its account worker must exit before removing app files.
+    ${If} $EForgeCleanupProcess <> 0
+      System::Call 'kernel32::WaitForSingleObject(p $EForgeCleanupProcess, i 5000)i.r0'
+      ${If} $0 <> 0
+        Abort
+      ${EndIf}
+      System::Call 'kernel32::CloseHandle(p $EForgeCleanupProcess)'
+      StrCpy $EForgeCleanupProcess 0
+    ${EndIf}
+    Return
+  ${EndIf}
+  System::Call 'user32::GetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Ready")p.r0'
+  ${If} $0 <> 0
+    !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+    ${If} $EForgeCleanupProcess == 0
+      System::Call 'user32::GetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Pid")p.r0'
+      System::Call 'kernel32::OpenProcess(i 0x100000, i 0, i r0)p.r1'
+      StrCpy $EForgeCleanupProcess $1
+      ${If} $EForgeCleanupProcess == 0
+        Abort
+      ${EndIf}
+    ${EndIf}
+    System::Call 'user32::SetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Commit", p 1)i.r0'
+  ${EndIf}
+  Abort
+FunctionEnd
+
+Function un.EForgeCleanupAbort
+  System::Call 'user32::GetPropW(p $EForgeCleanupPage, w "EvidenceForge.Cleanup.Busy")p.r0'
+  ${If} $0 <> 0
+    Abort ; An explicitly approved deletion must reach its result before exit.
+  ${EndIf}
+FunctionEnd
+; EFORGE_CLEANUP_PAGE_END
 
 ;Languages
 {{#each languages}}
@@ -796,19 +892,7 @@ Section Uninstall
 
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
-  ; Upgrades and silent/passive uninstall preserve data. Review cleanup under the
-  ; original desktop token, never the UAC administrator's token.
-  ${IfNot} ${Silent}
-  ${AndIf} $PassiveMode <> 1
-  ${AndIf} $UpdateMode <> 1
-    nsExec::ExecToStack '"$INSTDIR\runtime\bootstrap\python.exe" -I -B -X utf8 -m evidenceforge.studio.windows_uninstall --broker'
-    Pop $0
-    Pop $1
-    ${If} $0 != "0"
-      SetErrorLevel 1
-      Abort
-    ${EndIf}
-  ${EndIf}
+  ; Account-bound data review completed before entering the progress page.
 
   ; Delete the app directory and its content from disk
   ; Copy main executable

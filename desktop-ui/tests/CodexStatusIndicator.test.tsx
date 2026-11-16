@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
@@ -23,6 +24,23 @@ function setup(health: CodexHealth, activeTurns = 0) {
   const view = render(<Tooltip.Provider><CodexStatusIndicator {...props} /></Tooltip.Provider>);
   return { request, onReconnect, onError, ...view, props };
 }
+
+test("startup checking is distinct from a failed connection and becomes ready without reconnect", async () => {
+  const { props, rerender, onReconnect } = setup({ state: "checking", availability: "disconnected", detail: "Checking Codex connection" });
+  const indicator = screen.getByRole("button", { name: /^Codex checking connection:/ });
+  expect(indicator).toHaveClass("checking");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /^Codex checking connection:/ }));
+  const dialog = screen.getByRole("dialog", { name: "Codex status" });
+  expect(within(dialog).getByText("Checking connection…")).toBeVisible();
+  expect(within(dialog).queryByText("Not connected")).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Login" })).toBeDisabled();
+  rerender(<Tooltip.Provider><CodexStatusIndicator {...props} health={{ state: "connected", availability: "ready", detail: "Codex is ready", account_label: "Signed in" }} /></Tooltip.Provider>);
+  expect(indicator).toHaveAccessibleName("Codex ready for work: Codex is ready");
+  expect(indicator).not.toHaveClass("checking");
+  expect(within(dialog).getByText("Connected", { exact: true })).toBeVisible();
+  expect(onReconnect).not.toHaveBeenCalled();
+});
 
 test.each([
   { state: "disconnected", availability: "disconnected", detail: "Codex CLI was not found", enabled: false },

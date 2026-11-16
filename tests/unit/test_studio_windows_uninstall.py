@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,14 @@ import pytest
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
 from evidenceforge.studio.state_io import StateLock, StudioStateError, private_directory
-from evidenceforge.studio.windows_uninstall import UserLocations, build_plan, describe, execute
+from evidenceforge.studio.windows_uninstall import (
+    Category,
+    CleanupPlan,
+    UserLocations,
+    build_plan,
+    describe,
+    execute,
+)
 
 
 @pytest.fixture
@@ -78,6 +86,19 @@ def test_selected_categories_are_independent_and_other_accounts_stay(
     assert other_account.read_text() == "preserve"
     assert unrelated.read_text() == "preserve"
     assert not list(locations.profile.rglob(".eforge-uninstall-*"))
+
+
+def test_clean_uninstall_finds_local_default_even_after_private_settings_are_removed(
+    locations: UserLocations,
+) -> None:
+    local = locations.profile / "EvidenceForge"
+    work = write(local / ".eforge/artifacts/drafts/scenario/source.yaml")
+    unrelated = write(local / "my-notes.txt")
+    legacy = write(locations.documents / "EvidenceForge/.eforge/artifacts/legacy/source.yaml")
+    plan = build_plan(locations)
+    execute(plan, {"work"})
+    assert not work.exists() and not legacy.exists()
+    assert unrelated.read_text() == "preserve"
 
 
 def test_modified_known_skills_are_explicit_and_unrelated_files_survive(
@@ -199,13 +220,16 @@ def test_native_template_orders_maintenance_before_scope_and_preserves_silent_up
     assert template.index("Page custom PageReinstall") < template.index(
         "!insertmacro MULTIUSER_PAGE_INSTALLMODE"
     )
-    section = template[template.index("Section Uninstall") :]
-    cleanup = section.index("windows_uninstall --broker")
-    assert (
-        section.index("CheckIfAppIsRunning") < cleanup < section.index("; Delete the app directory")
-    )
-    assert "${IfNot} ${Silent}" in section[:cleanup]
-    assert "$PassiveMode <> 1" in section[:cleanup] and "$UpdateMode <> 1" in section[:cleanup]
+    page = template[
+        template.index("; EFORGE_CLEANUP_PAGE_BEGIN") : template.index("; EFORGE_CLEANUP_PAGE_END")
+    ]
+    assert "UninstPage custom un.EForgeCleanupCreate un.EForgeCleanupLeave" in page
+    assert page.count("${NSD_CreateCheckbox}") == 3
+    assert "--wizard-window $HWNDPARENT" in page and "pythonw.exe" in page
+    assert "nsExec::" not in page and "--broker'" not in page
+    assert "$PassiveMode == 1" in page and "$UpdateMode == 1" in page
+    assert "WaitForSingleObject" in page and "EvidenceForge.Cleanup.Done" in page
+    assert "windows_uninstall --broker" not in template[template.index("Section Uninstall") :]
 
 
 def test_nested_complete_and_incomplete_runs_are_selected_but_external_writer_blocks(
@@ -328,3 +352,358 @@ os._exit(0)
     with patch("evidenceforge.studio.state_upgrade.check_workers", side_effect=probe):
         _check_workers_snapshot(database)
     assert _inventory(locations.private) == before
+
+
+def test_private_only_cleanup_does_not_inspect_other_categories(locations: UserLocations) -> None:
+    state = write(locations.private / "saved-state.txt")
+    publisher = write(locations.profile / ".eforge/publisher.yaml", "not: [valid")
+    settings = write(locations.private / "settings.json", "not-json")
+    plan = build_plan(locations, {"private"})
+    assert plan.targets and {target.category for target in plan.targets} == {"private"}
+    assert state.exists() and publisher.exists() and settings.exists()
+    assert build_plan(locations, set()).targets == ()
+
+
+def test_cleanup_dialog_opens_before_inventory_and_prepares_only_selected_categories(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio import windows_uninstall_native as native
+    from evidenceforge.studio import windows_uninstall_ui as ui
+
+    state = write(locations.private / "saved-state.txt")
+    calls: list[set[Category]] = []
+    monkeypatch.setattr(native, "user_locations", lambda: locations)
+
+    def prepare(current: UserLocations, categories: set[Category]) -> CleanupPlan:
+        calls.append(categories)
+        return build_plan(current, categories)
+
+    def choose(plan: CleanupPlan, *, prepare: Callable[[set[Category]], CleanupPlan]) -> int:
+        assert calls == []
+        assert plan.targets == () and plan.locations == locations
+        assert prepare(set()).targets == ()
+        selected = prepare({"private"})
+        assert {target.category for target in selected.targets} == {"private"}
+        return 0
+
+    monkeypatch.setattr(native, "build_plan", prepare)
+    monkeypatch.setattr(ui, "choose", choose)
+    assert native.interactive(locations.account) == 0
+    assert calls == [set(), {"private"}]
+    assert state.read_text() == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows ACL inspection")
+def test_cleanup_settings_allow_read_grants_without_mutating_them(locations: UserLocations) -> None:
+    import subprocess
+
+    from evidenceforge.studio.state_io import atomic_write
+    from evidenceforge.utils import windows_filesystem as fs
+
+    private_directory(locations.private)
+    settings = locations.private / "settings.json"
+    atomic_write(
+        settings,
+        json.dumps(
+            {
+                "schema_version": 4,
+                "settings": {"workspace": str(locations.profile / "EvidenceForge")},
+            }
+        ).encode(),
+    )
+    subprocess.run(
+        ["icacls", str(settings), "/grant", "*S-1-1-0:(R)"], check=True, capture_output=True
+    )
+    before = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
+    descriptor = fs.open_file(settings, os.O_RDONLY)
+    try:
+        with pytest.raises(PermissionError, match="another principal"):
+            fs.require_private(descriptor)
+    finally:
+        os.close(descriptor)
+    assert build_plan(locations, {"work"}).locations == locations
+    after = subprocess.run(["icacls", str(settings)], check=True, capture_output=True).stdout
+    assert before == after
+    subprocess.run(
+        ["icacls", str(settings), "/grant", "*S-1-1-0:(W)"], check=True, capture_output=True
+    )
+    with pytest.raises(StudioStateError, match="Cannot inspect workspace settings"):
+        build_plan(locations, {"work"})
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native WebView2 capability ACLs")
+def test_webview_capability_modify_is_scoped_and_acl_is_preserved(locations: UserLocations) -> None:
+    import subprocess
+
+    from evidenceforge.utils import windows_filesystem as fs
+
+    capability = fs.capability_sids("lpacEdgeStableNetworkSandbox")
+    assert capability == frozenset(
+        {
+            "S-1-15-3-1024-3239966617-1410756637-3494353204-65451782-2225605771-3526040376-1730753648-3419555762"
+        }
+    )
+    sid = next(iter(capability))
+    secret = write(locations.private / "settings-secret.txt")
+    cache = locations.local / "org.evidenceforge.studio/EBWebView/Default/Cache"
+    cached = write(cache / "Cache_Data/item")
+    unrelated = write(locations.local / "unrelated-browser/cache")
+
+    def permissions(path: Path, *arguments: str) -> bytes:
+        return subprocess.run(
+            ["icacls", str(path), *arguments], check=True, capture_output=True
+        ).stdout
+
+    permissions(cache, "/grant", f"*{sid}:(OI)(CI)(M)")
+    before = permissions(cache)
+    plan = build_plan(locations, {"private"})
+    assert permissions(cache) == before  # No ACL repair or stripping browser grants.
+    descriptor = fs.open_directory(cache)
+    try:
+        with pytest.raises(PermissionError, match="another principal"):
+            fs.require_private(descriptor, allow_read_access=True)
+    finally:
+        os.close(descriptor)
+
+    # Identical grants are not accepted on the actual private settings/runtime tree.
+    permissions(secret, "/grant", f"*{sid}:(M)")
+    with pytest.raises(StudioStateError, match="Cannot safely inspect cleanup path"):
+        build_plan(locations, {"private"})
+    permissions(secret, "/remove:g", f"*{sid}")
+
+    unknown = next(iter(fs.capability_sids("EvidenceForgeUnrelatedCleanupProbe")))
+    permissions(cache, "/grant", f"*{unknown}:(M)")
+    with pytest.raises(StudioStateError, match="another principal"):
+        build_plan(locations, {"private"})
+    permissions(cache, "/remove:g", f"*{unknown}")
+    permissions(cache, "/grant:r", f"*{sid}:(F)")
+    with pytest.raises(StudioStateError, match="another principal"):
+        build_plan(locations, {"private"})
+    # icacls can retain a separate non-inheritable Full Control ACE when an
+    # inheritable Modify ACE is restored; explicitly remove this test grant.
+    permissions(cache, "/remove:g", f"*{sid}", "/T")
+    permissions(cache, "/grant", f"*{sid}:(OI)(CI)(M)")
+    execute(plan, {"private"})
+    assert not cached.exists() and not secret.exists()
+    assert unrelated.read_text() == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native pinned-directory inventory")
+def test_webview_inventory_derives_capability_once_per_scan(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio.windows_uninstall import _inventory
+    from evidenceforge.utils import windows_filesystem as fs
+
+    webview = locations.local / "org.evidenceforge.studio/EBWebView"
+    for index in range(20):
+        write(webview / f"Default/Cache/Cache_Data/file-{index}")
+    original = fs.capability_sids
+    lookups: list[str] = []
+
+    def derive(name: str) -> frozenset[str]:
+        lookups.append(name)
+        return original(name)
+
+    monkeypatch.setattr(fs, "capability_sids", derive)
+    for scan in range(2):
+        entries = _inventory(webview.parent, webview_root=webview)
+        assert sum(not entry.directory for entry in entries) == 20
+        assert lookups == ["lpacEdgeStableNetworkSandbox"] * (scan + 1)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native pinned-directory inventory")
+def test_large_inventory_pins_ancestry_once_and_cancellation_releases_it(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import CancelledError
+
+    from evidenceforge.studio.windows_uninstall import _inventory
+    from evidenceforge.utils import windows_filesystem as fs
+
+    root = locations.private / "runtimes/retained"
+    for directory in range(20):
+        for index in range(25):
+            write(root / f"pkg-{directory}" / f"file-{index}.py")
+    original = fs.open_directory
+    absolute_opens: list[Path] = []
+
+    def opened(path: Path, *, create: bool = False) -> int:
+        absolute_opens.append(path)
+        return original(path, create=create)
+
+    monkeypatch.setattr(fs, "open_directory", opened)
+    entries = _inventory(root)
+    assert sum(not entry.directory for entry in entries) == 500
+    assert absolute_opens == [root]  # No drive-root traversal for each descendant.
+    checks = 0
+
+    def cancel() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 15:
+            with pytest.raises(PermissionError):
+                root.rename(root.with_name("unexpected-move"))
+            raise CancelledError()
+
+    with pytest.raises(CancelledError):
+        _inventory(root, cancel)
+    relocated = root.with_name("released")
+    root.rename(relocated)  # Every pinned handle was released even during cancellation.
+    assert len(list(relocated.rglob("*.py"))) == 500
+
+
+def test_removal_reports_each_real_phase_and_finishes_after_selected_data_is_gone(
+    locations: UserLocations,
+) -> None:
+    from evidenceforge.studio.windows_uninstall import CleanupProgress
+
+    private = write(locations.private / "nested/settings.txt")
+    unrelated = write(locations.profile / "unrelated.txt")
+    progress: list[CleanupProgress] = []
+
+    def report(value: CleanupProgress) -> None:
+        progress.append(value)
+        if value.phase == "complete":
+            assert not private.exists()
+            assert unrelated.read_text() == "preserve"
+
+    execute(build_plan(locations, {"private"}), {"private"}, report_progress=report)
+    assert list(dict.fromkeys(value.phase for value in progress)) == [
+        "checking",
+        "preparing",
+        "removing",
+        "finishing",
+        "complete",
+    ]
+    assert any(value.total and 0 < value.completed < value.total for value in progress)
+    assert any(value.phase == "finishing" and value.total is None for value in progress)
+    assert progress[-1].completed == progress[-1].total == 1
+    assert all(value.total is None or value.completed <= value.total for value in progress)
+
+
+def test_losing_progress_display_does_not_interrupt_approved_cleanup(
+    locations: UserLocations,
+) -> None:
+    private = write(locations.private / "settings.txt")
+    calls = 0
+
+    def disconnected(value: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise BrokenPipeError("The display closed")
+
+    execute(build_plan(locations, {"private"}), {"private"}, report_progress=disconnected)
+    assert not private.exists() and calls == 1
+
+
+def test_full_clean_removes_entire_dedicated_roots_but_preserves_shared_parents(
+    locations: UserLocations,
+) -> None:
+    workspace = locations.profile / "EvidenceForge"
+    write(workspace / "runs/scenario/failed/.eforge-desktop-job.json", "{}")
+    write(workspace / "my-added-notes.txt")
+    write(workspace / "service-start.lock", "ordinary workspace data")
+    write(workspace / ".eforge/artifacts/drafts/industry/test-manufacturing/.keep")
+    write(locations.profile / ".eforge/unrecognized-cli-cache/item")
+    write(locations.private / "runtimes/retained/python.exe")
+    write(locations.local / "org.evidenceforge.studio/EBWebView/cache")
+    write(locations.profile / ".agents/skills/eforge-scenario/custom-notes.txt")
+    write(locations.profile / ".claude/commands/eforge/custom-reference.txt")
+    unrelated = write(locations.profile / ".agents/skills/other-tool/SKILL.md")
+    codex_login = write(locations.profile / ".codex/auth.json", "preserve sign-in")
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    review = describe(plan, {"private", "skills", "work"})
+    assert "FULL CLEAN" in review and "manually added" in review
+    assert {target.path for target in plan.targets if target.category == "work"} == {
+        workspace,
+        locations.profile / ".eforge",
+    }
+    with pytest.raises(StudioStateError, match="choices changed"):
+        execute(plan, {"private"})
+    execute(plan, {"private", "skills", "work"})
+    for path in (
+        workspace,
+        locations.profile / ".eforge",
+        locations.private,
+        locations.local / "org.evidenceforge.studio",
+        locations.profile / ".agents/skills/eforge-scenario",
+        locations.profile / ".claude/commands/eforge",
+    ):
+        assert not path.exists()
+    assert unrelated.exists() and codex_login.read_text() == "preserve sign-in"
+
+
+def test_full_clean_fences_nested_workspace_protocol_locks(locations: UserLocations) -> None:
+    from evidenceforge.studio.state_io import StateLock
+
+    workspace = locations.profile / "EvidenceForge"
+    nested_lock = (
+        workspace / ".eforge/artifacts/drafts/scenario/test/verification/.eforge/studio/owner.lock"
+    )
+    data = write(nested_lock.parent / "saved.json")
+    with StateLock(nested_lock):
+        plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+        assert nested_lock in plan.control_locks
+        with pytest.raises(StudioStateError, match="owns"):
+            execute(plan, {"private", "skills", "work"})
+        assert data.exists()
+    execute(
+        build_plan(locations, {"private", "skills", "work"}, full_cleanup=True),
+        {"private", "skills", "work"},
+    )
+    assert not workspace.exists()
+
+
+def test_full_clean_preserves_arbitrary_custom_workspace_container(
+    locations: UserLocations,
+) -> None:
+    custom = locations.profile / "Shared project"
+    unrelated = write(custom / "unrelated.txt")
+    authored = write(custom / ".eforge/artifacts/draft/source.yaml")
+    write(
+        locations.private / "settings.json",
+        json.dumps({"schema_version": 4, "settings": {"workspace": str(custom)}}),
+    )
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    assert str(custom) in " ".join(plan.preserved)
+    execute(plan, {"private", "skills", "work"})
+    assert unrelated.exists() and not authored.exists() and custom.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only directory/file attributes")
+def test_full_clean_removes_readonly_original_folders_and_files(locations: UserLocations) -> None:
+    import stat
+
+    workspace = locations.profile / "EvidenceForge"
+    source = write(workspace / ".eforge/artifacts/drafts/scenario/test/source.yaml")
+    run = write(workspace / "runs/scenario/failed/data/file.log")
+    for path in (source, run, source.parent, source.parent.parent, run.parent, workspace):
+        os.chmod(path, stat.S_IREAD)
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    execute(plan, {"private", "skills", "work"})
+    assert not workspace.exists()
+
+
+def test_full_clean_preserves_new_unreviewed_files_and_does_not_claim_completion(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.studio import windows_uninstall as cleanup
+
+    workspace = locations.profile / "EvidenceForge"
+    old = write(workspace / "reviewed.txt")
+    new = workspace / "new-after-review.txt"
+    plan = build_plan(locations, {"private", "skills", "work"}, full_cleanup=True)
+    original = cleanup._move
+
+    def move(source: Path, target: Path, *, directory: bool) -> None:
+        original(source, target, directory=directory)
+        if source == old:
+            new.write_text("preserve new work")
+
+    monkeypatch.setattr(cleanup, "_move", move)
+    progress: list[cleanup.CleanupProgress] = []
+    with pytest.raises(StudioStateError, match="new or locked contents remain"):
+        execute(plan, {"private", "skills", "work"}, report_progress=progress.append)
+    assert new.read_text() == "preserve new work" and not old.exists()
+    assert all(value.phase != "complete" for value in progress)

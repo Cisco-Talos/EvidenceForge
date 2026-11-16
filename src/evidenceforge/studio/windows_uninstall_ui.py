@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+from collections.abc import Callable
 from ctypes import wintypes as wt
 
 from pydantic import ValidationError
@@ -12,7 +13,11 @@ from evidenceforge.studio.windows_uninstall import LABELS, Category, CleanupPlan
 from evidenceforge.studio.windows_uninstall_native import _function, _require, message
 
 
-def choose(plan: CleanupPlan) -> int:
+def choose(
+    plan: CleanupPlan,
+    *,
+    prepare: Callable[[set[Category]], CleanupPlan] | None = None,
+) -> int:
     """Offer three unchecked choices, exact paths, cancellation and final confirmation."""
     window_proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
 
@@ -42,9 +47,29 @@ def choose(plan: CleanupPlan) -> int:
     result = 1
     checks: dict[Category, int] = {}
     inventory = 0
+    review_error: str | None = None
 
     def selected() -> set[Category]:
         return {category for category, handle in checks.items() if send(handle, 0xF0, 0, 0) == 1}
+
+    def refresh_review() -> None:
+        nonlocal plan, review_error
+        review_error = None
+        if prepare is not None:
+            set_text(inventory, "Preparing the list of files in your selected categories…")
+            _function("user32", "UpdateWindow", wt.BOOL, [wt.HWND])(window)
+            try:
+                plan = prepare(selected())
+            except (OSError, EvidenceForgeError, ValidationError, ValueError) as error:
+                review_error = str(error)
+        set_text(
+            inventory,
+            f"No cleanup has started. The selected cleanup cannot be prepared:\r\n\r\n"
+            f"{review_error}\r\n\r\nUncheck the affected category to preserve it, or cancel "
+            "and correct the reported storage problem before trying again."
+            if review_error
+            else describe(plan, selected()),
+        )
 
     @window_proc
     def procedure(window: int, event: int, word: int, parameter: int) -> int:
@@ -53,10 +78,18 @@ def choose(plan: CleanupPlan) -> int:
             if event == 0x111:  # WM_COMMAND
                 control = word & 0xFFFF
                 if control in (101, 102, 103):
-                    set_text(inventory, describe(plan, selected()))
+                    refresh_review()
                     return 0
                 if control == 201:
                     choices = selected()
+                    if review_error:
+                        message(
+                            "No cleanup has started. Review the reported path and storage "
+                            "problem, or uncheck the affected category to preserve it.",
+                            0x30,
+                            window,
+                        )
+                        return 0
                     if (
                         choices
                         and message(

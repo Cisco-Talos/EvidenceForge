@@ -33,6 +33,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.external_parsers.errors import SofElkHarnessError, SofElkParserError
 
 SOF_ELK_PREP_IMAGE = "alpine/git:2.49.1"
@@ -97,7 +98,7 @@ def reset_external_parser_run_directories(work_dir: Path) -> None:
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
-            shutil.rmtree(path)
+            remove_owned_tree(path)
         path.mkdir(parents=True, exist_ok=True)
 
 

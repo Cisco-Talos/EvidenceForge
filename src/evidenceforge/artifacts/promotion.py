@@ -5,13 +5,13 @@ from __future__ import annotations
 import difflib
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.schema import identify_document
 from evidenceforge.utils import load_scenario_source_graph
 
@@ -147,4 +147,4 @@ def promote_dependency(
                     raise
         return {"applied": apply, "release": receipt.model_dump(mode="json"), "diffs": diffs}
     finally:
-        shutil.rmtree(staging)
+        remove_owned_tree(staging)

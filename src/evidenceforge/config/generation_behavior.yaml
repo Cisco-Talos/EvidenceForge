@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 518
+current_revision: 520
 history_start_revision: 1
-behavior_surface_sha256: 2c2fbb64c1f01a231aa3f2b029e0f3a0b42f81bbffa6d7f2c01d377146531c38
+behavior_surface_sha256: 4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5961,3 +5961,21 @@ changes:
   formats: []
   summary: Retry bounded Windows scratch deletion and clear only handle-checked read-only
     attributes while retaining failed cleanup state, generated evidence and ACL protections.
+- revision: 519
+  id: retry-windows-generated-file-acquisition
+  impact: none
+  domains:
+  - output-publication
+  - temporary-storage
+  formats: []
+  summary: Retry bounded Windows generated-file open failures before acquiring the stream;
+    preserve access modes, permissions, exact publication receipts and evidence bytes.
+- revision: 520
+  id: centralize-owned-workspace-removal
+  impact: none
+  domains:
+  - output-publication
+  - temporary-storage
+  formats: []
+  summary: Share bounded Windows removal and per-entry read-only repair across owned
+    staging and journal trees without changing evidence bytes or protected storage policy.

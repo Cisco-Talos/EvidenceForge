@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
@@ -143,7 +142,7 @@ class SidecarRegistry:
                 stale.unlink()
             elif stale.is_dir():
                 logger.warning("Cleaning stale rollback directory: %s", stale)
-                shutil.rmtree(stale, ignore_errors=True)
+                remove_owned_tree(stale, ignore_errors=True)
 
         rollback_root = Path(tempfile.mkdtemp(prefix=".eforge_rollback_", dir=destination_root))
         succeeded = False
@@ -171,7 +170,7 @@ class SidecarRegistry:
             raise
         finally:
             if succeeded:
-                shutil.rmtree(rollback_root, ignore_errors=True)
+                remove_owned_tree(rollback_root, ignore_errors=True)
 
     @staticmethod
     def _remove(path: Path) -> None:
@@ -180,12 +179,7 @@ class SidecarRegistry:
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
-            if os.name == "nt":
-                from evidenceforge._windows_cleanup import remove_temporary_tree
-
-                remove_temporary_tree(path)
-            else:
-                shutil.rmtree(path)
+            remove_owned_tree(path)
 
 
 SIDECAR_REGISTRY = SidecarRegistry()

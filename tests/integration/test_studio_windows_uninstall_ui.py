@@ -15,7 +15,7 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Native Windows dialog ABI")
 
 
-@pytest.mark.parametrize("action", ["cancel", "preserve", "private", "decline"])
+@pytest.mark.parametrize("action", ["cancel", "preserve", "private", "decline", "blocked-private"])
 def test_native_cleanup_review_defaults_and_actions(tmp_path: Path, action: str) -> None:
     root = tmp_path / "cleanup test ü 汉"
     from evidenceforge.studio.state_io import private_directory
@@ -31,7 +31,7 @@ def test_native_cleanup_review_defaults_and_actions(tmp_path: Path, action: str)
     script = """
 import sys
 from pathlib import Path
-from evidenceforge.studio.windows_uninstall import UserLocations, build_plan
+from evidenceforge.studio.windows_uninstall import CleanupPlan, UserLocations, build_plan
 from evidenceforge.studio import windows_uninstall_ui as ui
 from evidenceforge.utils.windows_filesystem import current_user_sid
 root=Path(sys.argv[1])
@@ -41,8 +41,12 @@ def confirm(text, flags=0, owner=None):
         print(text, file=sys.stderr, flush=True)
     return 7 if sys.argv[2]=='decline' else 6
 ui.message=confirm
-plan=build_plan(UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid()))
-raise SystemExit(ui.choose(plan))
+locations=UserLocations(profile=root,local=root/'AppData/Local',documents=root/'Documents',account=current_user_sid())
+def prepare(categories):
+    if sys.argv[2]=='blocked-private' and 'private' in categories:
+        raise PermissionError('Blocked test cleanup path: '+str(locations.private))
+    return build_plan(locations,categories)
+raise SystemExit(ui.choose(CleanupPlan(locations=locations),prepare=prepare))
 """
     with subprocess.Popen(
         [sys.executable, "-c", script, str(root), action],
@@ -90,7 +94,7 @@ raise SystemExit(ui.choose(plan))
             )
             for identifier in (101, 102, 103):
                 assert send(control(window, identifier), 0xF0, 0, 0) == 0
-            if action in {"private", "decline"}:
+            if action in {"private", "decline", "blocked-private"}:
                 send(control(window, 101), 0xF1, 1, 0)
                 assert send(control(window, 101), 0xF0, 0, 0) == 1
                 send(window, 0x111, 101, control(window, 101))
@@ -101,6 +105,15 @@ raise SystemExit(ui.choose(plan))
             assert str(root) in text.value
             if action in {"private", "decline"}:
                 assert str(private) in text.value and "DELETE:" in text.value
+            if action == "blocked-private":
+                assert "No cleanup has started" in text.value
+                assert "Blocked test cleanup path" in text.value
+                send(control(window, 201), 0xF5, 0, 0)
+                assert child.poll() is None and sentinel.exists()
+                send(control(window, 101), 0xF1, 0, 0)
+                send(window, 0x111, 101, control(window, 101))
+                send(control(window, 301), 0xD, len(text), ctypes.addressof(text))
+                assert "Blocked test cleanup path" not in text.value
             button = 202 if action == "cancel" else 201
             send(control(window, button), 0xF5, 0, 0)
             if action == "decline":

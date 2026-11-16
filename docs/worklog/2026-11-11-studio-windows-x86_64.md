@@ -1483,3 +1483,1138 @@ without caching file bytes, and existing inspection limits (64 MiB captured sour
 avoiding repeated YAML/JSON parsing; generated log data is never scanned. Requalify
 the shared implementation on all supported native CI platforms. The separate scratch
 cleanup repair remains Windows-specific, and the P1 scratch-design review is shared.
+
+### Laptop reaches Windows XML publication; file open denied (November 13)
+
+PR #484 merges as c1186030 with the exact tracked tree of tested head 2d75947a.
+Feature source CI 43469489502 passes all 33 jobs; Windows qualification 43469510340
+passes all three. Qualified feature artifact 14062506620 has EXE SHA256
+2913f146eaa4906d467ea4009110f964d8ab9437d79246753676783da62d9f37 and passes
+both installed scopes, maintenance order, native helpers, checkpoint equivalence,
+cleanup inventories and preservation checks. Exact-dev CI 43475917382 passes all
+33 jobs; Installer Builds 43475916983 passes all 11, including all four native
+installer targets. Windows 11 cloud-provider and genuine separate-account
+acceptance remain manual; hosted Server CI is not that acceptance.
+
+Using the delivered local installer, the laptop now completes all five hours but
+fails at Windows Security source-finalization publication. _SingleHostWriter's
+exact row commit cannot open an existing staged windows_event_security.xml with
+r+b (PermissionError/errno 13). The file is under MG-FS-01.maplegrove.example in
+the OneDrive-backed run 20261113-132548-f50ee199. This is distinct from the earlier
+empty ES sorting-directory deletion; an access-denied error alone establishes
+neither ReadOnly attributes, file sharing, nor the responsible process/provider.
+The runtime receipt identifies f0528eb39ed140bd101ba91ddfecb581bac2d1b290a9fd1aad5d93cb5a7d79d6,
+Python 3.12.12, x86_64, EvidenceForge 3.0.0rc1. The product version alone does not
+distinguish preview commits. File-attribute inspection is requested without
+modifying the failed run; diagnosis is pending.
+
+On codex/windows-output-file-access, change the maintenance action to
+Install / Upgrade (preserve user data), including the native navigation driver
+and its transition tests. Same-version reinstallation still uses this action.
+The Windows runtime is a tar.gz extracted by the bundled native bootstrap Python
+through tarfile.open(mode=r:gz); it requires neither WSL nor external tar/gzip.
+
+The user confirms the installed cleanup helper SHA256 is
+857e4229480ad0d8bf1efaecf6a1715921847c8282c08c725a2d2101be4cbcdd,
+exactly matching the delivered fix. The failed XML still exists (95,952 bytes)
+with Archive and ReparsePoint attributes, without ReadOnly when inspected. This
+does not prove which flags or external handles were present at the failed open.
+It confirms a new access failure rather than an absent cleanup implementation.
+
+Windows CRT open maps sharing conflicts and permission denials to EACCES. Add
+one generated-file acquisition boundary across host, direct, sensor and external
+sorted writers. On Windows, retry possible access/sharing errors with seven waits
+totaling 6.35 seconds. Preserve access/sharing modes, ACLs, flags and original
+exceptions; only stream acquisition is retried. Reads, writes, flushes, receipt
+publication and namespace operations are never blindly replayed. Persistent errors
+include file attributes and reparse-tag diagnostics. POSIX keeps one ordinary open.
+The sensor writer's related physical I/O probes also use the existing extended-path
+adapter. This addresses a reproducible class, not proven OneDrive causation.
+
+Portable tests cover transient/persistent opens, mode/encoding preservation,
+unrelated/POSIX failures and lost write returns. Publication and real Windows
+Security finalization tests retain committed XML rows and prove retry neither
+duplicates records nor changes the uncontended bytes. Model-based tests pass
+locally; nine real Windows handle/attribute cases are authored and pending native
+execution. Replaying the unchanged captured five-hour input at seed 42 succeeds;
+all 53 manifest-declared file hashes verify and match the previous baseline.
+Evidence: /var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-windows-output-open-replay-r7oga5_4/.
+Behavior revision 519 declares no evidence change; product and storage versions stay.
+
+The user explicitly requests build-only Windows iterations to avoid acceptance-test
+latency, with full CI deferred until testing is ready to be declared complete.
+Add opt-in build-only to Windows Studio Preview; keep full qualification the default
+for manual/reusable callers. Skip service/recovery, native/frontend/shell tests,
+Codex probes and installed-scope acceptance only in that mode. Package construction,
+version/behavior integrity and artifact checksums remain part of the build.
+Upload a separately named unqualified EXE/checksum/build-metadata artifact; no
+verification report or qualified artifact is issued. Record source, CI run, runtime
+payload ID and toolchain for precise laptop identification. Keep this iteration on
+the feature branch without opening an automatically tested PR; full CI/qualification
+and integration follow the user's readiness decision. Deliver the built EXE locally
+under Downloads for transfer to the Windows laptop. No tags or releases are published.
+
+Build-only run 43488279139 succeeds from 718af5db; native service/recovery and
+qualification jobs are skipped as requested. Artifact 14068986715 is explicitly
+unqualified. Independently downloaded EXE SHA256 is
+b6931c88bec48997a1c288be104954749a8e72fe050798be3e34244951ea83b0.
+Build metadata records runtime
+8c7252e93a97c3081c51ef1b1e4d284e34594f16e32a805c6136e5c970cc1a73
+and qualification not_run. EXE, checksum and build metadata are copied to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-718af5db/.
+The new installer contains Install / Upgrade and bounded generated-file open
+retries. The actual laptop/OneDrive rerun, native nine-case handle/attribute tests
+and full CI/qualification remain pending. The model-free local focused gate passes
+154 cases; nine real-Windows cases are skipped on this macOS host. All 53 declared
+output hashes in the local five-hour replay match and verify. No new PR is opened
+and no code is merged while the user is still in the rapid testing loop.
+
+### Successful laptop generation; local storage and shared cleanup (November 13)
+
+The user reports that build-only 718af5db now completes generation and evaluation
+on the existing laptop scenario. Their next Delete bundle attempt fails with
+WinError 5 under `.eforge-generation/objects/resolved/8b`. OneDrive also repeatedly
+asks to confirm bulk deletion of checkpoint-object YAML, run.lock and hundreds of
+other items. The workspace is in OneDrive Documents. This confirms sync churn,
+not that every earlier access denial had the same cause: an earlier controlled
+probe reproduced read-only-directory deletion failure in local AppData as well.
+The first protected-private-state SID failure was a separate ACL issue.
+
+The user agrees to prefer local-only storage for large datasets. Windows new-user
+workspace selection now uses `%USERPROFILE%\EvidenceForge`, independent of the
+Documents known folder and OneDrive folder backup. Both physical Documents folders
+can exist separately on the laptop; Studio previously requested the configured
+known folder rather than hardcoding either physical Documents path. Preserve saved
+workspace choices, explicit overrides and macOS/Linux defaults. Expose the existing
+per-workspace `output_parents` setting as **Generated runs folder**: this allows a
+local run root without relocating the existing scenario library or invalidating
+history/checkpoint paths. New generations and resource forecasts already share that
+setting. No automatic move or rewrite of an existing job is performed. Clean
+uninstall discovers both the local default and the legacy Documents default even
+after private settings are removed; unrelated content and custom output roots stay.
+Document local NTFS as the preview baseline and cloud-synced active workspaces/run
+folders as unqualified. Do not disable OneDrive deletion prompts as a product fix.
+
+The deletion review finds raw recursive removal bypassing the existing Windows
+scratch helper in controller bundle deletion, artifact/import/export staging,
+composition rollback, draft cloning, CLI generation staging, ground-truth journal
+cleanup and external-parser scratch cleanup. Route caller-owned workspace trees
+through `remove_owned_tree`; retain the old scratch entrypoint as a delegating
+interface. Windows applies bounded namespace-removal retries and the existing
+handle-checked ReadOnly repair, preserving ACLs and refusing redirected/hardlinked
+attribute repair. Give each failing unlink/rmdir its own budget so a tree with more
+than seven read-only entries can be removed. Do not multiply an exhausted per-entry
+budget by retrying the entire tree. POSIX retains ordinary removal and its prior
+best-effort behavior at callsites that explicitly ignored cleanup errors.
+
+Controller deletion still requires its original exact-job marker, inactive process,
+owned-output flag and complete/incomplete eligibility checks. Keep marker/manifest
+receipts until other contents have gone; restore exclusively through a pinned,
+identity-checked directory handle if final empty-root removal fails. Never restore
+into a replacement root or overwrite a new receipt. Native protected-storage
+ancestry/reparse restrictions remain in force for recovery; ambiguous restoration
+fails closed. This does not adopt old folders whose marker was already lost by a
+previous partial deletion. Existing protected private-state/recovery/runtime and
+POSIX dir_fd removal contracts stay separate. An AST regression inventories the
+remaining deliberate direct recursive-removal exceptions, including callback
+references, so new workspace bypasses require review. This is a recursive-removal
+review, not a claim that every file operation or cloud provider is qualified.
+
+Use the existing branded ICO for both NSIS installer and uninstaller resources.
+Fix the shared JobCard grid: reserve a consistent action track rather than allowing
+each row's button count to resize earlier columns; put bundle size on the metadata
+line consistently. Browser inspection of actual ScenarioRuns/JobCard components at
+1440, 900 and 600 CSS pixels confirms aligned status/progress tracks, no horizontal
+row overflow, and usable wrapping. At desktop width all three action variants fit
+one 35px control row. Temporary visual harness and browser tab are removed afterward.
+
+The supplied evaluation paste is truncated mid-finding at about 64 KiB; do not treat
+it as a complete authoritative bundle or invent its missing acceptance tail. The
+complete visible action summary scores ground-truth agreement 97.10822866487705,
+with 3,047 correct of 3,187 applicable checks across 11 equally weighted actions.
+Its failure summary is 2 factual, 66 missing/duplicate and 72 unexpected-evidence
+checks (140 total); 1,300 expected absences and 656 coverage gaps are separate.
+The user's GUI reports PASS; passing an action-averaged threshold does not mean
+zero contradictions. Bounded inspection of ten complete findings identifies:
+
+- DNS SRV expected answers include priority/weight/port, while the reported parsed
+  answer contains only the DC hostname: projection/parser contract needs review.
+- SMTP expected and reported fields look identical, including empty sender and
+  recipient list, but matched_count is zero: comparator/normalization needs review.
+- HTTP proxy GET/POST evidence is present and matches; a second required CONNECT
+  to port 80 is absent: investigate tunnel-vs-plain-HTTP requirement construction.
+- eCAR/Sysmon evidence is present while the recorded expectation says absent due
+  to missing_capability or source_rule_filtering: investigate observation/visibility
+  ownership and exact selectors. Repeated findings can select the same row.
+
+These are provisional engine/evaluator-contract findings, not grounds to rewrite
+this authored scenario or weaken the 95% agreement gate. Definitive ownership and
+all remaining findings require the complete report and exact frozen bundle/source
+records. The new laptop scenario is not assumed identical to the older captured
+five-hour replay. The durable mixed-fleet ground-truth backlog remains open.
+
+Validation on this macOS host: focused Studio/controller/cleanup/settings/behavior
+checks pass (201 passed, one native-only skipped), artifact lifecycle/lineage/pack
+release/removal checks pass (111), resource prediction checks pass (13), frontend
+Settings/ScenarioRuns/BundleLibrary/ObjectActions checks pass (29), and frontend
+production build succeeds. After the final receipt-restoration hardening, its
+cleanup/controller/audit gate passes 50 with one native-only skipped. Native large
+read-only bundle deletion is in the existing Windows cleanup test module for the
+later qualified Windows gate; it is not claimed as run in build-only mode. Ruff,
+format, generated types and manifest integrity are required before committing.
+Behavior revision 520 declares no evidence-byte change. The unchanged older captured
+five-hour source at seed 42 completes again: all 53 declared file SHA256s verify and
+match the prior baseline. Evidence is in
+/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge-owned-cleanup-replay-n5rmj3wi/.
+No product/storage version bump, release tag, publication, PR or merge is authorized
+by this rapid laptop iteration; deliver another explicitly unqualified build-only EXE.
+
+Build-only run 43498872833 succeeds at exact source
+031c77ad7e32a36a1fc452ee29bfe187fba9623d. Service/recovery, native/installed
+acceptance and qualification are skipped as requested. Downloaded EXE SHA256
+9083aec4301ff4f32c1c3395ea6532b0c6980412ad7879ef2e70f92b1ef796bd
+matches both the SHA256 sidecar and build metadata. Metadata records qualification
+not_run, signed false, x86_64-pc-windows-msvc, bundled Python 3.12.12 and runtime
+b17c54393704eac7e2f077909695ddfa34237a078d9d36bd942495c6667a4764.
+The EXE (72,084,392 bytes), checksum and metadata are independently copied and
+byte-verified under /Users/dabianco/Downloads/EvidenceForge-Windows-build-only-031c77ad/.
+No release is published and no PR is opened. Laptop verification and full gates
+remain pending.
+
+At the user's request, add a one-sentence GitHub IMPORTANT callout to README's
+Quick Start stating the OneDrive/cloud-sync restriction and linking to the detailed
+storage guidance. Reconcile the stale Windows-delivery-deferred development note
+with the implemented unsigned x86_64 test preview. This documentation-only follow-up
+does not change the installer built from 031c77ad or its identity.
+
+### Copied workspace, deferred relocation and opening feedback (November 13)
+
+The user copies the complete OneDrive EvidenceForge workspace to their profile
+root, removes the OneDrive copy, and selects the new path at the missing-workspace
+startup prompt. After about 30 seconds the scenario library opens, but chats,
+validation results and scenario runs show zero. Code inspection confirms that
+workspace selection opens another workspace; it does not perform a relocation.
+Catalog registration is scoped by resolved workspace/source paths and creates new
+item IDs at the destination. Conversations and jobs are filtered by the original
+workspace path in the private studio.sqlite database, and saved validation results
+are keyed by the original item IDs. Source recovery handles moves within the same
+workspace; it does not merge whole-workspace registrations. Folder copying alone
+cannot transfer these associations or rebase absolute saved job/checkpoint paths.
+No claim is made that the laptop database has been inspected or that all copied
+files are verified; records may still be in its private state. Preserve those
+records and copied runs, and do not rewrite provenance or database paths blindly.
+
+The user explicitly classifies workspace relocation as an unsupported feature and
+requests a P2 TODO rather than an immediate migration implementation. Record a
+reviewed all-platform move/relink feature with backup, active-writer exclusion,
+conflict handling, interrupted-move recovery and preserved associations/provenance.
+Also record their separate P2 TODO for optional native file/folder browsers at all
+file/path entry points on all platforms. No file browser or relocation is implemented.
+Add explicit manual-copy limitations to the storage documentation.
+
+Fix the immediate startup workspace-opening feedback on the existing feature
+branch: the recovery hook marks selection in flight synchronously, ignores duplicate
+submissions, clears an old request error and uses a 180-second selection timeout
+instead of the generic 15 seconds. App reuses its normal indeterminate startup
+screen with Opening workspace / Checking workspace storage and loading your
+scenario library. Retain that screen through the subsequent reconnect/bootstrap,
+not just until the selection POST returns. Failure clears the opening state and
+returns to the applicable recovery/error UI with retry available. No backend schema,
+private history, immutable run metadata or workspace associations are changed.
+
+The focused hook/maintenance/startup gate passes 20 tests, including a simulated
+30-second preparation, duplicate submission, delayed bootstrap, failure and retry.
+Frontend production build, Ruff lint/format and diff whitespace checks pass.
+The earlier delivered installer remains exact source 031c77ad; this frontend repair
+will be included in the next installer build. No acceptance CI is started for TODOs.
+
+### Shared evidence disagreements reproduced on macOS (November 13)
+
+The user reports successful generation and evaluation after the latest installer,
+with evidence disagreements still present. The new supplied report is evaluated at
+2026-11-13T20:46:46.809969Z. Normalizing only evaluated_at makes its complete pasted
+text identical to the earlier 19:29 report: 140 failed checks (2 factual, 66
+missing/duplicate, 72 unexpected), ground-truth score 97.10822866487705, overall
+96.33618655842574 and 34,275 records. Both pastes stop at exactly 63,823 bytes,
+mid-finding; neither contains the final acceptance_passed field. Do not manufacture
+a completed JSON report or infer all acceptance gates from the overall score.
+
+Read-only minimal probes on this macOS source checkout confirm three shared code
+inconsistencies using the exact fields visible in the report:
+
+- evaluation.ground_truth_agreement._equal(True, True, 'tls') returns False, as does
+  False/False. Python bool enters the integer branch, which tries int(str(True))
+  and fails. _fields_match returns False for the report's identical SMTP expected
+  and actual dictionaries. This confirms an evaluator false disagreement.
+- events.evidence_projection.native_requirements for zeek_dns retains canonical
+  SRV answer `0 100 88 MG-DC-01.maplegrove.example`, while the existing
+  emitters.zeek_dns.zeek_dns_answer('SRV', ...) returns only the hostname. This
+  reproduces the report's canonical/native projection mismatch on macOS.
+- native_requirements('proxy_access', 'connection', ...) with the report's plain
+  HTTP URL and retained tunnel_status_code=200 requires CONNECT to authority :80
+  plus GET. The proxy emitter's _is_https_request returns False for that same
+  HTTP URL/port and does not enter its CONNECT-generation path. This confirms
+  an internal expectation/rendering mismatch. The repair must reconcile canonical
+  tunnel/transaction ownership and source expectations, not blindly emit another
+  CONNECT row or loosen the evaluator to hide missing real tunnels.
+
+The probes invoke existing pure comparison/projection helpers; no scenario,
+generated bundle, runtime, scoring threshold or production code is modified. They
+are diagnostic reproduction, not a rerun of the supplied exact bundle or a claim
+that every disagreement has the same cause. Ten complete sample findings are
+available in the truncated report. Remaining eCAR/Sysmon unexpected-evidence cases
+say missing_capability/source_rule_filtering despite selected rows; their exact
+canonical facts, frozen expectations, source policy and raw records still need
+bundle-level diagnosis before assigning an owner. Do not claim all 72 are confirmed
+false positives or Windows-independent solely from these samples.
+
+The user explicitly asks whether Windows testing can proceed if these are general
+issues. Confirm that the three reproduced families occur on macOS in platform-neutral
+engine/evaluator code. Defer their repair into the existing P1 mixed-fleet ground-truth
+work and continue Windows installer/Studio function testing separately. Do not start
+new acceptance CI, regenerate the scenario, change its authored intent, or request
+another large pasted report as a prerequisite for that testing. The most recent
+frontend workspace-opening feedback commit remains d2a5b12e, pending the next
+installer build; the currently delivered EXE remains exact source 031c77ad.
+
+### Pack handoff, forecast identity and uninstall review follow-up (November 13)
+
+The laptop successfully creates/publishes an industry pack, but the subsequent
+organization authoring chat cannot discover it without browsing the workspace.
+Studio already rescans after its Publish action. The missing boundary is the pack
+chat's selected project root: its working directory is a nested draft directory.
+Supply the explicit workspace and both published/draft inventory commands on every
+chat turn, match names/display names, and keep exact draft references for testing.
+Shared skill source guidance now retains an explicitly selected root across nested
+working-directory changes for standalone Codex and Claude Code too. Their existing
+installed skills need updating; ordinary CLI cwd defaults and root-search rules
+remain unchanged. A regression publishes through Studio, checks the store without
+an extra refresh, and discovers that release plus the organization draft through
+actual CLI subprocesses launched from the nested draft folder.
+
+Dependency display now uses a friendly display name plus Draft for a reusable draft;
+the exact UUID/key and composition identity remain intact. Forecast matching accepts
+case-equivalent Windows drive/UNC paths and slash styles, including output-parent
+map keys. Previously a lowercase drive in settings could reject an uppercase cached
+result, leaving Calculating visible. POSIX paths remain case-sensitive. Align the
+Settings folder-arrow button styling with the existing icon-button style. Add the
+requested P3 Settings move UI backlog, dependent on the existing P2 relocation work;
+promote shared mixed-fleet evidence disagreements to P0 release blockers without
+changing generation, evaluation thresholds or scenario intent in this Windows fix.
+
+Uninstall previously inventories all categories before opening its review window.
+One category's error can therefore hide every choice and force app-only fallback.
+Open an unchecked review first, inventory only selected categories, show the exact
+blocked path, and allow deselection/cancellation without deletion. Move the NSIS
+broker invocation to the confirmation-page leave hook, before uninstall progress
+or application-file deletion. Silent/passive/upgrading paths still preserve data.
+Cleanup settings reads now explicitly enforce the same owner/no-external-writer
+policy as cleanup inventory, allowing read-only grants without modifying ACLs;
+ordinary Studio settings reads are unchanged. This does not identify the laptop's
+exact blocked principal/path: no whitelist
+or external-write exception is introduced. Native regressions exercise the lazy
+review, a blocked category, default preservation and unchanged read-only ACLs.
+
+The user cannot provide the old pack-generation command after uninstall. The reported
+WinError 6 is still unconfirmed; do not claim it fixed or bypass checkpoint locking,
+write-through publication or Codex sandbox policy. The remote Windows desktop is
+available, but retained-history recovery has not yet produced the failed command.
+Add opt-in focused Windows uninstall/checkpoint diagnostics to the build-only path;
+these do not enable the full native/service/installer acceptance jobs or qualify the
+result as a tested release. Full CI and genuine Windows 11/UAC desktop acceptance
+remain pending by the user's explicit instruction.
+
+Local checks: generated API types, frontend production build, Ruff check/format and
+whitespace checks pass. Earlier focused checks pass 12 chat context cases, the
+publish/discover CLI regression and draft-label regression, 28 frontend tests, and
+21 uninstall tests (one native ACL test skipped on macOS). Additional combined and
+native evidence will be appended after execution, with the new build's exact identity.
+
+Combined local regression: 103 passed, 3 platform/data skips in 57.71 seconds across
+uninstall, workflow guards, state contracts, imports and artifact lifecycle. The
+three focused frontend files pass 28 tests again. No full acceptance matrix started.
+
+Native attempt 43516727155 passes 44 of 45 focused checks, including all five real
+dialog actions and checkpoint write-through/recovery tests. One new test incorrectly
+expects settings_document itself to reject a read-only grant; state_io's Windows
+reader delegates root/privacy enforcement to its surrounding ownership boundary.
+Correct the test to contrast strict require_private with cleanup's explicit
+allow-read policy, verify unchanged ACLs and require refusal of a newly added outside
+write grant. Do not attribute the laptop failure to the settings reader or claim an
+inconsistent preexisting ACL policy based on that disproven assumption.
+
+Run 43517279694 passes all 45 focused native checks, including the corrected ACL
+contract. Final review also reuses state_io.open_regular for cleanup settings on
+both platforms, retaining its pinned ancestry, regular/single-link and opened-file
+identity checks rather than a separate pathname-based read implementation. The
+cleanup-specific native ACL check remains on that same verified descriptor.
+This small follow-up will be included in the delivered installer. Remote input was
+interrupted before any retained chat error could be recovered; no laptop data,
+permissions or installation was changed by that diagnostic attempt.
+
+Final build-only run 43518282745 succeeds from exact source
+ac14928ce2aa65b81f474b70aa57924acc6dd8c1:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43518282745
+All 45 focused native Windows uninstall/dialog/checkpoint regressions pass; the
+full native Studio/service, installed-scope verification, authoring qualification,
+Rust/frontend acceptance and qualify jobs remain skipped. This is explicitly an
+unqualified unsigned test preview, not a release or completed desktop acceptance.
+
+Delivery identity:
+
+- EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe
+- Size: 72,067,135 bytes.
+- SHA256: b9f333fbec21f7875900232bd748cd5548b02bdf38b077d51a9f34378da2a1c0
+- Runtime ID: 202b6b44bd797e519b89cdec91be2e9a3593a35a0280d8bb6c7d9c0a4fba8401
+- Bundled CPython 3.12.12; build Python 3.12.16; rustc 1.100.0
+  (0ef1bc386, 2026-11-09); Node 22.23.4; uv 0.13.8 (3d97a6aad).
+- windows-2025 runner image 20261103.298.1, x86_64-pc-windows-msvc.
+
+Download, build receipt source/run identity, checksum and MZ header are checked;
+the EXE, .exe.sha256 and .build.json are copied and independently byte-verified in
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-ac14928c/.
+This includes the earlier d2a5b12e workspace-opening feedback. Install this build
+before retesting its uninstall review: launching an older installed uninstaller
+still runs that older version's cleanup implementation. The precise old chat
+WinError 6, the laptop's cleanup ACL path/principal, genuine Windows 11 dual-scope/
+UAC/alternate-account acceptance and P0 evidence-disagreement repairs remain open.
+No PR, release, tag or version bump is created; full CI remains deferred as requested.
+
+### Startup record identity rejected an equivalent Windows drive (November 13)
+
+The user tests installer ac14928c and gets Studio record identity mismatch in items,
+with database/settings/private-layout versions already equal to 3/4/1. A user-run
+read-only inspection of a temporary SQLite/WAL copy identifies exactly 14 mismatches:
+11 items and 3 conversations have SQL workspace C:\Users\david\EvidenceForge but
+JSON workspace c:\Users\david\EvidenceForge. Their IDs and the inspected item kind/
+source paths match. This is our writer/reader inconsistency, not an invalid Windows
+path, a required upgrade or proof of damage caused by the earlier workspace move.
+Do not delete/reset state or require the user to rewrite their database.
+
+The store resolves workspace/source paths for indexed SQL columns but previously
+serialized the original spelling in the JSON model. Resolve once into the model
+before serialization for items, projects, conversations and imported bundles; use
+that same value in the indexed columns. This also prevents the same split with
+noncanonical input paths on POSIX. Preserve schema versions, stable IDs and content.
+The reader recognizes only an absolute Windows drive-letter case alias in path
+projections. It performs no path resolution or record rewrites during inspection;
+historical workspace paths may be absent. Keep directory/file casing, other drives,
+relative paths, UNC namespaces, IDs, names and kinds strict. POSIX comparisons are
+unchanged. Accepting C: versus c: does not bypass permissions or ownership checks.
+
+Add portable negative identity cases and a write/reopen projection regression, plus
+native Windows preservation/reopen and actual create_app restart cases with legacy
+lowercase workspace payloads. The native read-only inspection compares authoritative
+database digests and verifies saved IDs/metadata survive; a different record ID still
+fails. Include this small test file in opt-in build-only native diagnostics, keeping
+full acceptance disabled. The local focused state/search/source-recovery/pack-identity
+and contract gate passes 128 tests with one native skip in 36.78 seconds; subsequent
+added edge/startup cases and native results are recorded with the next build below.
+Ruff and formatting checks pass. No laptop database or ACL is edited remotely.
+
+Startup-fix build-only run 43524419801 succeeds from exact source
+e021a95f59ad9a5735c0429beb11ef62e9e77dde:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/43524419801
+Native diagnostics pass 59 tests in 16.81 seconds, including unchanged authoritative
+record digests after inspection/reopen, strict refusal of a different record ID,
+and actual Studio create_app restart with legacy lowercase-drive item/chat payloads.
+The final local record-path/workflow gate also passes 45 tests with two native skips.
+Full CI, installed-scope qualification and Windows 11 desktop acceptance stay deferred.
+
+Delivery identity:
+
+- EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe
+- Size: 72,078,234 bytes.
+- SHA256: 891e1a441c6dd70f548d6198133ce261675fa3c82d6c3d07c3e976eb37075f06
+- Runtime ID: b5c5e26397a10f889c9bbca28f98d2542265d663ea4dc0556cb1d0a89b7b6a25
+- Bundled CPython 3.12.12; build Python 3.12.16; rustc 1.100.0
+  (0ef1bc386, 2026-11-09); Node 22.23.4; uv 0.13.8 (3d97a6aad).
+- windows-2025 runner image 20261103.298.1; x86_64-pc-windows-msvc; unsigned;
+  build receipt qualification remains not_run, distinct from the focused regressions.
+
+Verify the source/run identity, SHA256 and MZ header, then copy and independently
+hash-check the EXE, .exe.sha256 and .build.json under
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-e021a95f/.
+The user should install/upgrade over the current copy while preserving existing
+state. No cleanup/reset, state schema migration or laptop database edit is required
+for this confirmed drive-letter mismatch. Publication/version/tag/PR remain unchanged.
+
+### Successful scenario pipeline with authoring and UI follow-ups (November 13)
+
+On the e021a95f preview, the user creates industry/organization packs, authors a new
+scenario, fixes one expected validation warning through chat, forecasts, generates
+and evaluates successfully with no evidence disagreements in that new scenario.
+The older scenario still reports 140 disagreements. No ground-truth repair was
+included in these installer iterations; the previously confirmed shared defects
+remain P0 release blockers, with the remaining cases still needing exact-bundle
+analysis. Do not portray the unchanged count as a failed repair already shipped.
+
+The user quotes a publication refusal because the authoring session may write only
+the active draft. That boundary is expected: Studio's reviewed Publish action owns
+release creation outside the draft. The user mentioned publication testing without
+intending a publication request. The attachment does not contain a publish command
+or its result, so it cannot establish whether publication was actually attempted.
+Do not expand authoring filesystem permissions based on this report.
+
+The attachment c49f67d6-6b08-4825-b3e3-842697376645 instead supplies the previously
+missing generation trace. Runtime b5c5e26397a10f889c9bbca28f98d2542265d663ea4dc0556cb1d0a89b7b6a25
+runs its isolated Python module CLI with seed 42 and explicit local project root.
+Input is the aerospace-test industry draft add6d338-07af-435d-a783-a12c65015605's
+verification/consumer.yaml; output is its sibling verification/output directory.
+The aerospace-smoke input loads, validates cross-references and forecasts normally.
+Failure is RunLock.acquire -> mkdir_private_host -> WindowsCheckpointIO.mkdir,
+recursively creating the output parent -> _rename -> filesystem.replace_child ->
+NtSetInformationFile result converted at windows_filesystem.py:808 to WinError 6.
+This narrows the failure to native directory publication in the authoring session;
+it does not yet identify which handle or sandbox translation fails. Regular Studio
+helper generation passing does not close this different invocation path. Record a
+focused P1 investigation preserving isolation, lock ownership and durability.
+
+The user twice observes the command menu over a newly created scenario's chat,
+without pressing its shortcut. The visible text is App.tsx's command menu, opened
+by the search button or Ctrl/Cmd+K handler. Code inspection has not yet reproduced
+the unintended opening trigger. Record P2 modal/focus/key/pointer investigation,
+not a speculative clear-overlay patch or attribution to user input.
+
+Record the requested low-priority (P3) transient validation AbortError investigation.
+App.validateItem uses StudioApi.request's default 15-second timer, whose abort()
+provides no explicit reason. That is a plausible source of the displayed browser
+message, not confirmation of this incident's timing or proof it was harmless.
+The next validation succeeded. Preserve prior results and investigate cancellation,
+operation lifetime and useful timeout messaging rather than silently retrying work.
+
+Manual Install Skills is not a prerequisite for Studio authoring: resolve_turn_skill
+uses existing enabled skills or installs missing bundled Codex skills using the
+selected scope, with missing_only=True. Disabled skills still require enabling;
+existing skills are not automatically overwritten. The button remains useful for
+bulk installation/update/repair and configuring standalone Codex/Claude clients.
+The user's not clicking it does not establish that no skills were installed/reused.
+
+Proceed with uninstall acceptance while keeping these repairs open. Before any
+optional work/data deletion, preserve an external backup of the current workspace,
+including the old disagreeing bundle and aerospace verification input/logs. Test
+default preservation first and verify content/history after reinstall, then test
+optional category cleanup on backed-up/disposable content. Do not rerun or repair
+these scenarios merely to repeat the already successful ordinary GUI pipeline.
+This is a roadmap/evidence update; no new installer, full CI or quality-repair claim.
+
+### Embedded uninstall choices and responsive review (November 13)
+
+The laptop user rejects the separate Python cleanup window: choices must be on
+(or before) the NSIS confirmation page, with no separate top-level window. They
+report single-selection-like behavior, inability to clear choices and a long
+spinner that prevents Cancel; they kill Python before uninstalling. Preserve that
+installation/data for retest. The code confirms recursive inventory ran directly
+inside checkbox message handling. Existing native tests used BM_SETCHECK and tiny
+fixtures, missing actual click behavior and realistic inventory cancellation.
+
+Replace the separate window in the installer path with one NSIS nsDialogs page
+containing three stock independent checkboxes, exact path review and the Uninstall/
+Cancel footer. All choices default unchecked. The controller owns no visible
+window; it only updates controls owned by its verified parent NSIS process. A
+read-only inventory runs in a cancellable worker task, with progress/check counts.
+Changed choices invalidate the prior review receipt immediately. Only clicking
+Uninstall with the current reviewed receipt may run the existing locked/revalidated
+cleanup engine. The wizard waits for its owned controller/worker to finish before
+removing app files. Cancel stays responsive during preparation; explicitly approved
+staging/deletion is allowed to reach its result before exit, never killed on an
+uncertain acknowledgement. Silent/passive/upgrade paths preserve data as before.
+
+Retain the original same-session Explorer-token broker. The controller and
+unelevated account worker communicate over a fresh local-only named pipe with a
+restrictive DACL for the target account, controller account, SYSTEM and admins.
+Authenticate endpoint process IDs using the native kernel APIs, validate process
+image/parent and token SID, bound/validate JSON messages, and require an opaque
+single-use plan ID plus exact choices/revision for execution. No reviewed data
+inventory or credentials are passed through shared temporary files. Persistent
+ownership/ACL checks and per-account deletion boundaries are unchanged.
+
+The NSIS page uses the existing stock nsDialogs/System plugins, adding no new
+third-party plugin. Windows payload assembly verifies pythonw.exe is bundled.
+Implementation references: https://nsis.sourceforge.io/Docs/nsDialogs/Readme.html,
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid,
+and https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid.
+
+New tests exercise cancelled real recursive inventory, obsolete/mismatched/reused
+receipts, select-all/select-subset/clear-all with no deletion, bounded pipe framing,
+and native cross-process pipe endpoint identity. A disposable NSIS harness compiles
+the production page/callbacks and uses BM_CLICK rather than forcing state; it tests
+all three choices and clearing, Cancel during a blocked inventory, preservation,
+and selected private/work removal with unselected publisher/unrelated files retained.
+The harness substitutes only its fixture controller launch, keeping page controls,
+styles and NSIS navigation unchanged. Genuine Windows 11/UAC/alternate-account
+acceptance remains a separate user gate. Extend focused preview diagnostics with
+these tests and the compiled harness; full acceptance remains deferred this run.
+
+Focused iteration evidence: run 43533241363 exposed the test environment's Windows
+virtualenv redirector (the real named-pipe peer has a different PID from its
+launcher). Test child processes now use the direct base interpreter, preserving
+strict endpoint PID checks; packaged bootstrap Python already runs directly.
+Run 43533652222 passed all 65 native diagnostics, then caught a duplicate Modern UI
+uninstaller abort callback during packaging. Use its documented
+MUI_CUSTOMFUNCTION_UNABORT hook instead of defining un.onUserAbort directly.
+Runs 43534503910 and 43535583167 built the installer and passed the same diagnostics,
+but caught harness setup mistakes: decoding native compiler output from a Unicode
+path and extracting a trailing comment fragment as an NSIS command. Correct both;
+these runs did not upload an installer as ready for testing.
+
+Code review also identified a rapid check/uncheck edge: native click notifications
+disable Uninstall immediately, but both clicks can occur between controller polls
+and restore the same selection. Reassert eligibility from the current selection
+and exact reviewed receipt each poll. Extend the real-click test to require
+Uninstall to re-enable after clearing all choices, and the controller unit test to
+cover a native notification without a net selection change. Five controller/unit
+tests pass locally after this change; repository Ruff checks and formatting pass.
+
+Run 43536382348 also built successfully and passed all 65 diagnostics. The compiled
+harness then exposed its ordinary argv quoting of NSIS's special _?= tail: with
+spaces, NSIS ignores the override and starts a temporary copy outside the expected
+PID. Use the existing verifier's installer_command for installation and its same
+direct-CreateProcess/unquoted-final-tail convention for the interactive uninstaller.
+Keep the production controller's strict parent/window PID checks intact.
+
+Build-only run 43537272496 succeeds from source
+a7e2fbb879bb0bc1d27bdf17b50239b4963321d1: all 65 focused native diagnostics pass
+in 25.89 seconds, and all three compiled production-page wizard cases pass in 6.56
+seconds. The cases exercise actual checkbox clicks/clearing, Cancel while inventory
+is blocked, all-unchecked application removal, and private/work removal with
+unselected global publisher and unrelated workspace files preserved. The run builds
+and uploads an unsigned NSIS preview with exact-source/checksum metadata; qualification
+is explicitly not_run. Full CI/packaged acceptance and Windows 11 desktop/UAC/
+alternate-account acceptance remain pending. Before laptop retest, install/upgrade
+this build first so it replaces the old installed uninstaller, then choose Uninstall.
+
+Downloaded the EXE/checksum/build receipt and verified source SHA, run ID, target,
+unsigned/unqualified status, MZ executable header and matching installer bytes.
+Copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-a7e2fbb8/. The installer
+is 72,105,322 bytes, SHA256
+140f9469822f854bbac641dd221720a48bcdee1f60ac96f44db24d750c8b681f;
+runtime ID 136e359828c28c51486b89b098e4196ce646d3e657cba69cc49d24e4ac8f4a1e.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+No version bump, release publication or tag; no full acceptance claim.
+
+### Cleanup pipe deadlock and recurring validation abort (November 13)
+
+The a7e2fbb8 laptop retest confirms the embedded NSIS panel and independent
+checkboxes have the requested behavior, but selecting all categories leaves
+"Preparing the selected file list" unchanged for minutes, without an inspection
+counter or enabled Uninstall button. Cancel closes the wizard. A read-only process
+check identifies the abandoned worker PID 20888 on pipe
+eacc70acd8d54d6983b69448889ec991 (controller 18276); the user stops only that worker
+after matching its unique pipe ID. No deletion was approved.
+
+Find and reproduce the owning-layer bug: the controller's reply reader leaves a
+synchronous ReadFile pending on the same pipe handle used to send preparation.
+Windows serializes these operations; the request blocks behind its own reply read.
+The original transport test used sequential request/reply traffic, and the NSIS
+page harness used an in-process fixture channel, so neither covered this combined
+path. Test-only source ab2f4bdb, run 43539386526, reproduces exactly:
+"Command blocked behind the pending reply read" (65 existing diagnostics pass,
+the new combined test fails). This is not evidence of a slow directory inventory.
+
+Use FILE_FLAG_OVERLAPPED on both endpoints, with separate OVERLAPPED/event records
+for each outstanding operation. Keep buffers/events alive through completion or
+cancel-and-drain, then close the pipe only after active I/O has completed. Bound
+connect/write waits and require the authenticated worker's ready message within
+the existing startup deadline. Preserve the endpoint SID/PID checks, restrictive
+pipe ACL, exact single-use review receipts, original-account execution and locked
+cleanup engine. The combined native test exercises progress during a pending
+command read, changed-selection cancellation, exact review/apply acknowledgement
+and closing with both endpoints waiting for more traffic. Reference:
+https://learn.microsoft.com/en-us/windows/win32/ipc/synchronous-and-overlapped-input-and-output.
+
+The laptop also repeats validation AbortError after reinstall on an existing
+scenario; immediate revalidation succeeds. Confirm the client allows only 15
+seconds while _validate_source allows 180 seconds. Give scenario validation a
+240-second request budget (CLI time plus dependency checks/result persistence),
+matching the existing explicit long-operation pattern. Translate this client's
+own timeout into a useful uncertain-result message, retain existing error/result
+handling and do not automatically retry. Exact request timing from this laptop
+incident is unavailable: the repeated report warrants P2 profiling of cold
+validation and late-result/operation lifetime, not a claim that increasing the
+budget resolves underlying latency. Frontend tests verify no abort at 16 seconds,
+clear timeout/no retry and the App's explicit validation allowance; 120 focused
+frontend tests pass, followed by all 114 App tests after the final budget change.
+Frontend production build and 59 focused Python tests pass (one Windows-only skip)
+on macOS; repository Ruff checks/formatting pass. Run 43539802472 is superseded
+before diagnostics by the final budget adjustment; the final preview run remains
+build-only plus focused native diagnostics, not full acceptance CI.
+
+Final source b3bd8b172189e2feae28e0431d591cc018889a42, run 43539999661, succeeds:
+66 native diagnostics pass in 28.93 seconds, including the reproduced deadlock
+regression, and all three compiled wizard tests pass in 6.84 seconds. Build-only
+qualification remains not_run. Verify the downloaded installer checksum, source,
+run, target and MZ header, then copy all three artifact files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-b3bd8b17/.
+EXE size: 72,103,258 bytes; SHA256
+73e37b5f3aac791d7a81a813607835a5a060e30d1b4bda460151dfb2f8262b89;
+runtime ID d580326f915b4be91abf77983bd67a8a68e670a1c919d06bc743fbc894461a0f.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install/Upgrade before rerunning validation and uninstall; retain laptop acceptance
+for actual inventory duration, first validation and category removal. The corrected
+transport does not itself optimize recursive inventory: it still checks selected
+file identities/ACLs, including retained runtimes, without reading all log contents.
+No version bump, tag, release publication, PR or full acceptance claim.
+
+### Large uninstall review, WebView2 capability and Codex startup display (November 13)
+
+The b3bd8b17 laptop retest validates an existing scenario without issues, providing
+the first laptop confirmation after the browser timeout change. Codex initially
+looks disconnected; manual Reconnect succeeds, but no initial status detail/timing
+was captured. Inspecting the code confirms a display defect: CodexHealth initially
+has state=checking/availability=disconnected, while CodexStatusIndicator chooses its
+label solely from availability. Show amber "Checking connection" during initial
+checks/reconnect instead of red "Not connected", preserving login gating and actual
+failed-connection diagnostics. Native start and health polling remain unchanged;
+_monitor_codex already retries after each check plus an eight-second sleep. Startup
+initialization/sandbox checks have 15/30-second limits, normal health reads allow
+five seconds, and manual reconnect account checks allow ten. This is not evidence
+that every actual startup connection failure is only timing. The display regression
+checks transition to Ready without invoking Reconnect; all 12 indicator tests and
+the frontend production build pass locally.
+
+The uninstall counter now advances beyond 50k with all categories selected, but
+review remains slow. It counts callback checks across selected private state,
+retained runtime trees, browser data, skills and workspace discovery/inventory,
+not unique workspace files. Windows runtime pruning is deliberately disabled in
+this preview. The code currently inventories every candidate before enabling
+Uninstall, repeats inventory under ownership locks, stages each file, then deletes
+staged contents. Deletion necessarily visits entries, but this preflight/full-path
+reopening overhead is not an inherent requirement of an uninstall confirmation UI.
+Track realistic scale and the larger root/category-review design separately.
+
+The scan then refuses
+AppData/Local/org.evidenceforge.studio/EBWebView/Default/Cache. The user supplies
+the exact ACL: owner/current user ends -1001; another account ending -1008 has only
+inherited read access (0x1200a9). The rejected grant is a capability SID with Modify
+(0x1301bf):
+S-1-15-3-1024-3239966617-1410756637-3494353204-65451782-2225605771-3526040376-1730753648-3419555762.
+Its numeric identity matches lpacEdgeStableNetworkSandbox, consistent with Chromium
+network-service cache grants. This browser profile is not protected Studio settings.
+Use Windows DeriveCapabilitySidsFromName and accept the named capability's Modify
+grant only under this account's fixed org.evidenceforge.studio/EBWebView namespace.
+Keep actual object ownership checks and all other paths strict; reject unknown
+capabilities and grants with GenericAll/WRITE_DAC/WRITE_OWNER. Do not remove grants,
+change owners, grant broad access or apply this exception to settings/runtimes.
+
+Optimize Windows inventory using one verified root traversal and pinned relative
+child opens. Inspect each opened object's native identity/type/link count and ACL;
+retain directory handles down the current branch so ancestry cannot be renamed.
+Do not repeat drive-root walks/path lstat for each file. Close every handle on
+cancellation/failure. Existing POSIX inventory is unchanged. Review progress now
+names its current root and calls the count "filesystem checks completed", explaining
+that selected private/runtime data is included. The snapshot/recheck/removal contract
+is preserved; actual file staging/removal is not redesigned by this optimization.
+
+Native tests replay the exact named capability, verify ACLs remain unchanged,
+refuse that same grant on private settings and refuse unrelated capabilities or
+Full Control grants. A 500-file/20-directory fixture requires one absolute ancestry
+open, tests root pinning during review and confirms cancellation releases handles.
+The focused preview diagnostics now include native filesystem tests and per-test
+timings. Local Python evidence: 59 pass, three Windows-only skips; repository Ruff
+checks/formatting and diff checks pass. Native CI/laptop performance and actual
+profile cleanup remain distinct acceptance evidence.
+
+Primary references: Microsoft WebView2 sandbox/user-data permissions
+(https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/measures),
+DeriveCapabilitySidsFromName
+(https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-derivecapabilitysidsfromname),
+and Chromium network sandbox/cache ACL ownership
+(https://chromium.googlesource.com/chromium/src/+/refs/tags/141.0.7345.0/content/browser/network_sandbox.cc).
+
+Run 43542841897 from 70ec6661 passes 99 focused diagnostics, including the native
+pinned-walk/500-file cancellation test and existing filesystem guards. The exact
+capability test accepts Modify and correctly rejects both an unrelated capability
+and Full Control; its final cleanup then fails because icacls /grant:r does not
+remove the separate non-inheritable Full Control test ACE when restoring an
+inheritable Modify ACE. Fix the fixture to remove the deliberate grant explicitly
+before restoring it. Do not relax the production guard to accept Full Control.
+
+Final run 43543160453 succeeds from
+ad387bde0a20a13e4a0b8f5331942ad1477c781c: 100 focused native diagnostics pass in
+32.22 seconds, followed by all three compiled NSIS wizard cases in 6.72 seconds.
+The large native fixture's 1.65 seconds includes creating 500 files, full inspection
+and cancellation/handle-release checks; it is not a measurement of the laptop's
+50k-entry profile or of complete removal. Keep the P1 scale/design qualification open.
+
+Verified EXE/checksum/receipt source, run, target, unsigned/not_run status and MZ
+header, then copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-ad387bde/.
+EXE size: 72,106,964 bytes; SHA256
+dbe3d912e018954ef10722a7a20c59e1dc3559eee45c1f584e9da85a9d329929;
+runtime ID 6ad76ac7e524fbde071249d3318c452a8fb3e6d060fdfad93ef3c8ec29935c9f.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Close the current uninstaller, Install/Upgrade this build, then retest normal Codex
+startup and optional cleanup. No version bump, PR, publication/tag or full acceptance
+claim; genuine Windows 11/profile cleanup, runtime-scale duration and any actual
+startup Codex failure remain laptop acceptance evidence.
+
+### Removal progress, post-uninstall audit and complete dedicated roots (November 13)
+
+Laptop acceptance of ad387bde: filesystem review is nearly instant, the WebView2
+permission error is gone, and all three categories can complete removal. The
+remaining long removal phase has no visible activity; the user requests a progress
+bar and an independent cleanup check. Add a native bar on the existing NSIS page,
+never a new window. Counted phases are checking/preparing/removing; finishing
+directory cleanup uses marquee activity instead of an invented percentage. Updates
+are throttled, include the active path, and remain visible while the original-account
+worker executes. Progress channel loss must not interrupt already-approved cleanup.
+Keep mutation cancellation disabled and wait for owned workers before app removal.
+
+Progress-only source f650f283 passes run 43548526558: 102 focused native diagnostics
+(26.20 seconds) and all three compiled wizard cases (4.70 seconds). The real wizard
+harness pauses execution on actual intermediate progress, checks visible/nonzero
+bar position and nonoverlapping page bounds, then releases cleanup and verifies
+preservation. Real cross-process pipe tests carry progress/complete messages before
+the final acknowledgement. Local focused Python tests pass; full CI stays deferred.
+No installer from this intermediate snapshot is delivered while the subsequent
+whole-root cleanup change is being prepared.
+
+Before reinstall, a read-only PowerShell audit confirms ABSENT for Studio private
+state/runtimes, org.evidenceforge.studio, all nine standard skills under both global
+and project .agents/.codex scopes, Claude's eforge commands, global publisher and
+releases, and managed config/packs/releases/deletions/publisher paths. The workspace
+studio/scenarios containers are empty, but artifacts and runs retain descendants.
+The next bounded listing shows draft/validation folders, a failed run containing
+only .eforge-desktop-job.json, and other run checkpoint/artifacts/data directories.
+The listing does not establish whether deeper remaining directories are empty.
+Do not call the workspace cleanup complete from the private-state/skills success.
+
+The user explicitly requests deleting the complete EvidenceForge top-level folder
+and corresponding dedicated folders elsewhere. Implement a full-clean review when
+all three categories are selected: entire default profile/EvidenceForge and legacy
+Documents/EvidenceForge workspaces, profile/.eforge, both private/WebView2 roots,
+and the known individual eforge-* skill folders/Claude eforge command folder.
+Include manually added/unregistered content inside these dedicated roots; show this
+scope and exact paths in the review before execution. Shared profile/agent/skill
+parents, Codex authentication and unrelated tools stay. Arbitrary custom workspaces
+retain selective namespace cleanup and an explicit preservation note; they are not
+inferred to be wholly disposable from a saved path alone. Fewer selected categories
+keep the existing selective behavior.
+
+Full-clean is an explicit private plan flag, requires the unchanged three-category
+selection at execution, collapses overlapping roots, and carries discovered nested
+protocol locks into fencing/reclamation. Scope private service/lease lock names to
+the actual private root so an identically named workspace file remains ordinary data.
+Continue rechecking the exact snapshot and retaining new/unreviewed files. Remove
+read-only original objects by native identity-checked handle operations that clear
+only ReadOnly, never ACLs; tolerate no links/hardlink attribute mutation. Stop claiming
+full success if a reviewed root remains because of new/locked contents.
+
+Regressions cover failed jobs/unregistered files, manual files inside dedicated
+roots, nested live-lock refusal, shared-agent/auth preservation, arbitrary custom
+workspace preservation, and native read-only files/directories. Extend the compiled
+wizard matrix with all-three full clean while retaining its visible-progress check.
+Local evidence after this change: 64 pass, four native-only skips; Ruff checks,
+formatting and diff checks pass. Generation behavior surface validation still
+matches its declared digest; no generator or version change is made.
+
+Final full-clean source a5d5ff980c94a8e548f3583ba98dac80c67fb529 passes build-only
+run 43549830823: 106 focused native diagnostics (30.39 seconds) and all four
+compiled NSIS wizard cases (9.46 seconds), including full clean and preservation
+of unrelated agent/authentication content. Full cross-platform/desktop acceptance
+is deliberately not run. One additional test-only regression added afterward
+confirms new unreviewed files survive and prevent a false completion report;
+the local full-clean subset passes four tests with one native-only skip.
+
+Verified the downloaded EXE's MZ header, SHA256 sidecar and build receipt against
+the exact source/run/target/unsigned/not_run metadata, then copied all three files
+byte-for-byte to /Users/dabianco/Downloads/EvidenceForge-Windows-build-only-a5d5ff98/.
+EXE size: 72,107,736 bytes; SHA256
+7d972e2693d91e386c24bb99df8e65a877014bbdfb6ba7c2b8d3343fa224f761;
+runtime ID 1128fc710858055490d266829348b40009e67efafc265bdd476cb3c613a9dc79.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install this build before using its all-three-category uninstaller to remove the
+old workspace leftovers; the prior successful removal did not establish that
+those leftovers were empty. The final follow-up commit changes tests/worklog
+only, so the delivered executable remains explicitly bound to a5d5ff98.
+
+### Windows authoring configuration-cache regression (November 14)
+
+Laptop testing of runtime 1128fc710858055490d266829348b40009e67efafc265bdd476cb3c613a9dc79
+fails a normal `info formats --project-root` from a scenario draft with
+`Fatal error: untrusted derived cache wrapper discovered`. Environment inspection
+also reports an empty/non-JSON response and validation exits 21. These are
+consistent with one shared configuration-scope failure, not authored YAML defects.
+The capability lookup introduced in bdeb56c33 has an unregistered functools.cache
+wrapper in the Windows filesystem module. Native file/lease operations import
+that module; provider discovery then correctly rejects the unknown owned LRU.
+Prior focused uninstall tests exercised cleanup/ACL behavior but missed the
+interaction with normal CLI configuration scopes.
+
+Remove the global wrapper rather than weakening provider discovery or adding an
+OS capability lookup to the generation-configuration cache registry. Derive the
+named WebView2 capability lazily once per inventory scan and reuse the immutable
+value for all children in that scan. Native regressions require repeated inventory
+calls to keep working after capability lookup, and one derivation per WebView2
+scan. Keep the exact capability/Modify-only restrictions and preservation tests.
+
+Extend focused preview diagnostics with fresh native Python and PowerShell calls
+for formats inventory, validation and Studio's exact environment resolve flags
+from a draft in a path containing spaces, Unicode and an apostrophe. After
+packaging, install this build's actual archived runtime into a temporary private
+cache using its bundled bootstrap, then repeat all three operations through its
+isolated Python, PowerShell and relocatable launcher, with runtime leases active
+and development tools removed from PATH. These bounded smoke checks precede
+artifact upload; full CI/desktop acceptance remains deferred by user request.
+
+Local checks: 43 tests pass, five native-only skips; two focused provider LRU
+trust/value-graph tests pass without changing the provider. Ruff checks/formatting
+and diff checks pass. Behavior manifest remains revision 520 with unchanged digest
+4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a.
+
+While the cache-fix build runs, laptop testing confirms the native progress bar
+works well and the uninstaller otherwise appears to work. The user still sees a
+large per-checkbox review walk and prefers avoiding tens of thousands of checks.
+Whole-root *scope* did not replace the per-file snapshot/recheck/staging algorithm;
+Windows recursive removal also must still visit descendants. Refine the existing
+P1 scale backlog toward cheap dedicated-root review wherever an entire folder is
+selected (including private state alone), selective discovery for mixed/shared
+locations, and guarded streaming removal with visible progress.
+That redesign must make approval/changed-content semantics explicit and retain
+original-account execution, writer fencing, verified root identity and no-follow
+boundaries. It is not included in the cache-regression installer now building.
+
+The user subsequently requests an explicit "are you sure" for any selected content
+and removal of the scrolling details pane while retaining the progress bar, then
+explicitly requests restarting the installer build. Cancel superseded run
+43605925874 from 702c2601; do not deliver that snapshot. Require a native owned
+Yes/No confirmation on the final Uninstall click, defaulting to No. Summarize the
+selected categories, actual profile/data/workspace locations, full-clean/manual
+file scope, and retained unrelated accounts/agent sign-ins. Checkbox changes never
+prompt or authorize mutation; application-only removal does not prompt. Declining
+preserves the single-use review receipt for retry, and choices are rechecked after
+the modal response before execution. Missing confirmation metadata fails closed.
+
+Replace the EDIT/log pane with a plain short status label. Keep native counted/
+marquee progress, show phase names without path/count chatter, and present failures
+in an owned native message so details are not clipped by the short label. Native
+wizard regressions must decline once, prove no mutation, retry and accept, verify
+No is the default button, confirm the progress bar remains visible, and find no
+EDIT pane. Local control/cleanup/channel tests pass 36 with seven native-only
+skips before the additional changed-selection regression. The scan redesign
+remains a separate P1 backlog item, not part of this UI/cache build.
+
+Restarted run 43606487457 succeeds from
+12d0e75e3b3ef0d1c519f203cecb71795dc2cdf6. Native diagnostics: 120 pass in
+77.37 seconds, including formats/validation/environment calls through Python
+and PowerShell. Compiled NSIS navigation: four pass in 11.21 seconds, including
+the owned confirmation's default No, decline/retry/Yes flow, no EDIT pane and
+visible intermediate progress. Actual archived runtime installation plus nine
+isolated Python/PowerShell/launcher CLI checks pass in 185.30 seconds with active
+runtime leases and no development tools on PATH. These bounded engineering
+regressions do not establish Codex MXC or Windows 11 desktop acceptance and do not
+replace full CI. Local changed-selection/default-No wizard suite: all ten pass.
+
+Verified the EXE MZ header, SHA256 sidecar and source/run/target/unsigned/not_run
+receipt, then copied the three artifacts byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-12d0e75e/.
+EXE size: 72,115,842 bytes; SHA256
+9926e371c44e942124793291497382433f1300ac440dec970fd9a50ab092a2a1;
+runtime ID f3c3acbc085869027455b2041765dcdf9e934ee4a032f8ef88680abb65567eb9.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+The final follow-up updates only this evidence and the Windows guide's clean
+uninstall scope/confirmation/progress description. The delivered binary remains
+bound to 12d0e75e; no version bump, tags, release publication or PR is requested.
+Install/Upgrade this build before retesting authoring and its new uninstaller;
+no user-data reset is required for the cache regression.
+
+### Bounded uninstall review and one-pass removal (November 14)
+
+The user explicitly requests reducing/eliminating the content pre-scan and repeated
+removal phases, plus a short icon-free confirmation: the question, selected items,
+"This cannot be undone", and Cancel replacing No. Implement a private root-review
+plan used by the native NSIS ReviewSession. It validates only each selected root's
+type/identity/owner/access, never enumerating a complete selected directory. Keep
+selective discovery for mixed/shared skills and custom workspaces. Known publisher
+files need no YAML-content validation just to delete them. Default application-only
+uninstall and independent category boundaries stay unchanged.
+
+Approval now covers the contents of a selected folder when removal reaches them,
+including additions since selection. Before mutation, fence Studio/service/state,
+runtime install/leases, workspace/publication and discoverable run ownership; inspect
+retained jobs and recheck selected root identities. Remove in one no-follow walk
+under the original token, without a recursive rescan, per-file staging, tree copy
+or rollback phase. Windows enforces descendant access; cleanup does not parse every
+descendant ACL or rewrite grants. Open each regular file once with deletion rights,
+clear only ReadOnly when necessary, and delete the exact opened file. Pin directory
+handles during traversal and identity-check their final empty-directory removal.
+Hold protocol lock files until writer fences close, then remove only their small
+empty ancestor skeletons. New startup content after fences close is preserved and
+reported as incomplete cleanup, without another recursive pass. Mid-removal errors
+truthfully report possible partial deletion; no transactional rollback is promised.
+
+The former inventoried/staged execution remains available to the legacy standalone
+review entry point and its compatibility tests; the installed NSIS wizard explicitly
+selects the new path. Mac/Linux Studio implementations and generation behavior are
+unchanged. Native progress now stays in one animated removal operation until complete,
+with no invented percentage or repeated phase resets. The NSIS app-file removal page
+still follows as the standard application uninstall.
+
+Use Windows TaskDialogIndirect with common Yes/Cancel buttons, default IDCANCEL,
+and no main/footer icon. Activate Common Controls v6 using a bundled manifest;
+require that manifest in Windows packaging. A built wheel includes it. The body
+contains no paths, SIDs or preservation paragraphs. Cancel/Escape/close authorize
+no deletion. Keep parent ownership and selection revalidation after confirmation.
+Primary contracts: Microsoft TASKDIALOGCONFIG/TaskDialogIndirect and ACTCTXW;
+the Win32 SDK header packs the task-dialog structures to one byte.
+
+Local focused cleanup/wizard/navigation/channel checks: 51 pass, nine native-only
+skips. Regressions cover no descendant review/staging, one visit per directory,
+current-folder-content approval, replaced roots, active service/run/lease refusal,
+external link safety, exact minimal confirmation, and preservation of newly recreated
+content. Native tests add read-only files/directories, one file open per deletion,
+real shared runtime leases, and real TaskDialog cancellation/default behavior.
+Ruff/diff checks pass. Behavior revision 520/digest remains unchanged. Restart the
+build-only Windows preview with these focused probes; full qualification and 50k+
+laptop timings remain separate evidence.
+
+First native run 43623108388 from eac59e9b passes the focused filesystem/cleanup
+diagnostics and builds the installer, but two compiled-wizard cases time out while
+looking for a child HWND with numeric control ID 2. The owned confirmation window
+was found; this does not yet distinguish a virtual/native task-dialog control from
+an error message window. Replace that private control-ID assumption with Windows
+UI Automation inspection of actual button names, text and focus. Require Yes and
+Cancel, reject No/OK, and continue testing real Cancel and Yes using the documented
+TaskDialog button messages. Preserve the config-level default-Cancel/no-icon checks.
+The next run changes only the test and this evidence; production cleanup/dialog
+code remains unchanged. Do not deliver a build with a failing native UI gate.
+
+Run 43624259655 from 7e12d5a5 confirms the actual dialog displays the exact short
+question, selected categories and irreversibility sentence, with Yes/Cancel and
+Cancel focused. Its accessible command controls report ControlType.Pane and IDs
+CommandButton_6/CommandButton_2; the test incorrectly filtered them to Button.
+Match these controls by their visible names inside the already verified owned
+dialog, then retain the real TaskDialog Cancel/Yes messages, no-mutation check,
+default-focus check and final preservation/deletion assertions. This is another
+test-only correction; production code is still eac59e9b's implementation.
+
+Final run 43625251053 succeeds from
+7984f3ebb71a5d2b83418456a114a6343115fcd8: 133 native diagnostics pass in
+68.64 seconds, four compiled NSIS cases pass in 11.55 seconds, and nine actual
+archived-runtime/isolated CLI checks pass in 152.17 seconds. The UI test now
+verifies actual Yes/Cancel labels and focused Cancel through accessibility,
+invokes Cancel and proves preservation, retries Yes, pauses on a real nonzero
+removal callback, checks the visible animated bar/no EDIT pane, then finishes
+and verifies exact selected-root removal and unrelated sign-in preservation.
+Only tests/worklog changed after eac59e9b; a production-path diff across src,
+scripts and desktop-ui is empty. The two failed runs were UI-test assumptions,
+not production dialog changes. Keep full qualification and 50k+ laptop/profile
+timings open; successful hosted Server CI is not Windows 11 desktop acceptance.
+
+Verified MZ header, SHA256 sidecar and exact source/run/target/unsigned/not_run
+receipt, then copied all three files byte-for-byte to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-7984f3eb/.
+EXE size: 72,101,324 bytes; SHA256
+aed2f549dc019bac08c0ee60e9f656522680c208eb63dead4678fa35a8d3ed7c;
+runtime ID be56dce657a66a3caa284f00e912b12e3769f54a9bc89334945285c3a2fc3363.
+Receipt: bundled Python 3.12.12, build Python 3.12.16, rustc 1.100.0
+(0ef1bc386 2026-11-09), Node v22.23.4, uv 0.13.8, runner image 20261103.298.1.
+Install/Upgrade this build before testing its new uninstaller. Final follow-up
+changes only this delivery evidence, not the binary's source snapshot. No version
+bump, publication/tag or PR; full CI remains deferred by the user.
+
+Native API references: [TASKDIALOGCONFIG](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/ns-commctrl-taskdialogconfig),
+[ACTCTXW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-actctxw),
+[Win32 SDK task-dialog declarations](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/CommCtrl.h),
+and [UI Automation elements](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement).
+
+### November 16 — warm helper and uninterrupted removal activity
+
+The laptop's remaining checkbox pause came from lazy account-broker/worker startup,
+Python imports and repeated bundled skill discovery. Start the authenticated helper
+on an owned background thread as soon as the cleanup page opens. The page remains
+interactive during construction. Keep that helper through empty selections;
+an empty prepare cancels pending review and revokes the receipt without starting
+another review. Cancellation/app-only completion reaps even a late-created helper.
+Background startup failures stay quiet with no content selected and surface if
+content is selected; application-only uninstall remains available.
+
+Reuse only the installed package's immutable skill layout in the ReviewSession.
+Continue reading settings, installed skill markers and deletion roots afresh.
+Defer publisher/YAML/settings imports until actually needed; extract the existing
+settings-envelope decoder unchanged in behavior into a lightweight shared module,
+loading only the requested historical schema. No global functools cache/provider
+wrappers and no reuse of user-root ownership approvals or deletion receipts.
+
+The reported 0-to-10%-then-reset bar was an activity animation restarted by every
+progress report. Start/stop it only on mode transitions. Show a short real removed
+item count alongside uninterrupted activity, without a preliminary file count.
+Completion alone sets the bar to 100%. Keep the concise Yes/Cancel confirmation,
+no detail pane, root-only review and single direct removal walk.
+
+Added regressions for slow/failed background startup, cancel before construction
+finishes, clearing/reselecting with one helper and a new receipt, repeated progress
+reports without animation restarts, and package discovery reuse with fresh settings
+and replaced-root rejection. Existing compiled NSIS/IPC tests remain native gates.
+Build-only preview with focused diagnostics will follow; full qualification stays
+pending per the user's Windows test/fix-loop instruction.
+
+Local verification: 142 passed, 13 native-Windows skips in 14.33 seconds across
+uninstall/wizard/fast cleanup, frozen state contracts, state-upgrade integration,
+real-pipe and compiled-NSIS test files. Ruff check/format and git diff --check pass.
+
+Run 43868534078 passes 138 native diagnostics but one real-pipe fixture still
+expects clearing every checkbox to produce an executable empty cleanup receipt.
+The new intended behavior cancels/revokes without review, so the fixture times out.
+Update it to prove empty selection rejects execution, then prepare/execute a fresh
+nonempty selection over the same live pipe. All new background/progress tests and
+CLI/checkpoint diagnostics passed. No production adjustment follows this failure.
+
+Final run 43869166689 succeeds from
+73596077929f3edbe386a8dddf8ebff08c920be0: 139 native diagnostics pass in
+56.60 seconds, four compiled NSIS page cases pass in 11.19 seconds, and nine
+installed-archive isolated CLI checks pass in 131.82 seconds. Production source
+is c6b15412; the follow-up changes only the real-pipe test and this worklog.
+
+Verified the MZ header, SHA256 sidecar and exact source/run/target/unsigned/not_run
+receipt; copied all three bytes-identically to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-73596077/.
+EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe,
+72,111,698 bytes, SHA256
+fd7e08f28706e0006b48d7ef1a59e03bede44949340bd225c8f3ed29d297c8de;
+runtime ID 7c6a8428a3b2947dc559febf82f44023d35cae64777527cfdff8d1711fb457e7.
+Bundled Python 3.12.12; build Python 3.12.16; rustc 1.100.0
+(0ef1bc386 2026-11-09); Node v22.23.4; uv 0.13.8; runner 20261103.298.1.
+Install/Upgrade before testing this uninstaller. Full CI and Windows 11 desktop/
+50k+ profile timing acceptance remain pending. No version bump, release/tag,
+publication or PR. The final delivery-evidence commit changes documentation only.
+
+
+## Windows install/uninstall user acceptance — November 16
+
+After the latest delivery (source 73596077929f3edbe386a8dddf8ebff08c920be0,
+run 43869166689), the user reported: "I’m finally able to say that I think the
+install/uninstall functions are ready to go." Record the tested installation
+and uninstall functions as accepted and close their reported field-test blocker.
+This is the user's functional/performance acceptance of the tested laptop/profile,
+not an invented timing measurement or evidence for every scope/account combination.
+
+The accepted implementation includes native integrated cleanup choices, concise
+Yes/Cancel confirmation, background helper warmup/reuse, bounded folder review,
+direct removal with uninterrupted activity and real removed-item counts. Existing
+CI evidence is 139 native diagnostics, four compiled NSIS page cases and nine
+installed-archive CLI checks. No binary change or new installer build is needed
+for this acceptance record.
+
+Remaining full CI/release qualification, untested UAC/scope/alternate-administrator
+cases, genuine separate-account isolation, and other Studio/authoring/data-quality
+backlog items remain independent. No release publication or blanket Windows
+qualification is implied by this acceptance.
+
+### Integration after acceptance
+
+The user requested returning to full CI and integrating into dev, then clarified
+that a separate full branch run before opening the PR would duplicate PR CI.
+Open the PR first and let normal PR CI supply the routine/native checks. The
+build-only loop was opt-in workflow_dispatch input, not a change disabling normal
+CI; no test gate needs to be weakened or re-enabled in source. Dispatch only the
+additional slow/portability and full installer qualification workflows absent from
+a PR targeting dev. Reuse authenticated matching-input evidence normally; do not
+force duplicate suites. Merge only after the required integration checks pass.

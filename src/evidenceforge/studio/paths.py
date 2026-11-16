@@ -112,10 +112,17 @@ def _linux_documents() -> Path | None:
 
 
 def default_workspace() -> Path:
-    """Choose a visible Documents workspace independent of the launch directory."""
+    """Choose a visible workspace independent of the launch directory.
+
+    Windows Documents may be redirected into OneDrive by folder backup. Keep new
+    workspaces, large datasets and checkpoint churn outside that known folder.
+    Saved settings and explicit overrides continue to select their original path.
+    """
     override = os.environ.get("EFORGE_STUDIO_DEFAULT_WORKSPACE")
     if override:
         return Path(override).expanduser().resolve()
+    if sys.platform == "win32":
+        return Path.home() / "EvidenceForge"
     if sys.platform.startswith("linux"):
         return (_linux_documents() or Path.home()) / "EvidenceForge"
     return user_documents_path() / "EvidenceForge"

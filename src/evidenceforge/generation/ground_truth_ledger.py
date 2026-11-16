@@ -10,7 +10,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import shutil
 import sqlite3
 import tempfile
 import weakref
@@ -25,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
+from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.events.ground_truth_occurrence import (
     GROUND_TRUTH_EVENTS_FILENAME,
     GroundTruthCoverageGap,
@@ -527,7 +527,7 @@ def _outcome(facts: dict[str, JsonValue]) -> GroundTruthOutcome:
 
 def _close_journal(connection: sqlite3.Connection, directory: Path) -> None:
     connection.close()
-    shutil.rmtree(directory)
+    remove_owned_tree(directory)
 
 
 class GroundTruthLedger:

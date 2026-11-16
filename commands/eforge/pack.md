@@ -66,6 +66,11 @@ eforge pack list --json
 eforge pack show <source:publisher:type:name@version> --json
 ```
 
+Also use `eforge pack drafts --json` when the requested pack may still be a draft.
+Apply the same project-root selection to both commands and match both `name` and
+`display_name`. Draft inventory is separate from the published-release catalog;
+use the returned draft ID/path for test composition, not a fabricated release version.
+
 `pack list` includes package, project, project-release, and user-release scopes by default.
 Published Schema 3 packs appear as immutable `project-release` entries with `source: project`,
 `resolvable: true`, `hydration_state: native` and an exact `reference`. Imported Schema 2 library
