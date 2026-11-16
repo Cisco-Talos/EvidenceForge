@@ -347,9 +347,31 @@ For a first run:
 4. Start generation from **Runs**, then monitor it there or in the job center.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
 
-Libraries support projects, search, filters, sorting, cloning, and remembered expanded/collapsed
+Libraries support projects, search, filters, sorting, duplication, and remembered expanded/collapsed
 views. Scenario conversations open a dedicated chat view. The **Properties…** menu exposes
 scenario, pack, and bundle metadata, titles, notes, version history, and validation provenance.
+
+### Appearance and conventions
+
+Studio follows the macOS light or dark appearance and switches when it changes. Each library row
+shows one status label summarizing validation, generation, and evaluation, such as **Valid**,
+**2 warnings**, **Generating**, **Passed · 91**, or **Failed acceptance**. Hover or focus the
+label for the full details of each stage.
+
+Every object menu lists its actions in the same order: open and work actions; **Rename…**,
+**Duplicate…**, **Move to project**, and **Export…**; **Properties…**, **Reveal in Finder**, and
+**Copy path**; **Hide from library**; then removal. Action names mean the same thing everywhere:
+
+| Action | Effect |
+|--------|--------|
+| **Duplicate…** | Creates an independent copy with its own identity. |
+| **New draft** | Creates an editable draft from a published release. |
+| **Export…** | Writes a file outside Studio. A confirmation offers **Reveal in Finder**. |
+| **Remove from Studio…** | Forgets a library entry, conversation, or history record. Files are kept. |
+| **Delete…** | Permanently deletes files after you review what is affected. |
+
+Dialogs close with Esc unless an operation is in progress. Form dialogs do not close when you
+click outside them, so typed input is not lost.
 
 ## Import scenarios, packs, and bundles
 
@@ -385,7 +407,7 @@ incomplete jobs already appear in Bundles.
 
 Use conversations to create or revise scenario and pack content. **Packs → New** creates either
 industry or organization content. **Assets** offers structured editing for supported categories;
-Schema 3 draft edits retain the same draft identity. Use **Clone** for a separate identity.
+Schema 3 draft edits retain the same draft identity. Use **Duplicate…** for a separate identity.
 
 **New scenario** immediately creates a managed Schema 3 YAML scaffold and binds its conversation
 to that source. Authoring and resumed conversations edit this exact draft in place. Keep its
@@ -406,7 +428,7 @@ explicit validation findings remain available separately.
 ### Missing or moved scenario sources
 
 Studio retains a missing source as **Source missing** instead of discarding its history.
-Opening it offers **Locate source** and **Remove library entry…**. Locating requires the original
+Opening it offers **Locate source** and **Remove from Studio…**. Locating requires the original
 draft ID, or identical file bytes for a legacy scenario, and an authored YAML inside the current
 workspace. Finish active chats and jobs before reconnecting or removing the entry.
 
@@ -414,9 +436,9 @@ Refresh automatically reconnects one missing Schema 3 draft to one live draft wi
 It keeps the original library ID, project assignment, conversations, and historical run paths.
 Multiple candidates, conflicting project assignments, independent same-name drafts, and active
 work require manual resolution. Files and captured generation inputs are never rewritten by
-relinking. Draft editing remains distinct from cloning or creating an independent draft.
+relinking. Draft editing remains distinct from duplicating or creating an independent draft.
 
-**Remove library entry…** archives the missing registration without deleting YAML, receipts,
+**Remove from Studio…** archives the missing registration without deleting YAML, receipts,
 generated bundles, saved conversations, or Codex threads. Runs remain in Job center. Conversations
 stop appearing under the removed entry; restoring the same original source path and identity then
 refreshing recovers its registration and conversation associations.
@@ -762,7 +784,7 @@ the per-action agreement scores with equal weight.
 Studio shows up to 100 representative messages, with complete totals and explicit truncation.
 Category/search counts describe the displayed examples when the report is truncated. New
 evaluations give related messages an exact check ID; earlier reports group their available
-action/occurrence/source/format identities and disclose that limitation. Export report JSON for
+action/occurrence/source/format identities and disclose that limitation. **Export report…** (JSON) gives
 complete per-action counts and the same bounded examples; it is not a complete findings export.
 Historical feature-bundle verification limitations are displayed explicitly. Legitimate
 zero-check actions score 100% explicitly.

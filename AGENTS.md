@@ -719,8 +719,9 @@ Studio-wide rewrite unless the task asks for it.
   `--text-1/2/3`, `--accent`, `--accent-hover`, `--accent-fg`, `--accent-soft`, plus semantic
   `--ok`, `--warn`, `--err`, `--info`, each with a `-soft` variant. Define every token for both
   themes. A component must look correct in light and dark without per-theme overrides.
-- The theme follows `prefers-color-scheme` by default. A user override (System / Light / Dark) sets
-  `data-theme` on the root element. Do not branch on the theme in TypeScript.
+- The theme follows `prefers-color-scheme` by default. `src/theme.ts` sets `data-theme` on the root
+  element and will also apply a user override (System / Light / Dark). Do not branch on the theme
+  in TypeScript; theme-specific artwork goes through `useResolvedTheme()` (as `BrandLogo` does).
 - Type scale: 11 / 12 / 13 (base) / 15 / 20 / 26 px. Nothing smaller than 11px. Use
   `font-variant-numeric: tabular-nums` for sizes, counts, durations and times.
 - Spacing is in multiples of 4px. Radii: 6 (controls), 10 (cards), 14 (dialogs). Use two shadows
@@ -754,18 +755,21 @@ Studio-wide rewrite unless the task asks for it.
 
 ### Shared components (one way to do each thing)
 - **Dialogs:**
-  - Use the shared Radix-based `Modal` with the `form`, `confirm` or `review` variant.
+  - Use the shared Radix-based `Modal` (`src/Modal.tsx`) with the `form`, `confirm` or `review`
+    variant, or `ConfirmModal` for a single decision. Do not import Radix `Dialog` elsewhere.
   - Do not add `.modal-backdrop` markup, hand-rolled overlays or `window.confirm`.
   - Destructive dialogs use the `review` layout: what is affected, then "Can't be undone", then the
     danger button.
 - **Status:**
-  - Use the shared `StatusPill` (icon plus a 1–3 word label such as "Passed · 91", "2 warnings",
-    "Running 42%").
+  - Use the shared `StatusPill` (`src/StatusPill.tsx`): an icon plus a 1–3 word label such as
+    "Passed · 91", "2 warnings" or "Running 42%". Use `JobStatusPill` for job states, and
+    `summarizeStates` to collapse validation, generation and evaluation into one row status.
   - Icon-only status is allowed only in a table cell under a labeled column header, and must still
     carry an accessible label.
   - Do not invent new badge or chip styles.
 - **Feedback:**
-  - Use the shared empty-state, inline loading and error-banner components.
+  - Use the shared `EmptyState` and `ErrorBanner` (`src/Feedback.tsx`) and the inline
+    `RequestSpinner`/`RequestFeedback`.
   - Errors offer a retry when one is possible.
   - Success goes to a toast, never through an `onError` callback.
   - "Checked at" feedback uses relative times.
@@ -782,14 +786,18 @@ Studio-wide rewrite unless the task asks for it.
   | `Rename…` | Change a display title (inline on titles, `Rename…` in menus) | None |
   | `Duplicate…` | Independent copy with a new identity (replaces "Clone…") | Form |
   | `New draft` | Editable version of a published release (lifecycle only) | None |
-  | `Export…` | Write a file outside Studio; always ends with a toast offering **Reveal in Finder** | Save panel |
-  | `Remove from Studio` | Forget a registration or history entry; files are kept | Confirm |
-  | `Delete…` | Permanently delete files | Review dialog |
+  | `Export…` | Write a file outside Studio; confirm with a toast action or `SavedPath`, both offering **Reveal in Finder** | Save panel |
+  | `Remove from Studio…` | Forget a registration, conversation or history entry; files are kept | Confirm |
+  | `Delete…` | Permanently delete files (name the object: `Delete scenario…`, `Delete version…`) | Review dialog |
 
-- Object menus (`ObjectMenu`/`ObjectAction`) keep one order everywhere:
-  - Open · Rename · Duplicate · Move to project · Export.
-  - Then Properties · Reveal in Finder · Copy path.
-  - Then Hide · Remove/Delete.
+- Object menus (`ObjectMenu`/`ObjectAction`) keep one order everywhere. Assign each action the
+  matching `ActionGroup`; the menu renders the groups in this order:
+  - `inspect`: Open, View source, Open details.
+  - `work`: task actions such as Validate, Generate or New conversation.
+  - `manage`: Rename…, Duplicate…, Move to project, Export…, New draft.
+  - `locate`: Properties…, Reveal in Finder (`revealAction()` in `src/RevealInFinder.tsx`), Copy path.
+  - `organize`: Hide from library.
+  - `remove`: Remove from Studio…, Delete….
 - Use a `•••` menu only when there are at least two secondary actions. An action is either a visible
   button or a menu item, not both, and never appears twice on one screen.
 - Hide actions that can never apply to an object, such as Validate or Generate on an unauthored

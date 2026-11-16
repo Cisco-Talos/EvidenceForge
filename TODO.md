@@ -88,10 +88,9 @@ without turning `TODO.md` back into a high-conflict work journal.
   Ordinary Studio generation succeeds; that does not qualify this separate path.
   See the [laptop trace](docs/worklog/2026-11-11-studio-windows-x86_64.md#successful-scenario-pipeline-with-authoring-and-ui-follow-ups-november-13).
 
-- [ ] **P2 — Studio "Forge" UI redesign:** Phase 1 (design tokens, light/dark themes,
-  compact brand) is done on `feature/studio-forge-ui`. Remaining: Phase 2 consistency (shared
-  Modal/StatusPill/feedback components, one action vocabulary and menu order, Reveal in Finder);
-  Phase 3 library (projects in the sidebar, flat table, unified toolbar, automatic refresh);
+- [ ] **P2 — Studio "Forge" UI redesign:** Phases 1–2 are done on `feature/studio-forge-ui`:
+  design tokens, light/dark themes, shared Modal/StatusPill/feedback components, one action
+  vocabulary and menu order, and Reveal in Finder. Remaining: Phase 3 library (projects in the sidebar, flat table, unified toolbar, automatic refresh);
   Phase 4 workspace readiness pipeline with tabs and the Activity timeline; plus a Settings
   Appearance control. Rules are in `AGENTS.md` § Studio UI Design Patterns. See the
   [worklog](docs/worklog/2026-11-16-studio-forge-ui.md).

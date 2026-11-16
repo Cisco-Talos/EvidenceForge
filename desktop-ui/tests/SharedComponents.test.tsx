@@ -49,6 +49,10 @@ test("Modal forms submit with Enter and ConfirmModal names its action", async ()
   const view = render(<Modal title="New project" onClose={vi.fn()} onSubmit={onSubmit} actions={<button type="submit">Create project</button>}><input aria-label="Project name" /></Modal>);
   await user.type(screen.getByRole("textbox", { name: "Project name" }), "Alpha{Enter}");
   expect(onSubmit).toHaveBeenCalledOnce();
+  // The dialog box and its inner form must not share a layout class, or the dialog loses its panel.
+  const form = screen.getByRole("dialog").querySelector("form");
+  expect(form).toHaveClass("modal-body-form");
+  expect(screen.getByRole("dialog")).not.toHaveClass("modal-body-form");
   const onConfirm = vi.fn();
   view.rerender(<ConfirmModal title="Remove from Studio?" confirmLabel="Remove from Studio" onCancel={vi.fn()} onConfirm={onConfirm}><p>Files are kept.</p></ConfirmModal>);
   await user.click(screen.getByRole("button", { name: "Remove from Studio" }));

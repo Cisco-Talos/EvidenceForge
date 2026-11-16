@@ -2,39 +2,36 @@
 
 ## Status
 
-Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`). Phase 1 (tokens and
-light/dark themes) is complete. Phases 2–4 have not started. The binding rules for this work live
-in `AGENTS.md` § Studio UI Design Patterns.
+Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`).
+- **Phase 1 (complete):** design tokens and light/dark themes.
+- **Phase 2 (complete):** the consistency refactor.
+- **Phases 3–4:** not started.
+
+The binding rules for this work live in `AGENTS.md` § Studio UI Design Patterns.
 
 ## Current Handoff
 
-Next: Phase 2, the consistency refactor.
-- Add the shared `Modal` (Radix; `form`/`confirm`/`review`) and migrate every `.modal-backdrop`
-  dialog in `App.tsx`, the BundleLibrary import form and the `window.confirm` in
-  `StateMaintenance.tsx`.
-- Add `StatusPill` and use it wherever `OperationStatus` icons appear in rows and headers, plus
-  shared empty-state, inline-loading and error-banner components.
-- Apply the verb table: rename "Clone…" to "Duplicate…" and unify the Remove/Delete labels.
-- Normalize menu order, remove single-item and duplicated menus, and hide the permanently
-  disabled Validate/Generate entries in `DraftObjectMenu.tsx`.
-- Add Reveal in Finder. This needs a small Tauri command; nothing like it exists yet.
-- Update `docs/studio.md` wording in the same change, and update tests that assert renamed labels.
+Next: Phase 3, the library.
+- Move projects into the sidebar, replacing the in-page Projects rail.
+- Use one flat, sortable library table for Scenarios, Packs, Bundles and Assets; grouping becomes an
+  opt-in view that never opens collapsed.
+- Use one Search · Filter ▾ · Views ▾ · count toolbar, folding in the Hidden and previous-versions
+  toggles and the Bundles status/project selects.
+- Refresh the library automatically and drop the manual "Refresh library" button.
+- Remove the eyebrow, large `h1` and tagline page intros.
 
-Then:
-- **Phase 3:** projects move into the sidebar, a flat `LibraryTable` with grouping as an opt-in
-  view, one Search/Filter/Views toolbar across Scenarios, Packs, Bundles and Assets, and automatic
-  library refresh.
-- **Phase 4:** the workspace readiness pipeline (Author → Environment → Validate → Generate →
-  Evaluate) with one next-step button derived from `scenarioStates`/`environmentState`, tabs
-  instead of accordions, header facts moved to Properties, and Job center becoming an Activity
-  timeline.
+Then Phase 4:
+- The workspace readiness pipeline (Author → Environment → Validate → Generate → Evaluate), with
+  one next-step button derived from `scenarioStates`/`environmentState`.
+- Tabs instead of accordions, with header facts (path, version, digests) moved to Properties.
+- Job center becomes an Activity timeline.
 
-Phase 1 left these open:
-- Spacing values were not normalized to the 4px scale.
-- There is no Settings → Appearance (System/Light/Dark) control yet. `setThemePreference()` exists
-  in `src/theme.ts`, but persisting the choice needs a `StudioSettings` field in the service.
-- The page intros (eyebrow, large `h1`, tagline) are recolored but not yet removed; that is part of
-  Phase 3's layout work.
+Still open from earlier phases:
+- Spacing values are not yet on the 4px scale.
+- There is no Settings → Appearance control yet. `setThemePreference()` exists in `src/theme.ts`;
+  persisting the choice needs a `StudioSettings` field in the service.
+- Workspace section headers still use icon-only `OperationStatus` next to their titles. Phase 4's
+  pipeline replaces them.
 
 ## Decisions
 
@@ -51,18 +48,42 @@ Phase 1 left these open:
 - **Syntax highlighting** uses dedicated `--syntax-*` tokens, not the semantic state colors.
 - **Contrast:** the text, accent and state tokens were checked against WCAG AA, at least 4.5:1 on
   their usual surfaces in both themes. Recheck after changing any color token.
+- **Shared components (Phase 2):**
+  - **Dialogs:** every dialog uses `Modal`/`ConfirmModal` (`src/Modal.tsx`). Its title is the
+    accessible name unless `ariaLabel` overrides it; the override clears Radix's
+    `aria-labelledby`, which would otherwise win.
+  - **Dismissal:** forms do not close on outside clicks; Esc is blocked while busy. Hidden titles
+    render as non-heading text so custom headers keep a single heading.
+  - **Status and feedback:** row and job status uses `StatusPill`/`JobStatusPill`/
+    `summarizeStates`; empty and error states use `EmptyState`/`ErrorBanner` (`src/Feedback.tsx`).
+- **Vocabulary and menu order:**
+  - The verbs are Duplicate…, Export bundle…/file…/report…, Remove from Studio… (forget an entry;
+    files kept), and Delete scenario…/version…/bundle… (permanent).
+  - Menus render the `ActionGroup`s in this order: inspect, work, manage, locate, organize, remove.
+  - Single-item and duplicate menus were removed, along with the permanently disabled
+    Validate/Generate entries on draft menus.
+- **Reveal in Finder:** uses `revealItemInDir` from `@tauri-apps/plugin-opener`. Its default
+  permission set already allows it, so no new Tauri command was needed. `revealAction()` adds it
+  beside Copy path; `SavedPath` and the export toasts offer it after a save.
 - **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
   remains on the startup, maintenance and About screens and switches artwork per theme.
 
 ## Validation
 
-- `npm test`: 38 files, 386 tests pass. `npm run build` passes (with the existing chunk-size
-  warning). `npm run types:check` is in sync.
-- Visual check: an isolated preview service with `EFORGE_STUDIO_HOME` and
-  `EFORGE_STUDIO_DEFAULT_WORKSPACE` under `/tmp`. Vite must run on port 1420 because the service's
-  CORS allow-list only includes the Tauri dev origin. Library, workspace (with validation
-  findings), Packs, Job center, Settings and ⌘K were captured in both themes through headless
-  Chrome with emulated `prefers-color-scheme`.
+- **Latest run (Phase 2):** `npm test` passes, 39 files and 393 tests. `npm run build` passes,
+  with the existing chunk-size warning.
+- **Preview service:** run an isolated preview service with `EFORGE_STUDIO_HOME` and
+  `EFORGE_STUDIO_DEFAULT_WORKSPACE` under `/tmp`.
+- **Vite port:** do not use port 1420. The user's own Tauri dev server may hold `[::1]:1420`.
+  Serve Vite on `127.0.0.1:5321` and capture with a throwaway headless Chrome profile using
+  `--disable-web-security`, because the service's CORS allow-list only includes the Tauri dev
+  origins.
+- **Guard:** have the first capture step assert the page host and a Forge-only element (for
+  example `.brand-compact`), so captures cannot silently hit another server.
+- **Phase 2 captures:** library pills, the row menu, the Duplicate form, the delete review, ⌘K,
+  and Codex status, all checked in both themes. They caught a CSS class clash (variant
+  `modal-form` versus the inner `<form>`) that hid form dialog panels. It is fixed and covered by
+  a test.
 
 ## References
 

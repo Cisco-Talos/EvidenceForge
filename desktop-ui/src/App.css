@@ -251,7 +251,7 @@ p { line-height: 1.5; }
 .scenario-group.drop-target { outline: 2px solid var(--accent); background: var(--surface-3); }
 .job-group .disclosure-chevron { flex: none; transition: transform .15s ease; }
 .job-group[open] > summary .disclosure-chevron { transform: rotate(90deg); }
-.scenario-row { display: grid; grid-template-columns: 18px minmax(0,1fr) 80px 70px 105px auto; align-items: center; gap: 10px; min-height: 79px; padding: 10px 12px 10px 5px; background: var(--surface-1); border-bottom: 1px solid var(--border); transition: background .15s; }
+.scenario-row { display: grid; grid-template-columns: 18px minmax(0,1fr) 136px 76px 105px auto; align-items: center; gap: 10px; min-height: 79px; padding: 10px 12px 10px 5px; background: var(--surface-1); border-bottom: 1px solid var(--border); transition: background .15s; }
 .scenario-row-size { color: var(--text-2); font-size: var(--text-xs); display: flex; flex-direction: column; gap: 3px; }
 .scenario-row-size small { color: var(--text-2); font-size: var(--text-xs); }
 .scenario-row:last-child { border-bottom: 0; }
@@ -281,7 +281,7 @@ p { line-height: 1.5; }
 .library-sort { min-width: 0; width: 140px; flex: none; min-height: 32px; font-size: var(--text-xs); padding: 0 6px; }
 .project-overview-stats { display: flex; flex-wrap: wrap; gap: 7px 13px; align-items: center; justify-content: flex-end; color: var(--text-2); font-size: var(--text-xs); }
 @container (max-width: 1000px) {
-  .scenario-row { grid-template-columns: 18px minmax(0,1fr) 80px 60px auto; }
+  .scenario-row { grid-template-columns: 18px minmax(0,1fr) 128px 60px auto; }
   .scenario-row-meta { display: none; }
   .scenario-mobile-meta { display: block; }
 }
@@ -870,7 +870,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .modal-lg { width: min(720px, calc(100vw - 32px)); }
 .modal-xl { width: min(980px, calc(100vw - 48px)); max-height: min(840px, calc(100dvh - 48px)); }
 .modal-full { width: min(1320px, calc(100vw - 24px)); height: min(860px, calc(100dvh - 24px)); }
-.modal-form { display: contents; }
+.modal-body-form { display: contents; }
 .modal-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
 .modal-header > div { min-width: 0; flex: 1; }
 .modal-title { margin: 0 0 4px; font-size: var(--text-lg); font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }

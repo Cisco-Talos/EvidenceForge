@@ -50,7 +50,7 @@ export function Modal({ title, ariaLabel, description, children, actions, onClos
       onPointerDownOutside={(event) => { if (busy || !dismissOnOutside) event.preventDefault(); }}
       onInteractOutside={(event) => { if (busy || !dismissOnOutside) event.preventDefault(); }}
       onOpenAutoFocus={onOpenAutoFocus} onCloseAutoFocus={onCloseAutoFocus}>
-      {onSubmit ? <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit(event); }}>{body}</form> : body}
+      {onSubmit ? <form className="modal-body-form" onSubmit={(event) => { event.preventDefault(); onSubmit(event); }}>{body}</form> : body}
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>;
 }
