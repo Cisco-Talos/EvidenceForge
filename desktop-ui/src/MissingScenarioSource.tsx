@@ -1,10 +1,11 @@
-import { ActionShortcut, ObjectMenu, RemovalButton, type ObjectAction } from "./ObjectActions";
+import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { FolderOpen, TriangleAlert } from "lucide-react";
 import type { CatalogItem, Conversation, StudioApi, StudioJob } from "./api";
 import { artifactTitle } from "./artifactNaming";
 import { CopyPathButton } from "./CopyPathButton";
+import { ConfirmModal } from "./Modal";
 
 export function MissingScenarioSource({ item, conversations, jobs, api, onRecovered, onRemoved, onRuns }: {
   item: CatalogItem; conversations: Conversation[]; jobs: StudioJob[]; api: StudioApi;
@@ -37,7 +38,7 @@ export function MissingScenarioSource({ item, conversations, jobs, api, onRecove
     } catch (failure) { setError(String(failure)); }
     finally { setWorking(false); }
   }
-  const removalAction: ObjectAction = { id: "remove", label: "Remove from library", group: "remove", disabled: working || active, reason: "Finish or stop active work first", description: "Keep files and retained runs", run: () => setConfirmRemove(true) };
+  const removalAction: ObjectAction = { id: "remove", label: "Remove from Studio…", group: "remove", disabled: working || active, reason: "Finish or stop active work first", description: "Keep files and retained runs", run: () => setConfirmRemove(true) };
   const actions: ObjectAction[] = [
     { id: "recover", label: "Recover missing source…", group: "work", disabled: working || active, reason: "Finish or stop active work first", run: () => document.querySelector<HTMLInputElement>('[aria-label="Scenario YAML path"]')?.focus() },
     { id: "runs", label: "View retained runs", group: "inspect", disabled: !jobs.length, reason: "No retained runs", run: onRuns },
@@ -50,12 +51,13 @@ export function MissingScenarioSource({ item, conversations, jobs, api, onRecove
     <p>Locate the original file to reconnect its conversations and runs. Studio can automatically reconnect a moved draft when its draft ID has one unambiguous match.</p>
     <form onSubmit={(event) => { event.preventDefault(); void recover(); }}>
       <label className="modal-field">Scenario YAML path<input aria-label="Scenario YAML path" value={path} onChange={(event) => setPath(event.target.value)} disabled={working} /></label>
-      <div className="close-modal-actions">{isTauri() && <button type="button" className="button-quiet" disabled={working} onClick={() => void browse()}><FolderOpen size={16} /> Browse…</button>}<button className="button-primary" disabled={working || active || !path.trim()}>Locate source</button></div>
+      <div className="form-actions">{isTauri() && <button type="button" className="button-quiet" disabled={working} onClick={() => void browse()}><FolderOpen size={16} /> Browse…</button>}<button className="button-primary" disabled={working || active || !path.trim()}>Locate source</button></div>
     </form>
     {active && <p className="muted">Finish or stop active chats and jobs before changing this entry.</p>}
     <p className="muted">{conversations.length} conversation{conversations.length === 1 ? "" : "s"} and {jobs.filter((job) => job.kind === "generation").length} runs retained.</p>
     {!!jobs.length && <button className="button-quiet" onClick={onRuns}>View retained runs in Job center</button>}
     {error && <p className="field-error" role="alert">{error}</p>}
-    {confirmRemove ? <div className="missing-source-removal"><h2>Remove library entry?</h2><p>This removes the stale registration. Source files, generated bundles, saved conversations and Codex threads are kept. Saved conversations will no longer appear under this library entry.</p><div className="close-modal-actions"><button className="button-quiet" disabled={working} onClick={() => setConfirmRemove(false)}>Cancel</button><RemovalButton disabled={working || active} onClick={() => void remove()}>Remove from library</RemovalButton></div></div> : <ActionShortcut action={removalAction} />}
+    <ActionShortcut action={removalAction} />
+    {confirmRemove && <ConfirmModal title="Remove from Studio?" confirmLabel="Remove from Studio" busy={working} confirmDisabled={active} onCancel={() => setConfirmRemove(false)} onConfirm={() => remove()}><p>This removes the stale registration. Source files, generated bundles, saved conversations and Codex threads are kept, but the conversations no longer appear under this entry.</p></ConfirmModal>}
   </section>;
 }

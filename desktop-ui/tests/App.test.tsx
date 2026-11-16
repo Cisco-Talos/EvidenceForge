@@ -162,12 +162,12 @@ test("an artifact has the same ordered actions and availability in its library a
   }));
   await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
   const libraryActions = menuState();
-  expect(screen.getByRole("menuitem", { name: "Delete scenario" })).toHaveTextContent("Finish or stop active work first");
+  expect(screen.getByRole("menuitem", { name: "Delete scenario…" })).toHaveTextContent("Finish or stop active work first");
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
   expect(menuState()).toEqual(libraryActions);
-  expect(screen.getByRole("menuitem", { name: "Delete scenario" }).querySelector(".lucide-trash-2")).not.toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Delete scenario…" }).querySelector(".lucide-trash-2")).not.toBeNull();
 });
 
 test("upgrade completion uses the existing five-second notification and is consumed", async () => {
@@ -273,16 +273,16 @@ test("a scenario can be cloned from its library menu with a new name", async () 
   try {
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clone…" }));
-    expect(screen.getByRole("dialog", { name: "Clone scenario" })).toBeTruthy();
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate…" }));
+    expect(screen.getByRole("dialog", { name: "Duplicate scenario" })).toBeTruthy();
     const clone = { ...snapshot.items[0], id: "alpha-copy", name: "Alpha-copy", path: `${workspace}/scenarios/Alpha-copy/scenario.yaml` };
     snapshot.items = [...originalItems, clone];
     request.mockResolvedValueOnce(clone);
     await user.clear(screen.getByRole("textbox", { name: "New scenario name" }));
     await user.type(screen.getByRole("textbox", { name: "New scenario name" }), "Alpha-copy");
-    await user.click(screen.getByRole("button", { name: "Clone scenario" }));
+    await user.click(screen.getByRole("button", { name: "Duplicate scenario" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/clone", "POST", { name: "Alpha-copy" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Clone scenario" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Duplicate scenario" })).toBeNull());
     expect(screen.getByRole("heading", { name: "Alpha-copy" })).toBeTruthy();
   } finally {
     snapshot.items = originalItems;
@@ -304,14 +304,14 @@ test("a pack clone requests a workspace publisher when one is not configured", a
     await user.click(screen.getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "Options for finance 1.0.0" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clone…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate…" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Publisher ID" })).toBeTruthy());
     expect(screen.getByRole("textbox", { name: "Pack version" })).toHaveProperty("value", "1.0.0");
     await user.type(screen.getByRole("textbox", { name: "Publisher ID" }), "local-team");
     await user.type(screen.getByRole("textbox", { name: "Publisher display name" }), "Local Team");
     snapshot.items = [...originalItems, pack, clone];
     request.mockResolvedValueOnce(clone);
-    await user.click(screen.getByRole("button", { name: "Clone pack" }));
+    await user.click(screen.getByRole("button", { name: "Duplicate pack" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith(
       "/v1/packs/pack-1/clone", "POST",
       { name: "finance-copy", version: "1.0.0", publisher: "local-team", publisher_display_name: "Local Team" },
@@ -880,8 +880,8 @@ test("conversation menu exposes rename and delete actions", async () => {
     "/v1/conversations/chat-1", "PATCH", { title: "Credential timeline" },
   );
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
-  await user.click(screen.getByRole("menuitem", { name: "Delete conversation" }));
-  await user.click(screen.getByRole("button", { name: "Delete conversation" }));
+  await user.click(screen.getByRole("menuitem", { name: "Remove from Studio…" }));
+  await user.click(screen.getByRole("button", { name: "Remove from Studio" }));
   expect(useStudio().api?.request).toHaveBeenCalledWith("/v1/conversations/chat-1", "DELETE");
 });
 
@@ -977,7 +977,7 @@ test("completed run exposes ZIP export and removes its bundle after confirmation
   const { container } = render(<JobCard job={job} name="Alpha" api={{ request, downloadBundle } as unknown as StudioApi} onError={vi.fn()} onChanged={onChanged} />);
   await user.click(container.querySelector("summary")!);
   await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
-  await user.click(screen.getByRole("menuitem", { name: "Export ZIP…" }));
+  await user.click(screen.getByRole("menuitem", { name: "Export bundle…" }));
   expect(downloadBundle).toHaveBeenCalledWith(job.id, "Alpha-job-1.zip", expect.any(Function));
   await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
@@ -1221,7 +1221,7 @@ test("imported bundles appear beside Studio runs with read-only management", asy
     await user.click(screen.getByText("cli-output"));
     expect(screen.getByText(/Studio did not create this bundle/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Bundle options for external-1" }));
-    await user.click(screen.getByRole("menuitem", { name: "Remove from Studio" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from Studio…" }));
     const dialog = screen.getByRole("dialog", { name: "Remove from Studio?" });
     await user.click(within(dialog).getByRole("button", { name: "Remove from Studio" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bundles/external-1", "DELETE"));
@@ -1409,7 +1409,7 @@ test("Markdown files render safely with a source toggle and XML logs highlight t
   const { container } = render(<BundleFileBrowser jobId="job-1" files={{ root: "/tmp/run", files: [{ path: "GROUND_TRUTH.md", size: 150 }, { path: "windows.log", size: 170 }], truncated: false }} api={{ readTextPreview, download } as unknown as StudioApi} onClose={vi.fn()} onError={vi.fn()} />);
   expect(await screen.findByRole("heading", { name: "Investigation" })).toBeTruthy();
   expect(screen.getByRole("table")).toBeTruthy();
-  expect(container.querySelector("script")).toBeNull();
+  expect(document.body.querySelector("script")).toBeNull();
   const user = userEvent.setup();
   await user.click(screen.getAllByRole("button", { name: "Actions for file GROUND_TRUTH.md" }).at(-1)!);
   await user.click(screen.getByRole("menuitem", { name: "View source" }));
@@ -1419,10 +1419,10 @@ test("Markdown files render safely with a source toggle and XML logs highlight t
   await user.click(screen.getByRole("menuitem", { name: "Rendered view" }));
   expect(screen.getByRole("heading", { name: "Investigation" })).toBeTruthy();
   await user.click(within(screen.getByRole("navigation", { name: "Bundle file list" })).getByRole("button", { name: /^windows.log/ }));
-  await waitFor(() => expect(container.querySelector(".language-xml")).toBeTruthy());
+  await waitFor(() => expect(document.body.querySelector(".language-xml")).toBeTruthy());
   expect(screen.getByText("<Event", { selector: ".syntax-key" })).toBeTruthy();
   expect(screen.getByText('"User"', { selector: ".syntax-string" })).toBeTruthy();
-  expect(container.querySelector("Event")).toBeNull();
+  expect(document.body.querySelector("Event")).toBeNull();
   expect(download).not.toHaveBeenCalled();
 });
 
@@ -1438,9 +1438,9 @@ test("Job center removes finished history entries while preserving scenario runs
     const paused = container.querySelector("#job-job-2")!;
     expect(within(paused as HTMLElement).queryByRole("button", { name: "Delete job" })).toBeNull();
     await user.click(within(finished as HTMLElement).getByRole("button", { name: "Bundle options for job-1" }));
-    await user.click(screen.getByRole("menuitem", { name: "Remove from history" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from Studio…" }));
     expect(request).not.toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
-    await user.click(within(screen.getByRole("dialog", { name: "Remove from history?" })).getByRole("button", { name: "Remove from history" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Remove from Studio?" })).getByRole("button", { name: "Remove from Studio" }));
     expect(request).toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
@@ -1502,7 +1502,7 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
     await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
     expect(readTextPreview).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml");
     expect(openPath).not.toHaveBeenCalled();
-    await user.click(within(viewer).getByRole("button", { name: native ? "Save a copy…" : "Download file" }));
+    await user.click(within(viewer).getByRole("button", { name: native ? "Export file…" : "Download file" }));
     expect(useStudio().api!.download).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml", "scenario.yaml", expect.any(Function));
     await user.click(within(viewer).getByRole("button", { name: "Close source yaml" }));
     expect(screen.queryByRole("dialog", { name: "Source YAML" })).toBeNull();
@@ -1550,7 +1550,7 @@ test("Delete menu keeps history removal and bundle deletion together with distin
   const trigger = screen.getByRole("button", { name: "Bundle options for job-1" });
   trigger.focus();
   await user.keyboard("{Enter}");
-  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Remove from Studio…" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: /Delete bundle/ })).toBeTruthy();
   await user.keyboard("{Escape}");
   expect(document.activeElement).toBe(trigger);
@@ -1562,9 +1562,9 @@ test("Delete menu keeps history removal and bundle deletion together with distin
   expect(onDeleteHistory).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await user.click(trigger);
-  await user.click(screen.getByRole("menuitem", { name: "Remove from history" }));
+  await user.click(screen.getByRole("menuitem", { name: "Remove from Studio…" }));
   expect(onDeleteHistory).not.toHaveBeenCalled();
-  await user.click(within(screen.getByRole("dialog", { name: "Remove from history?" })).getByRole("button", { name: "Remove from history" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Remove from Studio?" })).getByRole("button", { name: "Remove from Studio" }));
   expect(onDeleteHistory).toHaveBeenCalledOnce();
   expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
 });
@@ -1576,13 +1576,13 @@ test("evaluations only offer history deletion and active generations offer neith
   const { container, unmount } = render(<JobCard job={{ id: "eval", kind: "evaluation", status: "completed", output_root: "/tmp/run" }} api={api} {...callbacks} />);
   await user.click(container.querySelector("summary")!);
   await user.click(screen.getByRole("button", { name: "Options for evaluation eval" }));
-  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Remove from Studio…" })).toBeTruthy();
   expect(screen.queryByRole("menuitem", { name: /Delete bundle/ })).toBeNull();
   unmount();
   render(<JobCard job={snapshot.jobs[0]} api={api} {...callbacks} />);
   await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
-  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toHaveAttribute("data-disabled");
-  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Remove from Studio…" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle…" })).toHaveAttribute("data-disabled");
 });
 
 test("Packs combines both types in stable sections, retains filters, and opens the exact pack", async () => {
@@ -1689,7 +1689,7 @@ test("scorecards start with pillar scores, explain failed acceptance, and expose
   await waitFor(() => expect(container.querySelector(".language-json")).toBeTruthy());
   expect(readTextPreview).toHaveBeenCalledWith("/v1/jobs/eval/report", 64 * 1024);
   expect(screen.getByText(/Preview limited to 64 KB/)).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "Download report JSON" }));
+  await user.click(screen.getByRole("button", { name: "Download report" }));
   expect(download).toHaveBeenCalledWith("/v1/jobs/eval/report", "evaluation-eval.json");
 });
 
@@ -2440,10 +2440,10 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" }));
       await expandLibraryGroups(".pack-group");
       await user.click(screen.getByRole("button", { name: "Options for office 2.0.0" }));
-      expect(screen.queryByRole("menuitem", { name: "Delete version" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Delete version…" })).not.toBeInTheDocument();
       await user.keyboard("{Escape}");
       await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
-      await user.click(screen.getByRole("menuitem", { name: "Delete version" }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete version…" }));
       const dialog = await screen.findByRole("dialog", { name: "Delete office 1.0.0?" });
       await user.click(within(dialog).getByText("Affected items (1)"));
       expect(within(dialog).getByText("practice")).toBeVisible();
@@ -2453,7 +2453,7 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       await user.click(screen.getByRole("button", { name: "Open office 1.0.0" }));
       expect(screen.getByRole("button", { name: "Validation & release" })).toBeVisible();
       await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
-      expect(screen.getByRole("menuitem", { name: "Delete version" })).toBeVisible();
+      expect(screen.getByRole("menuitem", { name: "Delete version…" })).toBeVisible();
     } finally { snapshot.items = originalItems; request.mockImplementation(implementation); }
   });
 }

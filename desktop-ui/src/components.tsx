@@ -1,6 +1,5 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, Check, ChevronDown, TriangleAlert, X } from "lucide-react";
-import { Dialog } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import { StudioApi, StudioJob, ValidationResult, type ExportProgress } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
@@ -15,9 +14,10 @@ import { jobDisplayStatus } from "./jobOutcomes";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { JobDiagnostics } from "./JobDiagnostics";
 import { capturedVersion } from "./bundleGrouping";
+import { Modal } from "./Modal";
 
 export function BundleOptionsMenu({ id, onProperties, actions }: { id: string; onProperties: () => void; actions?: ObjectAction[] }) {
-  return <ObjectMenu label={`Bundle options for ${id}`} actions={actions || [{ id: "properties", label: "Properties…", group: "inspect", run: onProperties }]} />;
+  return <ObjectMenu label={`Bundle options for ${id}`} actions={actions || [{ id: "properties", label: "Properties…", group: "locate", run: onProperties }]} />;
 }
 
 export function shortPath(path: string): string {
@@ -133,7 +133,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const evaluate: ObjectAction = { id: "evaluate", label: savedEvaluation ? "Re-evaluate" : "Evaluate", group: "work", disabled: working || job.status !== "completed" || evaluationActive, reason: working ? "An operation is in progress" : evaluationActive ? "An evaluation for this run is already active" : "Complete generation first", description: "Evaluate captured data; a completed report replaces previous scores", run: () => requestJob("/v1/jobs/evaluations", { generation_id: job.id }) };
   const actions: ObjectAction[] = [
     { id: "open", label: "Open details", group: "inspect", run: openDetails },
-    ...(generation ? [{ id: "properties", label: "Properties…", group: "inspect" as const, run: () => setPropertiesOpen(true) }] : []),
+    ...(generation ? [{ id: "properties", label: "Properties…", group: "locate" as const, run: () => setPropertiesOpen(true) }] : []),
     { id: "files", label: "View files", group: "inspect", run: openBundle },
     { id: "scorecard", label: "View scorecard", group: "inspect", disabled: !scorecardId, reason: "Complete an evaluation to save a scorecard", run: () => setScorecardOpen(true) },
     { id: "log", label: "View log", group: "inspect", run: () => { setLogRequested(true); openDetails(); } },
@@ -146,11 +146,11 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     ] : []),
     { id: "stop", label: "Stop", group: "work", disabled: working || !active, reason: "Available for a queued, running or paused job", run: () => requestJob(`/v1/jobs/${job.id}/stop`) },
     ...(generation ? [evaluate, { id: "regenerate", label: "Regenerate", group: "work" as const, disabled: working || !["stopped", "failed", "cancelled"].includes(job.status), reason: "Available after an interrupted generation", run: () => requestJob(`/v1/jobs/${job.id}/regenerate`) }] : []),
-    ...(generation ? [{ id: "export", label: job.status === "completed" ? "Export ZIP…" : "Export partial ZIP…", group: "reuse" as const, disabled: exporting || ["running", "queued"].includes(job.status), reason: exporting ? "Export is in progress" : "Pause or complete generation before export", run: exportBundle }] : []),
-    { id: "copy-log", label: "Copy log path", group: "reuse", run: copyLogPath },
-    { id: "copy", label: "Copy path", group: "reuse", run: () => writePathToClipboard(job.output_root).catch((error) => onError(String(error))) },
-    { id: "history", label: "Remove from history", group: "remove", disabled: working || !terminal || removed, reason: removed ? "Already removed from Job center" : "Finish or stop this job first", description: "Keep files and scorecards", run: () => setConfirmRemoval("history") },
-    ...(generation && job.owned_output === true ? [{ id: "delete", label: "Delete bundle", group: "remove" as const, disabled: working || evaluationActive || ["running", "queued"].includes(job.status) || (job.status !== "completed" && linked.length > 0), reason: evaluationActive ? "Stop the linked evaluation first" : linked.length ? "This incomplete run has linked evaluations" : "Pause or stop this run first", description: "Delete run files and linked evaluations", run: () => setConfirmRemoval("bundle") }] : []),
+    ...(generation ? [{ id: "export", label: job.status === "completed" ? "Export bundle…" : "Export partial bundle…", group: "manage" as const, disabled: exporting || ["running", "queued"].includes(job.status), reason: exporting ? "Export is in progress" : "Pause or complete generation before export", run: exportBundle }] : []),
+    { id: "copy-log", label: "Copy log path", group: "locate", run: copyLogPath },
+    { id: "copy", label: "Copy path", group: "locate", run: () => writePathToClipboard(job.output_root).catch((error) => onError(String(error))) },
+    { id: "history", label: "Remove from Studio…", group: "remove", disabled: working || !terminal || removed, reason: removed ? "Already removed from Job center" : "Finish or stop this job first", description: "Keep files and scorecards", run: () => setConfirmRemoval("history") },
+    ...(generation && job.owned_output === true ? [{ id: "delete", label: "Delete bundle…", group: "remove" as const, disabled: working || evaluationActive || ["running", "queued"].includes(job.status) || (job.status !== "completed" && linked.length > 0), reason: evaluationActive ? "Stop the linked evaluation first" : linked.length ? "This incomplete run has linked evaluations" : "Pause or stop this run first", description: "Delete run files and linked evaluations", run: () => setConfirmRemoval("bundle") }] : []),
   ];
   const shortcutIds = job.status === "running" ? generation ? ["pause", "stop"] : ["stop"] : job.status === "queued" ? ["stop"] : job.status === "paused" ? generation ? ["resume", "stop"] : ["stop"] : generation && job.status === "stopped" && job.can_resume ? ["resume", "files"] : generation && job.status === "completed" ? ["evaluate", "files"] : ["files"];
   return <details ref={row} className={`job-row ${summaryExtra ? "workspace-run" : ""} ${highlighted ? "source-highlight" : ""}`} id={`${idPrefix}-${job.id}`} onToggle={(event) => setExpanded(event.currentTarget.open)}>
@@ -167,8 +167,8 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     </div>
     {propertiesOpen && <BundlePropertiesDialog id={job.id} api={api} onClose={() => setPropertiesOpen(false)} />}
     {files && <BundleFileBrowser jobId={job.id} files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
-    {scorecardOpen && scorecardId && <Dialog.Root open onOpenChange={setScorecardOpen}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="close-modal scorecard-dialog"><Dialog.Title>Scorecard</Dialog.Title><Dialog.Description>Saved evaluation of this run's captured data.</Dialog.Description><ScorecardPanel jobId={scorecardId} api={api} /><Dialog.Close className="button-quiet">Close scorecard</Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>}
-    {confirmRemoval && <RemovalConfirmation title={confirmRemoval === "history" ? "Remove from history?" : "Delete this bundle?"} label={confirmRemoval === "history" ? "Remove from history" : "Delete bundle"} busy={working} onCancel={() => setConfirmRemoval(null)} onConfirm={remove}><p>{confirmRemoval === "history" ? "This job disappears from Job center. Its run files and saved scorecard remain available." : "The run directory, linked evaluations and their Studio records will be removed. The authored scenario remains available."}</p><div className="path-with-copy"><span className="path-value source-path" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div></RemovalConfirmation>}
+    {scorecardOpen && scorecardId && <Modal title="Scorecard" description="Saved evaluation of this run’s captured data." size="xl" className="scorecard-dialog" dismissOnOutside onClose={() => setScorecardOpen(false)} actions={<button type="button" className="button-quiet" onClick={() => setScorecardOpen(false)}>Close scorecard</button>}><ScorecardPanel jobId={scorecardId} api={api} /></Modal>}
+    {confirmRemoval && <RemovalConfirmation title={confirmRemoval === "history" ? "Remove from Studio?" : "Delete this bundle?"} label={confirmRemoval === "history" ? "Remove from Studio" : "Delete bundle"} busy={working} onCancel={() => setConfirmRemoval(null)} onConfirm={remove}><p>{confirmRemoval === "history" ? "This job disappears from Job center. Its run files and saved scorecard remain available." : "The run directory, linked evaluations and their Studio records will be removed. The authored scenario remains available."}</p><div className="path-with-copy"><span className="path-value source-path" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div></RemovalConfirmation>}
   </details>;
 }
 

@@ -1,7 +1,6 @@
 import { belongsToScenario } from "./scenarioSources";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, LoaderCircle, Package, Folder, MessageSquareText, ShieldCheck } from "lucide-react";
-import { Dialog } from "radix-ui";
 import type { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime, JobCard, ValidationPanel } from "./components";
 import { artifactTitle } from "./artifactNaming";
@@ -22,6 +21,7 @@ import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPane
 import { recentJobs } from "./jobOrder";
 import { RequestFeedback, requestTime, type RequestState } from "./RequestFeedback";
 import { countLabel, environmentSummary, latestJob, latestRunState, runsSummary, validationSummary } from "./workspaceSummaries";
+import { Modal } from "./Modal";
 
 export type WorkspaceTarget = "overview" | "environment" | "conversations" | "validation" | "generation" | "scoring";
 export type ValidationActivity = { status: "running"; completedAt?: never; error?: never }
@@ -151,8 +151,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const fixAction = getAction("fix", { id: "fix", label: "Fix in chat", group: "work", disabled: busy || !validationIssues.length, reason: "Validate to find issues requiring changes", run: onFix });
   const forecastAction = getAction("forecast", { id: "forecast", label: sizeLabel, group: "work", disabled: starter, reason: "Continue authoring before forecasting", run: () => setForecastOpen(true) });
   const generateAction = getAction("generate", { id: "generate", label: "Generate", group: "work", disabled: busy || starter || health?.ready === false, reason: starter ? "Continue authoring before generation" : health?.ready === false ? "Resolve dependency errors first" : "An operation is in progress", run: onGenerate });
-  const packExportAction = getAction("export-release", { id: "export-release", label: "Export release…", group: "reuse", disabled: !item.version, reason: "Publish a release before exporting", run: onExportPack });
-  const localForecastDialog = <Dialog.Root open={forecastOpen} onOpenChange={setForecastOpen}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker run-forecast-dialog"><Dialog.Title>Generation forecast</Dialog.Title><Dialog.Description>Estimates for the current scenario and generation settings.</Dialog.Description><ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} /><footer><Dialog.Close className="button-quiet">Close</Dialog.Close><button className="button-primary" onClick={() => { setForecastOpen(false); void onGenerate(); }} disabled={busy || starter || health?.ready === false}>Generate</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  const packExportAction = getAction("export-release", { id: "export-release", label: "Export release…", group: "manage", disabled: !item.version, reason: "Publish a release before exporting", run: onExportPack });
+  const localForecastDialog = forecastOpen && <Modal title="Generation forecast" description="Estimates for the current scenario and generation settings." size="lg" className="run-forecast-dialog" dismissOnOutside onClose={() => setForecastOpen(false)} actions={<><button type="button" className="button-quiet" onClick={() => setForecastOpen(false)}>Close</button><button type="button" className="button-primary" onClick={() => { setForecastOpen(false); void onGenerate(); }} disabled={busy || starter || health?.ready === false}>Generate</button></>}><ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} /></Modal>;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   useEffect(() => {
     if (!chatFocus) return;
@@ -175,13 +175,13 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
         <span className="workspace-project"><Folder size={15} />{snapshot.projects.find((project) => project.id === item.project_id)?.name || "Ungrouped"}</span>
         <CatalogObjectMenu item={item} fallbackActions={[
           { id: "open", label: "Open", group: "inspect", run: () => onNavigate("overview") },
-          { id: "properties", label: "Properties…", group: "inspect", run: () => onProperties?.("general") },
+          { id: "properties", label: "Properties…", group: "locate", run: () => onProperties?.("general") },
           { id: "source", label: "View source", group: "inspect", run: onViewYaml },
-          { id: "clone", label: "Clone…", group: "reuse", run: onClone },
-          ...(item.kind !== "scenario" ? [{ id: "export", label: "Export release…", group: "reuse" as const, run: onExportPack }] : []),
+          { id: "clone", label: "Duplicate…", group: "manage", run: onClone },
+          ...(item.kind !== "scenario" ? [{ id: "export", label: "Export release…", group: "manage" as const, run: onExportPack }] : []),
           projectAssignmentAction(snapshot.projects, onProjectChange),
           { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: onHidden },
-          ...(item.kind === "scenario" || item.pack_source === "workspace" ? [{ id: "delete", label: item.kind === "scenario" ? "Delete scenario" : "Delete version", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: item.kind === "scenario" ? onDeleteScenario : onDeletePack }] : []),
+          ...(item.kind === "scenario" || item.pack_source === "workspace" ? [{ id: "delete", label: item.kind === "scenario" ? "Delete scenario…" : "Delete version…", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: item.kind === "scenario" ? onDeleteScenario : onDeletePack }] : []),
         ]} />
       </div>
       {!chatFocus && <div className="workspace-description-area"><p ref={description} className={`workspace-description ${descriptionExpanded ? "expanded" : ""}`}>{item.description || "No description in the source file."}</p>{descriptionOverflow && <button className="workspace-description-more" aria-expanded={descriptionExpanded} onClick={() => setDescriptionExpanded(!descriptionExpanded)}>{descriptionExpanded ? "Show less" : "Show full description"}</button>}</div>}

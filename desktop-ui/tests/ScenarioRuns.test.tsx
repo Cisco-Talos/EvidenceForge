@@ -51,7 +51,7 @@ test("expanding a run opens its scorecard beside bundle actions without an inter
   expect(request).toHaveBeenCalledWith("/v1/jobs/latest-score/scorecard");
   for (const name of ["View files", "Re-evaluate"]) expect(within(row("second")).getByRole("button", { name })).toBeVisible();
   await menu("second");
-  for (const name of ["Export ZIP…", "Delete bundle", "Remove from history", "View scorecard"]) expect(screen.getByRole("menuitem", { name })).toBeVisible();
+  for (const name of ["Export bundle…", "Delete bundle…", "Remove from Studio…", "View scorecard"]) expect(screen.getByRole("menuitem", { name })).toBeVisible();
   await userEvent.setup().keyboard("{Escape}");
   expect(screen.queryByRole("button", { name: "View scorecard", exact: true })).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
@@ -149,7 +149,7 @@ test("partial export, built-in viewing and confirmed bundle deletion operate on 
   await open("first");
   const user = userEvent.setup();
   await menu("first");
-  await user.click(screen.getByRole("menuitem", { name: "Export partial ZIP…" }));
+  await user.click(screen.getByRole("menuitem", { name: "Export partial bundle…" }));
   expect(api.downloadBundle).toHaveBeenCalledWith("first", "Example-partial-first.zip", expect.any(Function));
   await user.click(within(row("first")).getByRole("button", { name: "View files" }));
   expect(request).toHaveBeenCalledWith("/v1/jobs/first/files");
@@ -164,14 +164,14 @@ test("partial export, built-in viewing and confirmed bundle deletion operate on 
 test("unowned runs have history removal without bundle deletion", async () => {
   setup([{ ...run, owned_output: false }]);
   await menu("first");
-  expect(screen.getByRole("menuitem", { name: "Remove from history" })).not.toHaveAttribute("data-disabled");
-  expect(screen.queryByRole("menuitem", { name: "Delete bundle" })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Remove from Studio…" })).not.toHaveAttribute("data-disabled");
+  expect(screen.queryByRole("menuitem", { name: "Delete bundle…" })).toBeNull();
   expect(row("first")).not.toHaveAttribute("open");
 });
 
 test("a linked active evaluation disables deletion of its completed source bundle", async () => {
   setup([second, { ...evaluation, status: "running", scorecard: undefined }]);
   await menu("second");
-  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveAttribute("data-disabled");
-  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveTextContent("Stop the linked evaluation first");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle…" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle…" })).toHaveTextContent("Stop the linked evaluation first");
 });

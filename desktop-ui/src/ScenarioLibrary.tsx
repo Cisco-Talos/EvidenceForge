@@ -76,13 +76,13 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
       <div className="scenario-row-meta"><span>{item?.version || "Draft"}</span><time dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time></div>
       <div className="scenario-row-actions">{item ? <CatalogObjectMenu item={item} fallbackActions={[
         { id: "open", label: "Open", group: "inspect", run: () => onOpen(item) },
-        { id: "properties", label: "Properties…", group: "inspect", disabled: missing, reason: "Recover the missing source first", run: () => onProperties?.(item) },
+        { id: "properties", label: "Properties…", group: "locate", disabled: missing, reason: "Recover the missing source first", run: () => onProperties?.(item) },
         ...(missing ? [{ id: "recover", label: "Recover missing source…", group: "work" as const, run: () => onOpen(item) }] : []),
-        { id: "clone", label: "Clone…", group: "reuse", disabled: missing, reason: "Recover the missing source first", run: () => onClone(item) },
-        { id: "export", label: "Export bundle…", group: "reuse", disabled: !available, reason: "Complete a generation before exporting", run: () => onExport(item) },
+        { id: "clone", label: "Duplicate…", group: "manage", disabled: missing, reason: "Recover the missing source first", run: () => onClone(item) },
+        { id: "export", label: "Export bundle…", group: "manage", disabled: !available, reason: "Complete a generation before exporting", run: () => onExport(item) },
         projectAssignmentAction(snapshot.projects, (projectId) => onMove(item, projectId), () => onNewProject(item)),
         { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: () => onHide(item) },
-        { id: "delete", label: "Delete scenario", group: "remove", run: () => onDelete(item) },
+        { id: "delete", label: "Delete scenario…", group: "remove", run: () => onDelete(item) },
       ]} /> : <DraftObjectMenu draft={draft!} projects={snapshot.projects} onOpen={() => onOpenDraft(draft!)} onRename={() => onRenameDraft(draft!)} onMove={(projectId) => onMoveDraft(draft!, projectId)} onDelete={() => onDeleteDraft(draft!)} />}</div>
     </li>;
   };

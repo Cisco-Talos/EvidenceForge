@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import type { UpgradeStatus } from "../src/api";
@@ -34,11 +34,13 @@ for (const state of ["pending", "running", "failed", "blocked", "restored", "rea
 
 test("restoration explains its operation and requires an explicit action", () => {
   const restore = vi.fn();
-  vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
   render(<StateMaintenance status={base} onRetry={vi.fn()} onRestore={restore} onWorkspace={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Restore previous UI state" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Restore previous UI state?" })).getByRole("button", { name: "Cancel" }));
   expect(restore).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Restore previous UI state" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Restore previous UI state?" })).getByRole("button", { name: "Restore" }));
   expect(restore).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByText("View details"));
   expect(screen.getByText(/Recovery backup:/)).toHaveTextContent(base.backup_path!);

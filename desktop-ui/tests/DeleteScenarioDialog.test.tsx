@@ -53,7 +53,7 @@ test("all-files choice fetches a separate review and explicitly confirms its sco
   const user = userEvent.setup();
   render(<DeleteScenarioDialog item={item} api={{ request } as unknown as StudioApi} onClose={vi.fn()} onDeleted={vi.fn(async () => undefined)} />);
   await waitFor(() => expect(screen.getByRole("button", { name: "Delete scenario" })).toBeEnabled());
-  expect(screen.getByText(/This cannot be undone/)).toBeVisible();
+  expect(screen.getByText("Can’t be undone")).toBeVisible();
   const checkbox = screen.getByRole("checkbox", { name: /Also delete/ });
   expect(checkbox).not.toBeChecked();
   await user.click(checkbox);

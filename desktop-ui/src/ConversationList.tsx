@@ -6,8 +6,8 @@ import { formatTime } from "./components";
 export function conversationActions(chat: Conversation, onOpen: (chat: Conversation) => void, onRename: (chat: Conversation) => void, onDelete: (chat: Conversation) => void): ObjectAction[] {
   return [
     { id: "open", label: "Open", group: "inspect", run: () => onOpen(chat) },
-    { id: "rename", label: "Rename…", group: "organize", run: () => onRename(chat) },
-    { id: "delete", label: "Delete conversation", group: "remove", disabled: chat.active, reason: "Finish or stop the active turn first", description: "Remove the Studio entry; keep authored files and the Codex thread", run: () => onDelete(chat) },
+    { id: "rename", label: "Rename…", group: "manage", run: () => onRename(chat) },
+    { id: "delete", label: "Remove from Studio…", group: "remove", disabled: chat.active, reason: "Finish or stop the active turn first", description: "Remove the Studio entry; keep authored files and the Codex thread", run: () => onDelete(chat) },
   ];
 }
 

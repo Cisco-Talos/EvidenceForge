@@ -2,7 +2,7 @@ import { CatalogObjectMenu } from "./CatalogObjectMenu";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, Check, Search } from "lucide-react";
-import { Dialog } from "radix-ui";
+import { Modal } from "./Modal";
 import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
 import { AssetBrowser } from "./AssetBrowser";
 import { ConfigurationLayers } from "./ConfigurationLayers";
@@ -53,11 +53,11 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
     } catch (error) { onError(String(error)); }
     finally { setWorking(false); }
   }
-  return <Dialog.Root open onOpenChange={(open) => !open && !working && onClose()}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker" aria-describedby="pack-picker-help" onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}><Dialog.Title>Choose environment packs</Dialog.Title><Dialog.Description id="pack-picker-help">Choose exact versions. This prepares a request in a new conversation so you can review how the packs fit your scenario.</Dialog.Description>
+  return <Modal title="Choose environment packs" description="Choose exact versions. Studio prepares the request in a new conversation for you to review." size="lg" className="environment-picker" busy={working} onClose={onClose} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}
+    actions={<><button type="button" className="button-quiet" disabled={working} onClick={onClose}>Cancel</button><button type="button" className="button-primary" disabled={working || (mode !== "none" && !active.length)} onClick={() => void prepare()}>{working ? "Preparing…" : "Prepare in chat"}</button></>}>
     <fieldset className="pack-mode"><legend>Composition</legend>{(["none", "industries", "organization"] as const).map((choice) => <label key={choice}><input type="radio" name="composition-mode" checked={mode === choice} onChange={() => setMode(choice)} />{choice === "none" ? "No packs" : choice === "industries" ? "Industry packs" : "One organization"}</label>)}</fieldset>
     {mode !== "none" && <><div className="search-box"><Search size={15} /><input aria-label="Search environment packs" placeholder="Search name, author, or version…" value={query} onChange={(event) => setQuery(event.target.value)} /></div><ul className="pack-choice-list">{choices.filter((choice) => choice.kind === activeKind && `${choice.label} ${choice.author} ${choice.version} ${choice.reference}`.toLowerCase().includes(query.toLowerCase())).map((choice) => <li key={choice.key}><label><input type={mode === "organization" ? "radio" : "checkbox"} name={mode === "organization" ? "organization-pack" : undefined} checked={selected.includes(choice.key)} onChange={(event) => setSelected(mode === "organization" ? [choice.key] : event.target.checked ? [...selected, choice.key] : selected.filter((key) => key !== choice.key))} /><span><strong>{choice.label} <small>{choice.version}</small></strong><small>{choice.author} · {choice.source}</small><code>{choice.reference}</code></span></label></li>)}</ul>{!active.length && <p className="muted">Select {mode === "organization" ? "an organization" : "at least one industry pack"}.</p>}</>}
-    <footer><Dialog.Close className="button-quiet" disabled={working}>Cancel</Dialog.Close><button className="button-primary" disabled={working || (mode !== "none" && !active.length)} onClick={() => void prepare()}>{working ? "Preparing…" : "Prepare in chat"}</button></footer>
-  </Dialog.Content></Dialog.Portal></Dialog.Root>;
+  </Modal>;
 }
 
 export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, onInspection, embedded = false }: {
@@ -88,7 +88,7 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
   const refreshAction: ObjectAction = { id: "refresh", label: "Refresh environment", group: "work", disabled: loading, reason: "Environment is refreshing", run: () => setRefresh((value) => value + 1) };
   const packActions: ObjectAction[] = [
     { id: "choose", label: "Choose packs…", group: "work", disabled: !report || loading, reason: "Wait for the environment inspection", run: () => setPicker(true) },
-    ...(onImportPacks ? [{ id: "import", label: "Import packs…", group: "reuse" as const, run: onImportPacks }] : []),
+    ...(onImportPacks ? [{ id: "import", label: "Import packs…", group: "manage" as const, run: onImportPacks }] : []),
   ];
   return <div className="workspace-content environment-view">
     {!embedded && <div className="section-heading"><h2>Environment</h2><ActionShortcut action={refreshAction} /><ObjectMenu label="Environment actions" actions={[refreshAction]} /></div>}

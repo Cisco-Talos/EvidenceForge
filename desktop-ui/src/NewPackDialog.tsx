@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Dialog } from "radix-ui";
+import { Modal } from "./Modal";
 import { Sparkles } from "lucide-react";
 import type { PackCreation, PackPublisherStatus, Project, StudioApi } from "./api";
 import { packNameError } from "./packName";
@@ -42,12 +42,8 @@ export function NewPackDialog({ kind, initialProjectId, projects, api, onCreated
     finally { setBusy(false); }
   }
 
-  return <Dialog.Root open onOpenChange={(open) => { if (!open && !busy) onClose(); }}><Dialog.Portal>
-    <Dialog.Overlay className="modal-backdrop" />
-    <Dialog.Content className="close-modal new-pack-dialog" aria-label="New pack" onPointerDownOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}>
-      <form onSubmit={(event) => { event.preventDefault(); void create(); }}>
-        <Dialog.Title>New pack</Dialog.Title>
-        <Dialog.Description>Create a named draft, then shape it in a conversation.</Dialog.Description>
+  return <Modal title="New pack" description="Create a named draft, then shape it in a conversation." busy={busy} className="new-pack-dialog" onClose={onClose} onSubmit={() => void create()}
+    actions={<><button type="button" className="button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button className="button-primary" type="submit" disabled={busy || !ready}>{details.trim() && <Sparkles size={16} aria-hidden="true" />}{busy ? "Creating…" : "Create pack"}</button></>}>
         <div className="pack-form-pair"><label className="modal-field">Pack type<select aria-label="New pack type" value={packKind} disabled={busy} onChange={(event) => setPackKind(event.target.value as typeof packKind)}><option value="industry_pack">Industry</option><option value="organization_pack">Organization</option></select></label>
           <label className="modal-field">Project<select aria-label="Project for new pack" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></div>
         <label className="modal-field">Pack Name<input autoFocus name="pack-name" autoComplete="off" aria-label="Pack Name" aria-invalid={!!name && !!nameError} aria-describedby={name && nameError ? "new-pack-name-error" : "pack-name-help"} disabled={busy} value={name} onChange={(event) => setName(event.target.value)} /></label>
@@ -58,8 +54,5 @@ export function NewPackDialog({ kind, initialProjectId, projects, api, onCreated
         <label className="modal-field"><span>Details <span className="muted">· optional</span></span><textarea aria-label="Pack details" rows={3} maxLength={16000} disabled={busy} placeholder="Describe what you'd like this pack to contain…" value={details} onChange={(event) => setDetails(event.target.value)} /></label>
         <p className="muted small">Details are sent as the first chat message when you create the pack. Leave them empty to start the conversation yourself.</p>
         {error && <p className="field-error" role="alert">{error}</p>}
-        <div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button className="button-primary" type="submit" disabled={busy || !ready}>{details.trim() && <Sparkles size={16} aria-hidden="true" />}{busy ? "Creating…" : "Create pack"}</button></div>
-      </form>
-    </Dialog.Content>
-  </Dialog.Portal></Dialog.Root>;
+  </Modal>;
 }

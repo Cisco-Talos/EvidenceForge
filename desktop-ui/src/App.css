@@ -166,12 +166,11 @@ p { line-height: 1.5; }
 .codex-indicator.unavailable .codex-indicator-dot { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
 .codex-indicator.disconnected .codex-indicator-dot { background: var(--err); box-shadow: 0 0 0 4px var(--err-soft); }
 .codex-indicator.checking .codex-indicator-dot { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
-.close-modal.codex-status-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .codex-status-details { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); font-size: var(--text-md); }
 .codex-status-details > div { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 12px; }
 .codex-status-details dt { color: var(--text-2); }
 .codex-status-details dd { margin: 0; overflow-wrap: anywhere; }
-.codex-status-dialog .close-modal-actions { flex-wrap: wrap; }
+.codex-status-dialog .modal-actions { flex-wrap: wrap; }
 .codex-status-dialog .button-primary:disabled { color: var(--text-3); border-color: var(--border-strong); background: var(--surface-3); box-shadow: none; opacity: 1; }
 .studio-tooltip { z-index: 60; display: flex; flex-direction: column; gap: 4px; max-width: 280px; padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-3); color: var(--text-1); box-shadow: var(--shadow-pop); font-size: var(--text-xs); }
 .studio-tooltip span { color: var(--text-2); }
@@ -755,7 +754,7 @@ p { line-height: 1.5; }
 .bundle-group > summary { padding-right: 17px; }
 .bundle-group-action { position: absolute; top: 9px; right: 12px; padding: 0; }
 .bundle-group-action .button-quiet { min-height: 27px; font-size: var(--text-xs); }
-.close-modal.bundle-browser { width: min(1320px, calc(100vw - 24px)); height: min(860px, calc(100dvh - 24px)); padding: 18px; display: flex; flex-direction: column; }
+.modal.bundle-browser { padding: 18px; }
 .bundle-browser-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .bundle-browser-heading > div { flex: 1; min-width: 0; }
 .bundle-browser-heading p { margin-bottom: 9px; font-size: var(--text-xs); }
@@ -852,9 +851,27 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 15px; max-width: 480px; padding: 10px 10px 10px 15px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text-1); background: var(--surface-3); box-shadow: 0 10px 35px var(--shadow-color); }
 .toast-error { border-color: var(--err); background: var(--err-soft); }
-.modal-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
-.close-modal { width: min(560px, 100%); padding: 25px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface-2); box-shadow: var(--shadow-dialog); }
-.close-modal p { color: var(--text-2); }
+/* Shared Modal (Modal.tsx). Every dialog uses these; size and variant are modifiers. */
+.modal-overlay { position: fixed; inset: 0; z-index: 100; background: var(--scrim); animation: modal-fade .14s ease-out; }
+.modal { position: fixed; top: 50%; left: 50%; z-index: 101; transform: translate(-50%, -50%); display: flex; flex-direction: column; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 22px 24px 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); color: var(--text-1); background: var(--surface-1); box-shadow: var(--shadow-dialog); animation: modal-rise .16s ease-out; }
+.modal:focus { outline: none; }
+.modal-sm { width: min(460px, calc(100vw - 32px)); }
+.modal-lg { width: min(720px, calc(100vw - 32px)); }
+.modal-xl { width: min(980px, calc(100vw - 48px)); max-height: min(840px, calc(100dvh - 48px)); }
+.modal-full { width: min(1320px, calc(100vw - 24px)); height: min(860px, calc(100dvh - 24px)); }
+.modal-form { display: contents; }
+.modal-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
+.modal-header > div { min-width: 0; flex: 1; }
+.modal-title { margin: 0 0 4px; font-size: var(--text-lg); font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.modal-description { margin: 0 0 8px; color: var(--text-2); }
+.modal p { color: var(--text-2); }
+.modal-danger-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: var(--radius-sm); color: var(--err); background: var(--err-soft); }
+.modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 20px; }
+.modal-actions .modal-actions-note { margin-right: auto; color: var(--text-3); font-size: var(--text-sm); }
+.button-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+@keyframes modal-fade { from { opacity: 0; } }
+@keyframes modal-rise { from { opacity: 0; transform: translate(-50%, calc(-50% + 6px)); } }
+@media (prefers-reduced-motion: reduce) { .modal, .modal-overlay { animation: none; } }
 .saved-views-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .saved-views-heading h2 { margin: 0 0 3px; }
 .saved-views-heading p { margin: 0; font-size: var(--text-md); }
@@ -871,7 +888,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .saved-view-create { display: flex; align-items: end; gap: 9px; padding-top: 15px; border-top: 1px solid var(--border-strong); }
 .saved-view-create .modal-field { flex: 1; min-width: 0; margin: 0; font-size: var(--text-sm); }
 .saved-view-create .button-primary { flex: none; }
-.command-modal { width: min(580px, 100%); overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface-2); box-shadow: var(--shadow-dialog); align-self: start; margin-top: min(14vh, 105px); }
+.modal.command-modal { top: min(14vh, 105px); transform: translateX(-50%); width: min(580px, calc(100vw - 32px)); padding: 0; overflow: hidden; background: var(--surface-2); animation: modal-fade .14s ease-out; }
 .command-search { display: flex; align-items: center; gap: 12px; height: 58px; padding: 0 16px; border-bottom: 1px solid var(--border-strong); color: var(--text-2); }
 .command-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; color: var(--text-1); background: transparent; font-size: var(--text-lg); }
 .command-search input::placeholder { color: var(--text-3); }
@@ -885,10 +902,9 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .command-footer { padding: 9px 17px; border-top: 1px solid var(--border-strong); color: var(--text-2); font-size: var(--text-xs); }
 .close-choice { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; padding: 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text-2); overflow-wrap: anywhere; }
 .close-choice select { min-width: 190px; }
-.close-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-.import-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; max-height: calc(100dvh - 40px); overflow-y: auto; width: min(600px, calc(100vw - 32px)); }
+.form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .import-review-dialog { width: min(850px, calc(100vw - 32px)); }
-.import-dialog .close-modal-actions { position: sticky; bottom: -24px; z-index: 1; margin: 20px -24px -24px; padding: 14px 24px; background: var(--surface-2); border-top: 1px solid var(--border-strong); flex-wrap: wrap; }
+.import-dialog .modal-actions { position: sticky; bottom: -20px; z-index: 1; margin: 20px -24px -20px; padding: 14px 24px; background: var(--surface-1); border-top: 1px solid var(--border); }
 .import-dialog h2 { margin-top: 0; }
 .import-path-field { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 8px; }
 .import-path-field input { flex: 1; min-width: 0; }
@@ -1024,9 +1040,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .selectable-packs .dependency-row > input { margin: 2px 0 0; cursor: pointer; }
 .visible-check:disabled { opacity: .65; cursor: default; }
 .dependency-row .required-pack-note { color: var(--accent); }
-.new-pack-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
 .pack-form-pair select { min-width: 0; }
-.new-pack-dialog h2 { margin: 0; font-size: var(--text-xl); }
 .new-pack-dialog .modal-field { font-size: var(--text-sm); margin-top: 12px; }
 .new-pack-dialog textarea { width: 100%; min-height: 60px; resize: vertical; padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text-1); background: var(--surface-1); font-weight: 400; line-height: 1.5; }
 .new-pack-dialog .small { font-size: var(--text-xs); line-height: 1.5; }
@@ -1151,10 +1165,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .overlay-file-list button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--text-2); padding: 8px 4px; text-align: left; font-size: var(--text-sm); }
 .overlay-file-list button:hover { background: var(--surface-3); }
 .overlay-file-list span { overflow-wrap: anywhere; }
-.radix-dialog-overlay { position: fixed; inset: 0; background: var(--scrim); z-index: 100; }
-.environment-picker { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 101; width: min(620px,calc(100vw - 40px)); max-height: calc(100dvh - 40px); overflow: auto; background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 22px; box-shadow: var(--shadow-dialog); }
-.environment-picker > h2 { font-size: var(--text-xl); margin: 0 0 9px; }
-.environment-picker > p { color: var(--text-2); line-height: 1.6; font-size: var(--text-sm); margin: 0 0 14px; }
 .pack-mode { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 9px 10px; display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 14px; font-size: var(--text-sm); }
 .pack-mode legend { font-size: var(--text-xs); color: var(--text-2); padding: 0 5px; }
 .pack-mode label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
@@ -1165,7 +1175,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .pack-choice-list strong { font-size: var(--text-md); }
 .pack-choice-list small { color: var(--text-2); font-size: var(--text-xs); }
 .pack-choice-list code { color: var(--text-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
-.environment-picker footer { display: flex; gap: 10px; justify-content: flex-end; position: sticky; bottom: -22px; background: var(--surface-1); padding: 16px 0 0; margin-top: 12px; }
 
 .resource-forecast { margin-bottom: 18px; }
 .overview-grid .resource-forecast { margin-bottom: 0; }
@@ -1207,7 +1216,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .configuration-cli .path-with-copy code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .configuration-scope small, .configuration-toggle small { color: var(--text-2); }
 
-.configuration-move-modal { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); overflow: auto; }
 
 /* Asset inventories share the existing bounded pagination and disclosure controls. */
 .asset-browser { padding: 18px; min-width: 0; }
@@ -1324,7 +1332,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .pack-workflow code, .pack-delete-dialog { overflow-wrap: anywhere; }
 .pack-workflow .state-success, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
 .pack-workflow svg { flex-shrink: 0; }
-.pack-delete-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .pack-delete-dialog ul { max-height: 220px; overflow: auto; padding-left: 20px; }
 
 .runtime-cleanup-notice { margin: 16px 28px 0; padding: 12px 16px; border: 1px solid var(--warn-line); border-radius: var(--radius-md); background: var(--warn-soft); color: var(--warn); flex-shrink: 0; }
@@ -1375,7 +1382,8 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .release-notes-preview { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .ai-suggestion .spinner { animation: display-name-spin 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .ai-suggestion .spinner { animation: none; } }
-.properties-dialog { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(960px, calc(100vw - 48px)); max-height: min(820px, calc(100vh - 48px)); display: flex; flex-direction: column; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); }
+.modal.properties-dialog { padding: 0; overflow: hidden; background: var(--surface-1); }
+.properties-kicker { color: var(--text-3); font-size: var(--text-xs); font-weight: 600; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .properties-heading { display: flex; justify-content: space-between; gap: 24px; padding: 22px 24px 18px; border-bottom: 1px solid var(--border-strong); }
 .properties-heading h2 { margin: 5px 0 0; overflow-wrap: anywhere; font-size: var(--text-xl); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1447,7 +1455,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .removal-shortcut:disabled { color: var(--text-2); }
 .chat-activity-entry { display: flex; align-items: center; gap: 8px; }
 .chat-activity-entry .chat-activity-row { flex: 1; min-width: 0; }
-.scorecard-dialog { width: min(900px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
 .job-row-result { min-width: 0; }
 .job-row-controls { flex-wrap: wrap; max-width: 100%; }
 @media (max-width: 1200px) {
@@ -1463,7 +1470,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
   .job-row-controls, .workspace-run .job-row-controls { grid-column: 1 / -1; }
 }
 
-.asset-dialog { width: min(1100px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
 .workspace-live-runs .job-row { margin: 0; }
 .overlay-file-list li { display: flex; align-items: center; gap: 8px; }
 .overlay-file-list li > button:first-child { flex: 1; min-width: 0; }
@@ -1481,9 +1487,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
   .workspace-section-actions { width: 100%; }
 }
 
-.removal-dialog, .asset-dialog, .scorecard-dialog { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: calc(100dvh - 24px); overflow: auto; }
-.removal-dialog { width: min(560px, calc(100vw - 24px)); }
-.removal-dialog .close-modal-actions { flex-wrap: wrap; }
 
 .resource-forecast .surface-heading { flex-wrap: wrap; }
 .resource-forecast .surface-heading .job-actions { margin: 0; flex-wrap: wrap; }

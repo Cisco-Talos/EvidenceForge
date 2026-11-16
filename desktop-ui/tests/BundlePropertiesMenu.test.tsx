@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -30,7 +30,11 @@ test.each([
   expect(row.open).toBe(false);
   if (keyboard) {
     options.focus();
-    await user.keyboard("{Enter}{ArrowDown}{Enter}");
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menuitem", { name: "Properties…" });
+    await user.keyboard("p");
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Properties…" })).toHaveFocus());
+    await user.keyboard("{Enter}");
   } else {
     await user.click(options);
     await user.click(await screen.findByRole("menuitem", { name: "Properties…" }));

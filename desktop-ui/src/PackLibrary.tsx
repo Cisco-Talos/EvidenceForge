@@ -50,12 +50,12 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, onO
           <button className="pack-open" aria-label={`Open ${artifactTitle(item)} ${item.version}`} onClick={() => onOpen(item)}><Layers3 size={18} /><span className="pack-row-copy"><strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}</strong><small title={item.description}>{item.description || "No description yet"}</small><SearchExcerpts item={item} /><small className="pack-row-meta"><span title={`Publisher: ${item.publisher || "not recorded"}`}>By {item.publisher_display_name || item.publisher || "Unknown author"}</span><span>·</span><span title={item.pack_source === "bundled" ? "Included with EvidenceForge" : "Authored or imported in this workspace"}>{item.pack_source === "bundled" ? "Bundled" : "Workspace"}</span><span>·</span><span>{projectName(item.project_id)}</span>{item.hidden && <><span>·</span><span>Hidden</span></>}</small></span><span className="pack-version">{item.version || "Draft"}</span><time title={new Date(item.modified_at * 1000).toLocaleString()}>{formatTime(item.modified_at)}</time><ArrowUpRight size={16} /></button>
           <CatalogObjectMenu item={item} fallbackActions={[
             { id: "open", label: "Open", group: "inspect", run: () => onOpen(item) },
-            { id: "properties", label: "Properties…", group: "inspect", run: () => onProperties?.(item) },
-            { id: "clone", label: "Clone…", group: "reuse", run: () => onClone(item) },
-            { id: "export", label: "Export release…", group: "reuse", disabled: !item.version, reason: "Publish a release before exporting", run: () => onExport(item) },
+            { id: "properties", label: "Properties…", group: "locate", run: () => onProperties?.(item) },
+            { id: "clone", label: "Duplicate…", group: "manage", run: () => onClone(item) },
+            { id: "export", label: "Export release…", group: "manage", disabled: !item.version, reason: "Publish a release before exporting", run: () => onExport(item) },
             projectAssignmentAction(projects, (id) => onMove(item, id), () => onNewProject(item)),
             { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: () => onHide(item) },
-            ...(item.pack_source === "workspace" ? [{ id: "delete", label: "Delete version", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: () => onDelete(item) }] : []),
+            ...(item.pack_source === "workspace" ? [{ id: "delete", label: "Delete version…", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: () => onDelete(item) }] : []),
           ]} />
           </div>
         </Fragment>)}

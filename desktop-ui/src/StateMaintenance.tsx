@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { UpgradeStatus } from "./api";
 import { BrandLogo } from "./StudioBrand";
+import { ConfirmModal } from "./Modal";
 
 export function StateMaintenance({ status, onRetry, onRestore, onWorkspace, requestError }: {
   status: UpgradeStatus;
@@ -10,6 +11,7 @@ export function StateMaintenance({ status, onRetry, onRestore, onWorkspace, requ
   requestError?: string | null;
 }) {
   const [path, setPath] = useState("");
+  const [confirmRestore, setConfirmRestore] = useState(false);
   const busy = status.state === "running";
   const startup = status.operation === "startup";
   const awaitingAcceptance = !startup && status.state === "pending" && !status.error;
@@ -23,11 +25,12 @@ export function StateMaintenance({ status, onRetry, onRestore, onWorkspace, requ
     {requestError && <p role="alert" className="error-text">{requestError}</p>}
     {awaitingAcceptance && <p>Review the upgrade details, then continue to create a verified recovery backup and upgrade your UI state.</p>}
     {status.state === "restored" && <p>Close Studio to use the compatible previous application, or retry the upgrade. Restoration does not install an older application.</p>}
-    {!busy && <div className="close-modal-actions">
+    {!busy && <div className="form-actions">
       {awaitingAcceptance && <button className="button-primary" onClick={onRetry}>Continue with upgrade</button>}
       {!awaitingAcceptance && status.can_retry && <button onClick={onRetry}>{startup ? "Retry startup" : "Retry upgrade"}</button>}
-      {status.can_restore && <button onClick={() => { if (window.confirm("Restore the UI state saved before this failed upgrade?")) onRestore(); }}>Restore previous UI state</button>}
+      {status.can_restore && <button onClick={() => setConfirmRestore(true)}>Restore previous UI state</button>}
     </div>}
+    {confirmRestore && <ConfirmModal title="Restore previous UI state?" description="Studio returns to the UI state saved before this failed upgrade." danger={false} confirmLabel="Restore" onCancel={() => setConfirmRestore(false)} onConfirm={() => { setConfirmRestore(false); onRestore(); }} />}
     <details><summary>View details</summary><p>Operation: {status.operation_id}</p><p>Scope: {status.scope}</p>{status.backup_path && <p>Recovery backup: {status.backup_path}</p>}<pre>{JSON.stringify({ saved: status.versions, target: status.target_versions }, null, 2)}</pre></details>
     {status.scope === "workspace" && !busy && <form onSubmit={(event) => { event.preventDefault(); onWorkspace(path); }}><label>Choose another workspace<input aria-label="Another workspace path" value={path} onChange={(event) => setPath(event.target.value)} /></label><button disabled={!path.trim()}>Open workspace</button></form>}
   </div>;

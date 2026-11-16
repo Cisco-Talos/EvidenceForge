@@ -39,9 +39,9 @@ export function CatalogObjectMenu({ item, fallbackActions = [], label, actionIds
 }
 
 export function projectAssignmentAction(projects: { id: string; name: string }[], onMove: (id: string | null) => void, onNewProject?: () => void): ObjectAction {
-  return { id: "move", label: "Move to project", group: "organize", children: [
-    { id: "ungrouped", label: "Ungrouped", group: "organize", run: () => onMove(null) },
-    ...projects.map((project): ObjectAction => ({ id: project.id, label: project.name, group: "organize", run: () => onMove(project.id) })),
-    ...(onNewProject ? [{ id: "new-project", label: "New project…", group: "organize" as const, run: onNewProject }] : []),
+  return { id: "move", label: "Move to project", group: "manage", children: [
+    { id: "ungrouped", label: "Ungrouped", group: "manage", run: () => onMove(null) },
+    ...projects.map((project): ObjectAction => ({ id: project.id, label: project.name, group: "manage", run: () => onMove(project.id) })),
+    ...(onNewProject ? [{ id: "new-project", label: "New project…", group: "manage" as const, run: onNewProject }] : []),
   ] };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Dialog } from "radix-ui";
+import { Modal } from "./Modal";
 import { FileText, GitBranch, Info, Layers3, LoaderCircle, Pencil, Sparkles, X } from "lucide-react";
 import type { CatalogItem, StudioApi, StudioSnapshot } from "./api";
 import type { components } from "./generated/studio";
@@ -33,12 +33,11 @@ function PropertiesShell({ title, section, onSection, onClose, children, footer,
 }) {
   const [discard, setDiscard] = useState(false);
   function close() { if (busy) return; if (dirty) setDiscard(true); else onClose(); }
-  return <Dialog.Root open onOpenChange={(open) => { if (!open) close(); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="properties-dialog" onPointerDownOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { event.preventDefault(); close(); }}>
-    <header className="properties-heading"><div><span className="eyebrow">PROPERTIES</span><Dialog.Title title={title}>{title}</Dialog.Title></div><button className="icon-button" aria-label="Close properties" disabled={busy} onClick={close}><X size={19} /></button></header>
-    <Dialog.Description className="sr-only">Inspect this artifact and edit its available draft properties.</Dialog.Description>
+  return <Modal title={title} hideTitle size="xl" className="properties-dialog" busy={busy} onClose={close}>
+    <header className="properties-heading"><div><span className="properties-kicker">Properties</span><h2 className="modal-title" title={title}>{title}</h2></div><button className="icon-button" aria-label="Close properties" disabled={busy} onClick={close}><X size={19} /></button></header>
     <div className="settings-layout properties-layout"><nav className="settings-nav" aria-label="Properties sections">{tabs.filter((tab) => !bundle || tab.id !== "versions").map((tab) => <button key={tab.id} className={section === tab.id ? "active" : ""} aria-current={section === tab.id ? "page" : undefined} onClick={() => onSection(tab.id)}><tab.icon size={17} /><span>{bundle && tab.id === "dependencies" ? "Captured inputs" : tab.label}</span></button>)}</nav><div className="properties-content">{children}</div></div>
     <footer className="properties-footer">{discard ? <><span>Discard unsaved property changes?</span><button className="button-quiet" onClick={() => setDiscard(false)}>Keep editing</button><button className="button-danger" onClick={onClose}>Discard changes</button></> : <>{footer}<button className="button-quiet" disabled={busy} onClick={close}>Close</button></>}</footer>
-  </Dialog.Content></Dialog.Portal></Dialog.Root>;
+  </Modal>;
 }
 
 function Property({ label, help, children }: { label: string; help: string; children: ReactNode }) {

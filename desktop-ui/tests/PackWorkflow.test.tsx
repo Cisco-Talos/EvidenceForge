@@ -37,7 +37,7 @@ test("deletion requires a reviewed exact version and only runs after confirmatio
   render(<DeletePackDialog item={item} api={{ request } as unknown as StudioApi} onClose={vi.fn()} onDeleted={onDeleted} />);
   await screen.findByText(removable.reference);
   expect(request).toHaveBeenCalledTimes(1);
-  expect(screen.getByText(/Codex histories/)).toBeVisible();
+  expect(screen.getByText(/captured runs stay available/)).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Delete version" }));
   await waitFor(() => expect(onDeleted).toHaveBeenCalledWith({ deleted_path: "/workspace/.eforge/packs/training/organization/office/1.0.0" }));
   expect(request).toHaveBeenCalledWith("/v1/packs/pack/delete", "POST", { revision: removable.revision, accept_dependents: false });
@@ -50,7 +50,7 @@ test("used packs show a collapsed warning and permit explicitly confirmed deleti
   await screen.findByText("Affected items (1)");
   expect(document.querySelector("details.affected-items")).not.toHaveAttribute("open");
   expect(screen.getByRole("button", { name: "Delete version" })).toBeEnabled();
-  expect(screen.getByText(/This cannot be undone/)).toBeVisible();
+  expect(screen.getByText("Can’t be undone")).toBeVisible();
   await userEvent.click(screen.getByText("Affected items (1)"));
   expect(screen.getByText("Training")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Delete version" }));
