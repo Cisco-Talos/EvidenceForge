@@ -2585,3 +2585,36 @@ Bundled Python 3.12.12; build Python 3.12.16; rustc 1.100.0
 Install/Upgrade before testing this uninstaller. Full CI and Windows 11 desktop/
 50k+ profile timing acceptance remain pending. No version bump, release/tag,
 publication or PR. The final delivery-evidence commit changes documentation only.
+
+
+## Windows install/uninstall user acceptance — November 16
+
+After the latest delivery (source 73596077929f3edbe386a8dddf8ebff08c920be0,
+run 43869166689), the user reported: "I’m finally able to say that I think the
+install/uninstall functions are ready to go." Record the tested installation
+and uninstall functions as accepted and close their reported field-test blocker.
+This is the user's functional/performance acceptance of the tested laptop/profile,
+not an invented timing measurement or evidence for every scope/account combination.
+
+The accepted implementation includes native integrated cleanup choices, concise
+Yes/Cancel confirmation, background helper warmup/reuse, bounded folder review,
+direct removal with uninterrupted activity and real removed-item counts. Existing
+CI evidence is 139 native diagnostics, four compiled NSIS page cases and nine
+installed-archive CLI checks. No binary change or new installer build is needed
+for this acceptance record.
+
+Remaining full CI/release qualification, untested UAC/scope/alternate-administrator
+cases, genuine separate-account isolation, and other Studio/authoring/data-quality
+backlog items remain independent. No release publication or blanket Windows
+qualification is implied by this acceptance.
+
+### Integration after acceptance
+
+The user requested returning to full CI and integrating into dev, then clarified
+that a separate full branch run before opening the PR would duplicate PR CI.
+Open the PR first and let normal PR CI supply the routine/native checks. The
+build-only loop was opt-in workflow_dispatch input, not a change disabling normal
+CI; no test gate needs to be weakened or re-enabled in source. Dispatch only the
+additional slow/portability and full installer qualification workflows absent from
+a PR targeting dev. Reuse authenticated matching-input evidence normally; do not
+force duplicate suites. Merge only after the required integration checks pass.

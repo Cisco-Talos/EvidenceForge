@@ -72,16 +72,13 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1 — Windows clean uninstall at realistic scale:** Qualify review and removal
-  with 50k+ entries, multiple retained runtimes and an actual WebView2 user-data
-  profile. The native wizard now uses bounded root review and one removal pass
-  without per-file staging; measure real laptop review/removal latency and retained
-  runtime scale. Approval covers current contents of selected folders; preserve
-  unrelated shared content and content recreated after writer fences close.
-  Retain root identity checks, original-account execution, writer fencing and
-  no-follow traversal. Keep browser capability access distinct from protected
-  credentials, without rewriting native browser ACLs. See the
-  [laptop scale/cache follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#large-uninstall-review-webview2-capability-and-codex-startup-display-november-13).
+- [x] **P1 — Windows install/uninstall field-test acceptance:** On November 16 the
+  user accepted the tested installation and uninstall flows after the laptop
+  test/fix loop, including optional content cleanup, responsive review and removal
+  progress. This closes the reported functional/performance blocker for the tested
+  profile; no numeric timing benchmark or untested account/scope matrix is claimed.
+  Full CI and remaining Windows desktop qualification stay separate. See the
+  [acceptance record](docs/worklog/2026-11-11-studio-windows-x86_64.md#windows-installuninstall-user-acceptance-november-16).
 
 - [ ] **P1 — Windows authoring smoke generation checkpoint rename failure:**
   A draft-local CLI smoke run validates and forecasts, then fails acquiring its run
@@ -166,8 +163,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
-  Exercise all three optional uninstall cleanup choices and subsequent fresh setup;
-  verify default preservation and cleanup ownership when another administrator elevates.
+  The user accepted the tested install/uninstall flows on November 16; retain
+  untested scope/UAC combinations, subsequent fresh setup as applicable, and cleanup
+  ownership when another administrator elevates as explicit qualification checks.
   Genuine separate-account isolation remains required before claiming that capability.
   Laptop test/fix iterations may use explicit unqualified build-only Windows previews;
   full CI and installer qualification remain required before declaring testing complete.
