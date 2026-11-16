@@ -724,7 +724,7 @@ Studio-wide rewrite unless the task asks for it.
   in TypeScript; theme-specific artwork goes through `useResolvedTheme()` (as `BrandLogo` does).
 - Type scale: 11 / 12 / 13 (base) / 15 / 20 / 26 px. Nothing smaller than 11px. Use
   `font-variant-numeric: tabular-nums` for sizes, counts, durations and times.
-- Spacing is in multiples of 4px. Radii: 6 (controls), 10 (cards), 14 (dialogs). Use two shadows
+- Spacing (padding, margin, gap) is in multiples of 4px; only 0–2px hairline offsets are exempt. Radii: 6 (controls), 10 (cards), 14 (dialogs). Use two shadows
   (popover, dialog).
 - The accent marks the single primary action on a surface and the current selection. Do not use
   it for decoration. Warning and error colors are only for real warnings and errors.
@@ -752,7 +752,12 @@ Studio-wide rewrite unless the task asks for it.
 - Workspace sections are tabs over an Overview: Overview shows each `WorkspaceSection` header as a
   card, and a tab or card shows that one section expanded. Keep hidden sections mounted (`hidden`)
   so in-progress inspection survives tab switches. Chat focus remains the dedicated conversation
-  view. Job and run history lives in **Activity**, filtered by a segmented control.
+  view. Job and run history lives in **Activity**: one newest-first timeline under day headings,
+  filtered by a segmented control, with per-kind clearing kept in its History menu.
+- Workspace section headers show labeled `StatusPill`s built from the same readiness steps as
+  the strip; never reintroduce icon-only status there.
+- Appearance (System/Light/Dark) is a per-Mac view preference in `src/theme.ts` web storage, not a
+  service setting; keep cosmetic preferences out of the versioned settings schema.
 - **Progressive disclosure:**
   - Technical identifiers live in Properties → Technical or in a collapsed "Technical details"
     disclosure, never in headers, rows or titles. This covers file paths, digests, UUIDs, run

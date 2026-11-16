@@ -2,24 +2,20 @@
 
 ## Status
 
-Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`). Phases 1–4 are complete.
-Remaining items are listed below; none blocks review.
+Complete on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`), pushed to origin.
+Phases 1–4 and every follow-up are done: labeled header status, Settings → Appearance, 4px
+spacing, the merged Activity timeline, and a flat Bundles list. No PR is open yet.
 
 The binding rules for this work live in `AGENTS.md` § Studio UI Design Patterns.
 
 ## Current Handoff
 
-Remaining follow-ups:
-- **Bundles:** it uses the shared toolbar and filters, and its groups start expanded. It is not yet
-  a flat table of runs, because each run needs a details drawer for diagnostics.
-- **Activity:** it filters by segment (All · Running · Queued · Needs attention · Done) but keeps
-  separate Generations and Evaluations groups, because "Clear completed/finished" history actions
-  are per kind. A single merged timeline needs a kind-aware clear action.
-- **Workspace headers:** section headers in the Overview cards still use icon-only
-  `OperationStatus`; the readiness strip carries the labeled status.
-- **Spacing:** values are not yet on the 4px scale.
-- **Appearance:** there is no Settings → Appearance control yet. `setThemePreference()` exists;
-  persisting it needs a `StudioSettings` field.
+Ready for review as a PR into `dev`. Before merging:
+- **Native check:** confirm the native app in a real Tauri session. In particular, check that
+  Appearance persists across relaunch (WKWebView local storage) and how the About window looks.
+  The browser preview cannot exercise either.
+- **Live runs:** generation in the isolated preview helper stops once the helper exits idle, so
+  completed and evaluated runs were exercised only by tests, not in screenshots.
 
 ## Decisions
 
@@ -79,12 +75,21 @@ Remaining follow-ups:
     Properties → Technical (Copy and Reveal); scenario counts moved into the Environment card.
   - **Activity:** Job center became Activity, with a segmented filter and counts in place of the
     stat strip.
+- **Follow-ups:**
+  - **Appearance:** stored in web storage under `evidenceforge.appearance` (and synced through
+    `storage` events) rather than `StudioSettings`. A settings field would require a v4 → v5
+    settings migration, a frozen reader and native upgrade gates for a cosmetic preference.
+  - **Spacing:** `/tmp/eforge-forge-tools/spacing.py` snapped 589 padding/margin/gap values to 4px.
+  - **Activity:** the timeline's "Clear completed" clears both kinds through the existing per-kind
+    endpoint; per-kind actions stay in the History menu.
+  - **Bundles:** the flat list is the default. Family grouping is the `project` order, labeled
+    "Group by scenario". Run rows carry "Open scenario" through `JobCard.extraActions`.
 - **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
   remains on the startup, maintenance and About screens and switches artwork per theme.
 
 ## Validation
 
-- **Latest run (Phase 4):** `npm test` passes, 40 files and 398 tests. `npm run build` passes.
+- **Latest run (follow-ups):** `npm test` passes, 40 files and 402 tests. `npm run build` passes.
 - **Phase 4 captures:** the Overview, the Runs and Validation tabs, a second scenario, a pack and
   Activity, in both themes.
 - **Preview limits:** the isolated helper exits about 2 minutes after start when no native app

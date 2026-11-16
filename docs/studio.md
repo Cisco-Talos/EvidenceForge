@@ -344,7 +344,10 @@ For a first run:
 2. Open its **Environment** tab to inspect systems, users, configuration, and exact pack
    dependencies. Import any missing packs before generation.
 3. Validate the scenario and review the resource forecast and available disk space.
-4. Start generation from **Runs**, then monitor it there or in **Activity**.
+4. Start generation from **Runs**, then monitor it there or in **Activity**, which lists every
+   generation, evaluation and authoring turn newest first. Use its filter to show Running, Queued,
+   Needs attention or Done; **Clear completed** and the History menu remove finished entries
+   without deleting bundles or scorecards.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
 
 A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Environment →
@@ -367,7 +370,8 @@ provenance.
 
 ### Appearance and conventions
 
-Studio follows the macOS light or dark appearance and switches when it changes. Each library row
+Studio follows the macOS light or dark appearance by default. Choose **Settings → Appearance** to
+keep it Light or Dark on this Mac; the choice applies immediately to every Studio window. Each library row
 shows one status label summarizing validation, generation, and evaluation, such as **Valid**,
 **2 warnings**, **Generating**, **Passed · 91**, or **Failed acceptance**. Hover or focus the
 label for the full details of each stage.
@@ -412,7 +416,8 @@ frozen content and configuration rather than becoming editable workspace files.
 
 ### Generated bundles
 
-The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
+**Bundles** lists every run and imported bundle newest first; choose **Views → Group by scenario**
+to see each scenario's versions together. The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
 versions. These imports are read-only: removing one from Studio's index leaves the external
 files in place. Incomplete external bundles with checkpoints are not yet importable; Studio-owned
 incomplete jobs already appear in Bundles.

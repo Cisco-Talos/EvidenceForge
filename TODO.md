@@ -88,12 +88,12 @@ without turning `TODO.md` back into a high-conflict work journal.
   Ordinary Studio generation succeeds; that does not qualify this separate path.
   See the [laptop trace](docs/worklog/2026-11-11-studio-windows-x86_64.md#successful-scenario-pipeline-with-authoring-and-ui-follow-ups-november-13).
 
-- [ ] **P2 — Studio "Forge" UI redesign:** Phases 1–4 are done on `feature/studio-forge-ui`:
-  design tokens and light/dark themes; shared dialog, status and feedback components; one action
-  vocabulary and menu order; Reveal in Finder; sidebar projects with flat library tables; the
-  workspace readiness strip with tabs; and Activity. Remaining: a flat Bundles table, a merged
-  Activity timeline, spacing tokens, and a Settings Appearance control. Rules are in `AGENTS.md`
-  § Studio UI Design Patterns. See the [worklog](docs/worklog/2026-11-16-studio-forge-ui.md).
+- [ ] **P2 — Studio "Forge" UI redesign:** Implementation is complete on
+  `feature/studio-forge-ui`: tokens and themes with an Appearance setting, shared components and
+  vocabulary, sidebar projects and flat libraries, the workspace readiness strip with tabs, and the
+  Activity timeline. Remaining: a PR into `dev` and native Tauri acceptance (Appearance
+  persistence, About window). Rules are in `AGENTS.md` § Studio UI Design Patterns. See the
+  [worklog](docs/worklog/2026-11-16-studio-forge-ui.md).
 
 - [ ] **P2 — Unrequested command menu after New Scenario:** Reproduce the repeated
   laptop report that creating a scenario opens its chat with the command menu over
