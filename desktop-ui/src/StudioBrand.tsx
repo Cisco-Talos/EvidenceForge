@@ -6,12 +6,15 @@ export function BrandLogo({ className }: { className: string }) {
   return <img className={className} src={`/brand/evidenceforge-${theme}.png`} alt="EvidenceForge" />;
 }
 
-/** Compact mark and wordmark for the sidebar, or the full logo for About. */
+/** The sidebar brand (compact) or the larger About logo; both use the full EvidenceForge artwork. */
 export function StudioBrand({ className = "brand", compact = false }: { className?: string; compact?: boolean }) {
   if (compact) {
+    // The full docs/logos artwork, sized to stay legible without crowding the navigation; narrow
+    // windows switch to the high-resolution anvil mark alone.
     return <div className={`${className} brand-compact`}>
-      <img className="brand-mark" src="/brand/icon-32.png" alt="" />
-      <span className="brand-wordmark"><strong>EvidenceForge</strong><small>Studio</small></span>
+      <BrandLogo className="brand-logo-sidebar" />
+      <img className="brand-mark" src="/brand/mark-256.png" alt="" />
+      <small>STUDIO</small>
     </div>;
   }
   return <div className={className}>

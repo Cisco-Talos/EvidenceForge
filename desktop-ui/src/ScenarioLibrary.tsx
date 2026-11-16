@@ -1,6 +1,6 @@
 import { belongsToScenario } from "./scenarioSources";
 import { artifactTitle, draftTitle } from "./artifactNaming";
-import { artifactFamilies, type ArtifactFamily } from "./artifactGrouping";
+import { artifactFamilies, isDraftItem, type ArtifactFamily } from "./artifactGrouping";
 import { Fragment, type DragEvent, useEffect, useState } from "react";
 import { ChevronRight, FileCode2, Folder, GripVertical, PencilLine } from "lucide-react";
 import type { CatalogItem, Conversation, Project, StudioApi, StudioSnapshot } from "./api";
@@ -74,7 +74,9 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, ex
       <button className="scenario-open col-name" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
         <span className={`scenario-symbol ${draft ? "draft" : ""}`}>{draft ? <PencilLine size={16} /> : <FileCode2 size={16} />}</span>
         <span className="scenario-row-copy">
-          <span className="scenario-row-title"><strong title={name}>{name}</strong>{(item?.version || child) && <span className="scenario-version">{item?.version && item.version !== "Draft" ? item.version : "Draft"}</span>}{family && family.drafts > 0 && <DraftCount count={family.drafts} />}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
+          <span className="scenario-row-title"><strong title={name}>{name}</strong>{item && (isDraftItem(item, snapshot.artifact_groups)
+            ? <DraftCount count={family ? family.drafts : 1} self />
+            : <><span className="scenario-version">{item.version}</span>{family && family.drafts > 0 && <DraftCount count={family.drafts} />}</>)}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
           {item && <SearchExcerpts item={item} />}
         </span>
@@ -116,7 +118,12 @@ export function FamilyToggle({ name, count, open, onToggle }: { name: string; co
   </button>;
 }
 
-/** A collapsed family row's hint that it holds unpublished drafts (open them with the expander). */
-export function DraftCount({ count }: { count: number }) {
-  return <span className="draft-count" title={`${count} unpublished ${count === 1 ? "draft" : "drafts"}; expand the row to open ${count === 1 ? "it" : "them"}`}>{count} {count === 1 ? "draft" : "drafts"}</span>;
+/**
+ * Orange marker for unpublished work. On a draft itself it reads "Draft" (or "N drafts" when its
+ * family holds more); on a released row it counts the drafts tucked inside the family.
+ */
+export function DraftCount({ count, self = false }: { count: number; self?: boolean }) {
+  const label = self && count === 1 ? "Draft" : `${count} ${count === 1 ? "draft" : "drafts"}`;
+  const title = self && count === 1 ? "Not published yet" : `${count} unpublished ${count === 1 ? "draft" : "drafts"}; expand the row to open ${count === 1 ? "it" : "them"}`;
+  return <span className="draft-count" title={title}>{label}</span>;
 }

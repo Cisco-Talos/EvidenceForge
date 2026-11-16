@@ -30,8 +30,15 @@ export function latestPublishedItems(items: CatalogItem[], groups?: ArtifactGrou
 /** One library row per artifact family: its newest version, and the other versions and drafts. */
 export interface ArtifactFamily {
   key: string; primary: CatalogItem; others: CatalogItem[];
-  /** Unpublished drafts among `others`, surfaced on the collapsed row. */
+  /** Unpublished drafts in the family, including the primary when it is itself a draft. */
   drafts: number;
+  /** The family has no release yet, so its headline row is a draft. */
+  primaryIsDraft: boolean;
+}
+
+/** True for unpublished drafts: items with neither a published nor an authored release version. */
+export function isDraftItem(item: CatalogItem, groups?: ArtifactGroups): boolean {
+  return !releaseVersion(item, groups);
 }
 
 /** A comparable release version: the published version, else a non-draft authored version. */
@@ -63,6 +70,6 @@ export function artifactFamilies(items: CatalogItem[], groups?: ArtifactGroups):
     const drafts = members.filter((item) => !releaseVersion(item, groups)).sort((a, b) => b.modified_at - a.modified_at || a.id.localeCompare(b.id));
     const primary = releases[0] || drafts[0];
     const others = [...drafts, ...releases].filter((item) => item.id !== primary.id);
-    return { key, primary, others, drafts: others.filter((item) => !releaseVersion(item, groups)).length };
+    return { key, primary, others, drafts: drafts.length, primaryIsDraft: !releaseVersion(primary, groups) };
   });
 }

@@ -96,6 +96,21 @@ test("families headline the newest published release, then legacy versions, then
   expect(bundled.primary.id).toBe("b");
 });
 
+test("draft-only families badge the headline row as a draft and count every draft", () => {
+  const first = { ...item("first"), modified_at: 2 };
+  const second = { ...item("second"), modified_at: 1 };
+  const draftGroups: ArtifactGroups = {
+    first: { key: "drafts", name: first.name, publisher: null, published_version: null },
+    second: { key: "drafts", name: second.name, publisher: null, published_version: null },
+  };
+  const view = scenarios([first], draftGroups);
+  expect(document.querySelector(".scenario-row .draft-count")).toHaveTextContent(/^Draft$/);
+  expect(document.querySelector(".scenario-version")).toBeNull();
+  view.unmount();
+  scenarios([first, second], draftGroups);
+  expect(document.querySelector(".scenario-row .draft-count")).toHaveTextContent("2 drafts");
+});
+
 test("latest releases use numeric versions while keeping active drafts, legacy files and publisher forks", () => {
   const old = { ...item("old", "team"), version: "1.0.9" };
   const current = { ...item("current", "team"), version: "1.0.10" };

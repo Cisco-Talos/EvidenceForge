@@ -1,6 +1,6 @@
 import { SearchExcerpts } from "./SearchExcerpts";
 import { artifactTitle, draftTitle } from "./artifactNaming";
-import { artifactFamilies, artifactGroup, artifactGroupLabel, type ArtifactFamily, type ArtifactGroups } from "./artifactGrouping";
+import { artifactFamilies, artifactGroup, artifactGroupLabel, isDraftItem, type ArtifactFamily, type ArtifactGroups } from "./artifactGrouping";
 import { DraftCount, FamilyToggle } from "./ScenarioLibrary";
 import { Fragment, type DragEvent, type ReactNode } from "react";
 import { Building2, Factory, Folder, GripVertical, PencilLine } from "lucide-react";
@@ -50,7 +50,7 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
     <span className="col-expand" />
     <button className="pack-open col-name" onClick={() => onOpenDraft(draft)}><span className="scenario-symbol draft"><PencilLine size={16} /></span><span className="pack-row-copy"><strong>{draftTitle(draft)}</strong><small>{draft.active ? "Authoring in progress" : "Ready to author"}</small></span></button>
     <span className="col-type pack-cell pack-type"><PackKindIcon kind={draft.draft_kind} size={13} />{typeLabels[draft.draft_kind || ""] || "Pack"}</span>
-    <span className="col-version"><span className="draft-chip">Draft</span></span>
+    <span className="col-version"><DraftCount count={1} self /></span>
     <span className="col-project scenario-project"><Folder size={13} aria-hidden="true" /><span>{projectName(draft.draft_project_id)}</span></span>
     <time className="col-updated pack-cell" title={new Date(draft.updated_at * 1000).toLocaleString()}>{formatTime(draft.updated_at)}</time>
     <div className="col-actions"><DraftObjectMenu draft={draft} projects={projects} onOpen={() => onOpenDraft(draft)} onMove={(id) => onMoveDraft(draft, id)} onDelete={() => onDeleteDraft(draft)} /></div>
@@ -59,12 +59,12 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
     <span className="pack-drag-handle col-drag" aria-hidden="true" title={`Drag ${item.name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); onDragStart(event, item); }}><GripVertical size={14} /></span>
     <span className="col-expand">{toggle}</span>
     <button className="pack-open col-name" aria-label={`Open ${artifactTitle(item)} ${item.version}`} onClick={() => onOpen(item)}><span className={`scenario-symbol pack-kind-${item.kind === "organization_pack" ? "organization" : "industry"}`}><PackKindIcon kind={item.kind} /></span><span className="pack-row-copy">
-      <strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}{item.hidden && <span className="draft-chip">Hidden</span>}{drafts > 0 && <DraftCount count={drafts} />}</strong>
+      <strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}{item.hidden && <span className="draft-chip">Hidden</span>}{drafts > 0 && !isDraftItem(item, artifactGroups) && <DraftCount count={drafts} />}</strong>
       <small title={item.description}>{item.description || "No description yet"}</small><SearchExcerpts item={item} />
       <small className="pack-row-meta"><span title={`Publisher: ${item.publisher || "not recorded"}`}>By {item.publisher_display_name || item.publisher || "Unknown author"}</span><span>·</span><span title={item.pack_source === "bundled" ? "Included with EvidenceForge" : "Authored or imported in this workspace"}>{item.pack_source === "bundled" ? "Bundled" : "Workspace"}</span></small>
     </span></button>
     <span className="col-type pack-cell pack-type"><PackKindIcon kind={item.kind} size={13} />{typeLabels[item.kind] || "Pack"}</span>
-    <span className="col-version"><span className="pack-version">{item.version || "Draft"}</span></span>
+    <span className="col-version">{isDraftItem(item, artifactGroups) ? <DraftCount count={child ? 1 : Math.max(1, drafts)} self /> : <span className="pack-version">{item.version}</span>}</span>
     <span className="col-project scenario-project"><Folder size={13} aria-hidden="true" /><span>{projectName(item.project_id)}</span></span>
     <time className="col-updated pack-cell" title={new Date(item.modified_at * 1000).toLocaleString()}>{formatTime(item.modified_at)}</time>
     <div className="col-actions"><CatalogObjectMenu item={item} fallbackActions={[

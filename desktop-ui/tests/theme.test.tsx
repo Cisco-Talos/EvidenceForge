@@ -43,7 +43,7 @@ test("startTheme defaults to dark when the system appearance is unavailable", ()
   expect(document.documentElement.dataset.theme).toBe("dark");
 });
 
-test("full brand logo switches artwork with the theme and the sidebar brand stays compact", () => {
+test("brand logos switch artwork with the theme in About and the sidebar", () => {
   mockSystemAppearance(false);
   startTheme();
   const view = render(<StudioBrand className="brand about-brand" />);
@@ -51,9 +51,8 @@ test("full brand logo switches artwork with the theme and the sidebar brand stay
   act(() => setThemePreference("light"));
   expect(screen.getByAltText("EvidenceForge")).toHaveAttribute("src", "/brand/evidenceforge-light.png");
   view.rerender(<StudioBrand compact />);
-  expect(screen.queryByAltText("EvidenceForge")).not.toBeInTheDocument();
-  expect(screen.getByText("EvidenceForge")).toBeInTheDocument();
-  expect(screen.getByText("Studio")).toBeInTheDocument();
+  expect(screen.getByAltText("EvidenceForge")).toHaveAttribute("src", "/brand/evidenceforge-light.png");
+  expect(screen.getByText("STUDIO")).toBeInTheDocument();
 });
 
 test("an explicit appearance persists, restores on launch and follows other Studio windows", () => {

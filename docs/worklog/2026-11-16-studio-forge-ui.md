@@ -97,8 +97,10 @@ Ready for review as a PR into `dev`. Before merging:
     a failed steer cannot lose the message.
   - **Projects:** projects for packs predate this branch; the redesign only moved them into the
     sidebar.
-- **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
-  remains on the startup, maintenance and About screens and switches artwork per theme.
+- **Sidebar brand:** by user request the sidebar shows the full `docs/logos` artwork (anvil plus
+  wordmark), 124px square, with a STUDIO caption. Narrow windows switch to the 256px anvil mark
+  (`public/brand/mark-256.png`, copied from the app icon), since the 32px icon blurs when scaled.
+  Startup, maintenance and About use the same theme-aware artwork.
 
 ## Validation
 
