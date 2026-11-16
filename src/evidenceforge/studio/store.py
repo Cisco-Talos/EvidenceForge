@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
+from evidenceforge.studio.state_records_v4 import ExampleInstallation
 
 
 def indexed_draft_identity(path: Path, entries: list[dict[str, Any]]) -> str | None:
@@ -222,6 +223,24 @@ class StudioStore:
         """Close the owned SQLite connection."""
         with self._lock:
             self._db.close()
+
+    def example_installation(self, workspace: Path) -> ExampleInstallation | None:
+        """Read explicit example enrollment without inferring it from project names."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM example_installations WHERE workspace=?",
+                (str(workspace.resolve()),),
+            ).fetchone()
+        return ExampleInstallation.model_validate_json(row[0]) if row else None
+
+    def save_example_installation(self, installation: ExampleInstallation) -> None:
+        """Persist installation intent before publishing source files or index changes."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO example_installations VALUES (?, ?) "
+                "ON CONFLICT(workspace) DO UPDATE SET payload=excluded.payload",
+                (str(installation.workspace.resolve()), installation.model_dump_json()),
+            )
 
     def registered_workspaces(self) -> set[Path]:
         """Retain workspace identity beyond the bounded recent-selection list."""
@@ -825,6 +844,14 @@ class StudioStore:
         changed_drafts: list[Conversation] = []
         changed_views: list[SavedView] = []
         with self._lock, self._db:
+            state = self.example_installation(project.workspace)
+            if state is not None and state.project_id == project.id:
+                state.manual_pending = False
+                state.regroup_pending = False
+                self._db.execute(
+                    "UPDATE example_installations SET payload=? WHERE workspace=?",
+                    (state.model_dump_json(), str(project.workspace.resolve())),
+                )
             rows = self._db.execute(
                 "SELECT payload FROM items WHERE workspace=?",
                 (str(project.workspace.resolve()),),

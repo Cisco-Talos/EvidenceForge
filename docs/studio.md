@@ -315,6 +315,32 @@ it uses `~/EvidenceForge`. Saved workspace choices and explicit overrides stay u
 Use **Settings → Workspace** to select another location. Workspace selection is independent of
 where Studio was launched. Projects organize library entries within a workspace.
 
+### Bundled example scenarios
+
+Each OS user's first Studio launch creates an **Example Scenarios** project in their initial
+default workspace. The collection may be empty in releases before examples are contributed.
+Existing Studio users can add it through **Settings → Workspace → Install/update examples**.
+The same action installs the current collection in any selected workspace and restores removed
+examples or a deleted examples project. **Open bundled examples folder** opens the ordinary files.
+
+Examples are published scenarios under the `evidenceforge` publisher. Like Packs, the library
+shows the latest installed release by default; **Show previous versions** and **Versions** retain
+access to earlier releases and their runs. **New draft** and **Clone** offer a destination project, defaulting
+to Ungrouped, and uses your configured publisher or an anonymous draft until publication.
+Official sources and exact ancestry stay intact.
+
+Product updates add bundled scenarios and versions automatically only in the initial default
+workspace while its tracked examples project exists. Renaming that project preserves updates;
+deleting it stops them. Deleting an individual example suppresses future automatic versions of
+that scenario until manual installation. Custom workspaces remain manual-only even after manual
+installation. Existing versions, user drafts and runs are preserved. Deleting a project retains
+its scenario files as ungrouped entries, following the ordinary project behavior.
+
+CLI and native-skill users can browse the same collection without Studio. See the
+[example collection guide](../examples/README.md) for locations, editing and contribution steps.
+
+### Workspace storage
+
 **Generated runs folder** selects a separate destination for new generations in the active
 workspace; leave it empty to use `<workspace>/runs`. Saving it does not move existing runs,
 change their recovery paths or detach their history. Resource forecasts use the same saved

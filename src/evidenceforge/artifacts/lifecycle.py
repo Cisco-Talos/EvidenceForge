@@ -90,7 +90,7 @@ def _safe_path(path: Path) -> Path:
     return path
 
 
-def snapshot_tree(root: Path) -> dict[str, bytes]:
+def snapshot_tree(root: Path, *, allow_hardlinks: bool = False) -> dict[str, bytes]:
     """Capture a bounded regular-file tree without following links."""
     _safe_path(root)
     if not root.is_dir():
@@ -101,7 +101,7 @@ def snapshot_tree(root: Path) -> dict[str, bytes]:
         _safe_path(path)
         if path.is_dir():
             continue
-        if not path.is_file() or path.stat().st_nlink != 1:
+        if not path.is_file() or not allow_hardlinks and path.stat().st_nlink != 1:
             raise ArtifactError(f"artifact member must be an unlinked regular file: {path}")
         name = path.relative_to(root).as_posix()
         safe_relative(name)
@@ -359,9 +359,9 @@ def _receipt_root(path: Path) -> Path | None:
     return None
 
 
-def verify_release(root: Path) -> ReleaseReceipt:
+def verify_release(root: Path, *, allow_hardlinks: bool = False) -> ReleaseReceipt:
     """Check the complete inventory, receipt seal and every captured file."""
-    files = snapshot_tree(root)
+    files = snapshot_tree(root, allow_hardlinks=allow_hardlinks)
     try:
         receipt = ReleaseReceipt.model_validate_json(files.pop(RECEIPT))
     except (KeyError, ValidationError) as exc:
@@ -525,7 +525,12 @@ def _capture_sources(path: Path, family: str) -> tuple[dict[str, bytes], str, Pa
         return snapshot_tree(path.parent), path.name, path.parent
     graph = load_scenario_source_graph(path)
     captured = {source.path: source.content for source in graph.sources}
-    email = graph.data.get("environment", {}).get("email", {})
+    environment = graph.data.get("environment", {})
+    if not isinstance(environment, dict):
+        raise ArtifactError(
+            "Scenario environment must be a mapping; repair it before capturing sources"
+        )
+    email = environment.get("email", {})
     corpus = email.get("corpus") if isinstance(email, dict) else None
     if corpus:
         declaring = graph.origins.get(("environment", "email", "corpus"), path)
@@ -533,6 +538,19 @@ def _capture_sources(path: Path, family: str) -> tuple[dict[str, bytes], str, Pa
         if not asset.is_relative_to(declaring.parent):
             raise ArtifactError("email corpus must remain beneath its declaring directory")
         captured[asset] = asset.read_bytes()
+    # Managed source trees are explicit authored inventories, including nested companions.
+    # Keep the graph capture above so include/corpus validation and relative paths stay intact.
+    for parent in path.parents:
+        if (parent / "draft.json").is_file() or (parent / RECEIPT).is_file():
+            source_root = parent / "source"
+            if path.is_relative_to(source_root):
+                captured.update(
+                    {
+                        source_root / name: content
+                        for name, content in snapshot_tree(source_root).items()
+                    }
+                )
+                break
     for companion in path.parent.glob("*.md"):
         if companion.name == "GROUND_TRUTH.md":
             continue
@@ -789,6 +807,7 @@ def create_draft(
     name: str | None = None,
     display_name: str | None = None,
     publisher: str | None = None,
+    inherit_publisher: bool = True,
     upgrade: bool = False,
     recover: bool = False,
     additional_parents: list[ParentReference] | None = None,
@@ -840,7 +859,7 @@ def create_draft(
         validate_name(logical_name, "scenario" if kind == "scenario" else "pack")
     storage_key = storage_name(logical_name)
     draft_publisher, publisher_title = _draft_publisher(
-        project_root, publisher, graph.data.get("publisher")
+        project_root, publisher, graph.data.get("publisher") if inherit_publisher else None
     )
     metadata = LifecycleMetadata(
         status="draft",

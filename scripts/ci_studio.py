@@ -22,6 +22,7 @@ def main() -> None:
             *directory.glob("test_studio_*.py"),
             *directory.glob("test_desktop_*.py"),
             directory / "test_resource_prediction.py",
+            Path("tests/integration/test_studio_examples.py"),
         }
     )
     subprocess.run(

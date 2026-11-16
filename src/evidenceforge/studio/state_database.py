@@ -26,7 +26,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 3
+DATABASE_VERSION = 4
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -112,6 +112,18 @@ MIGRATIONS = (
                 conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL
             );
             CREATE TABLE chat_preferences (
+                workspace TEXT PRIMARY KEY, payload TEXT NOT NULL
+            );
+        """,
+    ),
+    Migration(
+        id="studio-db-0004",
+        source=3,
+        target=4,
+        description="Track example enrollment, exclusions and restartable installation",
+        affected=("example_installations",),
+        sql="""
+            CREATE TABLE example_installations (
                 workspace TEXT PRIMARY KEY, payload TEXT NOT NULL
             );
         """,
@@ -311,6 +323,10 @@ def validate_records(connection: sqlite3.Connection) -> None:
             }
         )
     existing = set(tables(connection))
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 4:
+        from evidenceforge.studio.state_records_v4 import ExampleInstallation
+
+        models["example_installations"] = ExampleInstallation
     for table, model in models.items():
         if table not in existing:
             continue
@@ -346,6 +362,10 @@ def validate_records(connection: sqlite3.Connection) -> None:
             if table == "control" and (row["id"] != 1 or not isinstance(payload.get("id"), str)):
                 raise StudioStateError("Studio control identity is invalid")
             model.model_validate(payload)
+            if table == "example_installations" and not _same_record_path(
+                payload.get("workspace"), row["workspace"], windows=os.name == "nt"
+            ):
+                raise StudioStateError("Studio example workspace identity mismatch")
             if table.startswith("chat_"):
                 for key in ("id", "conversation_id", "workspace"):
                     same = (

@@ -289,6 +289,31 @@ test("a scenario can be cloned from its library menu with a new name", async () 
   }
 });
 
+test("official example clones default to Ungrouped and submit the chosen project", async () => {
+  const user = userEvent.setup();
+  const request = vi.mocked(useStudio().api!.request);
+  const originalItems = snapshot.items;
+  const originalSources = snapshot.example_sources;
+  const originalProjects = snapshot.projects;
+  try {
+    snapshot.example_sources = ["alpha"];
+    snapshot.projects = [{ id: "mine", workspace, name: "My exercises", description: "", updated_at: 0 }];
+    await renderExpandedApp();
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clone…" }));
+    const select = screen.getByRole("combobox", { name: "Clone destination project" });
+    expect(select).toHaveValue("");
+    await user.selectOptions(select, "mine");
+    const clone = { ...originalItems[0], id: "example-copy", name: "Alpha-copy", project_id: "mine" };
+    snapshot.items = [...originalItems, clone];
+    request.mockResolvedValueOnce(clone);
+    await user.click(screen.getByRole("button", { name: "Clone scenario" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/clone", "POST", { name: "Alpha-copy", project_id: "mine" }));
+  } finally {
+    snapshot.items = originalItems; snapshot.example_sources = originalSources; snapshot.projects = originalProjects;
+  }
+});
+
 test("a pack clone requests a workspace publisher when one is not configured", async () => {
   const user = userEvent.setup();
   const request = vi.mocked(useStudio().api!.request);

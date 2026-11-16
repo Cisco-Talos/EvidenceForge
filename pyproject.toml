@@ -87,6 +87,7 @@ exclude = ["**/._*", "**/.DS_Store"]
 # Recursively includes all skills, references, and future additions.
 # No need to add individual files — just put them in commands/eforge/.
 "commands/eforge" = "evidenceforge/_data/commands/eforge"
+"examples" = "evidenceforge/_data/examples"
 
 [tool.uv]
 # Avoid system SQLite WAL read-only compatibility failures in Studio.

@@ -448,3 +448,23 @@ def retired_versions(workspace: Path, *, kind: str, name: str, publisher: str) -
         ):
             versions.add(release["version"])
     return versions
+
+
+def deleted_release_digests(workspace: Path, receipt: ReleaseReceipt) -> set[str]:
+    """Return every recorded digest for an exact retired release label."""
+    digests: set[str] = set()
+    for data in _deletion_records(workspace):
+        release = data.get("release")
+        if isinstance(release, dict) and (
+            release.get("kind"),
+            release.get("name"),
+            release.get("publisher"),
+            release.get("version"),
+        ) == (
+            receipt.kind,
+            receipt.name,
+            receipt.lifecycle.publisher,
+            receipt.lifecycle.version,
+        ):
+            digests.add(str(release.get("digest", "")))
+    return digests

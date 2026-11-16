@@ -11,6 +11,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from evidenceforge.examples import collection_digest, discover_examples
+
 
 def run_cli(
     cli: Path,
@@ -141,6 +143,33 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
                 if key not in {"PYTHONHOME", "PYTHONPATH"}
             },
         )
+        examples = json.loads(
+            run_cli(
+                runtime / ("python.exe" if os.name == "nt" else "bin/python3.12"),
+                [
+                    "-I",
+                    "-B",
+                    "-c",
+                    "import json,sys; from pathlib import Path; "
+                    "from evidenceforge.examples import discover_examples,collection_digest,examples_directory; "
+                    "from evidenceforge.artifacts.portable import import_release; "
+                    "items=discover_examples(); "
+                    "assert (examples_directory()/'README.md').is_file(); "
+                    "[import_release(item.root,project_root=Path(sys.argv[1]),allow_hardlinks=True) "
+                    "for item in items[:1]]; "
+                    "print(json.dumps({'digest':collection_digest(items),'count':len(items)}))",
+                    str(workspace / "example-install"),
+                ],
+                workspace,
+                {
+                    key: value
+                    for key, value in environment.items()
+                    if key not in {"PYTHONHOME", "PYTHONPATH"}
+                },
+            )
+        )
+        if examples["digest"] != collection_digest(discover_examples()):
+            raise ValueError("Packaged example inventory differs from the source collection")
         if manifest["evidenceforge_version"] not in run_cli(
             cli, ["version"], workspace, environment
         ):
@@ -391,6 +420,7 @@ def verify_runtime(resources: Path, architecture: str) -> dict[str, str]:
         "generation_behavior": "passed",
         "isolated_cli": "passed",
         "bundled_skills_and_references": "passed",
+        "bundled_examples": "passed" if examples["count"] else "empty collection verified",
         "pack_inspection": "passed",
         "artifact_naming": "passed",
         "artifact_properties": "passed",

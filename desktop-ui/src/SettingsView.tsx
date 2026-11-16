@@ -4,6 +4,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
 import { PublisherSetup } from "./PublisherSetup";
+import { ExampleSettings } from "./ExampleSettings";
 import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
 import { codexAccountIdentity, useCodexAccount, type CodexStatus } from "./CodexAccount";
@@ -138,6 +139,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
         <PublisherSetup key={settings.workspace} workspace={settings.workspace} status={publisherStatus} api={api} onSaved={onSaved} />
+        <ExampleSettings key={`examples:${settings.workspace}`} workspace={settings.workspace} api={api} onSaved={onSaved} onOpenFolder={openLocalFolder} onError={onError} />
         <div className="setting-row"><div className="setting-copy"><strong>Remember library views</strong><Help text="Restore the last project, search, filters, and sorting for scenarios and packs in this workspace. Turning this off opens each library with its default view." /></div><input className="visible-check" type="checkbox" aria-label="Remember library views" disabled={!libraryReady} checked={rememberView} onChange={(event) => setRememberView(event.target.checked)} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Search matches per item</strong><Help text="Show this many matching fields or source lines (five by default). Names and descriptions rank first, then YAML values, keys, and comments. Substring matching is unchanged; extra matches are counted." /></div><input className="setting-number" type="number" min={1} max={50} aria-label="Search matches per item" value={draft.search_match_limit ?? 5} onChange={(event) => setDraft({ ...draft, search_match_limit: Number(event.target.value) })} onBlur={() => setDraft((current) => ({ ...current, search_match_limit: Math.min(50, Math.max(1, current.search_match_limit || 5)) }))} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
