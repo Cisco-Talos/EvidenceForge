@@ -255,11 +255,12 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
   }
 });
 
-test("library rows keep operation icons beside the title without a redundant service label", async () => {
+test("library rows show one labeled status without a redundant service label", async () => {
   await renderExpandedApp();
   const card = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row");
   expect(card).not.toBeNull();
-  expect(card?.querySelectorAll(".scenario-states.compact .state-icon")).toHaveLength(3);
+  expect(card?.querySelectorAll(".status-pill")).toHaveLength(1);
+  expect(card?.querySelector(".state-icon")).toBeNull();
   expect(card?.querySelector(".card-footer")).toBeNull();
   await userEvent.setup().click(within(card as HTMLElement).getByRole("button", { name: "Options for Alpha" }));
   expect(screen.getByRole("menuitem", { name: "Export bundle…" })).toBeVisible();
@@ -1129,9 +1130,8 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       expect(screen.queryByRole("menuitem", { name: /Add asset|View assets|New conversation|Move to project|Clone|Delete version/ })).toBeNull();
       expect(screen.getByRole("menuitem", { name: "Export release…" })).toHaveAttribute("data-disabled");
       await user.keyboard("{Escape}");
-      await user.click(within(assets).getByRole("button", { name: "Assets section actions" }));
-      expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["View assets", "Add asset…"]);
-      await user.keyboard("{Escape}");
+      expect(within(assets).queryByRole("button", { name: "Assets section actions" })).toBeNull();
+      expect(within(assets).getByRole("button", { name: "Add asset…" })).toBeVisible();
       await user.click(within(validation).getByRole("button", { name: "Validate", exact: true }));
       await waitFor(() => expect(request).toHaveBeenCalledWith(`/v1/items/${pack.id}/lifecycle`, "POST", { action: "validate", expected_digest: "captured-title" }, 180000));
       expect(within(validation).getByRole("button", { name: "Validation & release", exact: true })).toHaveAttribute("aria-expanded", "true");
@@ -1533,7 +1533,9 @@ test("library and workspace show a failed evaluation even with a high overall sc
   ];
   try {
     await renderExpandedApp();
-    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
+    const row = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row") as HTMLElement;
+    expect(within(row).getByText("Failed acceptance").closest(".status-pill")).toHaveClass("tone-err");
+    expect(within(row).getByLabelText(/Evaluation: Failed acceptance · 92\/100/)).toBeTruthy();
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
     expect(scenarioStates({ ...snapshot.items[0], source_sha256: "new-revision" }, snapshot)[2].state).toBe("stale");
@@ -1638,7 +1640,8 @@ test("new packs require a name and description, then submit optional details exa
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
-    await user.click(screen.getByRole("button", { name: "New organization pack" }));
+    await user.click(screen.getByRole("button", { name: "New pack" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Organization pack" }));
     const dialog = screen.getByRole("dialog", { name: "New pack" });
     await user.type(within(dialog).getByRole("textbox", { name: "Pack Name" }), "Bad Name");
     expect(within(dialog).getByRole("status").textContent).toMatch(/lowercase/);
@@ -2393,8 +2396,11 @@ test("workspace result icons preserve generation success and scoring failure whe
   ];
   try {
     const view = await renderExpandedApp();
-    expect(screen.getByLabelText(/Generation: Generation completed.*Inputs unverified/)).toHaveClass("state-warning");
-    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 96\/100.*Inputs unverified/)).toHaveClass("state-error");
+    const libraryRow = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row") as HTMLElement;
+    const pill = within(libraryRow).getByText("Failed acceptance").closest(".status-pill") as HTMLElement;
+    expect(pill).toHaveClass("tone-err");
+    expect(pill.getAttribute("aria-label")).toMatch(/Generation: Generation completed[\s\S]*Inputs unverified/);
+    expect(pill.getAttribute("aria-label")).toMatch(/Evaluation: Failed acceptance · 96\/100[\s\S]*Inputs unverified/);
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const generation = screen.getByRole("region", { name: "Runs", exact: true });
     const scoring = generation;

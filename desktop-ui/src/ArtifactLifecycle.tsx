@@ -4,6 +4,7 @@ import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { StudioApiError, type CatalogItem, type StudioApi } from "./api";
 import type { components } from "./generated/studio";
 import { Modal } from "./Modal";
+import { SavedPath } from "./RevealInFinder";
 
 type Finding = { severity?: string; field_path?: string; message?: string };
 
@@ -74,9 +75,14 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
     }
     finally { setBusy(false); }
   }
+  const [savedRelease, setSavedRelease] = useState("");
   async function exportRelease() {
     setBusy(true); setActionError("");
-    try { await api.download(`/v1/items/${item.id}/release`, artifactFilename(item, item.kind === "scenario" ? "efscenario" : "efpack")); }
+    setSavedRelease("");
+    try {
+      const result = await api.download(`/v1/items/${item.id}/release`, artifactFilename(item, item.kind === "scenario" ? "efscenario" : "efpack"));
+      if (result.status === "saved") setSavedRelease(result.path);
+    }
     catch (failure) { setActionError(String(failure)); onError?.(String(failure)); }
     finally { setBusy(false); }
   }
@@ -102,6 +108,7 @@ export function ArtifactLifecycle({ item, api, onChanged, onOpen, compact = true
   return <section className={`artifact-lifecycle ${compact ? "artifact-version-bar" : "surface"}`} aria-label="Versions and publication">
     <header>{!compact && <h2>Versions & publication</h2>}<span>{metadata?.status === "published" ? `Published ${metadata.version}` : metadata?.status === "draft" ? "Draft" : "Legacy source"}</span></header>
     {error && <p className="error-text" role="alert">{error}</p>}
+    {savedRelease && <SavedPath path={savedRelease} onError={(message) => setActionError(message)} />}
     {!!findings.length && <div role="status"><p>Upgrade validation findings</p><ul>{findings.map((finding, index) => <li key={index}>{finding.severity}: {finding.message}</li>)}</ul></div>}
     <div className="job-actions"><ActionShortcut action={lifecycleActions.find((entry) => entry.id === (metadata?.status === "draft" ? "publish" : "draft"))!} primary={metadata?.status === "draft"} /><ObjectMenu label="Versions and publication actions" actions={lifecycleActions} /></div>
     {publicationDialog}

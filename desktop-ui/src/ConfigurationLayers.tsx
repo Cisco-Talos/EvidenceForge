@@ -7,6 +7,7 @@ import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { writePathToClipboard } from "./CopyPathButton";
 import { CopyPathButton } from "./CopyPathButton";
 import { InspectionSection } from "./InspectionSection";
+import { revealAction } from "./RevealInFinder";
 
 export function ConfigurationLayers({ item, report, api, onRefresh, onPrepare, onError }: {
   item: CatalogItem; report: EnvironmentReport; api: StudioApi; onRefresh: () => void;
@@ -44,6 +45,7 @@ export function ConfigurationLayers({ item, report, api, onRefresh, onPrepare, o
         { id: "view", label: "View files", group: "inspect", disabled: !scope.files?.length, reason: "No files in this layer", run: () => openFile(scope.files![0]) },
         edit,
         ...(["project", "scenario"].includes(scope.id) ? [{ id: "toggle", label: scope.enabled ? "Disable layer" : "Enable layer", group: "work" as const, disabled: working, reason: "A configuration operation is in progress", run: () => toggle(scope.id, !scope.enabled) }] : []),
+        ...revealAction(scope.root, onError),
         { id: "copy", label: "Copy path", group: "locate", run: () => writePathToClipboard(scope.root).catch((error) => onError(String(error))) },
       ];
       return <div className="configuration-scope" key={scope.id}>

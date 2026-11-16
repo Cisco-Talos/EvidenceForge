@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, HardDrive, MemoryStick } from "lucide-react";
 import type { CatalogItem, PredictionRecord, StudioApi, StudioSnapshot } from "./api";
-import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
+import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import { formatBundleSize, formatTime } from "./components";
 import { RequestFeedback, type RequestState } from "./RequestFeedback";
 
@@ -60,7 +60,7 @@ export function ResourceForecastPanel({ item, snapshot, api, onError, onChanged,
   }
   const refreshAction: ObjectAction = { id: "refresh", label: "Refresh resource forecast", group: "work", disabled: refreshing, reason: "Forecast refresh is in progress", description: "Recheck current files and available resources", run: refresh };
   return <section className={`surface resource-forecast ${compact ? "compact" : ""}`} aria-label="Generation resource forecast">
-    <div className="surface-heading"><h2>{compact ? "Resource forecast" : "Before you generate"}</h2><div className="job-actions"><ActionShortcut action={refreshAction} /><ObjectMenu label="Resource forecast actions" actions={[refreshAction]} /></div></div>
+    <div className="surface-heading"><h2>{compact ? "Resource forecast" : "Before you generate"}</h2><div className="job-actions"><ActionShortcut action={refreshAction} /></div></div>
     <RequestFeedback {...feedback} label="Updating estimate…" completedLabel="Checked" previousLabel={forecast ? "Previous estimate is shown below." : undefined} />
     {forecast && shown?.result.available ? <><p className="muted forecast-note">Estimates for this revision · {snapshot.settings.checkpoint_hours ? `checkpoints every ${snapshot.settings.checkpoint_hours} simulated hours` : "checkpoints disabled"}</p><div className="forecast-metrics">{([
       ["Generated data", forecast.final_output, HardDrive], ["Peak memory", forecast.memory, MemoryStick], ["Peak disk", forecast.disk, HardDrive],

@@ -3,6 +3,7 @@ import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle
 import { Tooltip } from "radix-ui";
 import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
 import { recentJobs, jobSubmittedAt } from "./jobOrder";
+import { StatusPill, summarizeStates } from "./StatusPill";
 
 type State = "none" | "stale" | "working" | "success" | "warning" | "error";
 export interface OperationState { label: string; state: State; detail: string }
@@ -128,4 +129,10 @@ export function ScenarioStates({ item, snapshot, compact = false }: { item: Cata
   return <div className={`scenario-states ${compact ? "compact" : ""}`} aria-label="Scenario operation status">
     {scenarioStates(item, snapshot).map((status) => <OperationStatus key={status.label} status={status} compact={compact} />)}
   </div>;
+}
+
+/** A library row's single status: the most important of validation, generation and evaluation. */
+export function ScenarioStatusPill({ item, snapshot }: { item: CatalogItem; snapshot: StudioSnapshot }) {
+  const summary = summarizeStates(scenarioStates(item, snapshot));
+  return <StatusPill tone={summary.tone} label={summary.label} detail={summary.detail} />;
 }

@@ -29,7 +29,7 @@ function setup(snapshot = fixture()) {
   const request = vi.fn(async (path: string) => path === "/v1/jobs/bundle-sizes" ? { latest: 2048 } : { available: true, tail: "Saved generator log", log_path: "/runs/generation.log" });
   const onOpenScenario = vi.fn();
   const api = { request } as unknown as StudioApi;
-  const view = render(<Tooltip.Provider><BundleLibrary snapshot={snapshot} api={api} onOpenScenario={onOpenScenario} onError={vi.fn()} onChanged={async () => undefined} /></Tooltip.Provider>);
+  const view = render(<Tooltip.Provider><BundleLibrary snapshot={snapshot} api={api} onOpenScenario={onOpenScenario} onError={vi.fn()} onNotice={vi.fn()} onChanged={async () => undefined} /></Tooltip.Provider>);
   return { ...view, onOpenScenario, request };
 }
 

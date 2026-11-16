@@ -4,9 +4,10 @@ import { Tooltip } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import type { ScorecardDetail, StudioApi, TextPreview } from "./api";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { CopyPathButton } from "./CopyPathButton";
 import { GroundTruthDiagnostics } from "./GroundTruthDiagnostics";
 import type { GroundTruthSummary } from "./groundTruthFindings";
+import { SavedPath } from "./RevealInFinder";
+import { ErrorBanner } from "./Feedback";
 
 function score(value: number | null, precision = 0): string {
   return value == null ? "N/A" : `${value.toFixed(precision)}/100`;
@@ -68,7 +69,7 @@ export function ScorecardPanel({ jobId, api, compact = false }: { jobId: string;
     finally { setExporting(false); }
   }
 
-  if (error) return <div className="scorecard-detail error-text" role="alert">{error}</div>;
+  if (error) return <div className="scorecard-detail"><ErrorBanner>{error}</ErrorBanner></div>;
   if (!report) return <div className="scorecard-detail muted" role="status">Loading saved scorecard…</div>;
 
   const failed = report.acceptance_criteria.filter((criterion) => criterion.level === "hard" && criterion.applicable !== false && criterion.passed === false);
@@ -92,7 +93,7 @@ export function ScorecardPanel({ jobId, api, compact = false }: { jobId: string;
       {Object.keys(report.source_counts).length > 0 && <details className="scorecard-sources"><summary>Records by source</summary><ul>{Object.entries(report.source_counts).sort((a, b) => b[1] - a[1]).map(([source, count]) => <li key={source}><span>{source}</span><strong>{count.toLocaleString()}</strong></li>)}</ul></details>}
       <div className="scorecard-report-actions"><button className="button-quiet" aria-expanded={showRaw} onClick={() => setShowRaw(!showRaw)}><FileCode2 size={14} /> {showRaw ? "Hide raw report" : "View raw report"}</button><button className="button-quiet" disabled={exporting} onClick={() => void exportReport()}><Download size={14} /> {exporting ? "Saving…" : isTauri() ? "Export report…" : "Download report"}</button></div>
       {rawError && <p className="error-text" role="alert">{rawError}</p>}
-      {savedPath && <div className="path-with-copy muted small"><span className="path-value">Saved to {savedPath}</span><CopyPathButton path={savedPath} label="Copy saved report path" onError={setRawError} /></div>}
+      {savedPath && <SavedPath path={savedPath} onError={setRawError} />}
       {showRaw && <div className="scorecard-raw" aria-label="Raw evaluation report">{!raw && !rawError ? <p className="muted" role="status">Loading report…</p> : raw?.binary ? <p className="error-text">This report cannot be previewed as text.</p> : raw && <><ChatMarkdown text={`\`\`\`json\n${raw.text}\n\`\`\``} />{raw.truncated && <p className="muted small">Preview limited to 64 KB. Export the JSON for the full report.</p>}</>}</div>}
     </>}
   </section></Tooltip.Provider>;

@@ -7,7 +7,7 @@ import type { CatalogItem, Conversation, Project, StudioApi, StudioSnapshot } fr
 import { formatBundleSize, formatTime } from "./components";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
 import { DraftObjectMenu } from "./DraftObjectMenu";
-import { ScenarioStates, scenarioStates } from "./ScenarioStates";
+import { ScenarioStatusPill, scenarioStates } from "./ScenarioStates";
 
 import { SearchExcerpts } from "./SearchExcerpts";
 import { generationIsCurrent } from "./ScenarioStates";
@@ -71,7 +71,7 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
           <span className="scenario-mobile-meta">{missing ? "Source missing" : item?.version || "Draft"} · Updated {formatTime(updated)}</span>
         </span>
       </button>
-      <div className="scenario-row-status">{missing ? <span className="field-error">Source missing</span> : item ? <ScenarioStates item={item} snapshot={snapshot} compact /> : <span className="muted">Not authored yet</span>}</div>
+      <div className="scenario-row-status">{missing ? <span className="field-error">Source missing</span> : item ? <ScenarioStatusPill item={item} snapshot={snapshot} /> : <span className="muted">Not authored yet</span>}</div>
       <span className="scenario-row-size" title={actualSize != null ? "Measured size of the latest completed bundle for this revision" : estimatedSize != null ? "Estimated generated data size; actual output may differ" : "No current size estimate yet"}>{actualSize != null ? formatBundleSize(actualSize) : estimatedSize != null ? <>{formatBundleSize(estimatedSize)}<small>Estimated</small></> : "—"}</span>
       <div className="scenario-row-meta"><span>{item?.version || "Draft"}</span><time dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time></div>
       <div className="scenario-row-actions">{item ? <CatalogObjectMenu item={item} fallbackActions={[

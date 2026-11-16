@@ -3,6 +3,7 @@ import { CopyPathButton } from "./CopyPathButton";
 import { StudioApi, type StudioJob } from "./api";
 import type { components } from "./generated/studio";
 import { RequestFeedback } from "./RequestFeedback";
+import { ErrorBanner } from "./Feedback";
 
 type Diagnostics = components["schemas"]["JobDiagnostics"];
 
@@ -37,7 +38,7 @@ export function JobDiagnostics({ job, api, onError, requestedLog = false, refres
       The process ended without reporting completion. {data.available ? "Check the saved log below for details." : "No saved log is available."}
     </p>}
     {requestedLog && <RequestFeedback pending={loading} label="Refreshing log…" error={error ? `Could not read the run log: ${error}` : undefined} completedAt={completedAt} previousLabel={data ? "Previous log preview is shown below." : undefined} />}
-    {!requestedLog && error && <p className="job-message" role="alert">Could not read the run log: {error}</p>}
+    {!requestedLog && error && <ErrorBanner>Could not read the run log: {error}</ErrorBanner>}
     {requestedLog && data && <div className="job-log-preview">
       <div className="path-with-copy muted small"><span className="path-value" title={data.log_path}>{data.log_path}</span><CopyPathButton path={data.log_path} label="Copy log path" onError={onError} /></div>
       {data.truncated && <p className="muted small">Showing the last 32 KiB. The full log is saved at the path above.</p>}

@@ -8,6 +8,7 @@ import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { DisplayNameField } from "./DisplayNameField";
 import { ReleaseNotesField } from "./ReleaseNotesField";
 import { Help, formatBundleSize } from "./components";
+import { ErrorBanner } from "./Feedback";
 
 export type PropertiesSection = "general" | "versions" | "dependencies" | "technical";
 type Properties = components["schemas"]["ArtifactProperties"];
@@ -123,7 +124,7 @@ export function ArtifactPropertiesDialog({ item, initialSection = "general", sna
   }
   const open = async (path: string) => { onClose(); await onOpen(path); };
   return <PropertiesShell title={artifactTitle(item)} section={section} onSection={setSection} onClose={onClose} dirty={dirty} busy={busy} footer={<>{dirty && <span className="muted small">Unsaved changes</span>}{editable && <button className="button-primary" disabled={busy || !dirty} onClick={() => void save()}>Save properties</button>}</>}>
-    {error && <p className="error-text" role="alert">{error}<button className="button-quiet" disabled={busy || dirty} onClick={() => setRefresh((value) => value + 1)}>Refresh properties</button></p>}{status && <p className="property-status" role="status">{status}</p>}
+    {error && <ErrorBanner retryLabel="Refresh properties" busy={busy || dirty} onRetry={() => setRefresh((value) => value + 1)}>{error}</ErrorBanner>}{status && <p className="property-status" role="status">{status}</p>}
     {!properties ? <p className="muted">Reading properties…</p> : <>
       {section === "general" && <><h2>General</h2>{!editable && <div className="properties-readonly"><span>{properties.lifecycle?.status === "published" ? "Published release · read-only" : "Legacy source · read-only"}</span><ArtifactLifecycle item={item} api={api} onChanged={onChanged} onOpen={open} compact /></div>}
         <DisplayNameField value={displayName} onChange={setDisplayName} label="Display name" placeholder={properties.name} disabled={busy || !editable} api={api} source={{ item_id: item.id, expected_digest: properties.digest }} allowReplacement previewRequired help="Optional friendly title. It does not change the identifier, references or file names." />

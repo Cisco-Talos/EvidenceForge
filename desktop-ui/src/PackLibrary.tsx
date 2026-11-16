@@ -3,7 +3,6 @@ import { artifactTitle, draftTitle } from "./artifactNaming";
 import { artifactGroup, artifactGroupLabel, type ArtifactGroups } from "./artifactGrouping";
 import { Fragment, type DragEvent } from "react";
 import { ArrowUpRight, ChevronRight, GripVertical, Layers3 } from "lucide-react";
-import { ObjectMenu } from "./ObjectActions";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
 import { DraftObjectMenu } from "./DraftObjectMenu";
 import type { CatalogItem, Conversation, Project } from "./api";
@@ -13,12 +12,11 @@ import { HeaderSummary } from "./WorkspaceSection";
 
 type PackKind = "industry_pack" | "organization_pack";
 
-export function PackLibrary({ items, drafts, projects, busy, artifactGroups, onOpen, onProperties, onOpenDraft, onNew, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, expandedGroups, onToggleGroup }: {
+export function PackLibrary({ items, drafts, projects, busy, artifactGroups, onOpen, onProperties, onOpenDraft, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, expandedGroups, onToggleGroup }: {
   expandedGroups: string[]; onToggleGroup: (id: string, open: boolean) => void;
   items: CatalogItem[]; drafts: Conversation[]; projects: Project[]; busy: boolean;
   artifactGroups?: ArtifactGroups;
-  onOpen: (item: CatalogItem) => void; onProperties?: (item: CatalogItem) => void; onOpenDraft: (draft: Conversation) => void;
-  onNew: (kind: PackKind) => void; onClone: (item: CatalogItem) => void; onExport: (item: CatalogItem) => void;
+  onOpen: (item: CatalogItem) => void; onProperties?: (item: CatalogItem) => void; onOpenDraft: (draft: Conversation) => void; onClone: (item: CatalogItem) => void; onExport: (item: CatalogItem) => void;
   onHide: (item: CatalogItem) => void; onMove: (item: CatalogItem, projectId: string | null) => void;
   onMoveDraft: (draft: Conversation, projectId: string | null) => void;
   onDelete: (item: CatalogItem) => void; onNewProject: (item: CatalogItem) => void; onDeleteDraft: (draft: Conversation) => void;
@@ -40,7 +38,7 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, onO
     const updated = Math.max(0, ...packs.map((pack) => pack.modified_at), ...pending.map((draft) => draft.updated_at));
     const title = kind === "industry_pack" ? "Industry packs" : "Organization packs";
     return <details className="job-group pack-group" key={kind} open={expandedGroups.includes(kind)} onToggle={(event) => onToggleGroup(kind, event.currentTarget.open)}>
-      <summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{title}</strong><span>{packs.length + pending.length}</span><small className="group-summary"><HeaderSummary summary={{ headline: [countLabel(packs.length, "available pack"), pending.length && countLabel(pending.length, "draft"), pending.some((draft) => draft.active) && `${pending.filter((draft) => draft.active).length} authoring`].filter(Boolean).join(" · "), detail: [authors.slice(0, 2).join(", "), authors.length > 2 && `${authors.length - 2} more authors`, updated && `Updated ${formatTime(updated)}`].filter(Boolean).join(" · ") }} /></small><button className="button-quiet pack-new" aria-label={`New ${kind === "industry_pack" ? "industry" : "organization"} pack`} disabled={busy} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onNew(kind); }}>New pack…</button><ObjectMenu label={`${title} actions`} actions={[{ id: "new", label: "New pack…", group: "work", disabled: busy, reason: "An operation is in progress", run: () => onNew(kind) }]} /></summary>
+      <summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{title}</strong><span>{packs.length + pending.length}</span><small className="group-summary"><HeaderSummary summary={{ headline: [countLabel(packs.length, "available pack"), pending.length && countLabel(pending.length, "draft"), pending.some((draft) => draft.active) && `${pending.filter((draft) => draft.active).length} authoring`].filter(Boolean).join(" · "), detail: [authors.slice(0, 2).join(", "), authors.length > 2 && `${authors.length - 2} more authors`, updated && `Updated ${formatTime(updated)}`].filter(Boolean).join(" · ") }} /></small></summary>
       <div className="pack-list">
         {pending.map((draft) => <div className="pack-row pack-draft" key={draft.id} draggable onDragStart={(event) => onDraftDragStart(event, draft)} onDragEnd={onDragEnd}><button className="pack-open" onClick={() => onOpenDraft(draft)}><Layers3 size={18} /><span className="pack-row-copy"><strong>{draftTitle(draft)}</strong><small>{draft.active ? "Authoring in progress" : "Ready to author"} · {projectName(draft.draft_project_id)}</small></span><span className="draft-chip">Draft</span></button><DraftObjectMenu draft={draft} projects={projects} onOpen={() => onOpenDraft(draft)} onMove={(id) => onMoveDraft(draft, id)} onDelete={() => onDeleteDraft(draft)} /></div>)}
         {packs.map((item, index) => <Fragment key={item.id}>
