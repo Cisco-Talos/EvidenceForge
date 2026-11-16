@@ -637,3 +637,92 @@ def test_concurrent_draft_saves_cannot_clear_a_queue_hold(studio: StudioService)
     control = studio.store.chat.control(chat.id)
     assert control.queue_paused
     assert control.view.draft == "Draft 39"
+
+
+@pytest.mark.asyncio
+async def test_queued_message_can_steer_the_active_turn_once(
+    studio: StudioService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat = conversation(studio)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def call(method: str, params: dict[str, Any], *, timeout: float = 30) -> dict[str, Any]:
+        calls.append((method, params))
+        return {"turnId": "turn-1"}
+
+    monkeypatch.setattr(studio.codex, "call", call)
+    queued = await studio.chat.send(
+        chat, ChatMessageRequest(message_id="later", text="Also check DNS", mode="queue")
+    )
+    assert queued.state == "queued"
+    steered = await studio.chat.steer_queued(chat, "later")
+    assert steered.state == "accepted"
+    assert steered.mode == "steer"
+    assert calls == [
+        (
+            "turn/steer",
+            {
+                "threadId": "thread",
+                "expectedTurnId": "turn-1",
+                "clientUserMessageId": "later",
+                "input": [{"type": "text", "text": "Also check DNS"}],
+            },
+        )
+    ]
+    with pytest.raises(HTTPException, match="409"):
+        await studio.chat.steer_queued(chat, "later")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_steering_a_queued_message_refuses_without_an_active_turn_or_with_a_skill(
+    studio: StudioService,
+) -> None:
+    chat = conversation(studio)
+    await studio.chat.send(
+        chat,
+        ChatMessageRequest(message_id="skilled", text="Use it", mode="queue", skill_name="eforge"),
+    )
+    with pytest.raises(HTTPException, match="400"):
+        await studio.chat.steer_queued(chat, "skilled")
+    idle = conversation(studio, active=False)
+    studio.store.chat.save_input(
+        type(studio.store.chat.input("skilled"))(
+            id="idle-queued",
+            conversation_id=idle.id,
+            text="Next",
+            mode="queue",
+            created_at=time.time(),
+        )
+    )
+    with pytest.raises(HTTPException, match="409"):
+        await studio.chat.steer_queued(idle, "idle-queued")
+    assert studio.store.chat.input("idle-queued").state == "queued"
+    with pytest.raises(HTTPException, match="404"):
+        await studio.chat.steer_queued(chat, "missing")
+
+
+@pytest.mark.asyncio
+async def test_rejected_steer_returns_the_message_to_the_queue(
+    studio: StudioService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat = conversation(studio)
+
+    async def call(method: str, params: dict[str, Any], *, timeout: float = 30) -> dict[str, Any]:
+        raise HTTPException(409, "The turn already finished")
+
+    monkeypatch.setattr(studio.codex, "call", call)
+    await studio.chat.send(
+        chat, ChatMessageRequest(message_id="late", text="One more thing", mode="queue")
+    )
+    with pytest.raises(HTTPException, match="409"):
+        await studio.chat.steer_queued(chat, "late")
+    kept = studio.store.chat.input("late")
+    assert (kept.state, kept.mode, kept.expected_turn_id, kept.text) == (
+        "queued",
+        "queue",
+        None,
+        "One more thing",
+    )

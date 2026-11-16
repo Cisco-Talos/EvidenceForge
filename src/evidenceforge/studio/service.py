@@ -4427,6 +4427,14 @@ def create_app(
             await studio.emit(conversation_id, "chat.updated", {})
             return entry
 
+    @app.post("/v1/conversations/{conversation_id}/messages/{message_id}/steer")
+    async def steer_queued_chat_message(
+        conversation_id: str, message_id: str, studio: StudioService = Depends(authorized)
+    ) -> ChatInput:
+        conversation = chat_conversation(conversation_id, studio)
+        configure_chat_submission(studio)
+        return await studio.chat.steer_queued(conversation, message_id)
+
     @app.delete("/v1/conversations/{conversation_id}/messages/{message_id}")
     async def remove_chat_message(
         conversation_id: str, message_id: str, studio: StudioService = Depends(authorized)
