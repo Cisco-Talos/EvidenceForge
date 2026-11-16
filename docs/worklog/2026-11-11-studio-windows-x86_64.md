@@ -2524,3 +2524,38 @@ Native API references: [TASKDIALOGCONFIG](https://learn.microsoft.com/en-us/wind
 [ACTCTXW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-actctxw),
 [Win32 SDK task-dialog declarations](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/CommCtrl.h),
 and [UI Automation elements](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement).
+
+### November 16 — warm helper and uninterrupted removal activity
+
+The laptop's remaining checkbox pause came from lazy account-broker/worker startup,
+Python imports and repeated bundled skill discovery. Start the authenticated helper
+on an owned background thread as soon as the cleanup page opens. The page remains
+interactive during construction. Keep that helper through empty selections;
+an empty prepare cancels pending review and revokes the receipt without starting
+another review. Cancellation/app-only completion reaps even a late-created helper.
+Background startup failures stay quiet with no content selected and surface if
+content is selected; application-only uninstall remains available.
+
+Reuse only the installed package's immutable skill layout in the ReviewSession.
+Continue reading settings, installed skill markers and deletion roots afresh.
+Defer publisher/YAML/settings imports until actually needed; extract the existing
+settings-envelope decoder unchanged in behavior into a lightweight shared module,
+loading only the requested historical schema. No global functools cache/provider
+wrappers and no reuse of user-root ownership approvals or deletion receipts.
+
+The reported 0-to-10%-then-reset bar was an activity animation restarted by every
+progress report. Start/stop it only on mode transitions. Show a short real removed
+item count alongside uninterrupted activity, without a preliminary file count.
+Completion alone sets the bar to 100%. Keep the concise Yes/Cancel confirmation,
+no detail pane, root-only review and single direct removal walk.
+
+Added regressions for slow/failed background startup, cancel before construction
+finishes, clearing/reselecting with one helper and a new receipt, repeated progress
+reports without animation restarts, and package discovery reuse with fresh settings
+and replaced-root rejection. Existing compiled NSIS/IPC tests remain native gates.
+Build-only preview with focused diagnostics will follow; full qualification stays
+pending per the user's Windows test/fix-loop instruction.
+
+Local verification: 142 passed, 13 native-Windows skips in 14.33 seconds across
+uninstall/wizard/fast cleanup, frozen state contracts, state-upgrade integration,
+real-pipe and compiled-NSIS test files. Ruff check/format and git diff --check pass.

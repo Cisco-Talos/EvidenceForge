@@ -322,19 +322,49 @@ def _inventory(
     return tuple(sorted(entries, key=lambda item: item.relative))
 
 
-def _skill_files(profile: Path, *, complete_roots: bool = False) -> list[Path]:
-    """Identify only EvidenceForge's known files, preserving other skills and additions."""
-    from evidenceforge.cli.install_skills import (
-        _collect_command_files,
-        _collect_reference_files,
-        _collect_source_files,
-        _get_data_root,
-        _references_for_chatgpt_skill,
-    )
+class SkillLayout(BaseModel):
+    """Immutable bundled skill names and references, independent of user file state."""
 
-    manifest = _collect_source_files(_get_data_root())
-    commands = _collect_command_files(manifest)
-    references = _collect_reference_files(manifest)
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    manifest: tuple[str, ...]
+    references: dict[str, tuple[str, ...]]
+
+
+class CleanupDiscovery(BaseModel):
+    """Session-owned package discovery; never cache user roots or permission approval."""
+
+    model_config = ConfigDict(extra="forbid")
+    skills: SkillLayout | None = None
+
+    def skill_layout(self) -> SkillLayout:
+        """Read the installed package's static manifest at most once per worker."""
+        if self.skills is None:
+            from evidenceforge.cli.install_skills import (
+                _collect_command_files,
+                _collect_reference_files,
+                _collect_source_files,
+                _get_data_root,
+                _references_for_chatgpt_skill,
+            )
+
+            manifest = _collect_source_files(_get_data_root())
+            references = _collect_reference_files(manifest)
+            self.skills = SkillLayout(
+                manifest=tuple(manifest),
+                references={
+                    name: tuple(_references_for_chatgpt_skill(name, references))
+                    for name in _collect_command_files(manifest)
+                },
+            )
+        return self.skills
+
+
+def _skill_files(
+    profile: Path, *, complete_roots: bool = False, discovery: CleanupDiscovery | None = None
+) -> list[Path]:
+    """Identify known files freshly, reusing only the bundled skill layout."""
+    layout = (discovery or CleanupDiscovery()).skill_layout()
+    manifest, commands = layout.manifest, layout.references
     if complete_roots:
         return [profile / ".claude/commands/eforge"] + [
             profile / agent / "skills" / f"eforge-{name}"
@@ -354,9 +384,7 @@ def _skill_files(profile: Path, *, complete_roots: bool = False) -> list[Path]:
             if "EvidenceForge" not in text or f"name: eforge-{name}\n" not in text:
                 continue
             paths.append(marker)
-            paths.extend(
-                root / relative for relative in _references_for_chatgpt_skill(name, references)
-            )
+            paths.extend(root / relative for relative in commands[name])
     return paths
 
 
@@ -419,18 +447,16 @@ def build_plan(
     report_target: Callable[[Path], None] = lambda path: None,
     full_cleanup: bool = False,
     root_review: bool = False,
+    discovery: CleanupDiscovery | None = None,
 ) -> CleanupPlan:
     """Inventory independently selectable categories without creating or changing data."""
-    import yaml
-
-    from evidenceforge.composition.publisher import PublisherIdentity
-    from evidenceforge.studio.state_upgrade import decode_settings_document
-
     selected = set(LABELS) if categories is None else categories
     if full_cleanup and selected != set(LABELS):
         raise StudioStateError("Full cleanup requires all three categories to be selected")
     if not selected:
         return CleanupPlan(locations=locations)
+
+    discovery = discovery or CleanupDiscovery()
 
     candidates: list[tuple[Category, Path]] = [
         ("private", locations.private),
@@ -442,13 +468,19 @@ def build_plan(
     if "skills" in selected:
         candidates.extend(
             ("skills", path)
-            for path in _skill_files(locations.profile, complete_roots=full_cleanup)
+            for path in _skill_files(
+                locations.profile, complete_roots=full_cleanup, discovery=discovery
+            )
         )
     publisher = locations.profile / ".eforge/publisher.yaml"
     if "skills" in selected:
         safe_path(filesystem_path(publisher))
     if "skills" in selected and not full_cleanup and filesystem_path(publisher).is_file():
         if not root_review:
+            import yaml
+
+            from evidenceforge.composition.publisher import PublisherIdentity
+
             PublisherIdentity.model_validate(
                 yaml.safe_load(filesystem_path(publisher).read_text(encoding="utf-8"))
             )
@@ -466,6 +498,8 @@ def build_plan(
         safe_path(filesystem_path(settings))
     values: dict[str, object] = {}
     if workspaces and filesystem_path(settings).is_file():
+        from evidenceforge.studio.state_settings_document import decode_settings_document
+
         try:
             _version, values = decode_settings_document(_read_cleanup_settings(settings))
         except (OSError, ValueError, EvidenceForgeError) as error:
@@ -508,7 +542,10 @@ def build_plan(
         # Only app-managed namespaces; never recursively delete the workspace itself.
         if "skills" in selected:
             candidates.extend(
-                ("skills", path) for path in _skill_files(workspace, complete_roots=full_cleanup)
+                ("skills", path)
+                for path in _skill_files(
+                    workspace, complete_roots=full_cleanup, discovery=discovery
+                )
             )
         if "work" not in selected:
             continue
@@ -525,6 +562,10 @@ def build_plan(
         safe_path(filesystem_path(project_publisher))
         if filesystem_path(project_publisher).is_file():
             if not root_review:
+                import yaml
+
+                from evidenceforge.composition.publisher import PublisherIdentity
+
                 PublisherIdentity.model_validate(
                     yaml.safe_load(filesystem_path(project_publisher).read_text(encoding="utf-8"))
                 )
@@ -543,6 +584,8 @@ def build_plan(
                 child = parent / physical.name
                 safe_path(filesystem_path(child))
                 if filesystem_path(child).is_file() and child.suffix in {".yaml", ".yml"}:
+                    import yaml
+
                     try:
                         document = yaml.safe_load(
                             filesystem_path(child).read_text(encoding="utf-8")

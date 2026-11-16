@@ -66,6 +66,7 @@ class WizardControls:
         self.checks = dict(zip(("private", "skills", "work"), controls[:3], strict=True))
         self.review = controls[3]
         self.bar = controls[4]
+        self._marquee: bool | None = None
         child = _function("user32", "IsChild", wt.BOOL, [wt.HWND, wt.HWND])
         if _pid(wizard) != process or _pid(page) != process or not child(wizard, page):
             raise StudioStateError("Cleanup page changed its owner")
@@ -124,9 +125,15 @@ class WizardControls:
         )
         if value:
             self.progress(CleanupProgress(phase="removing"))
+        elif self._marquee is not None:
+            self.progress(CleanupProgress(phase="removing", total=1))
+            self._marquee = None
 
     def progress(self, value: CleanupProgress) -> None:
         """Use real phase counts, or marquee activity when the total is unknown."""
+        marquee = value.total is None
+        if marquee and self._marquee is True:
+            return  # Restarting PBM_SETMARQUEE on every report resets the animation.
         get = _function("user32", "GetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int])
         set_style = _function("user32", "SetWindowLongW", wt.LONG, [wt.HWND, ctypes.c_int, wt.LONG])
         send = _function(
@@ -137,10 +144,12 @@ class WizardControls:
             set_style(self.bar, -16, style | 0x8)  # PBS_MARQUEE
             send(self.bar, 0x40A, 1, 40)  # PBM_SETMARQUEE
         else:
-            send(self.bar, 0x40A, 0, 0)
-            set_style(self.bar, -16, style & ~0x8)
-            send(self.bar, 0x406, 0, 1000)  # PBM_SETRANGE32
+            if self._marquee is not False:
+                send(self.bar, 0x40A, 0, 0)
+                set_style(self.bar, -16, style & ~0x8)
+                send(self.bar, 0x406, 0, 1000)  # PBM_SETRANGE32
             send(self.bar, 0x402, min(1000, value.completed * 1000 // value.total), 0)
+        self._marquee = marquee
 
     def commit_requested(self) -> bool:
         requested = bool(_property(self.page, "Commit"))
@@ -304,6 +313,51 @@ class AccountChannel:
             self.process.wait(timeout=5)
 
 
+class BackgroundChannel:
+    """Own helper startup and shutdown off the wizard's responsive polling loop."""
+
+    def __init__(self, factory: Callable[[], Channel]) -> None:
+        self.replies: queue.Queue[CleanupReply] = queue.Queue()
+        self.closed = threading.Event()
+        self.inner: Channel | None = None
+        self.thread = threading.Thread(target=self._run, args=(factory,), name="cleanup-startup")
+        self.thread.start()
+
+    @property
+    def execution_pending(self) -> bool:
+        return self.inner is not None and self.inner.execution_pending
+
+    def _run(self, factory: Callable[[], Channel]) -> None:
+        try:
+            self.inner = factory()
+            while not self.closed.is_set():
+                self.inner.check()
+                try:
+                    reply = self.inner.replies.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                self.replies.put(reply)
+        except (OSError, ValueError, EvidenceForgeError, psutil.Error) as error:
+            self.replies.put(CleanupReply(state="error", revision=0, text=str(error)))
+        finally:
+            if self.inner is not None:
+                self.inner.close()
+
+    def send(
+        self, action: str, revision: int, categories: set[Category], plan_id: str | None = None
+    ) -> None:
+        if self.inner is None or self.closed.is_set():
+            raise StudioStateError("Cleanup helper is unavailable; cancel and retry")
+        self.inner.send(action, revision, categories, plan_id)
+
+    def check(self) -> None:
+        """The owned background thread checks the helper even during page warmup."""
+
+    def close(self) -> None:
+        self.closed.set()
+        self.thread.join()  # Reap even a helper whose constructor finishes after Cancel.
+
+
 def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = AccountChannel) -> None:
     """Drive native NSIS controls and confirm selected content before deletion."""
     channel: Channel | None = None
@@ -314,9 +368,11 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
     connected = False
     submitted = False
     applying = False
+    startup_error: str | None = None
     try:
         ui.text("All user data and skills will be preserved unless you select an option above.")
         ui.ready(True)
+        channel = BackgroundChannel(channel_factory)
         while ui.alive() or applying:
             try:
                 if ui.alive() and not applying:
@@ -327,19 +383,16 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                         receipt = None
                         confirmation_text = ""
                         submitted = False
-                        if not choices and channel is not None:
-                            channel.close()
-                            channel = None
-                            connected = False
                         ui.ready(not choices)
                         ui.text(
                             "Checking selected folders… You can change the choices or cancel."
                             if choices
                             else "All user data and skills will be preserved. Only the application will be uninstalled."
                         )
-                    if selected and channel is None:
-                        channel = channel_factory()
-                    if selected and connected and not submitted:
+                    if selected and startup_error is not None and not submitted:
+                        ui.error(startup_error)
+                        submitted = True
+                    if connected and not submitted:
                         channel.send("prepare", revision, selected)
                         submitted = True
                     # NSIS disables Next immediately on every click. Two clicks
@@ -388,7 +441,10 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                             if reply.state == "removing":
                                 if applying and ui.alive() and reply.progress is not None:
                                     ui.progress(reply.progress)
-                                    ui.text(reply.progress.message.split("\n", 1)[0])
+                                    status = reply.progress.message.split("\n", 1)[0]
+                                    if reply.progress.total is None and reply.progress.completed:
+                                        status += f" {reply.progress.completed:,} items removed."
+                                    ui.text(status)
                                 continue
                             if reply.state == "applied":
                                 applying = False
@@ -416,6 +472,10 @@ def run_wizard(ui: WizardControls, channel_factory: Callable[[], Channel] = Acco
                                             "Waiting for the selected cleanup to stop. Its acknowledgement was lost; application files will be preserved until its outcome can be checked."
                                         )
                                     continue
+                                if reply.revision == 0:
+                                    startup_error = reply.text
+                                    if not selected:
+                                        continue
                                 receipt = None
                                 applying = False
                                 if ui.alive():

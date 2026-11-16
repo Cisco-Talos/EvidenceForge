@@ -62,6 +62,7 @@ def test_new_selection_cancels_inventory_and_only_latest_receipt_can_execute(
         report_target: Callable[[Path], None],
         full_cleanup: bool,
         root_review: bool,
+        discovery: object,
     ) -> CleanupPlan:
         if categories == {"private"}:
             entered.set()
@@ -379,3 +380,127 @@ def test_selection_changed_during_confirmation_cannot_execute_old_approval(
 def test_worker_rejects_an_unrelated_controller_before_opening_user_state() -> None:
     with pytest.raises(StudioStateError, match="controller"):
         worker("not-a-pipe", -1, "other-account")
+
+
+def test_background_startup_keeps_page_active_and_reaps_late_helper(tmp_path: Path) -> None:
+    locations = _locations(tmp_path)
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    page = FakePage()
+
+    class SlowChannel(LocalChannel):
+        def __init__(self) -> None:
+            entered.set()
+            assert release.wait(3)
+            super().__init__(locations)
+
+        def close(self) -> None:
+            super().close()
+            closed.set()
+
+    thread = threading.Thread(target=run_wizard, args=(page, SlowChannel))
+    thread.start()
+    try:
+        assert entered.wait(2)
+        assert page.enabled and not page.applying
+        page.current = {"private"}
+        _wait(lambda: "Checking selected folders" in page.review)
+        page.current = set()
+        _wait(lambda: page.enabled and "Only the application" in page.review)
+        page.open = False  # Cancel before the constructor has finished.
+        release.set()
+        thread.join(5)
+        assert closed.is_set() and not thread.is_alive()
+        assert not page.errors and not page.finished
+    finally:
+        release.set()
+        page.open = False
+        thread.join(5)
+
+
+def test_clear_and_reselect_reuses_helper_but_revokes_old_receipt(tmp_path: Path) -> None:
+    locations = _locations(tmp_path)
+    page = FakePage()
+    calls: list[LocalChannel] = []
+
+    def factory() -> LocalChannel:
+        channel = LocalChannel(locations)
+        calls.append(channel)
+        return channel
+
+    thread = threading.Thread(target=run_wizard, args=(page, factory))
+    thread.start()
+    try:
+        _wait(lambda: len(calls) == 1)
+        page.current = {"private"}
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
+        receipt = calls[0].session.plan_id
+        assert receipt
+        page.current = set()
+        _wait(lambda: calls[0].session.plan_id is None)
+        page.current = {"private"}
+        _wait(lambda: page.enabled and page.review.startswith("Ready."))
+        assert calls[0].session.plan_id not in (None, receipt)
+        assert len(calls) == 1
+    finally:
+        page.open = False
+        thread.join(5)
+    assert not thread.is_alive() and not page.confirmations
+
+
+@pytest.mark.parametrize("select_content", [False, True])
+def test_warmup_failure_does_not_block_application_only_uninstall(select_content: bool) -> None:
+    page = FakePage()
+    failed = threading.Event()
+
+    def factory() -> LocalChannel:
+        failed.set()
+        raise OSError("test helper unavailable")
+
+    thread = threading.Thread(target=run_wizard, args=(page, factory))
+    thread.start()
+    try:
+        assert failed.wait(2)
+        time.sleep(0.15)  # Allow the queued startup failure to reach the idle page.
+        assert page.enabled and not page.errors
+        if select_content:
+            page.current = {"private"}
+            _wait(lambda: bool(page.errors))
+            assert "test helper unavailable" in page.errors[-1]
+            assert not page.enabled
+            page.current = set()
+            _wait(lambda: page.enabled)
+        page.commit = True
+        _wait(lambda: page.finished)
+    finally:
+        page.open = False
+        thread.join(5)
+    assert not thread.is_alive() and not page.confirmations
+
+
+def test_progress_animation_does_not_restart_on_each_removal_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.studio import windows_uninstall_wizard as wizard
+
+    sent: list[tuple[int, int, int]] = []
+
+    def function(library: str, name: str, result: object, arguments: list[object]) -> Callable:
+        def call(*values: int) -> int:
+            if name == "SendMessageW":
+                sent.append((values[1], values[2], values[3]))
+            return 0
+
+        return call
+
+    monkeypatch.setattr(wizard, "_function", function)
+    page = object.__new__(WizardControls)
+    page.bar = 123
+    page._marquee = None
+    for count in range(25):
+        page.progress(CleanupProgress(phase="removing", completed=count))
+    assert sent == [(0x40A, 1, 40)]
+    page.progress(CleanupProgress(phase="complete", completed=1, total=1))
+    assert sent[-3:] == [(0x40A, 0, 0), (0x406, 0, 1000), (0x402, 1000, 0)]
+    page.progress(CleanupProgress(phase="removing"))  # Retry starts one new animation.
+    page.progress(CleanupProgress(phase="removing", completed=1))
+    assert sent.count((0x40A, 1, 40)) == 2

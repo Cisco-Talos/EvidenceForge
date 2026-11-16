@@ -225,3 +225,48 @@ def test_native_running_runtime_lease_blocks_cleanup_before_any_removal(
         assert sentinel.exists()
     finally:
         os.close(descriptor)
+
+
+def test_session_reuses_bundled_layout_but_rediscovers_changed_user_data(
+    locations: UserLocations, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from evidenceforge.cli import install_skills
+
+    collected: list[Path] = []
+    original = install_skills._collect_source_files
+
+    def collect(root: Path) -> dict[str, Path]:
+        collected.append(root)
+        return original(root)
+
+    monkeypatch.setattr(install_skills, "_collect_source_files", collect)
+    private_directory(locations.private)
+    settings = locations.private / "settings.json"
+    first, second = locations.profile / "First", locations.profile / "Second"
+    for root in (first, second):
+        write(root / ".eforge/artifacts/test.yaml")
+    discovery = cleanup.CleanupDiscovery()
+    for workspace in (first, second):
+        settings.write_text(
+            json.dumps({"schema_version": 4, "settings": {"workspace": str(workspace)}})
+        )
+        plan = build_plan(locations, {"skills", "work"}, root_review=True, discovery=discovery)
+        assert workspace in plan.workspaces
+        assert (second if workspace == first else first) not in plan.workspaces
+        assert any(target.path == workspace / ".eforge/artifacts" for target in plan.targets)
+    assert len(collected) == 1
+    # Cached package names grant no authority over a root replaced by a link.
+    root = second / ".eforge/artifacts"
+    (root / "test.yaml").unlink()
+    root.rmdir()
+    external = locations.profile / "Unrelated"
+    external.mkdir()
+    try:
+        root.symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("Creating a directory link requires Windows developer mode")
+    with pytest.raises(StudioStateError):
+        build_plan(locations, {"skills", "work"}, root_review=True, discovery=discovery)
+    assert external.is_dir() and len(collected) == 1

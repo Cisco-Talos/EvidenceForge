@@ -17,6 +17,7 @@ from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.windows_uninstall import (
     LABELS,
     Category,
+    CleanupDiscovery,
     CleanupPlan,
     CleanupProgress,
     UserLocations,
@@ -62,6 +63,7 @@ class ReviewSession:
         self.plan: CleanupPlan | None = None
         self.plan_id: str | None = None
         self.categories: set[Category] = set()
+        self.discovery = CleanupDiscovery()
 
     def prepare(self, command: CleanupCommand) -> None:
         """Invalidate the previous receipt immediately, then inventory asynchronously."""
@@ -75,6 +77,9 @@ class ReviewSession:
             self.plan = None
             self.plan_id = None
             self.categories = command.categories.copy()
+
+        if not command.categories:
+            return  # Invalidate/cancel the old review without closing the warm helper.
 
         last_progress = time.monotonic()
         checks = 0
@@ -110,6 +115,7 @@ class ReviewSession:
                 report_target=report_target,
                 full_cleanup=command.categories == set(LABELS),
                 root_review=True,
+                discovery=self.discovery,
             )
 
         def completed(future: Future[CleanupPlan]) -> None:
