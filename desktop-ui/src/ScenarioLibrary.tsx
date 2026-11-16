@@ -74,7 +74,7 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, ex
       <button className="scenario-open col-name" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
         <span className={`scenario-symbol ${draft ? "draft" : ""}`}>{draft ? <PencilLine size={16} /> : <FileCode2 size={16} />}</span>
         <span className="scenario-row-copy">
-          <span className="scenario-row-title"><strong title={name}>{name}</strong>{(item?.version || child) && <span className="scenario-version">{item?.version && item.version !== "Draft" ? item.version : "Draft"}</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
+          <span className="scenario-row-title"><strong title={name}>{name}</strong>{(item?.version || child) && <span className="scenario-version">{item?.version && item.version !== "Draft" ? item.version : "Draft"}</span>}{family && family.drafts > 0 && <DraftCount count={family.drafts} />}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
           {item && <SearchExcerpts item={item} />}
         </span>
@@ -114,4 +114,9 @@ export function FamilyToggle({ name, count, open, onToggle }: { name: string; co
   return <button type="button" className="family-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} ${count} other ${count === 1 ? "version" : "versions"} of ${name}`} title={`${count} other ${count === 1 ? "version" : "versions"}`} onClick={onToggle}>
     <ChevronRight size={13} aria-hidden="true" className={open ? "open" : ""} /><span>+{count}</span>
   </button>;
+}
+
+/** A collapsed family row's hint that it holds unpublished drafts (open them with the expander). */
+export function DraftCount({ count }: { count: number }) {
+  return <span className="draft-count" title={`${count} unpublished ${count === 1 ? "draft" : "drafts"}; expand the row to open ${count === 1 ? "it" : "them"}`}>{count} {count === 1 ? "draft" : "drafts"}</span>;
 }

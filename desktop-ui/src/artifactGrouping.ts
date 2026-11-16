@@ -28,7 +28,11 @@ export function latestPublishedItems(items: CatalogItem[], groups?: ArtifactGrou
 }
 
 /** One library row per artifact family: its newest version, and the other versions and drafts. */
-export interface ArtifactFamily { key: string; primary: CatalogItem; others: CatalogItem[] }
+export interface ArtifactFamily {
+  key: string; primary: CatalogItem; others: CatalogItem[];
+  /** Unpublished drafts among `others`, surfaced on the collapsed row. */
+  drafts: number;
+}
 
 /** A comparable release version: the published version, else a non-draft authored version. */
 function releaseVersion(item: CatalogItem, groups?: ArtifactGroups): string {
@@ -58,6 +62,7 @@ export function artifactFamilies(items: CatalogItem[], groups?: ArtifactGroups):
     const releases = [...published, ...legacy];
     const drafts = members.filter((item) => !releaseVersion(item, groups)).sort((a, b) => b.modified_at - a.modified_at || a.id.localeCompare(b.id));
     const primary = releases[0] || drafts[0];
-    return { key, primary, others: [...drafts, ...releases].filter((item) => item.id !== primary.id) };
+    const others = [...drafts, ...releases].filter((item) => item.id !== primary.id);
+    return { key, primary, others, drafts: others.filter((item) => !releaseVersion(item, groups)).length };
   });
 }

@@ -167,12 +167,24 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     const collapsed = !sidebarCollapsed; setSidebarCollapsed(collapsed);
     void api.request("/v1/chat/preferences", "PUT", { workspace: snapshot.settings.workspace, sidebar_collapsed: collapsed }).catch((error) => { setSidebarCollapsed(!collapsed); onError(String(error)); });
   }
+  // Evaluate the newest completed run of the current revision, as its run row's Evaluate does.
+  const evaluationRunning = evaluations.some((job) => job.generation_id === latestCompleted?.id && ["queued", "running", "paused"].includes(job.status));
+  const evaluateAction: ObjectAction = {
+    id: "evaluate", label: "Evaluate", group: "work", disabled: busy || !latestCompleted || evaluationRunning,
+    reason: !latestCompleted ? "Complete a generation of the current revision first" : evaluationRunning ? "This run is already being evaluated" : "An operation is in progress",
+    run: async () => {
+      if (!latestCompleted) return;
+      try { await api.request("/v1/jobs/evaluations", "POST", { generation_id: latestCompleted.id }); await onChanged(); }
+      catch (error) { onError(String(error)); }
+    },
+  };
   const steps = readinessSteps({ starter, conversations: conversations.length, authoring: activeChats > 0, environment: environmentState(health, environmentRefreshing), states: [validationStatus, states[1], states[2]] });
   const exportBundle = sharedActions.find((entry) => entry.id === "export-bundle");
   const next = item.kind === "scenario" ? nextStep(steps, {
     author: { id: "author", label: "Continue authoring", group: "work", run: () => preferred ? onOpenConversation(preferred) : onCreateConversation() },
     environment: { id: "review-environment", label: "Review environment", group: "work", run: () => setTab("environment") },
     validate: validateAction, fix: fixAction, generate: generateAction,
+    evaluate: evaluateAction, reevaluate: { ...evaluateAction, id: "reevaluate", label: "Re-evaluate" },
     viewRun: { id: "view-run", label: "Open latest run", group: "work", disabled: !latestGeneration, reason: "No runs yet", run: () => onNavigate(latestEvaluation && latestEvaluation.status !== "completed" ? "scoring" : "generation", (latestEvaluation && latestEvaluation.status !== "completed" ? latestEvaluation : latestGeneration)?.id ?? null) },
     export: exportBundle,
   }, validationIssues.length > 0) : null;
@@ -209,7 +221,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       </div>
       {!chatFocus && <div className="workspace-description-area"><p ref={description} className={`workspace-description ${descriptionExpanded ? "expanded" : ""}`}>{item.description || "No description in the source file."}</p>{descriptionOverflow && <button className="workspace-description-more" aria-expanded={descriptionExpanded} onClick={() => setDescriptionExpanded(!descriptionExpanded)}>{descriptionExpanded ? "Show less" : "Show full description"}</button>}</div>}
     </header>
-    {!chatFocus && item.kind === "scenario" && <ReadinessPipeline steps={steps} next={next} hint={next?.id === "generate" ? sizeLabel : undefined} onStep={openStep} />}
+    {!chatFocus && item.kind === "scenario" && <ReadinessPipeline steps={steps} next={next} hint={next?.id === "generate" ? sizeLabel : (next?.id === "evaluate" || next?.id === "reevaluate") && latestCompleted ? `Latest run · ${formatTime(latestCompleted.started_at || latestCompleted.submitted_at || 0)}` : undefined} onStep={openStep} />}
     {!chatFocus && <div className="workspace-tablist" role="tablist" aria-label="Workspace sections">{tabs.map(([id, label, count, tone]) => <button key={id} type="button" role="tab" aria-label={label} aria-selected={(tab ?? "overview") === id} onClick={() => setTab(id === "overview" ? null : id)}>{label}{count ? <span className={`tab-count ${tone || ""}`} aria-hidden="true">{count}</span> : null}</button>)}</div>}
     <div className={`workspace-sections ${tab ? "single-section" : "overview-grid"}`} ref={list} hidden={chatFocus}>
       {!tab && <ArtifactLifecycle starter={starter} item={item} api={api} onChanged={onChanged} onOpen={onOpenArtifact} compact onProperties={() => onProperties?.("versions")} />}

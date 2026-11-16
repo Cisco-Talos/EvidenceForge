@@ -352,7 +352,9 @@ For a first run:
 
 A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Environment →
 Validate → Generate → Evaluate**, each with its current state, and one button for the next useful
-step, such as **Validate**, **Generate** with its size estimate, or **Export bundle…**. Select a step
+step, such as **Validate**, **Generate** with its size estimate, **Evaluate** for the latest completed
+run, or **Export bundle…**. If an evaluation job fails, the button offers **Re-evaluate**; a failed
+acceptance instead opens the run's scorecard, since evaluating again gives the same result. Select a step
 to open its tab. Overview summarizes each section as a card; a card or tab opens that section on its
 own. The source file path, schema and digests are in **Properties… → Technical details**.
 
@@ -362,7 +364,8 @@ click a column heading, or use **Views** to sort by name, by most recently updat
 project. Groups are headings, never collapsed folders. **Filter** holds every filter for the current
 library, including hidden items and pack type, author, version and location. Each scenario or pack
 appears once, headlined by its newest release; select its **+N** expander to list its other versions
-and drafts.
+and drafts. An orange **N draft** badge marks rows that hold unpublished drafts. Library counts count
+these rows, not individual versions.
 **Views** also applies and saves named views of a search, its filters, the ordering and the project.
 Studio rescans workspace files when you open a library or return to the app; use **Refresh library**
 in the command menu (⌘K) to rescan immediately. Bundles and asset lists use the same Search, Filter

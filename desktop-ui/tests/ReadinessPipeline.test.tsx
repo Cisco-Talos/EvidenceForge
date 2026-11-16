@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 const op = (label: string, state: OperationState["state"], detail = ""): OperationState => ({ label, state, detail });
 const action = (id: string) => ({ id, label: id, group: "work" as const, run: vi.fn() });
-const actions: NextStepActions = { author: action("author"), environment: action("environment"), validate: action("validate"), fix: action("fix"), generate: action("generate"), viewRun: action("view-run"), export: action("export") };
+const actions: NextStepActions = { author: action("author"), environment: action("environment"), validate: action("validate"), fix: action("fix"), generate: action("generate"), viewRun: action("view-run"), export: action("export"), evaluate: action("evaluate"), reevaluate: action("reevaluate") };
 const steps = (overrides: Partial<{ starter: boolean; environment: OperationState; states: OperationState[] }> = {}) => readinessSteps({
   starter: false, conversations: 2, authoring: false, environment: op("Environment", "success"),
   states: [op("Validation", "none"), op("Generation", "none"), op("Evaluation", "none")], ...overrides,
@@ -36,7 +36,12 @@ test("the next step follows the pipeline in order and skips work in progress", (
   expect(nextStep(steps({ states: [op("Validation", "stale"), op("Generation", "success"), op("Evaluation", "success")] }), actions, false)?.id).toBe("validate");
   expect(nextStep(steps({ states: [op("Validation", "working"), op("Generation", "none"), op("Evaluation", "none")] }), actions, false)).toBeNull();
   expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "working"), op("Evaluation", "none")] }), actions, false)?.id).toBe("view-run");
-  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "none")] }), actions, false)?.id).toBe("view-run");
+  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "none")] }), actions, false)?.id).toBe("evaluate");
+  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "stale")] }), actions, false)?.id).toBe("evaluate");
+  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "error", "Evaluation failed: crashed")] }), actions, false)?.id).toBe("reevaluate");
+  // A failed acceptance is a real result, so the strip points at the scorecard rather than re-running.
+  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "error", "Failed acceptance · 92/100.")] }), actions, false)?.id).toBe("view-run");
+  expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "working")] }), actions, false)?.id).toBe("view-run");
   expect(nextStep(steps({ states: [op("Validation", "success"), op("Generation", "success"), op("Evaluation", "success")] }), actions, false)?.id).toBe("export");
 });
 

@@ -1,7 +1,7 @@
 import { SearchExcerpts } from "./SearchExcerpts";
 import { artifactTitle, draftTitle } from "./artifactNaming";
 import { artifactFamilies, artifactGroup, artifactGroupLabel, type ArtifactFamily, type ArtifactGroups } from "./artifactGrouping";
-import { FamilyToggle } from "./ScenarioLibrary";
+import { DraftCount, FamilyToggle } from "./ScenarioLibrary";
 import { Fragment, type DragEvent, type ReactNode } from "react";
 import { Building2, Factory, Folder, GripVertical, PencilLine } from "lucide-react";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
@@ -55,11 +55,11 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
     <time className="col-updated pack-cell" title={new Date(draft.updated_at * 1000).toLocaleString()}>{formatTime(draft.updated_at)}</time>
     <div className="col-actions"><DraftObjectMenu draft={draft} projects={projects} onOpen={() => onOpenDraft(draft)} onMove={(id) => onMoveDraft(draft, id)} onDelete={() => onDeleteDraft(draft)} /></div>
   </li>;
-  const renderPack = (item: CatalogItem, toggle: ReactNode, child = false) => <li key={item.id} data-artifact-identity={artifactGroupLabel(artifactGroup(item, artifactGroups))} className={`pack-row library-row-grid draggable-pack ${item.hidden ? "hidden-pack" : ""} ${child ? "family-member" : ""}`} draggable onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}>
+  const renderPack = (item: CatalogItem, toggle: ReactNode, child = false, drafts = 0) => <li key={item.id} data-artifact-identity={artifactGroupLabel(artifactGroup(item, artifactGroups))} className={`pack-row library-row-grid draggable-pack ${item.hidden ? "hidden-pack" : ""} ${child ? "family-member" : ""}`} draggable onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}>
     <span className="pack-drag-handle col-drag" aria-hidden="true" title={`Drag ${item.name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); onDragStart(event, item); }}><GripVertical size={14} /></span>
     <span className="col-expand">{toggle}</span>
     <button className="pack-open col-name" aria-label={`Open ${artifactTitle(item)} ${item.version}`} onClick={() => onOpen(item)}><span className={`scenario-symbol pack-kind-${item.kind === "organization_pack" ? "organization" : "industry"}`}><PackKindIcon kind={item.kind} /></span><span className="pack-row-copy">
-      <strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}{item.hidden && <span className="draft-chip">Hidden</span>}</strong>
+      <strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}{item.hidden && <span className="draft-chip">Hidden</span>}{drafts > 0 && <DraftCount count={drafts} />}</strong>
       <small title={item.description}>{item.description || "No description yet"}</small><SearchExcerpts item={item} />
       <small className="pack-row-meta"><span title={`Publisher: ${item.publisher || "not recorded"}`}>By {item.publisher_display_name || item.publisher || "Unknown author"}</span><span>·</span><span title={item.pack_source === "bundled" ? "Included with EvidenceForge" : "Authored or imported in this workspace"}>{item.pack_source === "bundled" ? "Bundled" : "Workspace"}</span></small>
     </span></button>
@@ -82,7 +82,7 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
     const family = row.family!;
     const open = expandedFamilies.includes(family.key);
     return <Fragment key={row.id}>
-      {renderPack(row.item, family.others.length > 0 && <FamilyToggle name={row.name} count={family.others.length} open={open} onToggle={() => onToggleFamily(family.key, !open)} />)}
+      {renderPack(row.item, family.others.length > 0 && <FamilyToggle name={row.name} count={family.others.length} open={open} onToggle={() => onToggleFamily(family.key, !open)} />, false, family.drafts)}
       {open && family.others.map((other) => renderPack(other, null, true))}
     </Fragment>;
   });

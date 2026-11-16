@@ -726,7 +726,8 @@ Studio-wide rewrite unless the task asks for it.
   `font-variant-numeric: tabular-nums` for sizes, counts, durations and times.
 - Spacing (padding, margin, gap) is in multiples of 4px; only 0–2px hairline offsets are exempt. Radii: 6 (controls), 10 (cards), 14 (dialogs). Use two shadows
   (popover, dialog).
-- The accent marks the single primary action on a surface and the current selection. Do not use
+- The accent marks the single primary action on a surface and the current selection. The one other
+  use is the small badge that flags unpublished drafts on a collapsed library family row. Do not use
   it for decoration. Warning and error colors are only for real warnings and errors.
 
 ### Layout and information hierarchy

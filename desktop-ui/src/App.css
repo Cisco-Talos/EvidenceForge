@@ -1744,3 +1744,5 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .pack-type { display: inline-flex; align-items: center; gap: 6px; }
 .pack-type svg { color: var(--text-3); }
 .conversation-menu [role="menuitem"].object-action-item:has(> svg) { display: flex; align-items: center; gap: 8px; }
+/* Unpublished drafts are unfinished work, so they borrow the accent (see AGENTS.md exception). */
+.draft-count { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 7px; border: 1px solid var(--accent-line); border-radius: var(--radius-pill); color: var(--accent); background: var(--accent-soft); font-size: var(--text-xs); font-weight: 650; white-space: nowrap; }

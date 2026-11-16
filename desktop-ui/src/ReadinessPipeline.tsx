@@ -50,6 +50,8 @@ export function readinessSteps({ starter, conversations, authoring, environment,
 export interface NextStepActions {
   author: ObjectAction; environment: ObjectAction; validate: ObjectAction; fix: ObjectAction;
   generate: ObjectAction; viewRun: ObjectAction; export?: ObjectAction;
+  /** Evaluate the latest completed run; `reevaluate` retries an evaluation job that failed. */
+  evaluate: ObjectAction; reevaluate: ObjectAction;
 }
 
 /** The single most useful action for the current readiness, in pipeline order. */
@@ -61,6 +63,10 @@ export function nextStep(steps: PipelineStep[], actions: NextStepActions, hasFin
   if (tone.validate === "err") return hasFindings ? actions.fix : actions.validate;
   if (tone.validate === "todo" || (tone.validate === "warn" && steps[2].status === "Stale")) return actions.validate;
   if (tone.generate !== "ok") return actions.generate;
+  const evaluation = steps[4].status;
+  if (tone.evaluate === "todo" || evaluation === "Stale") return actions.evaluate;
+  // A failed acceptance is a real result: re-running gives the same answer, so show the scorecard.
+  if (tone.evaluate === "err" && evaluation !== "Failed acceptance") return actions.reevaluate;
   if (tone.evaluate !== "ok") return actions.viewRun;
   return actions.export || null;
 }
