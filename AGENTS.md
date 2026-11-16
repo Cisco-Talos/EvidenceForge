@@ -745,9 +745,14 @@ Studio-wide rewrite unless the task asks for it.
   sit beside it. Libraries refresh automatically on entry and focus; do not add manual refresh
   buttons.
 - The scenario workspace shows readiness as a labeled pipeline (Author → Environment → Validate →
-  Generate → Evaluate). It promotes exactly one next action as the primary button. Derive step
-  state from the existing `scenarioStates`/`environmentState` helpers; do not add parallel
-  status logic.
+  Generate → Evaluate) via `ReadinessPipeline` (`src/ReadinessPipeline.tsx`). It promotes exactly
+  one next action (`nextStep`) as the surface's only primary button; section headers must not
+  repeat the promoted action. Derive step state from the existing `scenarioStates`/
+  `environmentState` helpers; do not add parallel status logic.
+- Workspace sections are tabs over an Overview: Overview shows each `WorkspaceSection` header as a
+  card, and a tab or card shows that one section expanded. Keep hidden sections mounted (`hidden`)
+  so in-progress inspection survives tab switches. Chat focus remains the dedicated conversation
+  view. Job and run history lives in **Activity**, filtered by a segmented control.
 - **Progressive disclosure:**
   - Technical identifiers live in Properties → Technical or in a collapsed "Technical details"
     disclosure, never in headers, rows or titles. This covers file paths, digests, UUIDs, run

@@ -12,7 +12,7 @@ import { BundleLibrary } from "./BundleLibrary";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { JobSections } from "./JobSections";
-import { completedSuccessfully } from "./jobOutcomes";
+import { jobDisplayStatus } from "./jobOutcomes";
 import { SettingsView } from "./SettingsView";
 import { CodexStatusIndicator } from "./CodexStatusIndicator";
 import { RuntimeCleanupNotice } from "./RuntimeCleanupNotice";
@@ -56,11 +56,12 @@ import "./App.css";
 import { revealAction, revealLabel, revealPath, canReveal } from "./RevealInFinder";
 
 type Section = "scenarios" | "packs" | "bundles" | "jobs" | "settings";
+type ActivityFilter = "all" | "running" | "queued" | "attention" | "done";
 type CloseProblem = { type: "checkpoint_disabled" | "confirm_delete" | "waiting"; jobIds: string[]; failures?: { id: string; detail: string }[] };
 
 const sectionTitles: Record<Section, string> = {
   scenarios: "Scenarios", packs: "Packs",
-  bundles: "Bundles", jobs: "Job center", settings: "Settings",
+  bundles: "Bundles", jobs: "Activity", settings: "Settings",
 };
 
 function App() {
@@ -143,6 +144,7 @@ function App() {
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [fixDraft, setFixDraft] = useState<{ conversationId: string; text: string } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
 
   useLibraryRecall(api, snapshot?.settings.workspace, section, {
     search, project_id: selectedProjectId, show_hidden: showHidden, sort: scenarioSort, expanded_groups: expandedGroups,
@@ -203,6 +205,18 @@ function App() {
   const workingChats = snapshot?.conversations.filter((chat) => chat.active && !chat.needs_attention && codexHealthy) || [];
   const attentionChats = snapshot?.conversations.filter((chat) => chat.active && chat.needs_attention) || [];
   const uncertainChats = snapshot?.conversations.filter((chat) => chat.active && !chat.needs_attention && !codexHealthy) || [];
+  const liveJobs = snapshot?.jobs.filter((job) => ["running", "paused"].includes(job.status)) || [];
+  const queuedJobs = snapshot?.jobs.filter((job) => job.status === "queued") || [];
+  const failedJobs = snapshot?.jobs.filter((job) => job.status === "failed" || jobDisplayStatus(job) === "failed") || [];
+  const doneJobs = snapshot?.jobs.filter((job) => ["completed", "stopped", "cancelled"].includes(job.status) && jobDisplayStatus(job) !== "failed") || [];
+  const activityFilters: [ActivityFilter, string, number][] = [
+    ["all", "All", 0], ["running", "Running", liveJobs.length + workingChats.length], ["queued", "Queued", queuedJobs.length],
+    ["attention", "Needs attention", attentionChats.length + uncertainChats.length + failedJobs.length], ["done", "Done", 0],
+  ];
+  const activityChats = activityFilter === "all" ? [...workingChats, ...attentionChats, ...uncertainChats]
+    : activityFilter === "running" ? workingChats : activityFilter === "attention" ? [...attentionChats, ...uncertainChats] : [];
+  const activityJobs = activityFilter === "all" ? snapshot?.jobs || [] : activityFilter === "running" ? liveJobs
+    : activityFilter === "queued" ? queuedJobs : activityFilter === "attention" ? failedJobs : doneJobs;
 
 
   const commands = [
@@ -602,7 +616,7 @@ function App() {
       await api.request("/v1/jobs/generations", "POST", { scenario_id: target.id });
       await studio.reload();
       setWorkspaceTarget("generation");
-      showNotice("Generation queued. Its progress is visible here and in Job center.");
+      showNotice("Generation queued. Its progress is visible here and in Activity.");
     } catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
   }
@@ -958,7 +972,7 @@ function App() {
         <button className={section === "packs" ? "selected" : ""} onClick={() => { setSection("packs"); setSelectedId(null); setDraftConversationId(null); }}><Layers3 size={18} /> Packs</button>
         <button className={section === "bundles" ? "selected" : ""} onClick={() => { setSection("bundles"); setSelectedId(null); setDraftConversationId(null); }}><FolderOpen size={18} /> Bundles</button>
         <div className="nav-rule" />
-        <button className={section === "jobs" ? "selected" : ""} onClick={() => { setSection("jobs"); setSelectedId(null); setDraftConversationId(null); }}><Activity size={18} /> Job center {activeJobs > 0 && <span className="nav-count">{activeJobs}</span>}</button>
+        <button className={section === "jobs" ? "selected" : ""} onClick={() => { setSection("jobs"); setSelectedId(null); setDraftConversationId(null); }}><Activity size={18} /> Activity {activeJobs > 0 && <span className="nav-count">{activeJobs}</span>}</button>
       </nav>
       <section className="sidebar-projects" aria-label="Projects"><div className="sidebar-heading"><span>Projects</span><button className="icon-button" aria-label="New project" title="New project" onClick={() => setProjectForm({ id: null, name: "", description: "", assignItemId: null })}><Plus size={14} /></button></div>
         <button className={`project-nav-row ${projectsActive && selectedProjectId === null ? "active" : ""}`} aria-label={section === "packs" ? "All packs" : "All scenarios"} onClick={() => showProject(null)}><Layers3 size={15} /><span>{section === "packs" ? "All packs" : "All scenarios"}</span><small>{scenarioCount}</small></button>
@@ -999,7 +1013,11 @@ function App() {
         onCreateConversation={() => void createConversation()} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
         onProjectChange={(id) => void assignProject(item, id)} onClone={() => item.kind === "scenario" ? beginScenarioClone(item) : void beginPackClone(item)} onExportPack={() => void exportPack(item)} onDeleteScenario={() => setDeletingScenario(item)} onDeletePack={() => setDeletingPack(item)} onHidden={() => void setItemHidden(item, !item.hidden)} onViewYaml={() => void viewYaml()} onImportPacks={() => setPackImportOpen(true)} onOpenPack={(entry) => { setSection("packs"); openItem(entry); }} onGenerate={startGeneration} onValidate={() => void validateItem()} onFix={() => void fixValidationInChat()} onPrepare={prepareEnvironmentChange} onDraftSubmitted={(conversationId) => setFixDraft((current) => current?.conversationId === conversationId ? null : current)} onChanged={studio.reload} onOpenArtifact={async (path) => { const items = await api.request<CatalogItem[]>("/v1/items"); const found = items.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} onError={setNotice} />}
 
-      {section === "jobs" && <div className="page"><div className="jobs-summary"><div><strong>{snapshot.jobs.filter((job) => job.status === "running").length}</strong><span>Running jobs</span></div><div><strong>{snapshot.jobs.filter((job) => job.status === "queued").length}</strong><span>Queued jobs</span></div><div><strong>{snapshot.jobs.filter((job) => completedSuccessfully(job) && !snapshot.removed_job_ids?.includes(job.id)).length}</strong><span>Completed jobs</span></div><div aria-label={`${workingChats.length} active chats`}><strong>{workingChats.length}</strong><span>Active chats</span></div>{attentionChats.length > 0 && <div aria-label={`${attentionChats.length} chats need input`}><strong>{attentionChats.length}</strong><span>Need input</span></div>}{uncertainChats.length > 0 && <div aria-label={`${uncertainChats.length} chats need reconnection`}><strong>{uncertainChats.length}</strong><span>Connection uncertain</span></div>}</div>{(workingChats.length > 0 || attentionChats.length > 0 || uncertainChats.length > 0) && <section className="chat-activity surface"><div className="surface-heading"><h2>Authoring activity</h2><span className="eyebrow">LIVE</span></div>{[...workingChats, ...attentionChats, ...uncertainChats].map((chat) => <div className="chat-activity-entry" key={chat.id}><button className="chat-activity-row" onClick={() => openActiveConversation(chat)}><span className={chat.needs_attention ? "attention-dot" : "active-pulse"} /><span><strong>{chat.title}</strong><small>{snapshot.items.find((entry) => entry.id === chat.item_id)?.name || "Draft"}</small></span><em>{chat.needs_attention ? "Needs input" : !codexHealthy ? "Connection uncertain" : "Working"}</em><ArrowUpRight size={16} /></button><ObjectMenu label={`Options for ${chat.title}`} actions={conversationActions(chat, openActiveConversation, (entry) => { setEditingConversation(entry); setEditingTitle(entry.title); }, setDeletingConversation)} /></div>)}</section>}{snapshot.jobs.length ? <JobSections jobs={snapshot.jobs} removedJobIds={snapshot.removed_job_ids || []} manageHistory nameFor={jobScenarioName} api={api} onError={setNotice} onChanged={studio.reload} /> : <EmptyState icon={<Activity size={28} />} title="No jobs yet">Start a generation from a scenario workspace.</EmptyState>}</div>}
+      {section === "jobs" && <div className="page activity-page">
+        <div className="library-toolbar"><div className="segmented" role="group" aria-label="Show activity">{activityFilters.map(([id, label, count]) => <button key={id} type="button" aria-pressed={activityFilter === id} aria-label={`${label}${count ? ` (${count})` : ""}`} onClick={() => setActivityFilter(id)}>{label}{count ? <span className="tab-count" aria-hidden="true">{count}</span> : null}</button>)}</div></div>
+        {activityChats.length > 0 && <section className="chat-activity surface" aria-label="Authoring activity"><div className="surface-heading"><h2>Authoring</h2></div>{activityChats.map((chat) => <div className="chat-activity-entry" key={chat.id}><button className="chat-activity-row" onClick={() => openActiveConversation(chat)}><span className={chat.needs_attention ? "attention-dot" : "active-pulse"} /><span><strong>{chat.title}</strong><small>{snapshot.items.find((entry) => entry.id === chat.item_id)?.name || "Draft"}</small></span><em>{chat.needs_attention ? "Needs input" : !codexHealthy ? "Connection uncertain" : "Working"}</em><ArrowUpRight size={16} /></button><ObjectMenu label={`Options for ${chat.title}`} actions={conversationActions(chat, openActiveConversation, (entry) => { setEditingConversation(entry); setEditingTitle(entry.title); }, setDeletingConversation)} /></div>)}</section>}
+        {activityJobs.length ? <JobSections jobs={activityJobs} removedJobIds={snapshot.removed_job_ids || []} manageHistory nameFor={jobScenarioName} api={api} onError={setNotice} onChanged={studio.reload} /> : !activityChats.length && <EmptyState icon={<Activity size={28} />} title={snapshot.jobs.length || activityFilter !== "all" ? "Nothing here right now" : "No activity yet"}>{activityFilter === "all" ? "Start a generation from a scenario workspace." : "Choose All to see every generation, evaluation and authoring turn."}</EmptyState>}
+      </div>}
       {section === "bundles" && <BundleLibrary snapshot={snapshot} api={api} onError={setNotice} onNotice={showNotice} onChanged={studio.reload} onOpenScenario={(entry) => { setSection("scenarios"); openItem(entry); }} />}
       {propertiesTarget && snapshot.items.find((entry) => entry.id === propertiesTarget.id) && <ArtifactPropertiesDialog key={`properties-${propertiesTarget.id}`} item={snapshot.items.find((entry) => entry.id === propertiesTarget.id)!} initialSection={propertiesTarget.section} snapshot={snapshot} api={api} onClose={() => setPropertiesTarget(null)} onChanged={studio.reload} onProjectChange={(projectId) => { const entry = snapshot.items.find((entry) => entry.id === propertiesTarget.id); if (entry) void assignProject(entry, projectId); }} onOpen={async (path) => { const entries = await api.request<CatalogItem[]>("/v1/items"); const found = entries.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} />}
       {section === "settings" && <div className="page settings-page"><SettingsView settings={snapshot.settings} paths={snapshot.paths} runtimeCleanup={snapshot.runtime_cleanup} publisherStatus={snapshot.publisher_status} api={api} onSaved={studio.reload} onError={setNotice} /></div>}

@@ -55,7 +55,7 @@ export function MissingScenarioSource({ item, conversations, jobs, api, onRecove
     </form>
     {active && <p className="muted">Finish or stop active chats and jobs before changing this entry.</p>}
     <p className="muted">{conversations.length} conversation{conversations.length === 1 ? "" : "s"} and {jobs.filter((job) => job.kind === "generation").length} runs retained.</p>
-    {!!jobs.length && <button className="button-quiet" onClick={onRuns}>View retained runs in Job center</button>}
+    {!!jobs.length && <button className="button-quiet" onClick={onRuns}>View retained runs in Activity</button>}
     {error && <p className="field-error" role="alert">{error}</p>}
     <ActionShortcut action={removalAction} />
     {confirmRemove && <ConfirmModal title="Remove from Studio?" confirmLabel="Remove from Studio" busy={working} confirmDisabled={active} onCancel={() => setConfirmRemove(false)} onConfirm={() => remove()}><p>This removes the stale registration. Source files, generated bundles, saved conversations and Codex threads are kept, but the conversations no longer appear under this entry.</p></ConfirmModal>}

@@ -341,11 +341,17 @@ preserved by clean uninstall and should be managed/backed up separately.
 For a first run:
 
 1. Import an existing scenario, or use **New scenario** to begin a Codex-assisted conversation.
-2. Open its **Environment** section to inspect systems, users, configuration, and exact pack
+2. Open its **Environment** tab to inspect systems, users, configuration, and exact pack
    dependencies. Import any missing packs before generation.
 3. Validate the scenario and review the resource forecast and available disk space.
-4. Start generation from **Runs**, then monitor it there or in the job center.
+4. Start generation from **Runs**, then monitor it there or in **Activity**.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
+
+A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Environment →
+Validate → Generate → Evaluate**, each with its current state, and one button for the next useful
+step, such as **Validate**, **Generate** with its size estimate, or **Export bundle…**. Select a step
+to open its tab. Overview summarizes each section as a card; a card or tab opens that section on its
+own. The source file path, schema and digests are in **Properties… → Technical details**.
 
 The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
 or drag a row onto a project to move it there. **Scenarios** and **Packs** are single sortable tables:
@@ -422,7 +428,7 @@ to that source. Authoring and resumed conversations edit this exact draft in pla
 `draft.json`, includes and companion files together; moving only the YAML can leave an orphaned
 managed receipt.
 
-An untouched scaffold shows **Ready to author** and **Continue authoring**. Generate and Publish
+An untouched scaffold shows **Author: Not started** and **Continue authoring** in the readiness strip. Generate and Publish
 remain disabled, and automatic resource forecasts wait until its authored content changes.
 This check uses the managed scaffold's content fingerprint, not its inline user/system counts:
 pack-based scenarios can obtain their entities from dependencies. Existing unmodified scaffolds
@@ -447,7 +453,7 @@ work require manual resolution. Files and captured generation inputs are never r
 relinking. Draft editing remains distinct from duplicating or creating an independent draft.
 
 **Remove from Studio…** archives the missing registration without deleting YAML, receipts,
-generated bundles, saved conversations, or Codex threads. Runs remain in Job center. Conversations
+generated bundles, saved conversations, or Codex threads. Runs remain in Activity. Conversations
 stop appearing under the removed entry; restoring the same original source path and identity then
 refreshing recovers its registration and conversation associations.
 
@@ -572,7 +578,7 @@ Studio retains the latest valid completed evaluation report for each run. An int
 unreadable evaluation preserves the previous score; a completed report replaces it even if
 quality checks fail. Resource estimates and process completion are separate from quality scores.
 
-If generation stops, expand the run in **Runs** or **Job center**. A recorded CLI error
+If generation stops, expand the run in **Runs** or **Activity**. A recorded CLI error
 appears in the run details; **View log** shows its captured output, and **Refresh log**
 updates the preview. Long logs show their last 32 KiB with a copyable path to the full
 file. A **Stopped** status means the process exited without a completed bundle; it

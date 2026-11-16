@@ -2,29 +2,24 @@
 
 ## Status
 
-Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`).
-- **Phase 1 (complete):** design tokens and light/dark themes.
-- **Phase 2 (complete):** the consistency refactor.
-- **Phase 3 (complete):** the library restructure.
-- **Phase 4:** not started.
+Active on `feature/studio-forge-ui` (from `origin/dev` at `55b639b3`). Phases 1–4 are complete.
+Remaining items are listed below; none blocks review.
 
 The binding rules for this work live in `AGENTS.md` § Studio UI Design Patterns.
 
 ## Current Handoff
 
-Next: Phase 4, the scenario workspace.
-- A readiness pipeline (Author → Environment → Validate → Generate → Evaluate), with one next-step
-  button derived from `scenarioStates`/`environmentState`.
-- Tabs instead of accordions, with header facts (path, version, digests) moved to Properties.
-- Job center becomes an Activity timeline.
-
-Still open from earlier phases:
-- **Bundles:** it uses the shared toolbar and Filter popover, and its scenario groups start
-  expanded. It is not yet a flat `LibraryTable` of runs, because each group holds expandable
-  `JobCard`s with diagnostics. Flattening it means a run row plus a details drawer.
+Remaining follow-ups:
+- **Bundles:** it uses the shared toolbar and filters, and its groups start expanded. It is not yet
+  a flat table of runs, because each run needs a details drawer for diagnostics.
+- **Activity:** it filters by segment (All · Running · Queued · Needs attention · Done) but keeps
+  separate Generations and Evaluations groups, because "Clear completed/finished" history actions
+  are per kind. A single merged timeline needs a kind-aware clear action.
+- **Workspace headers:** section headers in the Overview cards still use icon-only
+  `OperationStatus`; the readiness strip carries the labeled status.
 - **Spacing:** values are not yet on the 4px scale.
-- **Appearance:** there is no Settings → Appearance control yet.
-- **Workspace headers:** section headers still use icon-only `OperationStatus`.
+- **Appearance:** there is no Settings → Appearance control yet. `setThemePreference()` exists;
+  persisting it needs a `StudioSettings` field.
 
 ## Decisions
 
@@ -72,15 +67,29 @@ Still open from earlier phases:
   - **Page titles:** they are the top bar's `h1`.
   - **Refresh:** automatic on library entry and on focus (15s throttle), with "Refresh library"
     in ⌘K.
+- **Workspace (Phase 4):**
+  - **Readiness strip:** `readinessSteps` maps the existing states onto the five steps, naming
+    stopped and cancelled runs rather than calling them failed. `nextStep` picks one action in
+    pipeline order, skips steps in progress, and allows generation with validation warnings.
+  - **No repeated actions:** section headers hide whichever action the strip is promoting, and
+    card actions are secondary whenever the strip is present.
+  - **Tabs:** the user confirmed tabs + Overview on 2026-11-16. This deliberately reverses the
+    2026-10-02 choice that replaced subtabs with folded sections; Chat focus is unchanged.
+  - **Header:** it shows title, version chip, project and description. The source path moved to
+    Properties → Technical (Copy and Reveal); scenario counts moved into the Environment card.
+  - **Activity:** Job center became Activity, with a segmented filter and counts in place of the
+    stat strip.
 - **Sidebar brand:** the compact sidebar brand is a 28px mark plus the wordmark. The full logo
   remains on the startup, maintenance and About screens and switches artwork per theme.
 
 ## Validation
 
-- **Latest run (Phase 3):** `npm test` passes, 39 files and 393 tests. `npm run build` passes.
-- **Phase 3 captures:** the library, project scoping, grouped view, Views menu, Filter popover,
-  Packs, Bundles and Job center, all in both themes, plus a 900px-wide window. The narrow capture
-  caught the container-query column bug.
+- **Latest run (Phase 4):** `npm test` passes, 40 files and 398 tests. `npm run build` passes.
+- **Phase 4 captures:** the Overview, the Runs and Validation tabs, a second scenario, a pack and
+  Activity, in both themes.
+- **Preview limits:** the isolated helper exits about 2 minutes after start when no native app
+  session claims it, and a generation started there ends as "stopped". Restart the service and
+  Vite together right before capturing.
 - **Preview service:** run an isolated preview service with `EFORGE_STUDIO_HOME` and
   `EFORGE_STUDIO_DEFAULT_WORKSPACE` under `/tmp`.
 - **Vite port:** do not use port 1420. The user's own Tauri dev server may hold `[::1]:1420`.

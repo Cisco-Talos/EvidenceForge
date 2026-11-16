@@ -226,9 +226,13 @@ test("path controls copy the complete path even when the label is shortened", as
     const { container } = await renderExpandedApp();
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("button", { name: "Copy scenario path" }));
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Properties…" }));
+    await user.click(await screen.findByRole("button", { name: "Technical details" }));
+    await user.click(await screen.findByRole("button", { name: "Copy scenario path" }));
     expect(writeText).toHaveBeenCalledWith(snapshot.items[0].path);
     expect(screen.getByRole("button", { name: "Path copied" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close properties" }));
 
     await user.click(screen.getByRole("button", { name: "Runs", exact: true }));
     await user.click(container.querySelector("#workspace-run-job-1 > summary")!);
@@ -660,7 +664,8 @@ test("starter guidance disables generation and forecasts but preserves validatio
     const user = userEvent.setup();
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    expect(screen.getByText("Ready to author — continue the conversation to build this scenario.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Author: Not started" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Continue authoring" })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Forecast · Awaiting authoring" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Validate", exact: true })).toBeEnabled();
@@ -859,7 +864,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
       "/v1/conversations/chat-fix/messages", "POST", expect.objectContaining({ text: expect.stringContaining("Unknown host") }),
     ));
     await user.click(screen.getByRole("button", { name: "Back to workspace" }));
-    await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
+    await user.click(screen.getByRole("button", { name: /^Author: / }));
     expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("");
   } finally {
     snapshot.validations = originalValidations;
@@ -867,7 +872,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
   }
 });
 
-test("job center counts working chats separately from chats awaiting input", async () => {
+test("Activity counts working chats separately from chats awaiting input", async () => {
   const user = userEvent.setup();
   const original = snapshot.conversations;
   snapshot.conversations = [
@@ -876,9 +881,13 @@ test("job center counts working chats separately from chats awaiting input", asy
   ];
   try {
     await renderExpandedApp();
-    await user.click(screen.getByRole("button", { name: /Job center/ }));
-    expect(screen.getByLabelText("1 active chats")).toBeTruthy();
-    expect(screen.getByLabelText("1 chats need input")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
+    const runningJobs = snapshot.jobs.filter((job) => ["running", "paused"].includes(job.status)).length;
+    expect(screen.getByRole("button", { name: `Running (${runningJobs + 1})` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Needs attention (1)" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Needs attention (1)" }));
+    expect(screen.queryByRole("button", { name: /Initial design.*Alpha.*Working/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "All" }));
     await user.click(screen.getByRole("button", { name: /Initial design.*Alpha.*Working/ }));
     expect(screen.getByRole("button", { name: "Back to workspace" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Initial design" })).toBeTruthy();
@@ -1022,7 +1031,7 @@ test("completed run exposes ZIP export and removes its bundle after confirmation
 test("job center renders independent progress bars for simultaneous generations", async () => {
   const user = userEvent.setup();
   await renderExpandedApp();
-  await user.click(screen.getByRole("button", { name: /Job center/ }));
+  await user.click(screen.getByRole("button", { name: /^Activity/ }));
   const bars = screen.getAllByRole("progressbar");
   expect(bars).toHaveLength(2);
   expect(bars.map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["25", "75"]);
@@ -1037,7 +1046,7 @@ test("job rows stay newest-first in submission order and sections can collapse",
   ];
   try {
     const { container } = await renderExpandedApp();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Activity/ }));
     expect([...container.querySelectorAll(".job-group")].map((entry) => entry.querySelector("summary strong")?.textContent)).toEqual(["Generations", "Evaluations"]);
     expect([...container.querySelectorAll(".job-group:first-child .job-row-name strong")].map((entry) => entry.textContent)).toEqual(["Bravo", "Alpha"]);
     const generations = container.querySelector(".job-group") as HTMLDetailsElement;
@@ -1321,7 +1330,7 @@ test("generation and evaluation cards use the authored scenario name", async () 
   ];
   try {
     await renderExpandedApp();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Activity/ }));
     expect(screen.getAllByText("LumenForge beacon", { selector: ".job-row-name strong" })).toHaveLength(2);
     expect(screen.getByRole("progressbar", { name: "LumenForge beacon generation progress" })).toBeTruthy();
   } finally {
@@ -1338,7 +1347,7 @@ test("paused and queued runs keep their saved progress and show their actual sta
   ];
   try {
     await renderExpandedApp();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Activity/ }));
     expect(screen.getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["50", "38"]);
     expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Queued to resume/)).toBeTruthy();
@@ -1352,7 +1361,7 @@ test("a stopped run without a checkpoint preserves its bar and cannot be resumed
   snapshot.jobs = [{ ...originalJobs[0], status: "stopped", can_resume: false }];
   try {
     await renderExpandedApp();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^Activity/ }));
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("25");
     expect(screen.getByText("No checkpoint to resume")).toBeTruthy();
     expect(screen.getByText(/Generation stopped before completion/)).toBeTruthy();
@@ -1460,14 +1469,14 @@ test("Markdown files render safely with a source toggle and XML logs highlight t
   expect(download).not.toHaveBeenCalled();
 });
 
-test("Job center removes finished history entries while preserving scenario runs and bundles", async () => {
+test("Activity removes finished history entries while preserving scenario runs and bundles", async () => {
   const originalJobs = snapshot.jobs;
   const request = vi.mocked(useStudio().api!.request);
   snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, { ...originalJobs[1], status: "paused" }];
   try {
     const { container } = await renderExpandedApp();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Job center/ }));
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
     const finished = container.querySelector("#job-job-1")!;
     const paused = container.querySelector("#job-job-2")!;
     expect(within(paused as HTMLElement).queryByRole("button", { name: "Delete job" })).toBeNull();
@@ -1499,7 +1508,7 @@ test("Clear Completed targets one job type and removed source runs can still be 
   try {
     const { container } = await renderExpandedApp();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Job center/ }));
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
     expect(container.querySelector("#job-job-1")).toBeNull();
     expect(screen.getByRole("button", { name: "Clear completed generations" }).hasAttribute("disabled")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Options for evaluation evaluation-1" }));
@@ -1527,11 +1536,9 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
     const user = userEvent.setup();
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    const sourceLink = screen.getByRole("button", { name: "View scenario YAML" });
-    expect(sourceLink).toHaveTextContent(snapshot.items[0].path);
-    expect(screen.queryByRole("button", { name: "View YAML", exact: true })).toBeNull();
-    sourceLink.focus();
-    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("button", { name: "View scenario YAML" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(await screen.findByRole("menuitem", { name: "View source" }));
     const viewer = await screen.findByRole("dialog", { name: "Source YAML" });
     await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
     expect(readTextPreview).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml");
@@ -2051,23 +2058,27 @@ test("conversation ordering uses recency then ID when no turns are active", () =
   expect(ordered.map((chat) => chat.id)).toEqual(["a", "b", "z"]);
 });
 
-test("workspace has folded sections, inline YAML, and no empty source or validation disclosures", async () => {
+test("workspace opens on an Overview with a readiness strip, section tabs and no inline source path", async () => {
   const user = userEvent.setup();
   const { container } = await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-  expect(screen.queryByRole("tablist")).toBeNull();
+  const tabs = screen.getByRole("tablist", { name: "Workspace sections" });
+  expect(within(tabs).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label"))).toEqual(["Overview", "Conversations", "Environment", "Validation", "Runs"]);
+  expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  const readiness = screen.getByRole("region", { name: "Readiness" });
+  expect(within(readiness).getAllByRole("listitem").map((entry) => entry.querySelector("strong")?.textContent)).toEqual(["Author", "Environment", "Validate", "Generate", "Evaluate"]);
   expect(screen.queryByRole("region", { name: "Scenario YAML" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Validation", exact: true })).toBeNull();
-  expect(screen.getByRole("button", { name: "Validate", exact: true })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Score a run" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Runs", exact: true })).toHaveAttribute("aria-expanded", "false");
   for (const name of ["Conversations", "Environment", "Runs"]) {
     expect(within(screen.getByRole("region", { name, exact: true })).getByRole("button", { name, exact: true })).toHaveAttribute("aria-expanded", "false");
   }
-  const path = container.querySelector(".workspace-heading .path-value")!;
-  expect(path.textContent).toBe(snapshot.items[0].path);
-  expect(path.nextElementSibling).toBe(screen.getByRole("button", { name: "Copy scenario path" }));
-  expect(screen.getAllByRole("button", { name: "Generate", exact: true })).toHaveLength(1);
+  expect(container.querySelector(".workspace-heading .path-value")).toBeNull();
+  await user.click(within(tabs).getByRole("tab", { name: "Runs" }));
+  expect(within(tabs).getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "Runs", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
+  await user.click(within(tabs).getByRole("tab", { name: "Overview" }));
+  expect(screen.getByRole("region", { name: "Environment", exact: true })).toBeVisible();
 });
 
 test("returning from chat preserves the draft and expanded workspace sections", async () => {
@@ -2075,14 +2086,14 @@ test("returning from chat preserves the draft and expanded workspace sections", 
   await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("button", { name: "Runs", exact: true }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: /^Author: / }));
   const draft = screen.getByRole("textbox", { name: "Message to Codex" });
   await user.type(draft, "Keep this unsent draft");
   const historyCalls = vi.mocked(useStudio().api!.request).mock.calls.filter(([path]) => path === "/v1/conversations/chat-1/history").length;
   await user.click(screen.getByRole("button", { name: "Back to workspace" }));
   expect(screen.getByRole("button", { name: "Runs", exact: true })).toHaveAttribute("aria-expanded", "true");
   expect(screen.queryByRole("textbox", { name: "Message to Codex" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: /^Author: / }));
   expect(screen.getByRole("textbox", { name: "Message to Codex" })).toHaveValue("Keep this unsent draft");
   expect(vi.mocked(useStudio().api!.request).mock.calls.filter(([path]) => path === "/v1/conversations/chat-1/history")).toHaveLength(historyCalls);
 });
@@ -2272,7 +2283,7 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       await user.click(within(region).getByRole("button", { name: "Environment", exact: true }));
       await user.click(await within(region).findByRole("button", { name: `Open ${reference} pack workspace` }));
       expect(screen.getByRole("heading", { name: "Sector", exact: true })).toBeVisible();
-      expect(screen.getByText("Version 1.0.0")).toBeVisible();
+      expect(screen.getByTitle("Version 1.0.0")).toHaveTextContent("1.0.0");
       expect(screen.getByRole("region", { name: "Validation & release", exact: true })).toBeVisible();
       expect(screen.getByRole("region", { name: "Assets", exact: true })).toBeVisible();
       expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
