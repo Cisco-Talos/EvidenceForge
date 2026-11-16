@@ -1578,7 +1578,7 @@ test("library and workspace show a failed evaluation even with a high overall sc
     expect(within(row).getByText("Failed acceptance").closest(".status-pill")).toHaveClass("tone-err");
     expect(within(row).getByLabelText(/Evaluation: Failed acceptance · 92\/100/)).toBeTruthy();
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
+    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("tone-err")).toBe(true);
     expect(scenarioStates({ ...snapshot.items[0], source_sha256: "new-revision" }, snapshot)[2].state).toBe("stale");
   } finally { snapshot.jobs = originalJobs; }
 });
@@ -2140,8 +2140,8 @@ test("folded Runs summarizes the latest generation and only its evaluation", asy
     view.rerender(<App />);
     expect(runs.querySelector("header")).toHaveTextContent("92/100 · Failed · 2,000 records");
     expect(runs.querySelector("header .summary-score")).toHaveClass("score-error");
-    expect(within(runs).getByLabelText(/Failed acceptance · 92\/100/)).toHaveClass("state-error");
-    expect(within(runs).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
+    expect(within(runs).getByLabelText(/Failed acceptance · 92\/100/)).toHaveClass("tone-err");
+    expect(within(runs).getByLabelText(/Generation: Generation completed/)).toHaveClass("tone-ok");
   } finally { snapshot.jobs = original; }
 });
 
@@ -2159,7 +2159,7 @@ test("collapsed environment and validation report dependency identities, finding
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const environment = screen.getByRole("region", { name: "Environment", exact: true });
     expect(environment.querySelector("header")).toHaveTextContent("1 dependency error · 1 pack · 1 include");
-    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare@2.0.0/)).toHaveClass("state-error");
+    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare@2.0.0/)).toHaveClass("tone-err");
     const validation = screen.getByRole("region", { name: "Validation", exact: true });
     expect(validation.querySelector("header")).toHaveTextContent("Needs changes · 1 error · 1 warning");
     expect(validation.querySelector("header")).toHaveTextContent("Out of date");
@@ -2232,12 +2232,12 @@ test("Environment is green when ready and refreshes dependencies without opening
     const environment = screen.getByRole("region", { name: "Environment", exact: true });
     const toggle = within(environment).getByRole("button", { name: "Environment", exact: true });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("state-success");
+    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("tone-ok");
     const refresh = within(environment).getByRole("button", { name: "Refresh environment" });
     await user.click(refresh);
     expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/dependencies/refresh", "POST", undefined, 180000);
     expect(refresh).toBeDisabled();
-    expect(within(environment).getByLabelText(/Environment: Checking current/)).toHaveClass("state-working");
+    expect(within(environment).getByLabelText(/Environment: Checking current/)).toHaveClass("tone-info");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     snapshot.dependencies.alpha = { ready: false, fingerprint: "missing", rows: [
       { key: "pack", kind: "pack", label: "team:industry:healthcare@2.0.0", status: "missing", detail: "Import the exact version" },
@@ -2246,7 +2246,7 @@ test("Environment is green when ready and refreshes dependencies without opening
     view.rerender(<App />);
     expect(useStudio().reload).toHaveBeenCalled();
     expect(refresh).toBeEnabled();
-    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare/)).toHaveClass("state-error");
+    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare/)).toHaveClass("tone-err");
     expect(request.mock.calls.some(([path]) => path.endsWith("/environment"))).toBe(false);
   } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
@@ -2411,12 +2411,12 @@ test("Environment refresh failures recover the header action and keep existing s
     await userEvent.setup().click(within(environment).getByRole("button", { name: "Refresh environment" }));
     await screen.findByText(/Cannot inspect pack files/);
     expect(within(environment).getByRole("button", { name: "Refresh environment" })).toBeEnabled();
-    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("state-success");
+    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("tone-ok");
   } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
 
 
-test("workspace result icons preserve generation success and scoring failure when legacy inputs are unverified", async () => {
+test("workspace status marks unverified legacy inputs as a warning and keeps the scoring failure", async () => {
   const originalJobs = snapshot.jobs;
   const originalDependencies = snapshot.dependencies;
   const originalItems = snapshot.items;
@@ -2435,8 +2435,8 @@ test("workspace result icons preserve generation success and scoring failure whe
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const generation = screen.getByRole("region", { name: "Runs", exact: true });
     const scoring = generation;
-    expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
-    expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+    expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("tone-warn");
+    expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("tone-err");
     expect(generation.querySelector("header")).toHaveTextContent("Inputs unverified");
     expect(generation.querySelector("header .summary-review .summary-inputs")).toHaveTextContent("Inputs unverified");
     expect(scoring.querySelector("header")).toHaveTextContent("96/100 · Failed");
@@ -2449,8 +2449,10 @@ test("workspace result icons preserve generation success and scoring failure whe
     snapshot.items = [{ ...originalItems[0], source_sha256: "changed-source" }, originalItems[1]];
     view.rerender(<App />);
     expect(within(generation).getByText("Inputs changed")).toBeVisible();
-    expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
-    expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+    // After an edit, the pills match the readiness strip: both results are stale for this revision.
+    expect(within(generation).getByLabelText(/Generation: Generation was completed for an older scenario revision/)).toHaveClass("tone-warn");
+    expect(within(scoring).getByLabelText(/Evaluation: Evaluation was completed for an older scenario revision/)).toHaveClass("tone-warn");
+    expect(scoring.querySelector("header .summary-score")).toHaveTextContent("Score · 96/100 · Failed");
     await userEvent.setup().click(within(generation).getByRole("button", { name: "Runs", exact: true }));
     expect(generation.querySelector("header .summary-inputs")).toHaveTextContent("Inputs changed");
     const row = view.container.querySelector("#workspace-run-job-1")!;

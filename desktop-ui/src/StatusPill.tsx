@@ -7,11 +7,13 @@ export type StatusTone = "ok" | "warn" | "err" | "info" | "neutral";
 const toneIcons = { ok: CheckCircle2, warn: TriangleAlert, err: XCircle, info: LoaderCircle, neutral: CircleMinus };
 
 /** The one Studio status indicator: a tone, an icon and a 1–3 word label, with optional detail on hover. */
-export function StatusPill({ tone, label, detail, icon = true, spinning = tone === "info" }: {
+export function StatusPill({ tone, label, detail, icon = true, spinning = tone === "info", ariaLabel }: {
   tone: StatusTone; label: string; detail?: string; icon?: boolean; spinning?: boolean;
+  /** Accessible name when the visible label needs context, e.g. "Generation: completed…". */
+  ariaLabel?: string;
 }) {
   const Icon = tone === "neutral" && label.toLowerCase().includes("stale") ? Clock3 : toneIcons[tone];
-  const pill = <span className={`status-pill tone-${tone}`} aria-label={detail ? `${label}: ${detail}` : undefined} tabIndex={detail ? 0 : undefined}>
+  const pill = <span className={`status-pill tone-${tone}`} aria-label={ariaLabel || (detail ? `${label}: ${detail}` : undefined)} tabIndex={detail ? 0 : undefined}>
     {icon && <Icon size={12} aria-hidden="true" className={spinning ? "spinning" : undefined} />}<span>{label}</span>
   </span>;
   if (!detail) return pill;

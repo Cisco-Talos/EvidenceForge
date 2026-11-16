@@ -1704,3 +1704,6 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .segmented button:hover { color: var(--text-1); }
 .segmented button[aria-pressed="true"] { color: var(--text-1); background: var(--surface-1); box-shadow: 0 1px 2px var(--shadow-color); }
 .activity-page .chat-activity { margin-bottom: 14px; }
+.workspace-section-status { display: flex; flex: none; flex-wrap: wrap; gap: 6px; align-items: center; }
+.workspace-sections.overview-grid .workspace-section-status { order: 2; flex-basis: 100%; padding-left: 47px; }
+.workspace-sections.overview-grid .workspace-section-actions { order: 3; }

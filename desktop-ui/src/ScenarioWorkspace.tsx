@@ -1,6 +1,6 @@
 import { belongsToScenario } from "./scenarioSources";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, LoaderCircle, Package, Folder, MessageSquareText, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Boxes, Play, LoaderCircle, Package, Folder, MessageSquareText, ShieldCheck } from "lucide-react";
 import type { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime, JobCard, ValidationPanel } from "./components";
 import { artifactTitle } from "./artifactNaming";
@@ -10,17 +10,18 @@ import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import { ChatView } from "./ChatView";
 import { ConversationList } from "./ConversationList";
 import { HeaderSummary, WorkspaceSection } from "./WorkspaceSection";
-import { nextStep, ReadinessPipeline, readinessSteps, type StepId } from "./ReadinessPipeline";
+import { nextStep, ReadinessPipeline, readinessSteps, type PipelineStep, type StepId } from "./ReadinessPipeline";
+import { StatusPill } from "./StatusPill";
 import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { PackWorkflow } from "./PackWorkflow";
 import { AssetBrowser } from "./AssetBrowser";
 import { EnvironmentView } from "./EnvironmentView";
 import { ScenarioRuns } from "./ScenarioRuns";
-import { environmentState, generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
+import { environmentState, generationIsCurrent, scenarioStates } from "./ScenarioStates";
 import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPanel";
 import { recentJobs } from "./jobOrder";
 import { RequestFeedback, requestTime, type RequestState } from "./RequestFeedback";
-import { countLabel, environmentSummary, latestJob, latestRunState, runsSummary, validationSummary } from "./workspaceSummaries";
+import { countLabel, environmentSummary, latestJob, runsSummary, validationSummary } from "./workspaceSummaries";
 import { Modal } from "./Modal";
 
 export type WorkspaceTarget = "overview" | "environment" | "conversations" | "validation" | "generation" | "scoring";
@@ -76,7 +77,6 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const sizeLabel = starter ? "Forecast · Awaiting authoring" : latestSize != null ? `Latest · ${formatBundleSize(latestSize)}` : forecast ? `Forecast · ~${formatBundleSize(forecast.final_output.expected_bytes)}` : prediction?.result.error ? "Forecast · Unavailable" : "Forecast · Calculating…";
   const latestGeneration = latestJob(generations);
   const latestEvaluation = latestJob(evaluations.filter((job) => job.generation_id === latestGeneration?.id));
-  const latestIsCurrent = !latestGeneration || generationIsCurrent(latestGeneration, item, snapshot);
   const validation = validationActivity?.status === "failed" ? validationActivity.previousResult : savedValidation;
   const validating = validationActivity?.status === "running";
   const validationFailed = validationActivity?.status === "failed";
@@ -180,6 +180,9 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     if (id === "author") { if (preferred) onOpenConversation(preferred); else setTab("conversations"); return; }
     setTab(id === "environment" ? "environment" : id === "validate" ? "validation" : "runs");
   }
+  /** A section header's labeled status, from the same readiness step the strip shows. */
+  // The Runs summary already notes unverified inputs, so the pill names the outcome instead.
+  const stepPill = (step: PipelineStep, context: string) => <StatusPill tone={step.tone === "todo" ? "neutral" : step.tone} label={step.status === "Inputs unverified" ? "Generated" : step.status} detail={step.detail} ariaLabel={`${context}: ${step.detail}`} />;
   // The readiness strip owns the promoted action; section headers do not repeat it.
   const promoted = next?.id;
   const findingCount = validationIssues.filter((issue) => ["error", "warning"].includes(String((issue as { severity?: string }).severity || "").toLowerCase())).length;
@@ -216,13 +219,13 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       {item.kind !== "scenario" && <div data-workspace-section="validation" hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validation & release" icon={<ShieldCheck size={19} />} summary={<span>Check catalogs and dependencies · export a portable release</span>} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<><ActionShortcut action={validateAction} /><CatalogObjectMenu item={item} label="Validation and release actions" actionIds={["validate", "fix", "publish", "export-release"]} fallbackActions={[validateAction, fixAction, packExportAction]} /></>}><PackWorkflow key={item.id} item={item} api={api} onPrepare={onPrepare} /></WorkspaceSection></div>}
       {item.kind !== "scenario" && <div data-workspace-section="assets" hidden={!!tab && tab !== "assets"}><WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse assets · draft edits keep the same draft</span>} expanded={tab === "assets"} onToggle={() => toggle("assets")} actions={<><ActionShortcut action={addAssetAction} /></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} embedded /></WorkspaceSection></div>}
       {item.kind === "scenario" && <>
-        <div data-workspace-section="environment" aria-busy={environmentRefreshing} hidden={!!tab && tab !== "environment"}><WorkspaceSection title="Environment" keepMounted icon={<OperationStatus status={environmentState(health, environmentRefreshing)} focusable={false} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={tab === "environment"} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} /></>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
+        <div data-workspace-section="environment" aria-busy={environmentRefreshing} hidden={!!tab && tab !== "environment"}><WorkspaceSection title="Environment" keepMounted icon={<Boxes size={19} />} status={stepPill(steps[1], "Environment")} summary={<HeaderSummary summary={environmentInfo} />} expanded={tab === "environment"} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} /></>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
           <EnvironmentView embedded onInspection={setEnvironmentInspection} refreshVersion={environmentRefresh + (catalog?.environmentRefreshVersion?.(item) || 0)} dependencyHealth={health} onImportPacks={onImportPacks} onOpenPack={onOpenPack} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario")} dependencyFingerprint={health?.fingerprint} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
-        <div data-workspace-section="validation" aria-busy={validating} hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validation" icon={<OperationStatus status={validationStatus} focusable={false} />} summary={<HeaderSummary summary={validationInfo} />} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && promoted !== fixAction.id && <ActionShortcut action={fixAction} />}{promoted !== validateAction.id && <ActionShortcut action={validateAction} />}</>}>
+        <div data-workspace-section="validation" aria-busy={validating} hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validation" icon={<ShieldCheck size={19} />} status={stepPill(steps[2], "Validation")} summary={<HeaderSummary summary={validationInfo} />} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && promoted !== fixAction.id && <ActionShortcut action={fixAction} />}{promoted !== validateAction.id && <ActionShortcut action={validateAction} />}</>}>
           {validating ? <div className="validation-progress" role="status"><LoaderCircle size={18} aria-hidden="true" />Validating current scenario…</div> : validationFailed ? <><p className="error-text" role="alert">{validationActivity.error}</p>{validation && <><p className="muted">Previous validation results:</p><ValidationPanel result={validation} embedded /></>}</> : validationDetails ? <ValidationPanel result={validation} embedded /> : undefined}
         </WorkspaceSection></div>
-        <div data-workspace-section="runs" hidden={!!tab && tab !== "runs"}><WorkspaceSection title="Runs" icon={<span className="run-outcome-icons"><OperationStatus status={latestRunState("Generation", latestGeneration, latestIsCurrent)} focusable={false} /><OperationStatus status={latestRunState("Evaluation", latestEvaluation, latestIsCurrent)} focusable={false} /></span>} summary={<HeaderSummary summary={runInfo} />} expanded={tab === "runs"} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} />{promoted !== generateAction.id && <ActionShortcut action={generateAction} />}</>} footer={tab !== "runs" && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
+        <div data-workspace-section="runs" hidden={!!tab && tab !== "runs"}><WorkspaceSection title="Runs" icon={<Play size={19} />} status={<>{stepPill(steps[3], "Generation")}{stepPill(steps[4], "Evaluation")}</>} summary={<HeaderSummary summary={runInfo} />} expanded={tab === "runs"} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} />{promoted !== generateAction.id && <ActionShortcut action={generateAction} />}</>} footer={tab !== "runs" && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
           {runCount ? <ScenarioRuns jobs={jobs} imports={imports} sizes={sizes} item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} focusJobId={focusJobId} focusVersion={runFocusVersion} /> : undefined}
         </WorkspaceSection></div>
       </>}
