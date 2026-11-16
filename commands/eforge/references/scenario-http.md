@@ -20,6 +20,11 @@ fileless where protocol semantics require it.
 For a file-backed upload, pair the network event with the real OS-native client process command.
 Raw curl `--data-binary @file` normally has no wire filename; multipart `-F name=@file` does.
 `request_body_len` is an exact transmitted entity assertion, not a convenient approximation.
+For file-backed authored connection/beacon multipart parts, a previously modeled command output
+(including a `Compress-Archive` result) supplies its retained canonical file size. The lookup is
+specific to the source host, principal and path; no files on the machine running generation are
+read. An unknown file still requires an authored leaf size or a solvable exact outer body length.
+Client request metadata never supplies a response host's file size.
 
 Use `request_multipart` or `response_multipart` for ordered multipart content. The engine derives
 the serialized outer size while each leaf file uses its decoded size. A separately authored outer

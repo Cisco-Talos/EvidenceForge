@@ -76,6 +76,15 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Repair and revalidate errors before warnings. Warnings do not block generation; after errors
   reach zero, group warnings by cause and identify intentional exceptions.
 - Info notes are observations, not warnings. Mention them only when useful.
+- Coverage checks consider selected source formats and their host platforms. Missing unrequested
+  alternatives and generic runtime uncertainty do not require extra sensors or formats. Explicit
+  loss, disabled collection and unobservable important facts still produce findings. Both `ssl`
+  and `https` are opaque to Zeek HTTP inspection; retain an intentional visibility warning when
+  the authored HTTP result has no application-side observer.
+- Executable location warnings compare genuine catalog/system-binary mappings, never a guessed
+  `/usr/bin` or System32 fallback for an unknown executable. Preserve intentional staged paths.
+- Complete native Mac launch preflight includes the installed bootstrap shell for a modeled
+  pre-existing root foothold. Retain required OS software when restricting application deployment.
 - Endpoint coverage is evaluated per host from effective source deployment, capabilities,
   enablement, missingness, and collection windows. No OS requires every native format or a
   particular endpoint format: eCAR applies across Windows, Linux, and macOS. Missing endpoint

@@ -177,6 +177,9 @@ def handle_connection(
                 response_spec=authored_response_multipart,
                 request_body_assertion=authored_request_body_len,
                 response_body_assertion=spec.response_body_len,
+                request_source_sizes=self._http_multipart_source_sizes(
+                    authored_request_multipart, source_ip=source_ip, principal=actor.username
+                ),
             )
 
     # Resolve source system from source_ip (not storyline system, which may be the target)

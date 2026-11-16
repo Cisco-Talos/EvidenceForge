@@ -23,7 +23,7 @@ def test_flow_evidence_cannot_prove_authored_http_status(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    "restriction", ["topology", "loss", "disabled", "window", "encryption", "capability"]
+    "restriction", ["topology", "loss", "disabled", "window", "encryption", "https", "capability"]
 )
 def test_certain_loss_of_an_important_fact_remains_a_warning(
     tmp_path: Path, restriction: str
@@ -36,8 +36,8 @@ def test_certain_loss_of_an_important_fact_remains_a_warning(
             NetworkSegment(name="other", cidr="10.0.99.0/24", exposure="internal", systems=[])
         )
         scenario.environment.network.sensors[0].monitoring_segments = ["other"]
-    elif restriction == "encryption":
-        scenario.storyline[0].events[0].service = "ssl"
+    elif restriction in {"encryption", "https"}:
+        scenario.storyline[0].events[0].service = "https" if restriction == "https" else "ssl"
     else:
         override.update(
             {"missingness": 1}
@@ -80,7 +80,7 @@ def test_probabilistic_loss_is_informational(tmp_path: Path) -> None:
     assert "probabilistic" in findings[0].message
 
 
-def test_generic_dhcp_and_firewall_gaps_are_informational(tmp_path: Path) -> None:
+def test_unrequested_firewall_does_not_produce_a_finding(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path, [_download()], formats=["ecar"])
     issues = ScenarioValidator(scenario).validate()
     generic = [
@@ -88,7 +88,7 @@ def test_generic_dhcp_and_firewall_gaps_are_informational(tmp_path: Path) -> Non
         for issue in issues
         if "DHCP broadcast" in issue.message or "no firewall sensor" in issue.message
     ]
-    assert generic
+    assert not any("no firewall sensor" in issue.message for issue in generic)
     assert all(issue.severity == "info" for issue in generic)
 
 
@@ -105,9 +105,29 @@ def test_process_network_consequence_is_assessed_without_generation(tmp_path: Pa
         formats=["ecar"],
     )
     findings = analyze_evidence_reachability(scenario)
-    assert any(
-        item.behavior_id == "typed_fact_transport" and "runtime" in item.message.lower()
-        for item in findings
+    assert not any(item.behavior_id == "typed_fact_transport" for item in findings)
+
+
+@pytest.mark.parametrize("formats", [["ecar"], ["windows"], ["ecar", "windows", "syslog"]])
+def test_optional_authentication_sources_do_not_require_other_platforms(
+    tmp_path: Path, formats: list[str]
+) -> None:
+    scenario = _scenario(tmp_path, [{"type": "logon", "logon_type": 2}], formats=formats)
+    assert not any(
+        item.behavior_id == "typed_fact_authentication"
+        for item in analyze_evidence_reachability(scenario)
+    )
+
+
+@pytest.mark.parametrize("image", ["/usr/sbin/php-fpm8.3", "/tmp/cache-maint"])
+def test_unknown_explicit_linux_paths_are_not_compared_to_fallback_guesses(
+    tmp_path: Path, image: str
+) -> None:
+    scenario = _scenario(tmp_path, [{"type": "process", "process_name": image}], formats=["ecar"])
+    scenario.environment.systems[0].os = "Linux Ubuntu 24.04"
+    assert not any(
+        "differs from configured canonical path" in issue.message
+        for issue in ScenarioValidator(scenario).validate()
     )
 
 

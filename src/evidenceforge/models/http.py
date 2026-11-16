@@ -120,3 +120,14 @@ class HttpMultipartEntitySpec(BaseModel):
                     + ", ".join(str(index) for index in missing)
                 )
         return self
+
+    def local_source_paths(self) -> tuple[str, ...]:
+        """Return exact file-backed leaf paths, including nested multipart parts."""
+        paths: list[str] = []
+        pending = list(self.parts)
+        while pending:
+            part = pending.pop()
+            pending.extend(part.parts)
+            if part.local_source_path:
+                paths.append(part.local_source_path)
+        return tuple(paths)

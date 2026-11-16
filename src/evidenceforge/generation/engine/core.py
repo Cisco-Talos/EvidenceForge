@@ -1197,8 +1197,18 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 for system in self.scenario.environment.systems
             )
         )
+        needs_multipart_files = any(
+            entity.local_source_paths()
+            for steps in (self.scenario.storyline, self.scenario.red_herrings or ())
+            for step in steps
+            for spec in step.events
+            for entry in (spec, *(getattr(spec, "http_sequence", None) or ()))
+            for field in ("request_multipart", "response_multipart")
+            if (entity := getattr(entry, field, None)) is not None
+        )
         if self.dispatcher.local_artifact_registry is None and (
             needs_filesystem
+            or needs_multipart_files
             or any(
                 spec.type == "macos_launch_item"
                 for step in self.scenario.storyline

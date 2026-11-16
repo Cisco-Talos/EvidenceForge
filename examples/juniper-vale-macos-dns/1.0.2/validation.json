@@ -1,0 +1,1 @@
+[{"field_path":"red_herrings.0.events.1","message":"Action 'approved-status-check' cannot record important typed fact 'http result'. zeek:kestrel-core-span/zeek_http: encrypted application","severity":"warning","suggestion":"Enable a capable source on the relevant host or transport leg, and export its format. Intentional collection settings still make this fact unobservable."}]

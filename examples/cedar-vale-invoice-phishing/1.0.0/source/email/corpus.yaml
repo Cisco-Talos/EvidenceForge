@@ -1,0 +1,68 @@
+messages:
+- id: invoice-review
+  subject: 'Harbor Supply: November invoice correction'
+  body: 'Hi Nina,
+
+    The revised invoice is ready in the document portal:
+
+    http://documents.harbor-invoices.example/review/november
+
+    Please download the reconciliation helper if the viewer cannot open the statement.
+    We need confirmation before today''s payment batch.
+
+    Regards,
+
+    Accounts Receivable
+
+    Harbor Supply'
+  background: false
+  storyline: true
+- id: payment-run
+  subject: Wednesday payment-run review
+  body: Please check the vendor totals in the internal treasury portal by 15:00. Evan
+    will reconcile exceptions against the approved purchase orders.
+  background: true
+- id: client-meeting
+  subject: Client review agenda
+  body: The meeting room is booked for 14:30. Please bring the portfolio summary and
+    note any outstanding suitability-review questions.
+  background: true
+- id: supplier-receipt
+  subject: Harbor Supply remittance receipt
+  body: Thank you for your payment. The receipt for order HS-1048 is attached. Please
+    retain it with the purchase order.
+  attachments:
+  - filename: HS-1048-receipt.txt
+    content_type: text/plain
+    content: 'Harbor Supply
+
+      Order HS-1048
+
+      Payment received: USD 840.00
+
+      This is an invented training receipt.
+
+      '
+  background: true
+- id: maintenance
+  subject: Endpoint maintenance this evening
+  body: Caleb will check workstation health after 17:00. The usual DeviceInventory
+    task may run during the afternoon. No action is required.
+  background: true
+- id: settlement
+  subject: Settlement exception queue
+  body: Two items require review in the settlement queue. Please use the existing
+    bookmarked portal and record your decision in the case notes.
+  background: true
+- id: lunch
+  subject: Tuesday lunch headcount
+  body: Please send Lena your lunch preference by noon tomorrow. The order form is
+    on the office noticeboard.
+  background: true
+- id: phish-reminder
+  subject: 'RE: Harbor Supply: November invoice correction'
+  body: 'Nina, a quick reminder that the revised statement is still awaiting review.
+    Please use the same document link before the payment batch closes.
+
+    Harbor Supply Accounts Receivable'
+  background: false

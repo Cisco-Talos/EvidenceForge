@@ -32,13 +32,74 @@ def published(tmp_path: Path) -> Path:
 def test_shipping_collection_is_complete_and_valid(tmp_path: Path) -> None:
     root = examples_directory()
     assert (root / "README.md").is_file()
-    for example in discover_examples(root):
-        assert not any(
-            finding["severity"] == "error"
-            for finding in validation_findings(
-                example.root / example.receipt.entrypoint, project_root=tmp_path
-            )
+    examples = discover_examples(root)
+    assert {example.receipt.name for example in examples} >= {
+        "cedar-vale-invoice-phishing",
+        "northstar-stolen-credentials",
+        "lantern-works-web-compromise",
+        "alderbrook-insider-exfiltration",
+        "juniper-vale-macos-dns",
+    }
+    for example in examples:
+        findings = validation_findings(
+            example.root / example.receipt.entrypoint, project_root=tmp_path
         )
+        expected_tls_gaps = example.receipt.name in {
+            "alderbrook-insider-exfiltration",
+            "juniper-vale-macos-dns",
+        }
+        assert len(findings) == int(expected_tls_gaps), findings
+        for finding in findings:
+            assert finding["severity"] == "warning"
+            assert "http result" in finding["message"]
+            assert "encrypted application" in finding["message"]
+
+
+def test_shipping_examples_import_and_fork_in_an_unrelated_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "unused-home")
+    workspace = tmp_path / "unrelated-workspace"
+    for example in discover_examples():
+        imported = import_release(example.root, project_root=workspace)
+        compiled = compile_scenario(imported, project_root=workspace)
+        assert compiled.scenario.name == example.receipt.name
+        draft = create_draft(imported, project_root=workspace, inherit_publisher=False)
+        assert compile_scenario(draft, project_root=workspace).scenario.name == example.receipt.name
+        assert (
+            inspect_artifact(draft)["lifecycle"]["parents"][0]["digest"] == example.receipt.digest
+        )
+        original_source = example.root / "source"
+        for original in original_source.rglob("*"):
+            if original.is_file() and original != example.root / example.receipt.entrypoint:
+                assert (draft.parent / original.relative_to(original_source)).read_bytes() == (
+                    original.read_bytes()
+                )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "example_root",
+    [example.root for example in discover_examples()],
+    ids=[example.identity for example in discover_examples()],
+)
+def test_shipping_example_generates_after_import(tmp_path: Path, example_root: Path) -> None:
+    from typer.testing import CliRunner
+
+    from evidenceforge.cli.commands import app
+
+    workspace = tmp_path / "workspace"
+    source = import_release(example_root, project_root=workspace)
+    bundle = workspace / "run"
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(source), "--project-root", str(workspace), "--output", str(bundle)],
+    )
+    assert result.exit_code == 0, result.output[-6000:]
+    assert (bundle / "GENERATION_MANIFEST.json").is_file()
+    assert (bundle / "GROUND_TRUTH.json").is_file()
+    if example_root.parent.name == "cedar-vale-invoice-phishing":
+        assert list((bundle / "artifacts/email").glob("*.eml"))
 
 
 def test_empty_and_populated_collection_identity(tmp_path: Path, published: Path) -> None:

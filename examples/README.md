@@ -1,7 +1,34 @@
 # Example scenarios
 
 This is the offline example collection included in Python distributions and Studio.
-The collection is intentionally empty until reviewed examples are contributed.
+Studio installs these into the **Example Scenarios** project through its first-run or
+Settings install/update workflow. CLI and skill users can use the same portable files.
+
+## Included examples
+
+Each example includes an analyst `ENVIRONMENT.md`, an `INSTRUCTOR_GUIDE.md` with the intended
+timeline and answers, and `RESEARCH.md` with technique references and modeling limits.
+User counts are modeled people; host counts include internal endpoints and servers, excluding
+logical sensors and third-party infrastructure. Collection hours exclude one hour of warmup.
+
+| Example | Pack / organization | Users | Hosts | Hours |
+| --- | --- | ---: | ---: | ---: |
+| [Invoice phishing](cedar-vale-invoice-phishing/1.0.0/source/README.md) | Finance / Cedar Vale Advisory | 6 | 8 | 8 |
+| [Stolen credentials](northstar-stolen-credentials/1.0.0/source/README.md) | Northstar Health 1.1.0 / Healthcare | 5 | 9 | 8 |
+| [Web server compromise](lantern-works-web-compromise/1.0.0/source/README.md) | Technology / Lantern Works Software | 4 | 6 | 6 |
+| [Insider data theft](alderbrook-insider-exfiltration/1.0.0/source/README.md) | Finance / Alderbrook Lending | 8 | 10 | 24 |
+| [macOS persistence and DNS](juniper-vale-macos-dns/1.0.2/source/README.md) | Technology / Kestrel Ridge Engineering | 4 | 6 | 8 |
+
+The phishing example includes authored benign and phishing email, with a receipt attachment.
+The Mac example uses explicit root/system LaunchDaemon stages and an installed Python
+interpreter; DNS and endpoint activity require correlation by host and time. See its instructor
+guide for the collection boundary. Current validation retains intentional opaque-HTTPS result
+warnings for Alderbrook and Kestrel Ridge. The web example's older instructor notes describe path
+advisories from its original validation; the current validator preserves its explicit PHP worker
+and staged-helper locations without comparing them to guessed fallback paths. No generated
+datasets are included.
+
+## Release layout
 
 Each example is an immutable published scenario under the `evidenceforge` publisher:
 

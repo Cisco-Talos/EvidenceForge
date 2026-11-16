@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 520
+current_revision: 521
 history_start_revision: 1
-behavior_surface_sha256: 4bc135daa584850ecc788a7aee4293738527a11cbd0041f3c239c02ca7a7d39a
+behavior_surface_sha256: 7bf43d7c686bb1ee313dcf3bbe5416c90f52ba5e9b5f7cddf405efee8816d41c
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -5979,3 +5979,18 @@ changes:
   formats: []
   summary: Share bounded Windows removal and per-entry read-only repair across owned
     staging and journal trees without changing evidence bytes or protected storage policy.
+- revision: 521
+  id: resolve-multipart-content-and-preflight-native-shells
+  impact: localized
+  domains:
+  - file-content
+  - http
+  - macos
+  formats:
+  - ecar
+  - zeek_files
+  - zeek_http
+  - macos_endpoint_security
+  summary: Resolve authored multipart sizes from retained host/principal/path content,
+    including command-created archives; preflight the installed shell required by a
+    native Mac root foothold.

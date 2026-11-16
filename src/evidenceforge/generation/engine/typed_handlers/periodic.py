@@ -269,6 +269,11 @@ def handle_beacon(
                     response_spec=first_response_multipart,
                     request_body_assertion=request_override,
                     response_body_assertion=response_override,
+                    request_source_sizes=self._http_multipart_source_sizes(
+                        first_request_multipart,
+                        source_ip=beacon_src_ip,
+                        principal=actor.username,
+                    ),
                 )
 
         # Hostname / DNS resolution (same logic as connection handler)
@@ -435,6 +440,11 @@ def handle_beacon(
                     response_spec=tick_response_multipart,
                     request_body_assertion=tick_request_override,
                     response_body_assertion=tick_response_override,
+                    request_source_sizes=self._http_multipart_source_sizes(
+                        tick_request_multipart,
+                        source_ip=beacon_src_ip,
+                        principal=actor.username,
+                    ),
                 )
             if tick_response_override is not None:
                 tick_resp_bytes = max(

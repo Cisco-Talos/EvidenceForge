@@ -21,6 +21,7 @@ from evidenceforge.generation.actions.file_transfer import (
 )
 from evidenceforge.generation.activity.generator import _attach_http_file_transfers
 from evidenceforge.generation.activity.http_multipart import (
+    apply_http_multipart_specs,
     build_http_multipart_context,
     encoded_multipart_leaf_size,
 )
@@ -36,6 +37,21 @@ from evidenceforge.models.scenario import (
 from tests.network_factories import network_plan
 
 _NOW = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+
+
+def test_request_file_size_does_not_supply_a_response_host_file_size() -> None:
+    path = "/tmp/archive.zip"
+    spec = HttpMultipartEntitySpec.model_validate(
+        {"parts": [{"name": "file", "local_source_path": path}]}
+    )
+    with pytest.raises(ValueError, match="requires body_len, staged size"):
+        apply_http_multipart_specs(
+            HttpContext(method="POST", host="portal.example", uri="/upload", status_code=200),
+            stable_key="different-hosts-same-path",
+            request_spec=spec,
+            response_spec=spec,
+            request_source_sizes={path: 777},
+        )
 
 
 def _captured_shape(body_len: int, sizes: list[int]) -> HttpMultipartEntityContext:

@@ -72,6 +72,18 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1 — Explicit DNS tunnel process linkage across platforms:** Add an authored
+  process reference to `dns_tunnel` and carry the exact live process identity through
+  the shared canonical network/DNS path. The current handler supplies no payload PID;
+  generic resolver inference does not establish the originating malicious process.
+  Distinguish the originating process from a resolver's transport ownership, prevent
+  inference from silently replacing explicit attribution, and preserve lifecycle and
+  cross-source identity consistency. Cover Windows, Linux and macOS, invalid/stale
+  references, and source visibility gaps without inventing source-native evidence.
+  This does not block the planned macOS example: network DNS evidence and endpoint
+  process evidence may intentionally require correlation by host and time. See the
+  [example planning notes](docs/worklog/2026-11-16-bundled-example-scenarios.md#scenario-planning-follow-up).
+
 - [x] **P1 — Windows install/uninstall field-test acceptance:** On November 16 the
   user accepted the tested installation and uninstall flows after the laptop
   test/fix loop, including optional content cleanup, responsive review and removal
