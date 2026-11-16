@@ -137,7 +137,6 @@ _SQLITE_COMPANION_SUFFIXES = ("-journal", "-wal", "-shm")
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
-_SECURITY_4689_NOISY_GUI_EXES = {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe"}
 _WFP_FILTER_BUCKET_OFFSETS = {
     "dns": 1,
     "kerberos": 2,
@@ -1734,9 +1733,6 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
-        if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
-            return
-
         event_data = {
             "EventID": 4689,
             "TimeCreated": event.timestamp,
@@ -2067,7 +2063,12 @@ class WindowsEventEmitter(LogEmitter):
             running = state_manager.get_process(host.hostname, process_id)
             if running is not None:
                 process_name = running.image
-        handle_id = f"0x{_stable_seed(smb.handle_id or smb.tree_id) & 0xFFFFFFFF:x}"
+        from evidenceforge.events.evidence_source_rules import windows_smb_handle_id
+        from evidenceforge.utils.rng import current_generation_seed
+
+        handle_id = windows_smb_handle_id(
+            {"handle_id": smb.handle_id, "tree_id": smb.tree_id}, current_generation_seed()
+        )
         share_local_path = smb.share_local_path.rstrip("\\")
         if share_local_path and not share_local_path.startswith("\\??\\"):
             share_local_path = f"\\??\\{share_local_path}"

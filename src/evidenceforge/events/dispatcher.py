@@ -2084,6 +2084,7 @@ class EventDispatcher:
     def _persistent_smb_projection_target_types() -> dict[str, type[object]]:
         """Return the closed exact source-type allowlist for SMB projections."""
 
+        from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.windows import WindowsEventEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -2100,6 +2101,7 @@ class EventDispatcher:
             "zeek_files": ZeekFilesEmitter,
             "ecar": EcarEmitter,
             "windows_event_security": WindowsEventEmitter,
+            "cisco_asa": CiscoAsaEmitter,
         }
 
     def _persistent_smb_projection_target_intent(
@@ -18082,7 +18084,11 @@ class EventDispatcher:
     ) -> list[tuple[str, ProjectionRole]]:
         """Return renderer-owned host routes without consulting mutable registries."""
 
-        if format_name == "ecar" and event.event_type == "connection":
+        if format_name == "ecar" and (
+            event.event_type == "connection"
+            or event.smb is not None
+            and str(event.event_type).startswith("smb_")
+        ):
             routes: list[tuple[str, ProjectionRole]] = []
             if event.src_host is not None:
                 routes.append((event.src_host.hostname, ProjectionRole.SOURCE_ENDPOINT))
@@ -18091,6 +18097,18 @@ class EventDispatcher:
                 or event.dst_host.hostname.casefold() != event.src_host.hostname.casefold()
             ):
                 routes.append((event.dst_host.hostname, ProjectionRole.DESTINATION_ENDPOINT))
+            if event.smb is not None:
+                from evidenceforge.events.evidence_source_rules import (
+                    semantic_source_admission,
+                    source_admission_facts,
+                )
+
+                facts = source_admission_facts(event)
+                routes = [
+                    (hostname, role)
+                    for hostname, role in routes
+                    if semantic_source_admission("ecar", str(event.event_type), facts, hostname)
+                ]
             return routes
 
         host = None

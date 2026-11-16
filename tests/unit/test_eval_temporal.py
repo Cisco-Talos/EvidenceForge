@@ -237,12 +237,20 @@ class TestHumanBurstiness:
 
 class TestSystemRegularity:
     def test_periodic_system_events(self):
-        """Regular periodic system events should have high autocorrelation."""
-        # System events every 60 seconds exactly
+        """A qualified cron command retains its documented fixed schedule."""
         timestamps = [T0 + timedelta(seconds=i * 60) for i in range(30)]
         records = {
-            "windows_event_security": [
-                _record("windows_event_security", {"TargetUserName": "SYSTEM"}, ts=t)
+            "syslog": [
+                _record(
+                    "syslog",
+                    {
+                        "username": "root",
+                        "hostname": "LNX01",
+                        "app_name": "cron",
+                        "message": "(root) CMD (/usr/bin/true)",
+                    },
+                    ts=t,
+                )
                 for t in timestamps
             ]
         }
@@ -251,7 +259,7 @@ class TestSystemRegularity:
         assert result.score >= 80.0
 
     def test_too_few_events(self):
-        """Fewer than 20 system events → skip, score 100."""
+        """Unidentified activity cannot establish a measured service cadence."""
         records = {
             "windows_event_security": [
                 _record(
@@ -264,7 +272,7 @@ class TestSystemRegularity:
         }
         scorer = TemporalRealismScorer()
         result = scorer._score_system_regularity(records)
-        assert result.score == 100.0
+        assert result.score is None and result.skipped
 
 
 class TestCausalOrdering:

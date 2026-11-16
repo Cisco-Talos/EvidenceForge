@@ -799,10 +799,13 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle all connection events with network context."""
-        return (
-            event.event_type in self._supported_types
-            and event.network is not None
-            and not event.network.application_layer_only
+        from evidenceforge.events.evidence_source_rules import (
+            semantic_source_admission,
+            source_admission_facts,
+        )
+
+        return event.event_type in self._supported_types and semantic_source_admission(
+            "cisco_asa", str(event.event_type), source_admission_facts(event)
         )
 
     def _route_projection(

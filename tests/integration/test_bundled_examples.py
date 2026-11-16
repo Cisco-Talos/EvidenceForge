@@ -1,5 +1,6 @@
 """Portable collection integrity and file-based use without Studio."""
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -100,6 +101,15 @@ def test_shipping_example_generates_after_import(tmp_path: Path, example_root: P
     assert (bundle / "GROUND_TRUTH.json").is_file()
     if example_root.parent.name == "cedar-vale-invoice-phishing":
         assert list((bundle / "artifacts/email").glob("*.eml"))
+    evaluated = CliRunner().invoke(app, ["eval", str(bundle), "--format", "json"])
+    assert evaluated.exit_code == 0, evaluated.output[-6000:]
+    report = json.loads(evaluated.stdout)
+    assert report["acceptance_passed"], report["acceptance_criteria"]
+    agreement = report["supplementary"]["ground_truth_agreement"]
+    assert not agreement["failure_counts"], agreement["findings"]
+    categories = {category["key"]: category["score"] for category in report["categories"]}
+    for category in ("source_schema", "canonical_invariants", "scenario_completeness"):
+        assert categories[category] == 100, (category, categories[category])
 
 
 def test_empty_and_populated_collection_identity(tmp_path: Path, published: Path) -> None:

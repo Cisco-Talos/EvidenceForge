@@ -63,6 +63,7 @@ zeek_conn:
 
 ecar:
   - field: object
+    platforms: [windows]
     reference:
       PROCESS: 0.40
       FILE: 0.15
@@ -73,6 +74,7 @@ ecar:
     tolerance: 0.30
 
   - field: action
+    platforms: [windows]
     reference:
       CREATE: 0.30
       TERMINATE: 0.10

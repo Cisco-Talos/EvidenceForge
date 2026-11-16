@@ -3,6 +3,134 @@
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from evidenceforge.events.base import CanonicalOccurrence
+
+
+def source_admission_facts(event: CanonicalOccurrence) -> dict:
+    """Read the small canonical subset used by source admission, without rendering."""
+    fields = {
+        "src_host": ("os_category", "hostname"),
+        "dst_host": ("os_category", "hostname"),
+        "network": ("application_layer_only",),
+        "firewall": ("action",),
+        "smb": (
+            "provider",
+            "server_platform",
+            "audit",
+            "result",
+            "operation",
+            "phase",
+            "client_access",
+            "client_path",
+            "local_path",
+        ),
+        "auth": ("session_kind",),
+        "process": ("pid",),
+    }
+    facts = {
+        name: {field: getattr(context, field) for field in names}
+        for name, names in fields.items()
+        if (context := getattr(event, name, None)) is not None
+    }
+    if event.syslog is not None:
+        facts["syslog"] = True
+    return facts
+
+
+def semantic_source_admission(format_name: str, kind: str, facts: dict, hostname: str = "") -> bool:
+    """Qualify a source's semantic projection before collection policy is applied."""
+    network = facts.get("network") or {}
+    if format_name == "cisco_asa":
+        return kind == "connection" and bool(network) and not network.get("application_layer_only")
+    if format_name == "ecar":
+        if (facts.get("firewall") or {}).get("action") == "deny":
+            return False
+        if (kind.startswith("smb_file_") or kind == "smb_directory_enumeration") and (
+            (facts.get("smb") or {}).get("result", "success") != "success"
+        ):
+            return False
+        if (
+            facts.get("smb")
+            and hostname
+            and (kind.startswith("smb_file_") or kind == "smb_directory_enumeration")
+        ):
+            return bool(
+                ecar_smb_projection_phases(
+                    kind,
+                    facts["smb"],
+                    facts.get("src_host") or {},
+                    facts.get("dst_host") or {},
+                    facts.get("process") or {},
+                    hostname,
+                )
+            )
+        return not (
+            (facts.get("firewall") or {}).get("action") == "deny"
+            or kind == "connection"
+            and network.get("application_layer_only")
+        )
+    if format_name == "syslog":
+        smb = facts.get("smb") or {}
+        destination = facts.get("dst_host") or {}
+        if destination.get("os_category") != "linux" or not (
+            smb.get("provider") == "samba"
+            or smb.get("server_platform") == "linux"
+            or (facts.get("auth") or {}).get("session_kind") == "smb"
+        ):
+            return bool(facts.get("syslog")) and any(
+                (facts.get(host) or {}).get("os_category") == "linux"
+                for host in ("src_host", "dst_host")
+            )
+        if kind in {"logon", "smb_tree_connect", "logoff"}:
+            return True
+        from evidenceforge.generation.activity.smb_profiles import (
+            get_samba_audit_operation,
+            samba_audit_enabled,
+        )
+
+        if get_samba_audit_operation(kind) is not None:
+            return samba_audit_enabled(
+                kind, smb.get("audit", "minimal"), smb.get("result", "success")
+            )
+        return bool(facts.get("syslog"))
+    return True
+
+
+def ecar_smb_projection_phases(
+    kind: str, smb: dict, source: dict, destination: dict, process: dict, hostname: str
+) -> tuple[str, ...]:
+    """Name only SMB endpoint rows actually visible on this particular host."""
+    phases: list[str] = []
+    if hostname.casefold() == str(destination.get("hostname", "")).casefold() and kind in {
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
+    }:
+        phases.append("base")
+    if hostname.casefold() != str(source.get("hostname", "")).casefold():
+        return tuple(phases)
+    copying = smb.get("operation") in {"copy", "move"}
+    upload = bool(smb.get("local_path")) and smb.get("phase") == "write" and copying
+    download = bool(smb.get("local_path")) and smb.get("phase") == "read" and copying
+    mounted = (
+        not upload
+        and not download
+        and (not copying or smb.get("phase") == "rename")
+        and (smb.get("client_access"), source.get("os_category"))
+        in {("cifs_mount", "linux"), ("macos_mount", "macos")}
+        and smb.get("phase") in {"directory_enumeration", "read", "write", "rename", "delete"}
+        and str(smb.get("client_path", "")).startswith("/")
+        and process.get("pid", 0) > 0
+    )
+    if upload or download or mounted:
+        phases.append("client_file")
+    if upload and smb.get("operation") == "move":
+        phases.append("client_delete")
+    return tuple(phases)
 
 
 def native_zeek_connection_state(protocol: str, state: str | None) -> str | None:
@@ -156,6 +284,11 @@ def windows_smb_event_ids(kind: str, facts: dict, seed: int) -> list[int]:
     if smb.get("audit") == "high" and kind == "smb_file_close":
         return [4658]
     return []
+
+
+def windows_smb_handle_id(smb: dict, seed: int) -> str:
+    """Project one retained SMB handle into its native Windows audit identity."""
+    return f"0x{_seed(smb.get('handle_id') or smb.get('tree_id', ''), seed) & 0xFFFFFFFF:x}"
 
 
 def native_projection_applicable(format_name: str, kind: str, facts: dict, seed: int) -> bool:

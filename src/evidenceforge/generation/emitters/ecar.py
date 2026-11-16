@@ -269,21 +269,14 @@ class EcarEmitter(HostMultiplexEmitter):
         Firewall deny events are excluded — the firewall blocked the
         connection before it reached the endpoint, so the EDR wouldn't see it.
         """
-        if event.firewall is not None and event.firewall.action == "deny":
-            return False
-        if (
-            event.event_type == "connection"
-            and event.network is not None
-            and event.network.application_layer_only
-        ):
-            return False
-        if (
-            event.event_type.startswith("smb_file_")
-            or event.event_type == "smb_directory_enumeration"
-        ) and event.smb is not None:
-            if event.smb.result != "success":
-                return False
-        return event.event_type in self._supported_types
+        from evidenceforge.events.evidence_source_rules import (
+            semantic_source_admission,
+            source_admission_facts,
+        )
+
+        return event.event_type in self._supported_types and semantic_source_admission(
+            "ecar", str(event.event_type), source_admission_facts(event)
+        )
 
     def emit(self, event: CanonicalOccurrence) -> None:
         """Dispatch to per-type render method."""
@@ -547,6 +540,10 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _render_smb_client_file_companion(self, event: CanonicalOccurrence) -> None:
         """Fan out source-native client FILE views from the same SMB occurrence."""
+
+        envelope = event._projection_envelope
+        if envelope is not None and envelope.role is ProjectionRole.DESTINATION_ENDPOINT:
+            return
 
         smb = event.smb
         host = event.src_host
@@ -872,6 +869,11 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _render_smb_file_event(self, event: CanonicalOccurrence) -> None:
         """Render the server-local EDR view of one canonical SMB operation."""
+
+        envelope = event._projection_envelope
+        if envelope is not None and envelope.role is ProjectionRole.SOURCE_ENDPOINT:
+            self._render_smb_client_file_companion(event)
+            return
 
         host = event.dst_host
         smb = event.smb

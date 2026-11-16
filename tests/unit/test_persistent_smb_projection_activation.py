@@ -12,6 +12,7 @@ from threading import Barrier, Thread
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
@@ -219,6 +220,7 @@ def test_certify_commit_recover_ack_is_exact_and_reclaims_every_live_member() ->
         ("zeek_files", ZeekFilesEmitter),
         ("ecar", EcarEmitter),
         ("windows_event_security", WindowsEventEmitter),
+        ("cisco_asa", CiscoAsaEmitter),
     ),
 )
 def test_certification_accepts_each_exact_supported_target(
@@ -245,7 +247,6 @@ def test_certification_accepts_each_exact_supported_target(
     (
         "syslog",
         "sysmon",
-        "cisco_asa",
         "snort_alert",
         "suricata_alert",
         "zeek_notice",

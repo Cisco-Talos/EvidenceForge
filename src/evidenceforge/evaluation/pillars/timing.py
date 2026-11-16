@@ -53,7 +53,6 @@ from evidenceforge.evaluation.dimensions import (
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord, RecordCorpus
-from evidenceforge.evaluation.rules import load_rules_file
 from evidenceforge.evaluation.storage import (
     append_group,
     bounded_groups,
@@ -143,64 +142,45 @@ class TimingScorer(DimensionScorer):
     # --- Sub-score 1: Attack Chain Timing ---
 
     def _score_attack_chain_timing(self, scenario: Scenario) -> SubScore:
-        storyline = scenario.storyline or []
-        if len(storyline) < 2:
-            return SubScore(
-                name="Attack Chain Timing",
-                key="attack_chain_timing",
-                weight=0.15,
-                score=100.0,
-                details="No consecutive storyline pairs to evaluate",
-            )
-
-        resolved = resolve_storyline(storyline, scenario)
-        bounds_config = load_rules_file("timing_bounds.yaml")
-        defaults = bounds_config.get("defaults", {})
-        default_min = defaults.get("min_seconds", 5)
-        default_max = defaults.get("max_seconds", 7200)
-        action_overrides = bounds_config.get("action_overrides", {})
-
-        total_pairs = 0
-        in_bounds = 0
+        """Check declared causal references, never documentation or list adjacency."""
+        resolved = resolve_storyline(scenario.storyline or [], scenario)
+        references: dict[tuple[str, str, str], Any] = {}
+        for event in resolved:
+            for detail in event.sub_details or [event.details]:
+                if detail.get("process_ref"):
+                    references[(event.actor, event.system, detail["process_ref"])] = event
+        pairs: set[tuple[int, int]] = set()
         failures: list[str] = []
-
-        for i in range(len(resolved) - 1):
-            curr = resolved[i]
-            nxt = resolved[i + 1]
-            elapsed = max(0.0, (nxt.time - curr.time).total_seconds())
-
-            min_sec = default_min
-            max_sec = default_max
-            activity_lower = nxt.activity.lower()
-            for keyword, override in action_overrides.items():
-                if keyword.lower() in activity_lower:
-                    min_sec = override.get("min_seconds", default_min)
-                    max_sec = override.get("max_seconds", default_max)
-                    break
-
-            total_pairs += 1
-            if min_sec <= elapsed <= max_sec:
-                in_bounds += 1
-            elif len(failures) < 10:
-                if elapsed < min_sec:
-                    failures.append(
-                        f"Events {i}→{i + 1}: {elapsed:.0f}s < min {min_sec}s "
-                        f"('{nxt.activity[:40]}')"
-                    )
-                else:
-                    failures.append(
-                        f"Events {i}→{i + 1}: {elapsed:.0f}s > max {max_sec}s "
-                        f"('{nxt.activity[:40]}')"
-                    )
-
-        score = (100.0 * in_bounds / total_pairs) if total_pairs > 0 else 100.0
+        for child in resolved:
+            for detail in child.sub_details or [child.details]:
+                for field in ("parent_ref", "caller_ref"):
+                    reference = detail.get(field)
+                    if not reference:
+                        continue
+                    parent = references.get((child.actor, child.system, reference))
+                    if parent is None:
+                        failures.append(f"Event {child.index}: unresolved {field} {reference!r}")
+                        continue
+                    pair = (parent.index, child.index)
+                    if pair in pairs:
+                        continue
+                    pairs.add(pair)
+                    if child.time < parent.time:
+                        failures.append(
+                            f"Events {parent.index}→{child.index}: child precedes its declared {field}"
+                        )
+        checks = len(pairs) + sum("unresolved" in failure for failure in failures)
         return SubScore(
             name="Attack Chain Timing",
             key="attack_chain_timing",
             weight=0.15,
-            score=score,
-            details=f"{in_bounds}/{total_pairs} storyline transitions within bounds",
-            sample_failures=failures,
+            score=100.0 * (checks - len(failures)) / checks if checks else None,
+            skipped=checks == 0,
+            details=(
+                f"{checks - len(failures)}/{checks} typed causal timing relationships agree; "
+                "unrelated adjacent steps impose no implicit deadline"
+            ),
+            sample_failures=failures[:10],
         )
 
     # --- Sub-score 2: Human Burstiness ---
@@ -254,80 +234,69 @@ class TimingScorer(DimensionScorer):
     # --- Sub-score 3: System Process Regularity ---
 
     def _score_system_regularity(self, records: RecordCorpus) -> SubScore:
-        system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
-        workspace = current_workspace()
-        facts = workspace.shared.get("statistics") if workspace else None
-        service_timestamps = facts.services if facts else bounded_groups(ordered=True)
-        total_system_events = facts.system_events if facts else 0
-
-        for _fmt, record_list in () if facts else records.items():
-            for record in record_list:
-                if record.timestamp is None:
+        """Measure separate service starts, not pooled multi-source lifecycle rows."""
+        accounts = {a.lower() for a in BUILTIN_ACCOUNTS}
+        streams = bounded_groups(ordered=True)
+        preferred: dict[str, int] = {}
+        priorities = {
+            "windows_event_sysmon": 3,
+            "windows_event_security": 2,
+            "ecar": 1,
+            "syslog": 0,
+        }
+        for fmt, rows in records.items():
+            for record in rows:
+                if record.timestamp is None or _extract_username(record) not in accounts:
                     continue
-                user = _extract_username(record)
-                if user and user in system_accounts_lower:
-                    hostname = _extract_hostname(record)
-                    if not hostname:
-                        continue
-                    service = _extract_system_service(record)
-                    if service == "other":
-                        continue
-                    ts = record.timestamp
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=UTC)
-                    append_group(service_timestamps, (hostname, service), ts, sort=ts)
-                    total_system_events += 1
-
-        if total_system_events < 20:
-            return SubScore(
-                name="System Process Regularity",
-                key="system_regularity",
-                weight=0.15,
-                score=100.0,
-                details=f"Only {total_system_events} system events — insufficient",
+                key = _service_stream_key(record)
+                host = _extract_hostname(record)
+                if key is None or not host:
+                    continue
+                rank = priorities.get(fmt, -1)
+                preferred[host] = max(preferred.get(host, -1), rank)
+                timestamp = record.timestamp
+                timestamp = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
+                append_group(streams, (host, rank, key), timestamp, sort=timestamp)
+        cvs: list[float] = []
+        scores: list[float] = []
+        starts = 0
+        for (host, rank, key), timestamps in streams.items():
+            if rank != preferred[host]:
+                continue
+            ordered = bounded_sorted(timestamps)
+            starts += len(ordered)
+            intervals = [
+                (right - left).total_seconds() for left, right in pairwise(ordered) if right > left
+            ]
+            if len(intervals) < 10:
+                continue
+            mean = statistics.mean(intervals)
+            if mean <= 0:
+                continue
+            cv = statistics.stdev(intervals) / mean
+            cvs.append(cv)
+            scores.append(
+                100.0
+                if (key.startswith("cron:") and cv <= 0.15) or 0.15 <= cv <= 1.0
+                else 50.0
+                if cv < 0.05
+                else 50 + 50 * (cv - 0.05) / 0.10
+                if cv < 0.15
+                else max(0.0, 100 * (2 - cv))
             )
-
-        cv_scores = bounded_list()
-        for _key, timestamps in service_timestamps.items():
-            sorted_ts = bounded_sorted(timestamps)
-            intervals = bounded_list(
-                (right - left).total_seconds()
-                for left, right in pairwise(sorted_ts)
-                if right > left
-            )
-            if len(intervals) >= 10:
-                mean_iv = statistics.mean(intervals)
-                if mean_iv > 0:
-                    cv = statistics.stdev(intervals) / mean_iv
-                    cv_scores.append(cv)
-
-        if not cv_scores:
-            return SubScore(
-                name="System Process Regularity",
-                key="system_regularity",
-                weight=0.15,
-                score=100.0,
-                details="Insufficient per-service interval data",
-            )
-
-        avg_cv = statistics.mean(cv_scores)
-        if avg_cv < 0.05:
-            score = 50.0
-        elif avg_cv < 0.15:
-            score = 50.0 + 50.0 * (avg_cv - 0.05) / 0.10
-        elif avg_cv <= 1.0:
-            score = 100.0
-        elif avg_cv <= 2.0:
-            score = 100.0 * (2.0 - avg_cv)
-        else:
-            score = 0.0
-
         return SubScore(
             name="System Process Regularity",
             key="system_regularity",
             weight=0.15,
-            score=score,
-            details=f"Interval CV: {avg_cv:.3f} ({len(cv_scores)} service groups, {total_system_events} events)",
+            score=statistics.mean(scores) if scores else None,
+            skipped=not scores,
+            details=(
+                f"{len(cvs)} independently identified service streams, {starts} starts; "
+                f"mean interval CV {statistics.mean(cvs):.3f}"
+                if cvs
+                else f"Insufficient repeated starts per identified service ({starts} observed); "
+                "unrelated tasks and lifecycle formats are not pooled"
+            ),
         )
 
     # --- Sub-score 4: Diurnal Pattern ---
@@ -660,3 +629,32 @@ def _extract_system_service(record: ParsedRecord) -> str:
         if app in ("cron", "anacron", "systemd"):
             return "scheduled_task"
     return "other"
+
+
+def _service_stream_key(record: ParsedRecord) -> str | None:
+    """Identify one actual task invocation with a complete command identity."""
+    f = record.fields
+    fmt = record.source_format
+    if fmt == "syslog":
+        message = str(f.get("message", ""))
+        return (
+            "cron:" + message.split("CMD", 1)[1].strip()
+            if f.get("app_name") in {"cron", "anacron"} and "CMD" in message
+            else None
+        )
+    starts = (
+        fmt == "windows_event_security"
+        and f.get("EventID") == 4688
+        or fmt == "windows_event_sysmon"
+        and f.get("EventID") == 1
+        or fmt == "ecar"
+        and f.get("object") == "PROCESS"
+        and f.get("action") == "CREATE"
+    )
+    if not starts:
+        return None
+    image = str(f.get("NewProcessName") or f.get("Image") or f.get("image_path") or "")
+    command = str(f.get("CommandLine") or f.get("command_line") or "")
+    if not image or not command:
+        return None
+    return image + "|" + command

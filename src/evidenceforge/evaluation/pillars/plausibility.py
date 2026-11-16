@@ -65,6 +65,7 @@ from evidenceforge.evaluation.storage import (
     bounded_set,
     bounded_sorted,
     current_workspace,
+    record_identity,
 )
 from evidenceforge.evaluation.visibility import VisibilityModel
 from evidenceforge.events.ids_evaluation import new_ids_digest, update_ids_digest
@@ -110,11 +111,11 @@ class PlausibilityScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Co-occurrence Rules", "score": s2.score})
 
         progress("sub_score_start", {"name": "Distribution Fit", "step": 3, "total": 7})
-        s3 = self._score_distribution_fit(records)
+        s3 = self._score_distribution_fit(records, scenario)
         progress("sub_score_done", {"name": "Distribution Fit", "score": s3.score})
 
         progress("sub_score_start", {"name": "Cross-Source Field Agreement", "step": 4, "total": 7})
-        s4 = self._score_field_agreement(records)
+        s4 = self._score_field_agreement(records, scenario)
         progress("sub_score_done", {"name": "Cross-Source Field Agreement", "score": s4.score})
 
         progress("sub_score_start", {"name": "User Behavioral Diversity", "step": 5, "total": 7})
@@ -122,7 +123,7 @@ class PlausibilityScorer(DimensionScorer):
         progress("sub_score_done", {"name": "User Behavioral Diversity", "score": s5.score})
 
         progress("sub_score_start", {"name": "Anomaly Rate", "step": 6, "total": 7})
-        s6 = self._score_anomaly_rate(records, scenario)
+        s6 = self._score_anomaly_rate(records, scenario, context)
         progress("sub_score_done", {"name": "Anomaly Rate", "score": s6.score})
 
         progress("sub_score_start", {"name": "IDS Correlation Integrity", "step": 7, "total": 7})
@@ -176,10 +177,13 @@ class PlausibilityScorer(DimensionScorer):
 
     # --- Sub-score 3: Distribution Fit ---
 
-    def _score_distribution_fit(self, records: RecordCorpus) -> SubScore:
+    def _score_distribution_fit(
+        self, records: RecordCorpus, scenario: Scenario | None = None
+    ) -> SubScore:
         dist_profiles = load_rules_file("distributions.yaml")
         divergence_scores: list[float] = []
         details_parts: list[str] = []
+        unavailable = 0
 
         for format_name, record_list in records.items():
             profiles = dist_profiles.get(format_name, [])
@@ -205,6 +209,8 @@ class PlausibilityScorer(DimensionScorer):
                 )
                 total = sum(observed_counts.values()) if facts else 0
                 for record in () if facts else valid:
+                    if not distribution_profile_applies(record, profile, scenario):
+                        continue
                     val = record.fields.get(field_name)
                     if val is not None:
                         key = _coerce_key(val, reference)
@@ -212,6 +218,7 @@ class PlausibilityScorer(DimensionScorer):
                         total += 1
 
                 if total == 0:
+                    unavailable += 1
                     continue
 
                 observed = bounded_map((k, v / total) for k, v in observed_counts.items())
@@ -225,7 +232,9 @@ class PlausibilityScorer(DimensionScorer):
                     field_score = max(0.0, 100.0 * (1.0 - jsd / (tolerance * 2)))
 
                 divergence_scores.append(field_score)
-                details_parts.append(f"{format_name}.{field_name}: {field_score:.0f}")
+                details_parts.append(
+                    f"{format_name}.{field_name}: {field_score:.0f} (n={total}, JS={jsd:.3f})"
+                )
 
         score = sum(divergence_scores) / len(divergence_scores) if divergence_scores else None
         return SubScore(
@@ -234,12 +243,20 @@ class PlausibilityScorer(DimensionScorer):
             weight=0.15,
             score=score,
             skipped=not divergence_scores,
-            details="; ".join(details_parts) if details_parts else "No distribution profiles",
+            unavailable_check_count=unavailable,
+            details=(
+                "; ".join(details_parts)
+                if details_parts
+                else "No applicable distribution populations"
+            )
+            + f"; {unavailable} reference populations unmeasured",
         )
 
     # --- Sub-score 4: Cross-Source Field Agreement ---
 
-    def _score_field_agreement(self, records: RecordCorpus) -> SubScore:
+    def _score_field_agreement(
+        self, records: RecordCorpus, scenario: Scenario | None = None
+    ) -> SubScore:
         pairs_config = load_rules_file("cross_source_pairs.yaml").get("pairs", [])
         if not pairs_config:
             return SubScore(
@@ -254,6 +271,7 @@ class PlausibilityScorer(DimensionScorer):
         total_matched = 0
         total_agreeing = 0
         failures: list[str] = []
+        diagnostics: dict[str, int] = {}
 
         for pair_index, pair_def in enumerate(pairs_config):
             fmt_a = pair_def.get("format_a", "")
@@ -279,7 +297,17 @@ class PlausibilityScorer(DimensionScorer):
                 b_index = _build_pivot_index(filtered_b, pivot)
             if not filtered_a or not b_index:
                 continue
-            m, ag, fails = _score_pair(pair_def["name"], filtered_a, b_index, pivot, agree_on)
+            m, ag, fails = _score_pair(
+                pair_def["name"],
+                filtered_a,
+                b_index,
+                pivot,
+                agree_on,
+                diagnostics=diagnostics,
+                server_addresses=_http_server_addresses(scenario)
+                if fmt_a == "web_access" and scenario is not None
+                else None,
+            )
             total_matched += m
             total_agreeing += ag
             if len(failures) < 10:
@@ -298,7 +326,7 @@ class PlausibilityScorer(DimensionScorer):
             failures.extend(http_failures[: 10 - len(failures)])
 
         crypto_matched, crypto_agreeing, crypto_failures = (
-            _score_cryptographic_protocol_consistency(records)
+            _score_cryptographic_protocol_consistency(records, diagnostics=diagnostics)
         )
         total_matched += crypto_matched
         total_agreeing += crypto_agreeing
@@ -313,6 +341,7 @@ class PlausibilityScorer(DimensionScorer):
                 score=None,
                 skipped=True,
                 details="No configured cross-source pivots were jointly observable",
+                unavailable_check_count=sum(diagnostics.values()),
             )
         score = 100.0 * total_agreeing / total_matched
         return SubScore(
@@ -320,7 +349,13 @@ class PlausibilityScorer(DimensionScorer):
             key="field_agreement",
             weight=0.15,
             score=score,
-            details=f"{total_agreeing}/{total_matched} matched pivot pairs agree",
+            details=(
+                f"{total_agreeing}/{total_matched} matched pivot pairs agree; "
+                f"{diagnostics.get('ambiguous', 0)} ambiguous HTTP joins and "
+                f"{diagnostics.get('unmatched_endpoint', 0)} unresolved HTTP endpoints; "
+                f"{diagnostics.get('partial_ocsp', 0)} incomplete OCSP responses unscored"
+            ),
+            unavailable_check_count=sum(diagnostics.values()),
             sample_failures=failures,
         )
 
@@ -390,15 +425,32 @@ class PlausibilityScorer(DimensionScorer):
         self,
         records: RecordCorpus,
         scenario: Scenario,
+        context: EvaluationContext | None = None,
     ) -> SubScore:
-        anomalous, total = detect_anomalies(records, scenario)
+        excluded = bounded_set()
+        if (
+            context is not None
+            and context.ground_truth is not None
+            and context.ground_truth.schema_version == 5
+        ):
+            from evidenceforge.evaluation.pillars.ground_truth import prepare_ground_truth_agreement
+
+            prepare_ground_truth_agreement(context, records, scenario)
+            for rows in context.ground_truth_agreement.get("bindings", {}).values():
+                for record in rows:
+                    excluded.add(record_identity(record))
+        diagnostics: dict[str, int] = {}
+        anomalous, total = detect_anomalies(
+            records, scenario, excluded_record_ids=excluded, diagnostics=diagnostics
+        )
         if total == 0:
             return SubScore(
                 name="Anomaly Rate",
                 key="anomaly_rate",
                 weight=0.10,
-                score=100.0,
-                details="No records to check",
+                score=None,
+                skipped=True,
+                details="No eligible background observations to check",
             )
 
         rate = anomalous / total
@@ -418,7 +470,11 @@ class PlausibilityScorer(DimensionScorer):
             key="anomaly_rate",
             weight=0.10,
             score=score,
-            details=f"{anomalous}/{total} events anomalous ({rate:.1%}), target 1-5%",
+            details=(
+                f"{anomalous}/{total} eligible observations anomalous ({rate:.1%}), target 1-5%; "
+                f"sampled from {diagnostics.get('eligible', 0)} eligible records; "
+                f"{len(excluded)} authored observations excluded"
+            ),
         )
 
     def _score_ids_integrity(
@@ -497,6 +553,8 @@ class PlausibilityScorer(DimensionScorer):
         for sensor, key in sorted(expected_keys | actual_keys):
             expected = document.ids_evaluation.sensors.get(sensor, {}).get(key)
             observed = actual.get(sensor, {}).get(key)
+            if expected is not None and expected.emitted == 0 and observed is None:
+                observed = {"emitted": 0, "digest": new_ids_digest()}
             check(expected is not None, f"Unexpected Snort rows for {sensor} {key}")
             check(observed is not None, f"Missing Snort rows for {sensor} {key}")
             if expected is None or observed is None:
@@ -595,6 +653,11 @@ def _check_os_plausibility(record: ParsedRecord, fmt: str) -> bool | None:
 
 
 def _coerce_key(value: Any, reference: dict) -> Any:
+    boolean_keys = {str(key).casefold() for key in reference}
+    if boolean_keys and boolean_keys <= {"true", "false"}:
+        text = str(value).casefold()
+        if text in {"true", "false"}:
+            return text == "true" if isinstance(next(iter(reference)), bool) else text
     sample_key = next(iter(reference), None)
     if sample_key is None:
         return value
@@ -606,6 +669,37 @@ def _coerce_key(value: Any, reference: dict) -> Any:
     if isinstance(sample_key, str) and not isinstance(value, str):
         return str(value)
     return value
+
+
+def distribution_profile_applies(
+    record: ParsedRecord, profile: dict, scenario: Scenario | None
+) -> bool:
+    """Select only populations supported by an explicit reference profile."""
+    platforms = profile.get("platforms")
+    roles = profile.get("host_roles")
+    if not platforms and not roles:
+        return True
+    hostname = str(record.source_host or _extract_hostname(record) or "").casefold().split(".")[0]
+    system = (
+        next(
+            (
+                host
+                for host in scenario.environment.systems
+                if host.hostname.casefold().split(".")[0] == hostname
+            ),
+            None,
+        )
+        if scenario is not None
+        else None
+    )
+    from evidenceforge.utils.platforms import platform_for_os
+
+    platform = (
+        platform_for_os(system.os) if system is not None else record.fields.get("os_category")
+    )
+    return (not platforms or platform in platforms) and (
+        not roles or system is not None and bool(set(roles) & set(system.roles))
+    )
 
 
 def _process_category(process_path: str) -> str:
@@ -913,6 +1007,8 @@ def _score_http_file_consistency(
 
 def _score_cryptographic_protocol_consistency(
     records: RecordCorpus,
+    *,
+    diagnostics: dict[str, int] | None = None,
 ) -> tuple[int, int, list[str]]:
     """Probe rendered DKIM, OCSP, and TLS-chain payload contracts."""
 
@@ -928,13 +1024,15 @@ def _score_cryptographic_protocol_consistency(
     agreeing = 0
     failures: list[str] = []
 
+    from evidenceforge.evaluation.dns_answers import dns_answer_values
+
     for record in records.get("zeek_dns", []):
         query = str(record.fields.get("query", "")).lower()
         if "._domainkey." not in query:
             continue
         answers = record.fields.get("answers") or []
         answers = answers if isinstance(answers, list) else [answers]
-        for answer in answers:
+        for answer in dns_answer_values(record, answers):
             value = str(answer)
             public_value = next(
                 (
@@ -967,6 +1065,11 @@ def _score_cryptographic_protocol_consistency(
         for record in records.get("zeek_ocsp", [])
         if record.fields.get("id")
     )
+    files_by_id = bounded_map(
+        (str(record.fields.get("fuid")), record)
+        for record in records.get("zeek_files", [])
+        if record.fields.get("fuid")
+    )
     for record in records.get("zeek_http", []):
         mime_types = record.fields.get("resp_mime_types") or []
         if "application/ocsp-response" not in mime_types:
@@ -975,6 +1078,19 @@ def _score_cryptographic_protocol_consistency(
         if not isinstance(fuids, list):
             fuids = [fuids]
         response = next((ocsp_by_id.get(str(fuid)) for fuid in fuids if fuid), None)
+        if (
+            response is None
+            and fuids
+            and all(
+                (file := files_by_id.get(str(fuid))) is not None
+                and type(file.fields.get("missing_bytes")) is int
+                and file.fields["missing_bytes"] > 0
+                for fuid in fuids
+            )
+        ):
+            if diagnostics is not None:
+                diagnostics["partial_ocsp"] = diagnostics.get("partial_ocsp", 0) + 1
+            continue
         matched += 1
         try:
             encoded = unquote(str(record.fields.get("uri", "")).lstrip("/"))
@@ -1224,6 +1340,31 @@ def _values_agree(a_val: Any, b_val: Any, spec: dict) -> bool:
     return _normalize_value(a_val, normalize) == _normalize_value(b_val, normalize)
 
 
+def _http_server_addresses(scenario: Scenario) -> dict[str, set[str]]:
+    """Resolve web source owners and declared static NAT aliases independently."""
+    result: dict[str, set[str]] = {}
+    for host in scenario.environment.systems:
+        addresses = {host.ip}
+        if scenario.environment.network:
+            addresses.update(
+                rule.mapped_ip
+                for sensor in scenario.environment.network.sensors
+                for rule in sensor.nat_rules
+                if rule.type == "static" and rule.real_ip == host.ip
+            )
+        result[host.hostname.casefold().split(".")[0]] = addresses
+    return result
+
+
+def _http_server_matches(
+    left: ParsedRecord, right: ParsedRecord, addresses: dict[str, set[str]] | None
+) -> bool:
+    if addresses is None:
+        return True
+    host = str(left.source_host or _extract_hostname(left) or "").casefold().split(".")[0]
+    return str(right.fields.get("id.resp_h", "")) in addresses.get(host, set())
+
+
 def _score_pair(
     pair_name: str,
     filtered_a: list[ParsedRecord],
@@ -1231,11 +1372,22 @@ def _score_pair(
     pivot: dict,
     agree_on: list,
     max_matches: int = _MAX_FIELD_AGREEMENT_MATCHES,
+    *,
+    diagnostics: dict[str, int] | None = None,
+    server_addresses: dict[str, set[str]] | None = None,
 ) -> tuple[int, int, list[str]]:
     total_matched = 0
     agreeing = 0
     failures: list[str] = []
     time_window = pivot.get("time_window_seconds")
+    one_to_one = pivot.get("matching") == "one_to_one"
+    used = bounded_set()
+    a_index = bounded_groups()
+    if one_to_one:
+        for record in filtered_a:
+            key = _get_pivot_key_a(record, pivot)
+            if key is not None:
+                a_index[key].append(record)
 
     for rec_a in filtered_a:
         if total_matched >= max_matches:
@@ -1251,6 +1403,12 @@ def _score_pair(
                 matching_b.extend(b_index.get(sub_key, []))
         else:
             matching_b = b_index.get(key_a, [])
+        if one_to_one and isinstance(key_a, tuple) and isinstance(key_a[-1], int):
+            matching_b = bounded_list(
+                record
+                for offset in (-1, 0, 1)
+                for record in b_index.get((*key_a[:-1], key_a[-1] + offset), [])
+            )
 
         if not matching_b:
             continue
@@ -1265,6 +1423,49 @@ def _score_pair(
             )
             if not matching_b:
                 continue
+
+        if one_to_one:
+            matching_b = bounded_list(
+                record
+                for record in matching_b
+                if record_identity(record) not in used
+                and _http_server_matches(rec_a, record, server_addresses)
+            )
+            if not matching_b:
+                if diagnostics is not None:
+                    diagnostics["unmatched_endpoint"] = diagnostics.get("unmatched_endpoint", 0) + 1
+                continue
+            # A source with only second precision cannot prove which of several
+            # indistinguishable requests belongs to this transaction. Never use
+            # the status being checked to select a favorable counterpart.
+            competitors = 0
+            if len(matching_b) == 1 and time_window is not None:
+                other = matching_b[0]
+                key_b = _get_pivot_key_b(other, pivot)
+                keys = (
+                    [(*key_b[:-1], key_b[-1] + offset) for offset in (-1, 0, 1)]
+                    if isinstance(key_b, tuple) and isinstance(key_b[-1], int)
+                    else [key_b]
+                )
+                competitors = sum(
+                    1
+                    for key in keys
+                    for record in a_index.get(key, ())
+                    if record.timestamp is not None
+                    and _http_server_matches(record, other, server_addresses)
+                    and other.timestamp is not None
+                    and abs(
+                        (
+                            _normalize_ts(record.timestamp) - _normalize_ts(other.timestamp)
+                        ).total_seconds()
+                    )
+                    <= time_window
+                )
+            if len(matching_b) != 1 or competitors != 1:
+                if diagnostics is not None:
+                    diagnostics["ambiguous"] = diagnostics.get("ambiguous", 0) + 1
+                continue
+            used.add(record_identity(matching_b[0]))
 
         for rec_b in matching_b:
             if total_matched >= max_matches:

@@ -178,9 +178,11 @@ PERSISTENT_WINDOWS_SMB_EVIDENCE = BehaviorEvidenceContract(
     ),
 )
 
+# ASA observes the physical transport. It is an exact publication participant,
+# but cannot by itself satisfy the SMB application-evidence requirement above.
 PERSISTENT_WINDOWS_SMB_TARGET_FORMATS = tuple(
     next(iter(alternative.formats)) for alternative in PERSISTENT_WINDOWS_SMB_EVIDENCE.alternatives
-)
+) + (FormatKind.CISCO_ASA.value,)
 
 
 def _host_event_contracts() -> dict[str, BehaviorEvidenceContract]:

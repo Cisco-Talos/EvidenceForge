@@ -4278,7 +4278,7 @@ class SourceTimingPlanner:
                     source_instance=instance,
                     hostname=hostname,
                 )
-            phases = self._endpoint_event_phases(event, family)
+            phases = self._endpoint_event_phases(event, family, hostname)
             phase_times: dict[str, datetime] = {}
             for phase in phases:
                 specialized = self._specialized_endpoint_times(
@@ -4935,7 +4935,9 @@ class SourceTimingPlanner:
         return (host,) if host is not None else ()
 
     @staticmethod
-    def _endpoint_event_phases(event: TimingOccurrence, family: str) -> tuple[str, ...]:
+    def _endpoint_event_phases(
+        event: TimingOccurrence, family: str, hostname: str = ""
+    ) -> tuple[str, ...]:
         """Return the source-native rows emitted for one endpoint occurrence."""
 
         if event.event_type in _PROCESS_START_EVENT_TYPES:
@@ -4955,6 +4957,21 @@ class SourceTimingPlanner:
         ):
             return ("base", "smb_object_open")
         if family == "ecar" and event.event_type.startswith("smb_"):
+            if hostname and event.smb is not None:
+                from dataclasses import asdict
+
+                from evidenceforge.events.evidence_source_rules import ecar_smb_projection_phases
+
+                return ecar_smb_projection_phases(
+                    str(event.event_type),
+                    asdict(event.smb),
+                    {"hostname": event.src_host.hostname, "os_category": event.src_host.os_category}
+                    if event.src_host
+                    else {},
+                    {"hostname": event.dst_host.hostname} if event.dst_host else {},
+                    {"pid": event.process.pid} if event.process else {},
+                    hostname,
+                )
             return ("base", "client_file", "client_delete")
         return ("base",)
 

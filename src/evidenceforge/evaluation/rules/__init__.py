@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.config import get_evaluation_directory
-from evidenceforge.utils.files import load_yaml
+from evidenceforge.utils.yaml_loader import load_yaml_text
 
 
 def get_rules_directory() -> Path:
@@ -39,4 +39,6 @@ def load_rules_file(name: str) -> dict[str, Any]:
     path = get_rules_directory() / name
     if not path.exists():
         return {}
-    return load_yaml(path)
+    # Scoring policy belongs to this engine. Captured generation defaults must
+    # not restore obsolete comparators, profiles or acceptance requirements.
+    return load_yaml_text(path.read_text(encoding="utf-8"), source=str(path)) or {}
