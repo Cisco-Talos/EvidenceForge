@@ -703,6 +703,114 @@ When adding or significantly modifying event types, emitters, or the event schem
 | 22 | Format Error | Format definition loading/validation error |
 | 130 | SIGINT | User interrupted (Ctrl+C) |
 
+## Studio UI Design Patterns
+
+Studio (`desktop-ui/`, Tauri + React) is migrating to the **"Forge" design system**: graphite
+neutrals, an ember-orange accent taken from the logo, teal for success, and light and dark themes.
+All new or modified Studio UI must follow these rules. When you touch a screen that still uses the
+older patterns, migrate the code you change instead of extending the old pattern. Do not start a
+Studio-wide rewrite unless the task asks for it.
+
+### Visual tokens
+- Every color, font size, radius, spacing value and shadow comes from CSS custom properties in the
+  token block at the top of `App.css`. Never add a raw hex/rgb color, pixel font size or one-off
+  radius outside that block. If a value you need does not exist, add a token; do not inline it.
+- Color tokens: `--bg`, `--sidebar`, `--surface-1/2/3`, `--border`, `--border-strong`,
+  `--text-1/2/3`, `--accent`, `--accent-hover`, `--accent-fg`, `--accent-soft`, plus semantic
+  `--ok`, `--warn`, `--err`, `--info`, each with a `-soft` variant. Define every token for both
+  themes. A component must look correct in light and dark without per-theme overrides.
+- The theme follows `prefers-color-scheme` by default. A user override (System / Light / Dark) sets
+  `data-theme` on the root element. Do not branch on the theme in TypeScript.
+- Type scale: 11 / 12 / 13 (base) / 15 / 20 / 26 px. Nothing smaller than 11px. Use
+  `font-variant-numeric: tabular-nums` for sizes, counts, durations and times.
+- Spacing is in multiples of 4px. Radii: 6 (controls), 10 (cards), 14 (dialogs). Use two shadows
+  (popover, dialog).
+- The accent marks the single primary action on a surface and the current selection. Do not use
+  it for decoration. Warning and error colors are only for real warnings and errors.
+
+### Layout and information hierarchy
+- Each page has one compact title row (title, optional count, page actions). Do not add eyebrow
+  labels, marketing taglines or a second page-sized `h1` that repeats the titlebar.
+- Projects are navigated from the sidebar. Libraries (scenarios, packs, bundles, assets) render as a
+  flat, sortable table that shows items immediately. Grouping is an opt-in view and never starts
+  collapsed.
+- Every library uses one toolbar pattern: `Search` · `Filter ▾` (a popover holding all facets,
+  including hidden items and previous versions) · `Views ▾` · result count. Do not add inline
+  filter selects or new toggle buttons to the toolbar.
+- The scenario workspace shows readiness as a labeled pipeline (Author → Environment → Validate →
+  Generate → Evaluate). It promotes exactly one next action as the primary button. Derive step
+  state from the existing `scenarioStates`/`environmentState` helpers; do not add parallel
+  status logic.
+- **Progressive disclosure:**
+  - Technical identifiers live in Properties → Technical or in a collapsed "Technical details"
+    disclosure, never in headers, rows or titles. This covers file paths, digests, UUIDs, run
+    hashes, schema versions, pack reference strings and raw JSON.
+  - Give runs human names (for example "Run 4 · Nov 14 10:22") and keep the ID in a tooltip and in
+    Properties.
+  - Help text is at most one sentence, plus a "Learn more" link to `docs/studio.md` when more is
+    needed. Do not add paragraphs of instructions to dialogs, tooltips or panels.
+- Never show the same fact twice on one surface. If a row, header and action label would all show
+  the forecast size, keep one.
+
+### Shared components (one way to do each thing)
+- **Dialogs:**
+  - Use the shared Radix-based `Modal` with the `form`, `confirm` or `review` variant.
+  - Do not add `.modal-backdrop` markup, hand-rolled overlays or `window.confirm`.
+  - Destructive dialogs use the `review` layout: what is affected, then "Can't be undone", then the
+    danger button.
+- **Status:**
+  - Use the shared `StatusPill` (icon plus a 1–3 word label such as "Passed · 91", "2 warnings",
+    "Running 42%").
+  - Icon-only status is allowed only in a table cell under a labeled column header, and must still
+    carry an accessible label.
+  - Do not invent new badge or chip styles.
+- **Feedback:**
+  - Use the shared empty-state, inline loading and error-banner components.
+  - Errors offer a retry when one is possible.
+  - Success goes to a toast, never through an `onError` callback.
+  - "Checked at" feedback uses relative times.
+- **Rows:** library-style lists use the shared table/row component. Do not create a new row layout
+  for a new object type.
+- If a required shared component does not exist yet, create it once in `desktop-ui/src/` with tests
+  and use it, rather than writing a local one-off.
+
+### Actions, menus and vocabulary
+- Use these verbs, and only these, for these meanings:
+
+  | Verb | Meaning | Confirmation |
+  |---|---|---|
+  | `Rename…` | Change a display title (inline on titles, `Rename…` in menus) | None |
+  | `Duplicate…` | Independent copy with a new identity (replaces "Clone…") | Form |
+  | `New draft` | Editable version of a published release (lifecycle only) | None |
+  | `Export…` | Write a file outside Studio; always ends with a toast offering **Reveal in Finder** | Save panel |
+  | `Remove from Studio` | Forget a registration or history entry; files are kept | Confirm |
+  | `Delete…` | Permanently delete files | Review dialog |
+
+- Object menus (`ObjectMenu`/`ObjectAction`) keep one order everywhere:
+  - Open · Rename · Duplicate · Move to project · Export.
+  - Then Properties · Reveal in Finder · Copy path.
+  - Then Hide · Remove/Delete.
+- Use a `•••` menu only when there are at least two secondary actions. An action is either a visible
+  button or a menu item, not both, and never appears twice on one screen.
+- Hide actions that can never apply to an object, such as Validate or Generate on an unauthored
+  draft. Disable an action only when it is temporarily blocked, and always give a `reason`.
+- Icon meanings are fixed: `FolderOpen` = Reveal in Finder, `ArrowUpRight` = navigate to an object,
+  `Copy` = copy, `MoreHorizontal` = menu. Do not reuse an icon for a different meaning.
+- The UI wording and `docs/studio.md` must use the same verbs and labels. Update the guide in the
+  same change when you rename a user-visible action.
+
+### Studio UI change checklist
+1. No raw colors or sizes outside the token block; check the result in both light and dark themes.
+2. Reuse shared components (`Modal`, `StatusPill`, empty/loading/error, table rows,
+   `ObjectMenu`).
+3. Use the standard verbs and menu order; no single-item or duplicated menus; no permanently
+   disabled actions.
+4. Keep identifiers, paths and raw data behind disclosure.
+5. Meet keyboard and focus behavior, WCAG AA contrast in both themes, and
+   `prefers-reduced-motion`.
+6. Run `npm test` and `npm run build` in `desktop-ui/`, and update tests that assert renamed labels.
+7. Update `docs/studio.md` when user-visible labels or workflows change.
+
 ## Testing Requirements
 
 **Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/fixtures/` (shared data)
