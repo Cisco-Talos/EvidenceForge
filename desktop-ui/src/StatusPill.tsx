@@ -44,7 +44,10 @@ export function summarizeStates(states: OperationState[]): { tone: StatusTone; l
   if (working) return { tone: "info", label: `${working.label === "Validation" ? "Validating" : working.label === "Generation" ? "Generating" : "Evaluating"}`, detail };
   const failed = states.find((state) => state.state === "error");
   if (failed) {
-    const label = failed.label === "Validation" ? "Invalid" : failed.label === "Evaluation" && failed.detail.startsWith("Failed acceptance") ? "Failed acceptance" : `${failed.label} failed`;
+    // Job errors include stopped and cancelled runs; name which one happened.
+    const ended = /\bstopped\b/.test(failed.detail) ? "stopped" : /\bcancelled\b/.test(failed.detail) ? "cancelled" : "failed";
+    const label = failed.label === "Validation" ? "Invalid" : failed.label === "Evaluation" && failed.detail.startsWith("Failed acceptance") ? "Failed acceptance" : `${failed.label} ${ended}`;
+    if (ended !== "failed") return { tone: "neutral", label, detail };
     return { tone: "err", label, detail };
   }
   const score = evaluation?.detail.match(/·\s*(\d+)\/100/)?.[1];

@@ -183,7 +183,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
         <div className="setting-row"><div className="setting-copy"><strong>Codex executable</strong><Help text="Automatic checks PATH, common CLI install locations for your account, and the Codex desktop app on macOS and Windows. Available models come from the selected Codex version. After changing this path, save and reconnect Codex using the status dot in the header." /></div><input value={draft.codex_path || ""} onChange={(event) => setDraft({ ...draft, codex_path: event.target.value || null })} placeholder="Automatic" /></div>
         <div className="setting-row"><div className="setting-copy"><strong>eforge executable</strong><Help text="Leave empty to use this Python environment's eforge CLI." /></div><input value={draft.eforge_path || ""} onChange={(event) => setDraft({ ...draft, eforge_path: event.target.value || null })} placeholder="Automatic" /></div>
       </>}
-      <div className="settings-footer"><span role="status" className="settings-save-status">{saveStatus}</span><button className="button-primary" disabled={!dirty || saving} onClick={() => void save()}><Check size={16} /> {saving ? "Saving…" : "Save settings"}</button></div>
+      {tab !== "appearance" && <div className="settings-footer"><span role="status" className="settings-save-status">{saveStatus}</span><button className="button-primary" disabled={!dirty || saving} onClick={() => void save()}><Check size={16} /> {saving ? "Saving…" : "Save settings"}</button></div>}
     </div>
   </div>;
 }

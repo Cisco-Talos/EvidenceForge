@@ -68,6 +68,7 @@ test("summarizeStates prefers active work, then failures, then the furthest comp
   expect(summarizeStates([state("Validation", "success"), state("Generation", "success"), state("Evaluation", "success", "Passed acceptance · 91/100 for this scenario revision.")])).toMatchObject({ tone: "ok", label: "Passed · 91" });
   expect(summarizeStates([state("Validation", "warning", "Current revision is valid with 2 warnings."), state("Generation", "none"), state("Evaluation", "none")])).toMatchObject({ tone: "warn", label: "2 warnings" });
   expect(summarizeStates([state("Validation", "stale"), state("Generation", "none"), state("Evaluation", "none")])).toMatchObject({ tone: "neutral", label: "Stale" });
+  expect(summarizeStates([state("Validation", "success"), state("Generation", "error", "Generation stopped."), state("Evaluation", "none")])).toMatchObject({ tone: "neutral", label: "Generation stopped" });
   const none = summarizeStates([state("Validation", "none"), state("Generation", "none"), state("Evaluation", "none")]);
   expect(none).toMatchObject({ tone: "neutral", label: "Not validated" });
   expect(none.detail).toBe("Validation: Validation detail\nGeneration: Generation detail\nEvaluation: Evaluation detail");
