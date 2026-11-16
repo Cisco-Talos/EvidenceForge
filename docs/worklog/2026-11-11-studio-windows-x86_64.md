@@ -2566,3 +2566,22 @@ The new intended behavior cancels/revokes without review, so the fixture times o
 Update it to prove empty selection rejects execution, then prepare/execute a fresh
 nonempty selection over the same live pipe. All new background/progress tests and
 CLI/checkpoint diagnostics passed. No production adjustment follows this failure.
+
+Final run 43869166689 succeeds from
+73596077929f3edbe386a8dddf8ebff08c920be0: 139 native diagnostics pass in
+56.60 seconds, four compiled NSIS page cases pass in 11.19 seconds, and nine
+installed-archive isolated CLI checks pass in 131.82 seconds. Production source
+is c6b15412; the follow-up changes only the real-pipe test and this worklog.
+
+Verified the MZ header, SHA256 sidecar and exact source/run/target/unsigned/not_run
+receipt; copied all three bytes-identically to
+/Users/dabianco/Downloads/EvidenceForge-Windows-build-only-73596077/.
+EXE: EvidenceForge-Studio-3.0.0rc1-windows-x86_64-test-setup.exe,
+72,111,698 bytes, SHA256
+fd7e08f28706e0006b48d7ef1a59e03bede44949340bd225c8f3ed29d297c8de;
+runtime ID 7c6a8428a3b2947dc559febf82f44023d35cae64777527cfdff8d1711fb457e7.
+Bundled Python 3.12.12; build Python 3.12.16; rustc 1.100.0
+(0ef1bc386 2026-11-09); Node v22.23.4; uv 0.13.8; runner 20261103.298.1.
+Install/Upgrade before testing this uninstaller. Full CI and Windows 11 desktop/
+50k+ profile timing acceptance remain pending. No version bump, release/tag,
+publication or PR. The final delivery-evidence commit changes documentation only.
