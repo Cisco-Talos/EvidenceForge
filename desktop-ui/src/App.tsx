@@ -1,4 +1,3 @@
-import { latestPublishedItems } from "./artifactGrouping";
 import { StateMaintenance } from "./StateMaintenance";
 import { StartupScreen } from "./StartupScreen";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,7 +22,7 @@ import { artifactFilename, artifactTitle, draftTitle } from "./artifactNaming";
 import { packNameError } from "./packName";
 import { scenarioNameError } from "./scenarioName";
 import { generationIsCurrent } from "./ScenarioStates";
-import { PackLibrary } from "./PackLibrary";
+import { PackKindIcon, PackLibrary } from "./PackLibrary";
 import { ScenarioLibrary, type ScenarioSort } from "./ScenarioLibrary";
 import { useLibraryRecall } from "./useLibraryRecall";
 import { DeletePackDialog } from "./DeletePackDialog";
@@ -75,7 +74,6 @@ function App() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
-  const [showPreviousVersions, setShowPreviousVersions] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [scenarioSort, setScenarioSort] = useState<ScenarioSort>("name");
   const [packFilter, setPackFilter] = useState<"packs" | "industry_pack" | "organization_pack">("packs");
@@ -173,9 +171,8 @@ function App() {
       ? searchResult.ids.has(entry.id)
       : `${artifactTitle(entry)} ${entry.name} ${entry.description} ${entry.publisher || ""} ${entry.publisher_display_name || ""} ${entry.version} ${entry.requires_evidenceforge || ""} ${entry.pack_source || ""}`.toLowerCase().includes(search.toLowerCase())))).map((entry) => search.trim() && searchResult?.key === searchKey ? searchResult.hits.get(entry.id) || entry : entry) || [],
     [snapshot, kind, search, searchKey, searchResult, selectedProjectId, packCriteria, showHidden]);
-  const latestLibrary = latestPublishedItems(matchingLibrary, snapshot?.artifact_groups);
-  const previousVersionCount = matchingLibrary.length - latestLibrary.length;
-  const library = showPreviousVersions || (kind !== "scenario" && !!packCriteria.version) ? matchingLibrary : latestLibrary;
+  // Every matching version is listed; the library collapses each family into one expandable row.
+  const library = matchingLibrary;
   const item = snapshot?.items.find((entry) => entry.id === selectedId) || null;
   const draftConversation = snapshot?.conversations.find((chat) => chat.id === draftConversationId) || null;
   const drafts = snapshot?.conversations.filter((chat) =>
@@ -946,9 +943,11 @@ function App() {
   ];
   const libraryToggles: FilterToggle[] = [
     ...(hiddenCount > 0 || showHidden ? [{ id: "hidden", label: `Include hidden ${section === "packs" ? "packs" : "scenarios"}${hiddenCount ? ` (${hiddenCount})` : ""}`, checked: showHidden, onChange: setShowHidden }] : []),
-    ...(previousVersionCount > 0 || showPreviousVersions ? [{ id: "previous", label: `Show previous versions${previousVersionCount ? ` (${previousVersionCount})` : ""}`, checked: showPreviousVersions, onChange: setShowPreviousVersions }] : []),
   ];
-  function resetLibraryFilters() { setPackFilter("packs"); setPackCriteria(emptyPackFilters); setShowHidden(false); setShowPreviousVersions(false); }
+  function resetLibraryFilters() { setPackFilter("packs"); setPackCriteria(emptyPackFilters); setShowHidden(false); }
+  function toggleFamily(key: string, open: boolean) {
+    setExpandedGroups((current) => current.includes(key) === open ? current : open ? [...current, key] : current.filter((entry) => entry !== key));
+  }
   function savedViewDetail(view: SavedView): string {
     return [view.search ? `Search: ${view.search}` : "All items", view.ungrouped ? "Ungrouped" : snapshot!.projects.find((project) => project.id === view.project_id)?.name, view.publisher ? `Author: ${view.publisher}` : null, view.version, view.pack_source, view.show_hidden ? "Includes hidden" : null].filter(Boolean).join(" · ");
   }
@@ -960,7 +959,7 @@ function App() {
   const pageActions = showLibrary && !item && !draftConversationId
     ? section === "scenarios"
       ? <button className="button-primary" disabled={busy} onClick={newScenario}><Plus size={15} aria-hidden="true" />New scenario</button>
-      : <div className="library-pack-actions"><button className="button-quiet" onClick={() => setPackImportOpen(true)}>Import packs…</button><DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}><Plus size={15} aria-hidden="true" />New pack<ChevronDown size={14} aria-hidden="true" /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5} align="end"><DropdownMenu.Item className="object-action-item" onSelect={() => setNewPackKind("industry_pack")}>Industry pack</DropdownMenu.Item><DropdownMenu.Item className="object-action-item" onSelect={() => setNewPackKind("organization_pack")}>Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>
+      : <div className="library-pack-actions"><button className="button-quiet" onClick={() => setPackImportOpen(true)}>Import packs…</button><DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}><Plus size={15} aria-hidden="true" />New pack<ChevronDown size={14} aria-hidden="true" /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5} align="end"><DropdownMenu.Item className="object-action-item" onSelect={() => setNewPackKind("industry_pack")}><PackKindIcon kind="industry_pack" size={14} />Industry pack</DropdownMenu.Item><DropdownMenu.Item className="object-action-item" onSelect={() => setNewPackKind("organization_pack")}><PackKindIcon kind="organization_pack" size={14} />Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>
     : section === "jobs" && hasPausedJobs ? <ActionShortcut action={resumeHeldAction} /> : null;
   const projectCount = (projectId: string | null) => snapshot.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden && (projectId === null ? !entry.project_id : entry.project_id === projectId)).length + allDrafts.filter((draft) => projectId === null ? !draft.draft_project_id : draft.draft_project_id === projectId).length;
   const projectsActive = showLibrary && !item && !draftConversationId;
@@ -999,7 +998,7 @@ function App() {
           count={library.length + drafts.length} noun={section === "packs" ? ["pack", "packs"] : ["scenario", "scenarios"]}>
           {libraryFeedback.error && <div className="library-refresh-feedback"><RequestFeedback {...libraryFeedback} label="Refreshing library…" previousLabel="The previous library contents remain visible." /></div>}
         </LibraryToolbar>
-        {library.length + drafts.length ? section === "packs" ? <PackLibrary onProperties={(entry) => setPropertiesTarget({ id: entry.id, section: "general" })} artifactGroups={snapshot.artifact_groups} sort={scenarioSort} onSort={setScenarioSort} dropTargetId={dropTargetId} onProjectDragOver={allowProjectDrop} onProjectDragLeave={leaveProjectDrop} onProjectDrop={dropIntoProject} items={library} drafts={drafts} projects={snapshot.projects} busy={busy} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onClone={(entry) => void beginPackClone(entry)} onExport={(entry) => void exportPack(entry)} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onDelete={setDeletingPack} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draftTitle(draft)); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} /> : <ScenarioLibrary onProperties={(entry) => setPropertiesTarget({ id: entry.id, section: "general" })} dropTargetId={dropTargetId} onProjectDragOver={allowProjectDrop} onProjectDragLeave={leaveProjectDrop} onProjectDrop={dropIntoProject} items={library} drafts={drafts} snapshot={snapshot} api={api} sort={scenarioSort} onSort={setScenarioSort} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onClone={beginScenarioClone} onExport={openExport} onUnavailableExport={() => showNotice("Generate a run before exporting its bundle.")} onDelete={setDeletingScenario} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onRenameDraft={(draft) => { setRenamingDraft(draft); setDraftName(draftTitle(draft)); }} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draftTitle(draft)); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} />
+        {library.length + drafts.length ? section === "packs" ? <PackLibrary expandedFamilies={expandedGroups} onToggleFamily={toggleFamily} onProperties={(entry) => setPropertiesTarget({ id: entry.id, section: "general" })} artifactGroups={snapshot.artifact_groups} sort={scenarioSort} onSort={setScenarioSort} dropTargetId={dropTargetId} onProjectDragOver={allowProjectDrop} onProjectDragLeave={leaveProjectDrop} onProjectDrop={dropIntoProject} items={library} drafts={drafts} projects={snapshot.projects} busy={busy} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onClone={(entry) => void beginPackClone(entry)} onExport={(entry) => void exportPack(entry)} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onDelete={setDeletingPack} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draftTitle(draft)); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} /> : <ScenarioLibrary expandedFamilies={expandedGroups} onToggleFamily={toggleFamily} onProperties={(entry) => setPropertiesTarget({ id: entry.id, section: "general" })} dropTargetId={dropTargetId} onProjectDragOver={allowProjectDrop} onProjectDragLeave={leaveProjectDrop} onProjectDrop={dropIntoProject} items={library} drafts={drafts} snapshot={snapshot} api={api} sort={scenarioSort} onSort={setScenarioSort} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onClone={beginScenarioClone} onExport={openExport} onUnavailableExport={() => showNotice("Generate a run before exporting its bundle.")} onDelete={setDeletingScenario} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onRenameDraft={(draft) => { setRenamingDraft(draft); setDraftName(draftTitle(draft)); }} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draftTitle(draft)); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} />
           : <EmptyState tall icon={<FolderOpen size={30} />} title={search ? "No matches" : selectedProject ? `No ${section} in this project` : "Nothing here yet"}>{search ? "Try another search." : selectedProject ? `Drag ${section} onto ${selectedProject.name} in the sidebar, or use their project menu.` : section === "packs" ? "Import or create a pack to describe an industry or organization." : "Add or import a scenario to start building your library."}</EmptyState>}
       </div>}
 

@@ -1,8 +1,9 @@
 import { SearchExcerpts } from "./SearchExcerpts";
 import { artifactTitle, draftTitle } from "./artifactNaming";
-import { artifactGroup, artifactGroupLabel, type ArtifactGroups } from "./artifactGrouping";
-import { Fragment, type DragEvent } from "react";
-import { Folder, GripVertical, Layers3, PencilLine } from "lucide-react";
+import { artifactFamilies, artifactGroup, artifactGroupLabel, type ArtifactFamily, type ArtifactGroups } from "./artifactGrouping";
+import { FamilyToggle } from "./ScenarioLibrary";
+import { Fragment, type DragEvent, type ReactNode } from "react";
+import { Building2, Factory, Folder, GripVertical, PencilLine } from "lucide-react";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
 import { DraftObjectMenu } from "./DraftObjectMenu";
 import type { CatalogItem, Conversation, Project } from "./api";
@@ -11,14 +12,21 @@ import { groupRows, LibraryGroupHeading, LibraryTable, sortRows, type LibraryCol
 
 const typeLabels: Record<string, string> = { industry_pack: "Industry", organization_pack: "Organization" };
 
+/** Industry and organization packs are told apart by shape: a factory or an office building. */
+export function PackKindIcon({ kind, size = 16 }: { kind?: string | null; size?: number }) {
+  return kind === "organization_pack" ? <Building2 size={size} aria-hidden="true" /> : <Factory size={size} aria-hidden="true" />;
+}
+
 const columns: LibraryColumn[] = [
-  { key: "drag", label: "" }, { key: "name", label: "Name", sort: "name" }, { key: "type", label: "Type" },
+  { key: "drag", label: "" }, { key: "expand", label: "" }, { key: "name", label: "Name", sort: "name" }, { key: "type", label: "Type" },
   { key: "version", label: "Version" }, { key: "project", label: "Project", sort: "project" }, { key: "updated", label: "Updated", sort: "updated" }, { key: "actions", label: "" },
 ];
 
-export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sort, onSort, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop, onOpen, onProperties, onOpenDraft, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd }: {
+export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sort, onSort, expandedFamilies, onToggleFamily, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop, onOpen, onProperties, onOpenDraft, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd }: {
   items: CatalogItem[]; drafts: Conversation[]; projects: Project[]; busy: boolean;
   artifactGroups?: ArtifactGroups; sort: LibrarySort; onSort: (sort: LibrarySort) => void;
+  /** Open family keys; a family row lists its other versions and drafts beneath it. */
+  expandedFamilies: string[]; onToggleFamily: (key: string, open: boolean) => void;
   dropTargetId: string | null;
   onProjectDragOver: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
   onProjectDragLeave: (event: DragEvent<HTMLElement>) => void;
@@ -32,28 +40,30 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
 }) {
   const projectName = (id: string | null) => projects.find((project) => project.id === id)?.name || "Ungrouped";
   const groupId = (id: string | null) => projects.some((project) => project.id === id) ? id! : "ungrouped";
-  const rows = sortRows([
-    ...items.map((item) => ({ id: item.id, name: artifactTitle(item), updated: item.modified_at, project: projectName(item.project_id), groupId: groupId(item.project_id), item, draft: null })),
-    ...drafts.map((draft) => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: groupId(draft.draft_project_id), item: null, draft })),
+  type Row = { id: string; name: string; updated: number; project: string; groupId: string; item: CatalogItem | null; draft: Conversation | null; family: ArtifactFamily | null };
+  const rows = sortRows<Row>([
+    ...artifactFamilies(items, artifactGroups).map((family): Row => ({ id: family.primary.id, name: artifactTitle(family.primary), updated: Math.max(family.primary.modified_at, ...family.others.map((other) => other.modified_at)), project: projectName(family.primary.project_id), groupId: groupId(family.primary.project_id), item: family.primary, draft: null, family })),
+    ...drafts.map((draft): Row => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: groupId(draft.draft_project_id), item: null, draft, family: null })),
   ], sort);
-  const identity = (row: typeof rows[number]) => row.item ? artifactGroup(row.item, artifactGroups).key : row.id;
   const renderDraft = (draft: Conversation) => <li className="pack-row library-row-grid pack-draft" key={draft.id} draggable onDragStart={(event) => onDraftDragStart(event, draft)} onDragEnd={onDragEnd}>
     <span className="pack-drag-handle col-drag" aria-hidden="true"><GripVertical size={14} /></span>
+    <span className="col-expand" />
     <button className="pack-open col-name" onClick={() => onOpenDraft(draft)}><span className="scenario-symbol draft"><PencilLine size={16} /></span><span className="pack-row-copy"><strong>{draftTitle(draft)}</strong><small>{draft.active ? "Authoring in progress" : "Ready to author"}</small></span></button>
-    <span className="col-type pack-cell">{typeLabels[draft.draft_kind || ""] || "Pack"}</span>
+    <span className="col-type pack-cell pack-type"><PackKindIcon kind={draft.draft_kind} size={13} />{typeLabels[draft.draft_kind || ""] || "Pack"}</span>
     <span className="col-version"><span className="draft-chip">Draft</span></span>
     <span className="col-project scenario-project"><Folder size={13} aria-hidden="true" /><span>{projectName(draft.draft_project_id)}</span></span>
     <time className="col-updated pack-cell" title={new Date(draft.updated_at * 1000).toLocaleString()}>{formatTime(draft.updated_at)}</time>
     <div className="col-actions"><DraftObjectMenu draft={draft} projects={projects} onOpen={() => onOpenDraft(draft)} onMove={(id) => onMoveDraft(draft, id)} onDelete={() => onDeleteDraft(draft)} /></div>
   </li>;
-  const renderPack = (item: CatalogItem) => <li key={item.id} data-artifact-identity={artifactGroupLabel(artifactGroup(item, artifactGroups))} className={`pack-row library-row-grid draggable-pack ${item.hidden ? "hidden-pack" : ""}`} draggable onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}>
+  const renderPack = (item: CatalogItem, toggle: ReactNode, child = false) => <li key={item.id} data-artifact-identity={artifactGroupLabel(artifactGroup(item, artifactGroups))} className={`pack-row library-row-grid draggable-pack ${item.hidden ? "hidden-pack" : ""} ${child ? "family-member" : ""}`} draggable onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}>
     <span className="pack-drag-handle col-drag" aria-hidden="true" title={`Drag ${item.name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); onDragStart(event, item); }}><GripVertical size={14} /></span>
-    <button className="pack-open col-name" aria-label={`Open ${artifactTitle(item)} ${item.version}`} onClick={() => onOpen(item)}><span className="scenario-symbol"><Layers3 size={16} /></span><span className="pack-row-copy">
+    <span className="col-expand">{toggle}</span>
+    <button className="pack-open col-name" aria-label={`Open ${artifactTitle(item)} ${item.version}`} onClick={() => onOpen(item)}><span className={`scenario-symbol pack-kind-${item.kind === "organization_pack" ? "organization" : "industry"}`}><PackKindIcon kind={item.kind} /></span><span className="pack-row-copy">
       <strong title={`${artifactTitle(item)} · ${item.name}`}>{artifactTitle(item)}{item.hidden && <span className="draft-chip">Hidden</span>}</strong>
       <small title={item.description}>{item.description || "No description yet"}</small><SearchExcerpts item={item} />
       <small className="pack-row-meta"><span title={`Publisher: ${item.publisher || "not recorded"}`}>By {item.publisher_display_name || item.publisher || "Unknown author"}</span><span>·</span><span title={item.pack_source === "bundled" ? "Included with EvidenceForge" : "Authored or imported in this workspace"}>{item.pack_source === "bundled" ? "Bundled" : "Workspace"}</span></small>
     </span></button>
-    <span className="col-type pack-cell">{typeLabels[item.kind] || "Pack"}</span>
+    <span className="col-type pack-cell pack-type"><PackKindIcon kind={item.kind} size={13} />{typeLabels[item.kind] || "Pack"}</span>
     <span className="col-version"><span className="pack-version">{item.version || "Draft"}</span></span>
     <span className="col-project scenario-project"><Folder size={13} aria-hidden="true" /><span>{projectName(item.project_id)}</span></span>
     <time className="col-updated pack-cell" title={new Date(item.modified_at * 1000).toLocaleString()}>{formatTime(item.modified_at)}</time>
@@ -67,25 +77,15 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
       ...(item.pack_source === "workspace" ? [{ id: "delete", label: "Delete version…", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: () => onDelete(item) }] : []),
     ]} /></div>
   </li>;
-  const newestFirst = (a: typeof rows[number], b: typeof rows[number]) => (b.item?.version || "").localeCompare(a.item?.version || "", undefined, { numeric: true }) || a.id.localeCompare(b.id);
-  /** Keep each pack's versions together, ordered newest first, and order the families by the library sort. */
-  const renderRows = (members: typeof rows) => {
-    const families = [...new Set(members.map(identity))].map((key) => members.filter((row) => identity(row) === key).sort(newestFirst));
-    families.sort((a, b) => {
-      if (sort === "updated") return Math.max(...b.map((row) => row.updated)) - Math.max(...a.map((row) => row.updated));
-      const [first, second] = [a[0], b[0]];
-      return first.name.localeCompare(second.name, undefined, { sensitivity: "base" }) || (first.item?.name || "").localeCompare(second.item?.name || "")
-        || (first.item ? artifactGroup(first.item, artifactGroups).publisher || "" : "").localeCompare(second.item ? artifactGroup(second.item, artifactGroups).publisher || "" : "")
-        || newestFirst(first, second);
-    });
-    return families.map((family) => {
-      const first = family[0].item;
-      return <Fragment key={identity(family[0])}>
-        {first && family.length > 1 && <li className="artifact-identity-heading">{artifactGroupLabel(artifactGroup(first, artifactGroups))} · drafts & releases</li>}
-        {family.map((row) => row.item ? renderPack(row.item) : renderDraft(row.draft!))}
-      </Fragment>;
-    });
-  };
+  const renderRows = (members: Row[]) => members.map((row) => {
+    if (!row.item) return renderDraft(row.draft!);
+    const family = row.family!;
+    const open = expandedFamilies.includes(family.key);
+    return <Fragment key={row.id}>
+      {renderPack(row.item, family.others.length > 0 && <FamilyToggle name={row.name} count={family.others.length} open={open} onToggle={() => onToggleFamily(family.key, !open)} />)}
+      {open && family.others.map((other) => renderPack(other, null, true))}
+    </Fragment>;
+  });
   return <LibraryTable label="Pack library" className="pack-table" columns={columns} sort={sort} onSort={onSort}>
     {groupRows(rows, sort).map((group) => <Fragment key={group.id || "all"}>
       {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}

@@ -134,3 +134,10 @@ test("library filters count active facets and toggles and reset them together", 
   await user.click(screen.getByRole("button", { name: "Reset filters" }));
   expect(onReset).toHaveBeenCalledOnce();
 });
+
+test("the hidden attribute always beats component display rules in the stylesheet", async () => {
+  // jsdom ignores CSS, so guard the rule that keeps hidden workspace views (and chat) from rendering.
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(`${process.cwd()}/src/App.css`, "utf8");
+  expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
+});

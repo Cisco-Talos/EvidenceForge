@@ -21,13 +21,13 @@ const groups: ArtifactGroups = Object.fromEntries(members.map((member) => [membe
   key: "shared-family", name: member.name, publisher: "davidjbianco",
 }]));
 
-function scenarios(items: CatalogItem[], artifact_groups = groups) {
+function scenarios(items: CatalogItem[], artifact_groups = groups, expandedFamilies: string[] = []) {
   const snapshot = {
     settings: { workspace: "/workspace", output_parents: {} }, jobs: [], projects: [], conversations: [],
     validations: {}, dependencies: {}, forecasts: {}, artifact_groups,
   } as unknown as StudioSnapshot;
   return render(<Tooltip.Provider><ScenarioLibrary items={items} drafts={[]} snapshot={snapshot} api={{} as StudioApi} sort="name"
-    expandedGroups={["ungrouped"]} onToggleGroup={vi.fn()} dropTargetId={null}
+    onSort={vi.fn()} expandedFamilies={expandedFamilies} onToggleFamily={vi.fn()} dropTargetId={null}
     onProjectDragOver={vi.fn()} onProjectDragLeave={vi.fn()} onProjectDrop={vi.fn()}
     onOpen={vi.fn()} onOpenDraft={vi.fn()} onClone={vi.fn()} onExport={vi.fn()}
     onUnavailableExport={vi.fn()} onHide={vi.fn()} onDelete={vi.fn()} onMove={vi.fn()}
@@ -35,20 +35,25 @@ function scenarios(items: CatalogItem[], artifact_groups = groups) {
     onDeleteDraft={vi.fn()} onDragStart={vi.fn()} onDraftDragStart={vi.fn()} onDragEnd={vi.fn()} /></Tooltip.Provider>);
 }
 
-test("scenario lineage groups originals and anonymous drafts despite different display names", () => {
-  scenarios(members);
-  expect(screen.getAllByText("davidjbianco/Test_scenario_1 · drafts & releases")).toHaveLength(1);
+test("scenario lineage collapses originals and anonymous drafts into one expandable row", () => {
+  const view = scenarios(members);
+  expect(document.querySelectorAll(".scenario-row")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Show 2 other versions of Test_scenario_1" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("button", { name: "Open scenario Maple Office - PowerShell Discovery" })).toBeNull();
+  view.unmount();
+  scenarios(members, groups, ["shared-family"]);
   expect(document.querySelectorAll(".scenario-row")).toHaveLength(3);
-  expect(document.querySelectorAll(".artifact-identity-heading")).toHaveLength(1);
+  expect(document.querySelectorAll(".scenario-row.family-member")).toHaveLength(2);
   expect(screen.getByRole("button", { name: "Open scenario Maple Office - PowerShell Discovery" })).toBeInTheDocument();
+  expect(document.querySelector(".artifact-identity-heading")).toBeNull();
   expect(members[0].publisher).toBe("");
   expect(members[1].publisher).toBe("");
 });
 
-test("filtered scenario lists retain the group from the complete workspace ancestry", () => {
-  scenarios(members.slice(1));
-  expect(screen.getByText("davidjbianco/Test_scenario_1 · drafts & releases")).toBeInTheDocument();
+test("filtered scenario lists retain the family from the complete workspace ancestry", () => {
+  scenarios(members.slice(1), groups, ["shared-family"]);
   expect(document.querySelectorAll(".scenario-row")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Hide 1 other version of A Published Title" })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("different publishers and unrelated anonymous identifiers remain separate", () => {
@@ -56,21 +61,39 @@ test("different publishers and unrelated anonymous identifiers remain separate",
   expect(artifactGroup(item("one", "team")).key).not.toBe(artifactGroup(item("two", "other")).key);
   const fork = item("fork", "other");
   scenarios([...members, fork], { ...groups, fork: { key: "fork-family", publisher: "other", name: fork.name } });
-  expect(document.querySelectorAll(".artifact-identity-heading")).toHaveLength(2);
-  expect(screen.getByText("other/Test_scenario_1")).toBeInTheDocument();
+  expect(document.querySelectorAll(".scenario-row")).toHaveLength(2);
+  expect(document.querySelectorAll(".family-toggle")).toHaveLength(1);
 });
 
-test("pack lists use the same ancestry grouping and keep each exact version available", () => {
+test("pack lists use the same ancestry families and keep each exact version available when expanded", () => {
   const packs = members.slice(1).map((member) => ({ ...member, kind: "organization_pack", pack_source: "workspace" } as CatalogItem));
-  render(<PackLibrary items={packs} artifactGroups={groups} drafts={[]} projects={[]} busy={false}
-    expandedGroups={["organization_pack"]} onToggleGroup={vi.fn()} onOpen={vi.fn()}
-    onOpenDraft={vi.fn()} onNew={vi.fn()} onClone={vi.fn()} onExport={vi.fn()}
+  render(<PackLibrary items={packs} artifactGroups={groups} drafts={[]} projects={[]} busy={false} sort="name" onSort={vi.fn()}
+    expandedFamilies={["shared-family"]} onToggleFamily={vi.fn()} dropTargetId={null} onProjectDragOver={vi.fn()} onProjectDragLeave={vi.fn()} onProjectDrop={vi.fn()} onOpen={vi.fn()}
+    onOpenDraft={vi.fn()} onClone={vi.fn()} onExport={vi.fn()}
     onHide={vi.fn()} onMove={vi.fn()} onMoveDraft={vi.fn()} onDelete={vi.fn()}
     onNewProject={vi.fn()} onDeleteDraft={vi.fn()} onDragStart={vi.fn()} onDraftDragStart={vi.fn()} onDragEnd={vi.fn()} />);
-  expect(screen.getByText("davidjbianco/Test_scenario_1 · drafts & releases")).toBeInTheDocument();
   expect([...document.querySelectorAll("[data-artifact-identity]")].map((row) => row.getAttribute("data-artifact-identity"))).toEqual(["davidjbianco/Test_scenario_1", "davidjbianco/Test_scenario_1"]);
   expect(screen.getByRole("button", { name: "Open A Published Title 1.0.0" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Open Maple Office - PowerShell Discovery" })).toBeInTheDocument();
+});
+
+test("families headline the newest published release, then legacy versions, then drafts", async () => {
+  const { artifactFamilies } = await import("../src/artifactGrouping");
+  const old = { ...item("old", "team"), version: "1.0.9" };
+  const current = { ...item("current", "team"), version: "1.0.10" };
+  const draft = item("active", "team");
+  const legacy = { ...item("legacy", "team"), version: "9.0.0" };
+  const metadata: ArtifactGroups = {
+    old: { key: "team", name: old.name, publisher: "team", published_version: "1.0.9" },
+    current: { key: "team", name: current.name, publisher: "team", published_version: "1.0.10" },
+    active: { key: "team", name: draft.name, publisher: "team", published_version: null },
+    legacy: { key: "team", name: legacy.name, publisher: "team", published_version: null },
+  };
+  const [family] = artifactFamilies([old, draft, legacy, current], metadata);
+  expect(family.primary.id).toBe("current");
+  expect(family.others.map((entry) => entry.id)).toEqual(["active", "old", "legacy"]);
+  const [bundled] = artifactFamilies([{ ...item("a", "team"), version: "1.0.0" }, { ...item("b", "team"), version: "1.1.0" }], {});
+  expect(bundled.primary.id).toBe("b");
 });
 
 test("latest releases use numeric versions while keeping active drafts, legacy files and publisher forks", () => {

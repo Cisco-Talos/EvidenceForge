@@ -1067,18 +1067,19 @@ test("legacy resumed jobs use their bundle creation time for stable order", () =
   expect(chronologicalJobs([second, first]).map((job) => job.id)).toEqual(["first", "second"]);
 });
 
-test("packs sort by name A–Z and numeric version newest-first within each name", async () => {
+test("packs sort by name A–Z with one row per family whose versions expand newest-first", async () => {
   const original = snapshot.items;
   snapshot.items = [
     { ...original[0], id: "z", kind: "industry_pack", name: "Zebra", version: "9.0.0" },
-    { ...original[0], id: "a2", kind: "industry_pack", name: "Alpha", version: "1.2.0" },
-    { ...original[0], id: "a10", kind: "industry_pack", name: "Alpha", version: "1.10.0" },
-    { ...original[0], id: "a20", kind: "industry_pack", name: "Alpha", version: "2.0.0" },
+    { ...original[0], id: "a2", kind: "industry_pack", publisher: "team", name: "Alpha", version: "1.2.0" },
+    { ...original[0], id: "a10", kind: "industry_pack", publisher: "team", name: "Alpha", version: "1.10.0" },
+    { ...original[0], id: "a20", kind: "industry_pack", publisher: "team", name: "Alpha", version: "2.0.0" },
   ];
   try {
     await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: "Packs", exact: true }));
-    await expandLibraryGroups(".pack-group");
+    expect(screen.getAllByRole("button", { name: /^Open (Alpha|Zebra) / }).map((button) => button.getAttribute("aria-label"))).toEqual(["Open Alpha 2.0.0", "Open Zebra 9.0.0"]);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Show 2 other versions of Alpha" }));
     expect(screen.getAllByRole("button", { name: /^Open (Alpha|Zebra) / }).map((button) => button.getAttribute("aria-label"))).toEqual([
       "Open Alpha 2.0.0", "Open Alpha 1.10.0", "Open Alpha 1.2.0", "Open Zebra 9.0.0",
     ]);
@@ -2531,7 +2532,7 @@ test("missing scenario opens recovery instead of artifact operations", async () 
   } finally { snapshot.missing_sources = previous; }
 });
 
-test("scenario library shows the latest release and exposes previous versions on request", async () => {
+test("scenario library shows the latest release and expands its family to previous versions and drafts", async () => {
   const originalItems = snapshot.items;
   const originalGroups = snapshot.artifact_groups;
   snapshot.items = [
@@ -2545,12 +2546,12 @@ test("scenario library shows the latest release and exposes previous versions on
   try {
     await renderExpandedApp();
     expect(screen.getByRole("button", { name: "Open scenario Current release" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open scenario Active draft" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open scenario Active draft" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
     const user = userEvent.setup();
-    await toggleFilter(user, "Filter scenarios", /Show previous versions \(1\)/);
-    expect(screen.getByRole("button", { name: "Open scenario Previous release" })).toBeInTheDocument();
-    await toggleFilter(user, "Filter scenarios", /Show previous versions/);
+    await user.click(screen.getByRole("button", { name: "Show 2 other versions of Current release" }));
+    expect([...document.querySelectorAll(".scenario-row.family-member .scenario-row-title strong")].map((node) => node.textContent)).toEqual(["Active draft", "Previous release"]);
+    await user.click(screen.getByRole("button", { name: "Hide 2 other versions of Current release" }));
     expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
   } finally {
     snapshot.items = originalItems;

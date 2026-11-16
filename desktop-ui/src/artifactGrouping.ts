@@ -26,3 +26,38 @@ export function latestPublishedItems(items: CatalogItem[], groups?: ArtifactGrou
   }
   return items.filter((item) => !groups?.[item.id]?.published_version || latest.get(artifactGroup(item, groups).key)?.id === item.id);
 }
+
+/** One library row per artifact family: its newest version, and the other versions and drafts. */
+export interface ArtifactFamily { key: string; primary: CatalogItem; others: CatalogItem[] }
+
+/** A comparable release version: the published version, else a non-draft authored version. */
+function releaseVersion(item: CatalogItem, groups?: ArtifactGroups): string {
+  const published = groups?.[item.id]?.published_version;
+  if (published) return published;
+  return item.version && item.version !== "Draft" ? item.version : "";
+}
+
+const newestVersion = (groups?: ArtifactGroups) => (a: CatalogItem, b: CatalogItem) =>
+  releaseVersion(b, groups).localeCompare(releaseVersion(a, groups), undefined, { numeric: true }) || b.modified_at - a.modified_at || a.id.localeCompare(b.id);
+
+/**
+ * Group items by family. The primary is the newest published release, else the newest versioned
+ * legacy file (such as a bundled pack), else the most recently edited draft. Others list drafts
+ * first, then the remaining versions newest first.
+ */
+export function artifactFamilies(items: CatalogItem[], groups?: ArtifactGroups): ArtifactFamily[] {
+  const families = new Map<string, CatalogItem[]>();
+  for (const item of items) {
+    const key = artifactGroup(item, groups).key;
+    families.set(key, [...(families.get(key) || []), item]);
+  }
+  return [...families.entries()].map(([key, members]) => {
+    // Published releases outrank legacy versioned files, which outrank drafts.
+    const published = members.filter((item) => groups?.[item.id]?.published_version).sort(newestVersion(groups));
+    const legacy = members.filter((item) => !groups?.[item.id]?.published_version && releaseVersion(item, groups)).sort(newestVersion(groups));
+    const releases = [...published, ...legacy];
+    const drafts = members.filter((item) => !releaseVersion(item, groups)).sort((a, b) => b.modified_at - a.modified_at || a.id.localeCompare(b.id));
+    const primary = releases[0] || drafts[0];
+    return { key, primary, others: [...drafts, ...releases].filter((item) => item.id !== primary.id) };
+  });
+}

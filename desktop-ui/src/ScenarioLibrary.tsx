@@ -1,8 +1,8 @@
 import { belongsToScenario } from "./scenarioSources";
 import { artifactTitle, draftTitle } from "./artifactNaming";
-import { artifactGroup, artifactGroupLabel } from "./artifactGrouping";
+import { artifactFamilies, type ArtifactFamily } from "./artifactGrouping";
 import { Fragment, type DragEvent, useEffect, useState } from "react";
-import { FileCode2, Folder, GripVertical, PencilLine } from "lucide-react";
+import { ChevronRight, FileCode2, Folder, GripVertical, PencilLine } from "lucide-react";
 import type { CatalogItem, Conversation, Project, StudioApi, StudioSnapshot } from "./api";
 import { formatBundleSize, formatTime } from "./components";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
@@ -17,14 +17,16 @@ import { groupRows, LibraryGroupHeading, LibraryTable, sortRows, type LibraryCol
 export type ScenarioSort = LibrarySort;
 
 const columns: LibraryColumn[] = [
-  { key: "drag", label: "" }, { key: "name", label: "Name", sort: "name" }, { key: "project", label: "Project", sort: "project" },
+  { key: "drag", label: "" }, { key: "expand", label: "" }, { key: "name", label: "Name", sort: "name" }, { key: "project", label: "Project", sort: "project" },
   { key: "status", label: "Status" }, { key: "size", label: "Size" }, { key: "updated", label: "Updated", sort: "updated" }, { key: "actions", label: "" },
 ];
 
-export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, onOpen, onProperties, onOpenDraft, onClone,
+export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, expandedFamilies, onToggleFamily, onOpen, onProperties, onOpenDraft, onClone,
   onExport, onHide, onDelete, onMove, onMoveDraft, onNewProject, onRenameDraft,
   onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop }: {
   dropTargetId: string | null;
+  /** Open family keys; a family row lists its other versions and drafts beneath it. */
+  expandedFamilies: string[]; onToggleFamily: (key: string, open: boolean) => void;
   onProjectDragOver: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
   onProjectDragLeave: (event: DragEvent<HTMLElement>) => void;
   onProjectDrop: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
@@ -49,11 +51,13 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, on
     return () => { cancelled = true; };
   }, [api, snapshot.settings.workspace, completedKey]);
   const projectName = (id: string | null) => snapshot.projects.find((project: Project) => project.id === id)?.name || "Ungrouped";
-  const rows = sortRows([
-    ...items.map((item) => ({ id: item.id, name: artifactTitle(item), updated: item.modified_at, project: projectName(item.project_id), groupId: snapshot.projects.some((project) => project.id === item.project_id) ? item.project_id! : "ungrouped", item, draft: null })),
-    ...drafts.map((draft) => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: snapshot.projects.some((project) => project.id === draft.draft_project_id) ? draft.draft_project_id! : "ungrouped", item: null, draft })),
+  type Row = { id: string; name: string; updated: number; project: string; groupId: string; item: CatalogItem | null; draft: Conversation | null; family: ArtifactFamily | null; child?: boolean };
+  const itemRow = (item: CatalogItem, family: ArtifactFamily | null, child = false): Row => ({ id: item.id, name: artifactTitle(item), updated: family ? Math.max(family.primary.modified_at, ...family.others.map((other) => other.modified_at)) : item.modified_at, project: projectName(item.project_id), groupId: snapshot.projects.some((project) => project.id === item.project_id) ? item.project_id! : "ungrouped", item, draft: null, family, child });
+  const rows = sortRows<Row>([
+    ...artifactFamilies(items, snapshot.artifact_groups).map((family) => itemRow(family.primary, family)),
+    ...drafts.map((draft): Row => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: snapshot.projects.some((project) => project.id === draft.draft_project_id) ? draft.draft_project_id! : "ungrouped", item: null, draft, family: null })),
   ], sort);
-  const renderRow = ({ id, name, updated, project, item, draft }: typeof rows[number]) => {
+  const renderRow = ({ id, name, updated, project, item, draft, family, child }: Row) => {
     const missing = !!item && snapshot.missing_sources?.includes(item.id);
     const available = !!item && snapshot.jobs.some((job) => belongsToScenario(job, item, snapshot) && job.status === "completed");
     const freshRun = item && snapshot.jobs.filter((job) => belongsToScenario(job, item, snapshot) && job.status === "completed" && generationIsCurrent(job, item, snapshot)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
@@ -63,12 +67,14 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, on
     const prediction = item ? currentPrediction(item, snapshot) : undefined;
     const estimatedSize = prediction?.result.forecast?.final_output.expected_bytes ?? forecast?.final_output?.expected_bytes;
     const drag = (event: DragEvent<HTMLElement>) => item ? onDragStart(event, item) : onDraftDragStart(event, draft!);
-    return <li className={`scenario-row library-row-grid ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
+    const open = !!family && expandedFamilies.includes(family.key);
+    return <li className={`scenario-row library-row-grid ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""} ${child ? "family-member" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
       <span className="scenario-drag-handle col-drag" aria-hidden="true" title={`Drag ${name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); drag(event); }}><GripVertical size={14} /></span>
+      <span className="col-expand">{family && family.others.length > 0 && <FamilyToggle name={name} count={family.others.length} open={open} onToggle={() => onToggleFamily(family.key, !open)} />}</span>
       <button className="scenario-open col-name" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
         <span className={`scenario-symbol ${draft ? "draft" : ""}`}>{draft ? <PencilLine size={16} /> : <FileCode2 size={16} />}</span>
         <span className="scenario-row-copy">
-          <span className="scenario-row-title"><strong title={name}>{name}</strong>{item?.version && <span className="scenario-version">{item.version}</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
+          <span className="scenario-row-title"><strong title={name}>{name}</strong>{(item?.version || child) && <span className="scenario-version">{item?.version && item.version !== "Draft" ? item.version : "Draft"}</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
           {item && <SearchExcerpts item={item} />}
         </span>
@@ -89,12 +95,10 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, on
       ]} /> : <DraftObjectMenu draft={draft!} projects={snapshot.projects} onOpen={() => onOpenDraft(draft!)} onRename={() => onRenameDraft(draft!)} onMove={(projectId) => onMoveDraft(draft!, projectId)} onDelete={() => onDeleteDraft(draft!)} />}</div>
     </li>;
   };
-  const renderRows = (members: typeof rows) => [...new Set(members.map((row) => row.item ? artifactGroup(row.item, snapshot.artifact_groups).key : row.id))].map((identity) => {
-    const family = members.filter((row) => (row.item ? artifactGroup(row.item, snapshot.artifact_groups).key : row.id) === identity);
-    const group = family[0].item ? artifactGroup(family[0].item, snapshot.artifact_groups) : null;
-    const duplicateName = members.some((row) => row.item && group && row.item.name === group.name && artifactGroup(row.item, snapshot.artifact_groups).key !== identity);
-    return <Fragment key={identity}>{group && (family.length > 1 || duplicateName) && <li className="artifact-identity-heading">{artifactGroupLabel(group)}{family.length > 1 ? " · drafts & releases" : ""}</li>}{family.map(renderRow)}</Fragment>;
-  });
+  const renderRows = (members: Row[]) => members.map((row) => <Fragment key={row.id}>
+    {renderRow(row)}
+    {row.family && expandedFamilies.includes(row.family.key) && row.family.others.map((other) => renderRow(itemRow(other, null, true)))}
+  </Fragment>);
   return <LibraryTable label="Scenario library" className="scenario-table" columns={columns} sort={sort} onSort={onSort}>
     {groupRows(rows, sort).map((group) => <Fragment key={group.id || "all"}>
       {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}
@@ -103,4 +107,11 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, on
       {renderRows(group.rows)}
     </Fragment>)}
   </LibraryTable>;
+}
+
+/** Expands a family row to list its other versions and drafts. */
+export function FamilyToggle({ name, count, open, onToggle }: { name: string; count: number; open: boolean; onToggle: () => void }) {
+  return <button type="button" className="family-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} ${count} other ${count === 1 ? "version" : "versions"} of ${name}`} title={`${count} other ${count === 1 ? "version" : "versions"}`} onClick={onToggle}>
+    <ChevronRight size={13} aria-hidden="true" className={open ? "open" : ""} /><span>+{count}</span>
+  </button>;
 }
