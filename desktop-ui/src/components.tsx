@@ -44,7 +44,9 @@ export function formatBundleSize(bytes: number): string {
 export { Help } from "./Help";
 
 
-export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged, idPrefix = "job", summaryExtra, detailsExtra, latest = false, onNavigateRow, sourceLabel }: {
+export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged, idPrefix = "job", summaryExtra, detailsExtra, latest = false, onNavigateRow, sourceLabel, extraActions = [] }: {
+  /** Context actions from the containing list, such as Open scenario in a flat bundle list. */
+  extraActions?: ObjectAction[];
   job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean; focusScorecard?: boolean;
   onShowSource?: (generationId: string) => void; api: StudioApi;
   onDeleteHistory?: () => Promise<void | boolean>;
@@ -133,6 +135,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const evaluate: ObjectAction = { id: "evaluate", label: savedEvaluation ? "Re-evaluate" : "Evaluate", group: "work", disabled: working || job.status !== "completed" || evaluationActive, reason: working ? "An operation is in progress" : evaluationActive ? "An evaluation for this run is already active" : "Complete generation first", description: "Evaluate captured data; a completed report replaces previous scores", run: () => requestJob("/v1/jobs/evaluations", { generation_id: job.id }) };
   const actions: ObjectAction[] = [
     { id: "open", label: "Open details", group: "inspect", run: openDetails },
+    ...extraActions,
     ...(generation ? [{ id: "properties", label: "Properties…", group: "locate" as const, run: () => setPropertiesOpen(true) }] : []),
     { id: "files", label: "View files", group: "inspect", run: openBundle },
     { id: "scorecard", label: "View scorecard", group: "inspect", disabled: !scorecardId, reason: "Complete an evaluation to save a scorecard", run: () => setScorecardOpen(true) },

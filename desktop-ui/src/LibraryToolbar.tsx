@@ -33,25 +33,29 @@ export function LibraryFilters({ label, facets = [], toggles = [], onReset }: {
 }
 
 /** Ordering and saved views. Saved views return to a search, its filters and project. */
-export function ViewsMenu({ sort, onSort, views, onApply, onManage }: {
+export function ViewsMenu({ sort, onSort, views, onApply, onManage, options = Object.keys(sortLabels) as LibrarySort[], labels = {} }: {
   sort: LibrarySort; onSort: (sort: LibrarySort) => void;
-  views: { name: string; detail: string }[]; onApply: (name: string) => void; onManage: () => void;
+  /** Saved views; omit for libraries without them. */
+  views?: { name: string; detail: string }[]; onApply?: (name: string) => void; onManage?: () => void;
+  options?: LibrarySort[]; labels?: Partial<Record<LibrarySort, string>>;
 }) {
   return <DropdownMenu.Root>
     <DropdownMenu.Trigger className="toolbar-button" aria-label="Views"><Bookmark size={15} aria-hidden="true" />Views<ChevronDown size={13} aria-hidden="true" /></DropdownMenu.Trigger>
     <DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu views-menu" sideOffset={6} align="start">
       <DropdownMenu.Label className="menu-label">Sort</DropdownMenu.Label>
       <DropdownMenu.RadioGroup value={sort} onValueChange={(value) => onSort(value as LibrarySort)}>
-        {(Object.keys(sortLabels) as LibrarySort[]).map((value) => <DropdownMenu.RadioItem key={value} value={value} className="object-action-item menu-radio">
-          <DropdownMenu.ItemIndicator className="menu-indicator"><Check size={13} /></DropdownMenu.ItemIndicator>{sortLabels[value]}
+        {options.map((value) => <DropdownMenu.RadioItem key={value} value={value} className="object-action-item menu-radio">
+          <DropdownMenu.ItemIndicator className="menu-indicator"><Check size={13} /></DropdownMenu.ItemIndicator>{labels[value] || sortLabels[value]}
         </DropdownMenu.RadioItem>)}
       </DropdownMenu.RadioGroup>
+      {views && <>
       <DropdownMenu.Separator className="menu-separator" />
       <DropdownMenu.Label className="menu-label">Saved views</DropdownMenu.Label>
-      {views.length ? views.map((view) => <DropdownMenu.Item key={view.name} className="object-action-item" aria-label={`Apply saved view ${view.name}`} onSelect={() => onApply(view.name)}><span className="object-action-copy"><span>{view.name}</span><small>{view.detail}</small></span></DropdownMenu.Item>)
+      {views.length ? views.map((view) => <DropdownMenu.Item key={view.name} className="object-action-item" aria-label={`Apply saved view ${view.name}`} onSelect={() => onApply?.(view.name)}><span className="object-action-copy"><span>{view.name}</span><small>{view.detail}</small></span></DropdownMenu.Item>)
         : <div className="menu-empty">No saved views yet</div>}
       <DropdownMenu.Separator className="menu-separator" />
-      <DropdownMenu.Item className="object-action-item" onSelect={onManage}>Save or manage views…</DropdownMenu.Item>
+      <DropdownMenu.Item className="object-action-item" onSelect={() => onManage?.()}>Save or manage views…</DropdownMenu.Item>
+      </>}
     </DropdownMenu.Content></DropdownMenu.Portal>
   </DropdownMenu.Root>;
 }

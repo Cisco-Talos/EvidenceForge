@@ -121,7 +121,7 @@ async function expandLibraryGroups(selector = ".scenario-group") {
 }
 
 /** Pick a library ordering from the Views menu. */
-async function chooseSort(user: ReturnType<typeof userEvent.setup>, label: "Name A–Z" | "Recently updated" | "Group by project") {
+async function chooseSort(user: ReturnType<typeof userEvent.setup>, label: "Name A–Z" | "Recently updated" | "Group by project" | "Group by scenario" | "Newest first") {
   await user.click(screen.getByRole("button", { name: "Views" }));
   await user.click(await screen.findByRole("menuitemradio", { name: label }));
 }
@@ -1097,6 +1097,7 @@ test("bundle groups and their owned/imported rows are newest-first without movin
   try {
     const view = await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: "Bundles", exact: true }));
+    await chooseSort(userEvent.setup(), "Group by scenario");
     await expandLibraryGroups(".bundle-group");
     expect([...view.container.querySelectorAll(".bundle-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Bravo", "Alpha"]);
     const alpha = view.container.querySelectorAll(".bundle-group")[1];
@@ -1228,6 +1229,7 @@ test("bundle library groups runs by scenario and filters their status", async ()
     const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Bundles" }));
+    await chooseSort(userEvent.setup(), "Group by scenario");
     await expandLibraryGroups(".bundle-group");
     expect(screen.getByRole("heading", { name: "Bundles" })).toBeTruthy();
     expect([...container.querySelectorAll(".bundle-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Alpha", "Bravo"]);
@@ -2032,6 +2034,7 @@ test("packs list in one table and bundle groups start expanded with visible coun
     expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open Bravo 2.0" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Bundles" }));
+    await chooseSort(userEvent.setup(), "Group by scenario");
     const bundles = [...container.querySelectorAll<HTMLDetailsElement>(".bundle-group")];
     expect(bundles).toHaveLength(2);
     expect(bundles.every((group) => group.open)).toBe(true);

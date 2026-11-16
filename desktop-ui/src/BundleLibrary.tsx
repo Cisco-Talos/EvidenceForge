@@ -6,7 +6,8 @@ import type { CatalogItem, ImportedBundle, StudioApi, StudioSnapshot } from "./a
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { ActionShortcut, ObjectMenu, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
 import { Modal } from "./Modal";
-import { LibraryFilters, LibraryToolbar } from "./LibraryToolbar";
+import { LibraryFilters, LibraryToolbar, ViewsMenu } from "./LibraryToolbar";
+import type { LibrarySort } from "./LibraryTable";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard } from "./components";
@@ -112,6 +113,8 @@ export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onO
   const [sizes, setSizes] = useState<Record<string, number | null>>({});
   const [importPath, setImportPath] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  /** `updated` lists every run newest first; `project` groups runs under their scenario family. */
+  const [order, setOrder] = useState<LibrarySort>("updated");
   const generations = snapshot.jobs.filter((job) => job.kind === "generation");
   const imports = snapshot.imported_bundles || [];
   const sizeKey = generations.map((job) => `${job.id}:${job.status}`).sort().join("|");
@@ -140,6 +143,12 @@ export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onO
     })).filter((group) => group.jobs.length || group.imports.length)
       .sort((left, right) => (orderedBundles(right.jobs, right.imports)[0]?.time || 0) - (orderedBundles(left.jobs, left.imports)[0]?.time || 0) || left.name.localeCompare(right.name) || left.key.localeCompare(right.key));
   }, [snapshot.jobs, snapshot.imported_bundles, snapshot.items, snapshot.source_paths, snapshot.artifact_groups, search, status, project]);
+  const flatEntries = groups.flatMap((group) => orderedBundles(group.jobs, group.imports).map((entry) => ({ entry, group })))
+    .sort((a, b) => b.entry.time - a.entry.time || a.entry.id.localeCompare(b.entry.id));
+  const scenarioActions = (group: BundleGroup): ObjectAction[] => {
+    const choices: ObjectAction[] = group.items.map((item) => ({ id: item.id, label: snapshot.artifact_groups?.[item.id]?.published_version ? `v${snapshot.artifact_groups[item.id].published_version}` : item.version === "Draft" ? "Draft" : "Legacy scenario", group: "inspect", run: () => onOpenScenario(item) }));
+    return [{ id: "scenario", label: "Open scenario", group: "inspect", disabled: !choices.length, reason: "The original scenario is no longer in the library", ...(choices.length > 1 ? { children: choices } : { run: choices[0]?.run }) }];
+  };
   const visibleCount = groups.reduce((count, group) => count + group.jobs.length + group.imports.length, 0);
   async function importBundle() {
     if (!importPath?.trim()) return;
@@ -172,10 +181,15 @@ export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onO
       filters={<LibraryFilters label="Filter bundles" onReset={() => { setStatus("all"); setProject("all"); }} facets={[
         { id: "status", label: "Bundle status", allLabel: "All statuses", value: status === "all" ? "" : status, options: [{ value: "complete", label: "Complete" }, { value: "incomplete", label: "Incomplete" }], onChange: (value) => setStatus(value || "all") },
         { id: "project", label: "Bundle project", allLabel: "All projects", value: project === "all" ? "" : project, options: [{ value: "ungrouped", label: "Ungrouped" }, ...snapshot.projects.map((entry) => ({ value: entry.id, label: entry.name }))], onChange: (value) => setProject(value || "all") },
-      ]} />}>
+      ]} />}
+      views={<ViewsMenu sort={order} onSort={setOrder} options={["updated", "project"]} labels={{ updated: "Newest first", project: "Group by scenario" }} />}>
       <div className="toolbar-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={15} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={15} /> Import bundle</button></div>
     </LibraryToolbar>
-    {groups.length ? <div className="bundle-groups">{groups.map((group) => <BundleGroupRow key={group.key} group={group} snapshot={snapshot} sizes={sizes} api={api} onError={onError} onChanged={onChanged} onOpenScenario={onOpenScenario} disambiguate={groups.filter((entry) => entry.name === group.name).length > 1} />)}</div> : <EmptyState icon={<FolderOpen size={28} />} title={generations.length + imports.length ? "No matching bundles" : "No bundles yet"}>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</EmptyState>}
+    {groups.length ? order === "project" ? <div className="bundle-groups">{groups.map((group) => <BundleGroupRow key={group.key} group={group} snapshot={snapshot} sizes={sizes} api={api} onError={onError} onChanged={onChanged} onOpenScenario={onOpenScenario} disambiguate={groups.filter((entry) => entry.name === group.name).length > 1} />)}</div>
+      : <div className="job-list bundle-flat-list" aria-label="Bundles">{flatEntries.map(({ entry, group }) => entry.kind === "job"
+        ? <JobCard key={entry.id} job={entry.job} name={group.name} sourceLabel={capturedVersion(entry.job.scenario_source)} sizeBytes={sizes[entry.id]} extraActions={scenarioActions(group)} api={api} onError={onError} onChanged={onChanged} />
+        : <ImportedBundleRow key={entry.id} bundle={entry.bundle} api={api} onError={onError} onChanged={onChanged} />)}</div>
+      : <EmptyState icon={<FolderOpen size={28} />} title={generations.length + imports.length ? "No matching bundles" : "No bundles yet"}>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</EmptyState>}
     {importPath !== null && <Modal title="Import an existing bundle" ariaLabel="Import bundle" description="Studio indexes a complete generation folder for viewing and export; its files stay where they are." busy={working} onClose={() => setImportPath(null)} onSubmit={() => void importBundle()} actions={<><button type="button" className="button-quiet" disabled={working} onClick={() => setImportPath(null)}>Cancel</button><button type="submit" className="button-primary" disabled={working || !importPath.trim()}>{working ? "Importing…" : "Import bundle"}</button></>}><label className="modal-field">Bundle folder<input autoFocus aria-label="Bundle folder" name="bundle-folder" autoComplete="off" value={importPath} onChange={(event) => setImportPath(event.target.value)} /></label>{isTauri() && <button type="button" className="button-quiet" onClick={() => void chooseFolder()}><FolderOpen size={16} /> Browse…</button>}</Modal>}
   </div>;
 }

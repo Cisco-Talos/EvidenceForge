@@ -1715,3 +1715,4 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .job-timeline-day + .job-timeline-day { border-top: 1px solid var(--border); }
 .job-timeline-heading { margin: 0; padding: 12px 16px 4px; color: var(--text-3); font-size: var(--text-xs); font-weight: 600; text-transform: none; }
 .job-timeline .job-list { padding: 4px 8px 8px; }
+.bundle-flat-list { display: grid; gap: 8px; }
