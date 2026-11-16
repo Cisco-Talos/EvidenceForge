@@ -1037,7 +1037,7 @@ test("job center renders independent progress bars for simultaneous generations"
   expect(bars.map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["25", "75"]);
 });
 
-test("job rows stay newest-first in submission order and sections can collapse", async () => {
+test("Activity lists generations and evaluations together newest-first under day headings", async () => {
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [
     { ...originalJobs[1], submitted_at: 20, started_at: 20 },
@@ -1047,15 +1047,12 @@ test("job rows stay newest-first in submission order and sections can collapse",
   try {
     const { container } = await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /^Activity/ }));
-    expect([...container.querySelectorAll(".job-group")].map((entry) => entry.querySelector("summary strong")?.textContent)).toEqual(["Generations", "Evaluations"]);
-    expect([...container.querySelectorAll(".job-group:first-child .job-row-name strong")].map((entry) => entry.textContent)).toEqual(["Bravo", "Alpha"]);
-    const generations = container.querySelector(".job-group") as HTMLDetailsElement;
-    await userEvent.setup().click(generations.querySelector("summary")!);
-    expect(generations.open).toBe(false);
+    expect(container.querySelector("details.job-group")).toBeNull();
+    expect(container.querySelectorAll(".job-timeline-heading").length).toBeGreaterThan(0);
+    expect([...container.querySelectorAll(".job-timeline .job-row")].map((entry) => entry.id)).toEqual(["job-eval-1", `job-${originalJobs[1].id}`, "job-job-1"]);
     await userEvent.setup().click(container.querySelector("#job-eval-1 > summary")!);
     await userEvent.setup().click(screen.getByRole("button", { name: "Options for evaluation eval-1" }));
     await userEvent.setup().click(screen.getByRole("menuitem", { name: "Open generation" }));
-    expect(generations.open).toBe(true);
     expect((container.querySelector("#job-job-1") as HTMLDetailsElement).open).toBe(true);
     expect(container.querySelector("#job-job-1")?.classList.contains("source-highlight")).toBe(true);
     await waitFor(() => expect(document.activeElement).toBe(container.querySelector("#job-job-1 > summary")));
@@ -1497,6 +1494,23 @@ test("Activity removes finished history entries while preserving scenario runs a
   } finally { snapshot.jobs = originalJobs; }
 });
 
+test("Clear completed in the Activity header clears successful jobs of both kinds", async () => {
+  const originalJobs = snapshot.jobs;
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, {
+    id: "evaluation-1", kind: "evaluation", generation_id: "job-1", status: "completed", output_root: "/tmp/run", scorecard: { overall_score: 98, acceptance_passed: true },
+  }];
+  const request = vi.mocked(useStudio().api!.request);
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
+    await user.click(screen.getByRole("button", { name: "Clear completed jobs" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Clear completed jobs?" })).getByRole("button", { name: "Clear completed" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/jobs/history/clear-completed", "POST", { kind: "evaluation" }));
+    expect(request).toHaveBeenCalledWith("/v1/jobs/history/clear-completed", "POST", { kind: "generation" });
+  } finally { snapshot.jobs = originalJobs; }
+});
+
 test("Clear Completed targets one job type and removed source runs can still be revealed", async () => {
   const originalJobs = snapshot.jobs;
   const originalRemoved = snapshot.removed_job_ids;
@@ -1510,16 +1524,20 @@ test("Clear Completed targets one job type and removed source runs can still be 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /^Activity/ }));
     expect(container.querySelector("#job-job-1")).toBeNull();
-    expect(screen.getByRole("button", { name: "Clear completed generations" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "History actions" }));
+    expect(screen.getByRole("menuitem", { name: "Clear completed generations" })).toHaveAttribute("data-disabled");
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Options for evaluation evaluation-1" }));
     await user.click(screen.getByRole("menuitem", { name: "Open generation" }));
     await waitFor(() => expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true));
-    await user.click(screen.getByRole("button", { name: "Clear completed evaluations" }));
+    await user.click(screen.getByRole("button", { name: "History actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clear completed evaluations" }));
     await user.click(within(screen.getByRole("dialog", { name: "Clear completed evaluations?" })).getByRole("button", { name: "Clear completed" }));
     expect(request).toHaveBeenCalledWith("/v1/jobs/history/clear-completed", "POST", { kind: "evaluation" });
     await waitFor(() => expect(container.querySelector("#job-evaluation-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Clear completed generations" }));
+    await user.click(screen.getByRole("button", { name: "History actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clear completed generations" }));
     await user.click(within(screen.getByRole("dialog", { name: "Clear completed generations?" })).getByRole("button", { name: "Clear completed" }));
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
   } finally { snapshot.jobs = originalJobs; snapshot.removed_job_ids = originalRemoved; }

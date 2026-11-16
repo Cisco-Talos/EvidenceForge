@@ -1707,3 +1707,11 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .workspace-section-status { display: flex; flex: none; flex-wrap: wrap; gap: 8px; align-items: center; }
 .workspace-sections.overview-grid .workspace-section-status { order: 2; flex-basis: 100%; padding-left: 48px; }
 .workspace-sections.overview-grid .workspace-section-actions { order: 3; flex-basis: auto; }
+/* Activity timeline (JobSections timeline mode) */
+.job-timeline { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); overflow: hidden; }
+.job-timeline-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.job-timeline-header > span { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.job-timeline-header .job-history-actions { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+.job-timeline-day + .job-timeline-day { border-top: 1px solid var(--border); }
+.job-timeline-heading { margin: 0; padding: 12px 16px 4px; color: var(--text-3); font-size: var(--text-xs); font-weight: 600; text-transform: none; }
+.job-timeline .job-list { padding: 4px 8px 8px; }
