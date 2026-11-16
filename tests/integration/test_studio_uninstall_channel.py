@@ -125,11 +125,17 @@ session.serve(CleanupPipe.client(sys.argv[1],int(sys.argv[2])),locations)
             send("prepare", 1, ["private"])
             assert replies.get(timeout=3)["state"] == "inspecting"
             send("prepare", 2, [])
+            # Clearing choices now only cancels/revokes; it grants no empty receipt.
+            send("execute", 2, [], "invalidated")
+            while (rejected := replies.get(timeout=3))["state"] != "error":
+                assert rejected["state"] == "inspecting"
+            assert rejected["revision"] == 2 and not (tmp_path / "approved").exists()
+            send("prepare", 3, ["work"])
             while (prepared := replies.get(timeout=3))["state"] != "prepared":
                 assert prepared["state"] == "inspecting"
-            assert prepared["revision"] == 2 and (tmp_path / "cancelled").exists()
+            assert prepared["revision"] == 3 and (tmp_path / "cancelled").exists()
             assert not (tmp_path / "approved").exists()
-            send("execute", 2, [], prepared["plan_id"])
+            send("execute", 3, ["work"], prepared["plan_id"])
             update = replies.get(timeout=3)
             assert update["state"] == "removing"
             assert update["progress"]["completed"] == 1 and update["progress"]["total"] == 2

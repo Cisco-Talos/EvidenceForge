@@ -2559,3 +2559,10 @@ pending per the user's Windows test/fix-loop instruction.
 Local verification: 142 passed, 13 native-Windows skips in 14.33 seconds across
 uninstall/wizard/fast cleanup, frozen state contracts, state-upgrade integration,
 real-pipe and compiled-NSIS test files. Ruff check/format and git diff --check pass.
+
+Run 43868534078 passes 138 native diagnostics but one real-pipe fixture still
+expects clearing every checkbox to produce an executable empty cleanup receipt.
+The new intended behavior cancels/revokes without review, so the fixture times out.
+Update it to prove empty selection rejects execution, then prepare/execute a fresh
+nonempty selection over the same live pipe. All new background/progress tests and
+CLI/checkpoint diagnostics passed. No production adjustment follows this failure.
