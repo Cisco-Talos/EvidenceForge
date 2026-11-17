@@ -132,6 +132,18 @@ Ready for review as a PR into `dev`. Before merging:
   against an "Example" badge, because membership in the Example Scenarios project already says
   so. Long example titles now truncate so the version badge stays inline.
 
+- **Dev CI repair before landing (2026-11-16):** dev had been red since the bundled-examples
+  commits. Root causes and fixes:
+  - A fresh default workspace auto-installs the real shipped examples. Unrelated Studio tests
+    therefore counted five extra scenarios, and the real-helper and ownership tests waited on a
+    multi-second install, so their exit and replacement deadlines failed. Fixed by adding the
+    Studio-only `EFORGE_STUDIO_EXAMPLES_DIR` override. `tests/conftest.py` points it at an
+    empty collection, which subprocess helpers inherit, and the example tests set their own.
+  - Browser Security 4689 and ASA persistent-SMB targets were intentional contract changes in
+    394eeb80, so their stale tests now assert the new contract.
+  - The validate skill had grown past its 150-line budget. The Mac launch-preflight rule moved
+    to the macOS reference, and duplicated text-output and target wording was tightened.
+
 ## References
 
 - Review and static mockups (not tracked): `/tmp/evidenceforge-studio-review/`, containing

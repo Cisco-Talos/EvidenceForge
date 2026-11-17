@@ -25,13 +25,22 @@ def _smb_scenario(scenarios_dir: Path, *formats: str) -> Scenario:
 
 
 def test_persistent_smb_runtime_targets_derive_from_the_reachability_contract() -> None:
-    """Runtime target priority must have no second private format declaration."""
+    """Runtime target priority must have no second private format declaration.
+
+    The application-evidence alternatives come first, in contract order. Cisco ASA follows as
+    the physical-transport publication participant; it cannot satisfy the SMB requirement.
+    """
 
     assert all(
         len(alternative.formats) == 1
         for alternative in PERSISTENT_WINDOWS_SMB_EVIDENCE.alternatives
     )
-    assert PERSISTENT_WINDOWS_SMB_TARGET_FORMATS == (
+    application_formats = tuple(
+        next(iter(alternative.formats))
+        for alternative in PERSISTENT_WINDOWS_SMB_EVIDENCE.alternatives
+    )
+    assert "cisco_asa" not in application_formats
+    assert application_formats == (
         "zeek_conn",
         "zeek_smb_mapping",
         "zeek_smb_files",
@@ -39,6 +48,7 @@ def test_persistent_smb_runtime_targets_derive_from_the_reachability_contract() 
         "ecar",
         "windows_event_security",
     )
+    assert PERSISTENT_WINDOWS_SMB_TARGET_FORMATS == (*application_formats, "cisco_asa")
 
 
 def test_persistent_windows_smb_without_projection_is_a_validation_error(

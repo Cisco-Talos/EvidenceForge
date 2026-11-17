@@ -338,6 +338,9 @@ that scenario until manual installation. Custom workspaces remain manual-only ev
 installation. Existing versions, user drafts and runs are preserved. Deleting a project retains
 its scenario files as ungrouped entries, following the ordinary project behavior.
 
+For development and tests, the `EFORGE_STUDIO_EXAMPLES_DIR` override points Studio at another
+example collection, such as an empty folder; the test suite uses this to keep workspaces isolated.
+
 CLI and native-skill users can browse the same collection without Studio. See the
 [example collection guide](../examples/README.md) for locations, editing and contribution steps.
 
