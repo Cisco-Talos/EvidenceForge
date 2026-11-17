@@ -177,7 +177,12 @@ from evidenceforge.studio.pack_lifecycle import (
     review_pack_deletion,
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
-from evidenceforge.studio.processes import launch_options, shell_argument, shell_command
+from evidenceforge.studio.processes import (
+    launch_options,
+    native_shell_guidance,
+    shell_argument,
+    shell_command,
+)
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanup,
@@ -4270,7 +4275,7 @@ def create_app(
                 "Do not substitute an eforge executable found on PATH or another Python environment. "
                 "If this command cannot run or lacks a requested capability, report the blocker; "
                 "do not fall back to another installation or claim equivalent validation."
-            )
+            ) + native_shell_guidance()
             workspace_argument = shell_argument(str(conversation.workspace))
             configuration_instructions += (
                 f" The workspace explicitly selected by Studio is {workspace_argument}. "

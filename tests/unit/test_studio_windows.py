@@ -426,3 +426,17 @@ def test_native_windows_cleanup_retains_every_runtime_without_posix_operations(
     assert marker.read_text() == "retained"
     with pytest.raises(StudioStateError, match="unavailable"):
         manager.save_settings(RuntimeCleanupSettings(previous_runtime_days=0))
+
+
+def test_native_shell_guidance_steers_windows_agents_away_from_posix_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "os", SimpleNamespace(name="nt"))
+    guidance = processes.native_shell_guidance()
+
+    assert "Select-String" in guidance
+    assert "rg (ripgrep)" in guidance
+    assert "not a read-only filesystem" in guidance
+
+    monkeypatch.setattr(processes, "os", SimpleNamespace(name="posix"))
+    assert processes.native_shell_guidance() == ""

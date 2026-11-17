@@ -29,6 +29,19 @@ def shell_command(command: list[str]) -> str:
     return shlex.join(command)
 
 
+def native_shell_guidance() -> str:
+    """Describe the authoring shell's search tools when they differ from POSIX habits."""
+    if os.name != "nt":
+        return ""
+    return (
+        " Commands run in Windows PowerShell. rg (ripgrep), grep, sed, awk and other Unix "
+        "tools are not installed; do not call them. Search file contents with Select-String "
+        "(for example Select-String -Path <file> -Pattern '<regex>' -Context 0,28), find "
+        "files with Get-ChildItem -Recurse -Filter, and read files with Get-Content. A "
+        "missing command is a tooling limit, not a read-only filesystem."
+    )
+
+
 def executable_command(command: str | Path) -> list[str]:
     """Run explicit Python scripts on Windows without relying on shell associations."""
     path = str(command)
