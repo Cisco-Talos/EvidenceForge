@@ -192,8 +192,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   retained legacy workspace paths and retryable deletion of read-only checkpoint trees.
   Cloud-synced active workspaces/run folders remain outside the local-NTFS baseline.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
-  This preview excludes ARM support, signing and automatic runtime pruning. See the
+  The Windows release excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+
+- [x] **P1 — Publish the Windows x86_64 installer with releases:** The Release workflow now
+  builds the NSIS setup in release mode, runs the same native installed-scope and
+  service/recovery qualification, and requires the setup EXE and its checksum alongside the
+  macOS and Linux installers. Windows 11 desktop acceptance above remains a user gate.
 - [ ] **P1 — Evaluate Mac ES JSON key-order variation internally:** Prototype simple,
   reproducible collector-scoped ordering generated and cached from schema keys.
   Measure serialization and end-to-end performance against its raw-log training

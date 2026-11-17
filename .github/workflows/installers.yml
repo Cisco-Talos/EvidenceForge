@@ -215,8 +215,9 @@ jobs:
       force-tests: ${{ inputs.force-tests || false }}
 
   windows-preview:
-    name: Installer (windows-x86_64 preview)
-    if: ${{ !inputs.release && (inputs.platform == 'windows-x86_64' || inputs.platform == 'all' || inputs.platform == '') }}
+    name: Installer (windows-x86_64)
+    if: ${{ inputs.release || inputs.platform == 'windows-x86_64' || inputs.platform == 'all' || inputs.platform == '' }}
     uses: ./.github/workflows/windows-preview.yml
     with:
       source-ref: ${{ inputs.source-ref || github.sha }}
+      release: ${{ inputs.release || false }}

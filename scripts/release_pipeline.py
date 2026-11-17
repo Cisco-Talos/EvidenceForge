@@ -18,10 +18,12 @@ from tempfile import TemporaryDirectory
 from pydantic import BaseModel, ConfigDict
 from scripts.sync_studio_version import studio_version, synchronize
 
+# Platform -> (filename label, extension). Preview builds insert "-test" between the two.
 INSTALLER_TARGETS: dict[str, tuple[str, str]] = {
-    "macos-aarch64": ("aarch64", "dmg"),
-    "linux-aarch64": ("aarch64", "AppImage"),
-    "linux-x86_64": ("x86_64", "AppImage"),
+    "macos-aarch64": ("aarch64", ".dmg"),
+    "linux-aarch64": ("aarch64", ".AppImage"),
+    "linux-x86_64": ("x86_64", ".AppImage"),
+    "windows-x86_64": ("windows-x86_64", "-setup.exe"),
 }
 
 
@@ -41,11 +43,11 @@ class ReleasePlan(BaseModel):
 
     def installer_names(self, platform: str | None = None, *, preview: bool = False) -> list[str]:
         """Return the exact artifact contract for one builder or the complete release."""
-        targets = INSTALLER_TARGETS if platform is None else {platform: INSTALLER_TARGETS[platform]}
+        platforms = tuple(INSTALLER_TARGETS) if platform is None else (platform,)
         suffix = "-test" if preview else ""
         return [
-            f"EvidenceForge-Studio-{self.version}-{architecture}{suffix}.{extension}"
-            for architecture, extension in targets.values()
+            f"EvidenceForge-Studio-{self.version}-{label}{suffix}{extension}"
+            for label, extension in (INSTALLER_TARGETS[name] for name in platforms)
         ]
 
     @property
@@ -135,7 +137,11 @@ def prepare(root: Path, event: str, ref: str) -> ReleasePlan:
 
 
 def verify_assets(
-    directory: Path, plan: ReleasePlan, platform: str | None = None, *, preview: bool = False
+    directory: Path,
+    plan: ReleasePlan,
+    platform: str | None = None,
+    *,
+    preview: bool = False,
 ) -> list[Path]:
     """Require the exact installer set and valid, filename-bound checksums for every image."""
     files = sorted(path for path in directory.rglob("*") if path.is_file())
@@ -240,6 +246,15 @@ def publish(root: Path, directory: Path, plan: ReleasePlan, repository: str) -> 
             "other distributions are not certified. Codex is installed separately for authoring. "
             "Make the matching AppImage executable and verify its companion SHA256 file. "
             "See docs/studio.md in the tagged source for external requirements.\n"
+        )
+        notes += (
+            "\n### Windows installer\n\n"
+            "Windows 11 x86_64 only. The setup installs for the current user or for all "
+            "users and includes Python and the EvidenceForge runtime. Codex is installed "
+            "separately for authoring. This build is not code-signed, so Windows "
+            "SmartScreen may ask for confirmation before it runs. Verify the download "
+            "using the companion SHA256 file. See docs/studio.md in the tagged source for "
+            "installation, storage and uninstall guidance.\n"
         )
         with TemporaryDirectory(prefix="eforge-release-notes-") as temporary:
             path = Path(temporary) / "notes.md"

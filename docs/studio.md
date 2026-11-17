@@ -4,9 +4,8 @@ EvidenceForge Studio is a desktop workspace for authoring scenarios and packs, v
 generating logs, and reviewing evaluations. Existing CLI and native chat-skill workflows are still
 supported. Studio is a supplement, not a replacement.
 
-Studio installers are available for **Apple Silicon macOS** and **Ubuntu 24.04 Linux
-ARM64/x86_64**. Windows has an unsigned x86_64 preview build path described below;
-it is not part of published releases. Intel macOS installers are not enabled; other Linux distributions
+Studio installers are available for **Apple Silicon macOS**, **Ubuntu 24.04 Linux
+ARM64/x86_64** and **Windows 11 x86_64**. Intel macOS installers are not enabled; other Linux distributions
 and desktop environments remain outside the accepted baseline. macOS field testing covers
 macOS 26 and 27.0.1; the configured macOS 13 deployment floor is not acceptance of older hosts.
 See [release platforms and validation](releases.md).
@@ -23,11 +22,21 @@ Node.js, or Rust to use it. Codex-assisted authoring requires you to install and
 yourself; Codex is not included with EvidenceForge. Validation, generation, evaluation, and bundle
 viewing work without Codex.
 
-## Windows x86_64 preview
+## Windows x86_64 installation
 
-The feature-branch preview targets Windows 11 x86_64 on local NTFS. Windows ARM,
+The Windows installer targets Windows 11 x86_64 on local NTFS. Windows ARM,
 32-bit Windows, Windows 10 and Windows Server desktop qualification are outside its
 scope. Hosted Windows Server CI is engineering evidence, not Windows 11 acceptance.
+
+Download `EvidenceForge-Studio-<version>-windows-x86_64-setup.exe` and its adjacent
+`.sha256` from the same [GitHub Release](https://github.com/Cisco-Talos/EvidenceForge/releases),
+then compare the digest in PowerShell before running setup:
+
+```powershell
+$setup = 'EvidenceForge-Studio-<version>-windows-x86_64-setup.exe'
+(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+Get-Content "$setup.sha256"
+```
 
 The single NSIS setup EXE offers **Just me** and **Everyone**. Both choices require
 administrator approval. Everyone shares the installed application files. Studio
@@ -37,7 +46,7 @@ still awaits acceptance. Launch Studio normally after setup exits; the installer
 does not launch it. If changing installation scope, uninstall the existing copy
 first. Uninstall preserves private state, retained runtimes and authored work by default;
 interactive removal offers three separate cleanup choices for the desktop account.
-Automatic runtime cleanup is unavailable in this preview.
+Automatic runtime cleanup is not yet available on Windows.
 
 WebView2 is downloaded during setup only when needed. No development tools or
 separately installed Python are required. Native Windows Codex is separately
@@ -74,8 +83,8 @@ connection credentials. Idle event sockets close cooperatively during shutdown.
 Studio selects MXC for its packaged Windows Codex process and checks that it can
 run the private CLI read-only before connecting authoring. This requires a
 [compatible device and permitting policy](https://learn.chatgpt.com/docs/windows/windows-sandbox#mxc-compatibility).
-The legacy elevated sandbox uses a separate account and cannot execute this
-preview's private runtime. Studio does not fall back to that account or broaden
+The legacy elevated sandbox uses a separate account and cannot execute Studio's
+private runtime. Studio does not fall back to that account or broaden
 runtime ACLs. Startup failures retain a bounded underlying diagnostic; a CLI
 exception does not establish that Windows lacks MXC.
 
@@ -87,8 +96,8 @@ verification report records this limitation. Deterministic tools remain usable.
 The app and installer are unsigned. Browser downloads may show SmartScreen's
 unrecognized-app warning; enterprise policy can prevent bypass. Smart App Control
 can block unknown unsigned executables without a per-app exception. A checksum
-verifies the downloaded bytes but does not grant Windows trust. Use the preview
-only where local policy permits it; do not disable organization security controls.
+verifies the downloaded bytes but does not grant Windows trust. Use Studio only
+where local policy permits it; do not disable organization security controls.
 
 Build on native Windows x86_64 after installing the development prerequisites:
 
@@ -99,9 +108,11 @@ uv run python scripts/package_studio_windows.py
 ```
 
 The output is `dist/windows/EvidenceForge-Studio-<version>-windows-x86_64-test-setup.exe`
-with a SHA256 file. Installer Builds accepts `windows-x86_64` on the feature ref;
-its disposable Windows runner exercises both installation scopes and writes a
-verification report alongside the artifact. The verifier refuses to run on an
+with a SHA256 file; `--release` uses the published filename without `-test`. Installer
+Builds accepts `windows-x86_64` (or `all`) on the feature ref; its disposable Windows
+runner exercises both installation scopes and writes a verification report alongside
+the artifact. The Release workflow builds the same installer in release mode, verifies
+it the same way and publishes it with the macOS and Linux installers. The verifier refuses to run on an
 ordinary workstation or one with an existing Studio installation.
 
 During development, dispatch **Windows Studio Preview** on a feature branch. Its
@@ -126,7 +137,7 @@ both scopes, cancelled UAC, separate administrator credentials and intended-user
 ownership, normal-user launch, authoring/sign-in, dialogs, scaling and imports/
 exports. Genuine separate-account isolation remains a separate acceptance gate.
 
-### Reset the Windows preview for a fresh installation test
+### Reset Windows Studio for a fresh installation test
 
 Quit Studio and finish or pause all background work. In Windows Settings → Apps →
 Installed apps, choose **EvidenceForge Studio → Uninstall**. Existing installations
@@ -352,9 +363,9 @@ change their recovery paths or detach their history. Resource forecasts use the 
 destination. To keep an existing OneDrive scenario library while testing locally, set this
 field to `C:\Users\<user>\EvidenceForge\runs`, then save settings before starting a new run.
 
-Use a local disk for active generation and checkpoints. The Windows preview's storage
+Use a local disk for active generation and checkpoints. Windows Studio's storage
 baseline is local NTFS; OneDrive and other cloud-synced active workspaces/run folders are
-unsupported for active use in this preview. Large datasets and the creation/deletion of
+unsupported for active use. Large datasets and the creation/deletion of
 checkpoint objects can trigger
 heavy synchronization, transient sharing conflicts and OneDrive bulk-deletion prompts.
 Documents folder backup can redirect the Windows Documents known folder into OneDrive even
