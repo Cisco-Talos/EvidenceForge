@@ -538,7 +538,7 @@ providers:
     ]
     assert len(warnings) == 2
     assert all("public_identity_profiles.yaml" in issue["message"] for issue in warnings)
-    assert all("EvidenceForge 3.0" in issue["message"] for issue in warnings)
+    assert all("later major release" in issue["message"] for issue in warnings)
 
     silent_commands = (
         [

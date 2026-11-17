@@ -107,7 +107,7 @@ def test_config_guidance_preserves_typed_deployment_and_compatibility_contracts(
         "auth_policy.mode: realistic",
         "EvidenceForgeDeprecationWarning",
         "public_identity_profiles.yaml",
-        "EvidenceForge 3.0",
+        "later major release",
         "only `eforge validate`",
     ):
         assert expected in compatibility

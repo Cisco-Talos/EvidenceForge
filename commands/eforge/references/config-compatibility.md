@@ -21,11 +21,12 @@ effective-config provenance and fingerprints, and translated bindings identify t
 ## Warning behavior and removal
 
 Only `eforge validate` warns, and only when one of these user-owned files was actually consumed.
-It emits one actionable warning per file naming the replacement and the EvidenceForge 3.0 removal
-target. `generate`, `resolve`, `validate-config`, `info`, evaluation, pack, and checkpoint commands
+It emits one actionable warning per file naming the replacement and stating that the file is
+deprecated for removal in a later major release. `generate`, `resolve`, `validate-config`, `info`, evaluation, pack, and checkpoint commands
 stay silent. Packaged configuration and authoritative resolved scenarios do not warn.
 
-Migrate each project before upgrading to 3.0. Preserve role separation unless infrastructure is
+Migrate each project to the canonical file; 3.0 still translates legacy files, including those
+frozen in published scenarios and resolved runs. Preserve role separation unless infrastructure is
 deliberately shared; use `share_with_roles` for that explicit exception. Run
 `eforge validate-config --json`, then `eforge validate <scenario> --json` from the selected project
 root. Do not suppress the validate warning as a permanent migration strategy.

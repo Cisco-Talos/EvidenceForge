@@ -136,7 +136,7 @@ subtree, change only the intended leaf, and validate.
 
 Use reserved/documentation identities where required by safety policy. Do not reuse one public
 identity for contradictory client, hostile, and service roles. Scenario-authored identities take
-precedence over these fallbacks. Compatibility input and its 3.0 removal path are documented only
+precedence over these fallbacks. Deprecated compatibility input and its migration are documented only
 in the project migration guide.
 
 ## Repair decisions
