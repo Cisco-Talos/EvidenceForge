@@ -1,27 +1,28 @@
 import { belongsToScenario } from "./scenarioSources";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, LoaderCircle, Package, Folder, MessageSquareText, ShieldCheck } from "lucide-react";
-import { Dialog } from "radix-ui";
+import { ArrowLeft, Boxes, Play, LoaderCircle, Package, Folder, MessageSquareText, ShieldCheck } from "lucide-react";
 import type { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime, JobCard, ValidationPanel } from "./components";
 import { artifactTitle } from "./artifactNaming";
 import type { PropertiesSection } from "./ArtifactProperties";
 import { CatalogActionContext, CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
-import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
-import { CopyPathButton } from "./CopyPathButton";
+import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import { ChatView } from "./ChatView";
 import { ConversationList } from "./ConversationList";
 import { HeaderSummary, WorkspaceSection } from "./WorkspaceSection";
+import { nextStep, ReadinessPipeline, readinessSteps, type PipelineStep, type StepId } from "./ReadinessPipeline";
+import { StatusPill } from "./StatusPill";
 import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { PackWorkflow } from "./PackWorkflow";
 import { AssetBrowser } from "./AssetBrowser";
 import { EnvironmentView } from "./EnvironmentView";
 import { ScenarioRuns } from "./ScenarioRuns";
-import { environmentState, generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
+import { environmentState, generationIsCurrent, scenarioStates } from "./ScenarioStates";
 import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPanel";
 import { recentJobs } from "./jobOrder";
 import { RequestFeedback, requestTime, type RequestState } from "./RequestFeedback";
-import { countLabel, environmentSummary, latestJob, latestRunState, runsSummary, validationSummary } from "./workspaceSummaries";
+import { countLabel, environmentSummary, latestJob, runsSummary, validationSummary } from "./workspaceSummaries";
+import { Modal } from "./Modal";
 
 export type WorkspaceTarget = "overview" | "environment" | "conversations" | "validation" | "generation" | "scoring";
 export type ValidationActivity = { status: "running"; completedAt?: never; error?: never }
@@ -45,7 +46,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   onChanged: () => Promise<void>; onOpenArtifact?: (path: string) => Promise<void>; onProperties?: (section?: PropertiesSection) => void; onError: (message: string) => void;
 }) {
   const catalog = useContext(CatalogActionContext);
-  const [expanded, setExpanded] = useState<string[]>([]);
+  /** The open section tab; `null` is the Overview of every section. */
+  const [tab, setTab] = useState<string | null>(null);
   const [locallyRefreshingEnvironment, setEnvironmentRefreshing] = useState(false);
   const [environmentInspection, setEnvironmentInspection] = useState<RequestState>({ pending: false });
   const [localEnvironmentFeedback, setLocalEnvironmentFeedback] = useState<RequestState>({ pending: false });
@@ -75,7 +77,6 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const sizeLabel = starter ? "Forecast · Awaiting authoring" : latestSize != null ? `Latest · ${formatBundleSize(latestSize)}` : forecast ? `Forecast · ~${formatBundleSize(forecast.final_output.expected_bytes)}` : prediction?.result.error ? "Forecast · Unavailable" : "Forecast · Calculating…";
   const latestGeneration = latestJob(generations);
   const latestEvaluation = latestJob(evaluations.filter((job) => job.generation_id === latestGeneration?.id));
-  const latestIsCurrent = !latestGeneration || generationIsCurrent(latestGeneration, item, snapshot);
   const validation = validationActivity?.status === "failed" ? validationActivity.previousResult : savedValidation;
   const validating = validationActivity?.status === "running";
   const validationFailed = validationActivity?.status === "failed";
@@ -88,10 +89,11 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const validationDetails = validation && (!validation.report || validationIssues.length > 0 || validation.exit_code !== 0 || validation.report.valid === false);
   const environmentCheckedAt = Math.max(dependencyFeedback.completedAt || 0, environmentInspection.completedAt || 0);
   const environmentError = dependencyFeedback.error || environmentInspection.error;
+  const scenarioFacts = `${item.users} ${item.users === 1 ? "user" : "users"} · ${item.systems} ${item.systems === 1 ? "system" : "systems"} · ${item.events} ${item.events === 1 ? "event" : "events"}`;
   const environmentInfo = { ...environmentSummary(health), detail: environmentRefreshing ? "Refreshing environment…"
     : environmentError ? "Refresh could not finish · retry to check current inputs"
-    : environmentCheckedAt ? `Checked ${requestTime(environmentCheckedAt)} · Exact pack versions and files`
-    : "Exact pack versions and files · expand to inspect" };
+    : environmentCheckedAt ? `Checked ${requestTime(environmentCheckedAt)} · ${scenarioFacts}`
+    : scenarioFacts };
   const activeChats = conversations.filter((chat) => chat.active && !chat.needs_attention).length;
   const attentionChats = conversations.filter((chat) => chat.needs_attention).length;
   // Imported bundles carry scenario names rather than item IDs; only link unambiguous names.
@@ -122,11 +124,11 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     if (target === "overview" || target === "conversations") return;
     const section = target === "generation" || target === "scoring" ? "runs" : target;
     if (section === "runs") setRunFocusVersion((value) => value + 1);
-    setExpanded((current) => current.includes(section) ? current : [...current, section]);
+    setTab(section);
     onNavigate("overview", focusJobId);
     requestAnimationFrame(() => list.current?.querySelector(`[data-workspace-section="${section}"]`)?.scrollIntoView?.({ block: "nearest" }));
   }, [target, focusJobId]);
-  const toggle = (name: string) => setExpanded((current) => current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]);
+  const toggle = (name: string) => setTab((current) => current === name ? null : name);
   const navigateJob = (job: StudioJob) => onNavigate(job.kind === "evaluation" ? "scoring" : "generation", job.id);
   async function refreshEnvironment() {
     if (environmentRefreshing) return;
@@ -144,15 +146,14 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const getAction = (id: string, fallback: ObjectAction): ObjectAction => sharedActions.find((entry) => entry.id === id) || fallback;
   const continueAction = getAction("continue", { id: "continue", label: "Continue", group: "work", disabled: !preferred, reason: "Create a conversation first", description: preferred?.title, run: () => { if (preferred) onOpenConversation(preferred); } });
   const conversationAction = getAction("conversation", { id: "conversation", label: "New conversation", group: "work", run: onCreateConversation });
-  const assetsAction = getAction("assets", { id: "assets", label: "View assets", group: "inspect", run: () => toggle("assets") });
   const addAssetAction = getAction("add-asset", { id: "add-asset", label: "Add asset…", group: "work", run: () => toggle("assets") });
   const environmentAction = { ...getAction("refresh-environment", { id: "refresh-environment", label: "Refresh environment", group: "work", run: refreshEnvironment }), ...(environmentRefreshing ? { disabled: true, reason: "Environment refresh is in progress" } : {}) };
   const validateAction = getAction("validate", { id: "validate", label: "Validate", group: "work", disabled: busy, reason: "Validation is in progress", run: onValidate });
   const fixAction = getAction("fix", { id: "fix", label: "Fix in chat", group: "work", disabled: busy || !validationIssues.length, reason: "Validate to find issues requiring changes", run: onFix });
   const forecastAction = getAction("forecast", { id: "forecast", label: sizeLabel, group: "work", disabled: starter, reason: "Continue authoring before forecasting", run: () => setForecastOpen(true) });
   const generateAction = getAction("generate", { id: "generate", label: "Generate", group: "work", disabled: busy || starter || health?.ready === false, reason: starter ? "Continue authoring before generation" : health?.ready === false ? "Resolve dependency errors first" : "An operation is in progress", run: onGenerate });
-  const packExportAction = getAction("export-release", { id: "export-release", label: "Export release…", group: "reuse", disabled: !item.version, reason: "Publish a release before exporting", run: onExportPack });
-  const localForecastDialog = <Dialog.Root open={forecastOpen} onOpenChange={setForecastOpen}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker run-forecast-dialog"><Dialog.Title>Generation forecast</Dialog.Title><Dialog.Description>Estimates for the current scenario and generation settings.</Dialog.Description><ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} /><footer><Dialog.Close className="button-quiet">Close</Dialog.Close><button className="button-primary" onClick={() => { setForecastOpen(false); void onGenerate(); }} disabled={busy || starter || health?.ready === false}>Generate</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  const packExportAction = getAction("export-release", { id: "export-release", label: "Export release…", group: "manage", disabled: !item.version, reason: "Publish a release before exporting", run: onExportPack });
+  const localForecastDialog = forecastOpen && <Modal title="Generation forecast" description="Estimates for the current scenario and generation settings." size="lg" className="run-forecast-dialog" dismissOnOutside onClose={() => setForecastOpen(false)} actions={<><button type="button" className="button-quiet" onClick={() => setForecastOpen(false)}>Close</button><button type="button" className="button-primary" onClick={() => { setForecastOpen(false); void onGenerate(); }} disabled={busy || starter || health?.ready === false}>Generate</button></>}><ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} /></Modal>;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   useEffect(() => {
     if (!chatFocus) return;
@@ -166,51 +167,84 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     const collapsed = !sidebarCollapsed; setSidebarCollapsed(collapsed);
     void api.request("/v1/chat/preferences", "PUT", { workspace: snapshot.settings.workspace, sidebar_collapsed: collapsed }).catch((error) => { setSidebarCollapsed(!collapsed); onError(String(error)); });
   }
+  // Evaluate the newest completed run of the current revision, as its run row's Evaluate does.
+  const evaluationRunning = evaluations.some((job) => job.generation_id === latestCompleted?.id && ["queued", "running", "paused"].includes(job.status));
+  const evaluateAction: ObjectAction = {
+    id: "evaluate", label: "Evaluate", group: "work", disabled: busy || !latestCompleted || evaluationRunning,
+    reason: !latestCompleted ? "Complete a generation of the current revision first" : evaluationRunning ? "This run is already being evaluated" : "An operation is in progress",
+    run: async () => {
+      if (!latestCompleted) return;
+      try { await api.request("/v1/jobs/evaluations", "POST", { generation_id: latestCompleted.id }); await onChanged(); }
+      catch (error) { onError(String(error)); }
+    },
+  };
+  const steps = readinessSteps({ starter, conversations: conversations.length, authoring: activeChats > 0, environment: environmentState(health, environmentRefreshing), states: [validationStatus, states[1], states[2]] });
+  const exportBundle = sharedActions.find((entry) => entry.id === "export-bundle");
+  const next = item.kind === "scenario" ? nextStep(steps, {
+    author: { id: "author", label: "Continue authoring", group: "work", run: () => preferred ? onOpenConversation(preferred) : onCreateConversation() },
+    environment: { id: "review-environment", label: "Review environment", group: "work", run: () => setTab("environment") },
+    validate: validateAction, fix: fixAction, generate: generateAction,
+    evaluate: evaluateAction, reevaluate: { ...evaluateAction, id: "reevaluate", label: "Re-evaluate" },
+    viewRun: { id: "view-run", label: "Open latest run", group: "work", disabled: !latestGeneration, reason: "No runs yet", run: () => onNavigate(latestEvaluation && latestEvaluation.status !== "completed" ? "scoring" : "generation", (latestEvaluation && latestEvaluation.status !== "completed" ? latestEvaluation : latestGeneration)?.id ?? null) },
+    export: exportBundle,
+  }, validationIssues.length > 0) : null;
+  function openStep(id: StepId) {
+    if (id === "author") { if (preferred) onOpenConversation(preferred); else setTab("conversations"); return; }
+    setTab(id === "environment" ? "environment" : id === "validate" ? "validation" : "runs");
+  }
+  /** A section header's labeled status, from the same readiness step the strip shows. */
+  // The Runs summary already notes unverified inputs, so the pill names the outcome instead.
+  const stepPill = (step: PipelineStep, context: string) => <StatusPill tone={step.tone === "todo" ? "neutral" : step.tone} label={step.status === "Inputs unverified" ? "Generated" : step.status} detail={step.detail} ariaLabel={`${context}: ${step.detail}`} />;
+  // The readiness strip owns the promoted action; section headers do not repeat it.
+  const promoted = next?.id;
+  const findingCount = validationIssues.filter((issue) => ["error", "warning"].includes(String((issue as { severity?: string }).severity || "").toLowerCase())).length;
+  const tabs: [string, string, number?, string?][] = item.kind === "scenario"
+    ? [["overview", "Overview"], ["conversations", "Conversations", conversations.length], ["environment", "Environment"], ["validation", "Validation", findingCount, validationStatus.state === "error" ? "err" : "warn"], ["runs", "Runs", runCount]]
+    : [["overview", "Overview"], ["conversations", "Conversations", conversations.length], ["validation", "Validation & release"], ["assets", "Assets"]];
   const conversationList = <ConversationList conversations={conversations} selectedId={selectedConversation} onOpen={onOpenConversation} onRename={onRenameConversation} onDelete={onDeleteConversation} />;
 
   return <div className={`scenario-page scenario-workspace ${chatFocus ? "focused" : ""}`}>
     {localForecastDialog}
     <header className="workspace-heading">
-      <div className="workspace-title-row"><button className="artifact-title-button" title="Edit properties" onClick={() => onProperties?.("general")}><h1 title={artifactTitle(item)}>{artifactTitle(item)}</h1></button>
+      <div className="workspace-title-row"><button className="artifact-title-button" title="Edit properties" onClick={() => onProperties?.("general")}><h1 title={artifactTitle(item)}>{artifactTitle(item)}</h1></button><span className="scenario-version" title={item.version ? `Version ${item.version}` : "Draft"}>{item.version || "Draft"}</span>
         <span className="workspace-project"><Folder size={15} />{snapshot.projects.find((project) => project.id === item.project_id)?.name || "Ungrouped"}</span>
         <CatalogObjectMenu item={item} fallbackActions={[
           { id: "open", label: "Open", group: "inspect", run: () => onNavigate("overview") },
-          { id: "properties", label: "Properties…", group: "inspect", run: () => onProperties?.("general") },
+          { id: "properties", label: "Properties…", group: "locate", run: () => onProperties?.("general") },
           { id: "source", label: "View source", group: "inspect", run: onViewYaml },
-          { id: "clone", label: "Clone…", group: "reuse", run: onClone },
-          ...(item.kind !== "scenario" ? [{ id: "export", label: "Export release…", group: "reuse" as const, run: onExportPack }] : []),
+          { id: "clone", label: "Duplicate…", group: "manage", run: onClone },
+          ...(item.kind !== "scenario" ? [{ id: "export", label: "Export release…", group: "manage" as const, run: onExportPack }] : []),
           projectAssignmentAction(snapshot.projects, onProjectChange),
           { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: onHidden },
-          ...(item.kind === "scenario" || item.pack_source === "workspace" ? [{ id: "delete", label: item.kind === "scenario" ? "Delete scenario" : "Delete version", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: item.kind === "scenario" ? onDeleteScenario : onDeletePack }] : []),
+          ...(item.kind === "scenario" || item.pack_source === "workspace" ? [{ id: "delete", label: item.kind === "scenario" ? "Delete scenario…" : "Delete version…", group: "remove" as const, disabled: busy, reason: "An operation is in progress", run: item.kind === "scenario" ? onDeleteScenario : onDeletePack }] : []),
         ]} />
       </div>
       {!chatFocus && <div className="workspace-description-area"><p ref={description} className={`workspace-description ${descriptionExpanded ? "expanded" : ""}`}>{item.description || "No description in the source file."}</p>{descriptionOverflow && <button className="workspace-description-more" aria-expanded={descriptionExpanded} onClick={() => setDescriptionExpanded(!descriptionExpanded)}>{descriptionExpanded ? "Show less" : "Show full description"}</button>}</div>}
-      <div className="workspace-source"><div className="path-with-copy"><button className="path-value workspace-source-link" aria-label={`View ${item.kind === "scenario" ? "scenario" : "pack"} YAML`} title={`View YAML: ${item.path}`} onClick={onViewYaml}>{item.path}</button><CopyPathButton path={item.path} label={item.kind === "scenario" ? "Copy scenario path" : "Copy pack path"} onError={onError} /></div></div>
-      {!chatFocus && <div className="workspace-facts"><span>{item.version ? `Version ${item.version}` : "Draft"}</span>{item.kind === "scenario" && <span>{item.users} {item.users === 1 ? "user" : "users"} · {item.systems} {item.systems === 1 ? "system" : "systems"} · {item.events} {item.events === 1 ? "event" : "events"}</span>}<span>Edited {formatTime(item.modified_at)}</span></div>}
     </header>
-    <div className="workspace-sections" ref={list} hidden={chatFocus}>
-      {starter && <div className="surface" role="status"><p>Ready to author — continue the conversation to build this scenario.</p><button className="button-primary" onClick={() => preferred ? onOpenConversation(preferred) : onCreateConversation()}>Continue authoring</button></div>}
-      <ArtifactLifecycle starter={starter} item={item} api={api} onChanged={onChanged} onOpen={onOpenArtifact} compact onProperties={() => onProperties?.("versions")} />
-      <WorkspaceSection title="Conversations" icon={<MessageSquareText size={19} />} summary={<HeaderSummary summary={{ headline: [countLabel(conversations.length, "conversation"), activeChats && `${activeChats} working`, attentionChats && `${attentionChats} need input`].filter(Boolean).join(" · "), detail: preferred ? `${preferred.active ? "Continue active" : "Latest"}: ${preferred.title} · ${formatTime(preferred.updated_at)}` : "No conversations yet" }} />} expanded={expanded.includes("conversations")} onToggle={() => toggle("conversations")} actions={<>{preferred && <ActionShortcut action={continueAction} primary />}<ActionShortcut action={conversationAction} primary={!preferred} /><ObjectMenu label="Conversations actions" actions={[continueAction, conversationAction]} /></>}>
+    {!chatFocus && item.kind === "scenario" && <ReadinessPipeline steps={steps} next={next} hint={next?.id === "generate" ? sizeLabel : (next?.id === "evaluate" || next?.id === "reevaluate") && latestCompleted ? `Latest run · ${formatTime(latestCompleted.started_at || latestCompleted.submitted_at || 0)}` : undefined} onStep={openStep} />}
+    {!chatFocus && <div className="workspace-tablist" role="tablist" aria-label="Workspace sections">{tabs.map(([id, label, count, tone]) => <button key={id} type="button" role="tab" aria-label={label} aria-selected={(tab ?? "overview") === id} onClick={() => setTab(id === "overview" ? null : id)}>{label}{count ? <span className={`tab-count ${tone || ""}`} aria-hidden="true">{count}</span> : null}</button>)}</div>}
+    <div className={`workspace-sections ${tab ? "single-section" : "overview-grid"}`} ref={list} hidden={chatFocus}>
+      {!tab && <ArtifactLifecycle starter={starter} item={item} api={api} onChanged={onChanged} onOpen={onOpenArtifact} compact onProperties={() => onProperties?.("versions")} />}
+      <div data-workspace-section="conversations" hidden={!!tab && tab !== "conversations"}><WorkspaceSection title="Conversations" icon={<MessageSquareText size={19} />} summary={<HeaderSummary summary={{ headline: [countLabel(conversations.length, "conversation"), activeChats && `${activeChats} working`, attentionChats && `${attentionChats} need input`].filter(Boolean).join(" · "), detail: preferred ? `${preferred.active ? "Continue active" : "Latest"}: ${preferred.title} · ${formatTime(preferred.updated_at)}` : "No conversations yet" }} />} expanded={tab === "conversations"} onToggle={() => toggle("conversations")} actions={<>{preferred && <ActionShortcut action={continueAction} primary={item.kind !== "scenario"} />}<ActionShortcut action={conversationAction} primary={!preferred && item.kind !== "scenario"} /></>}>
         {conversations.length ? conversationList : undefined}
-      </WorkspaceSection>
-      {item.kind !== "scenario" && <div data-workspace-section="validation"><WorkspaceSection title="Validation & release" icon={<ShieldCheck size={19} />} summary={<span>Check catalogs and dependencies · export a portable release</span>} expanded={expanded.includes("validation")} onToggle={() => toggle("validation")} actions={<><ActionShortcut action={validateAction} /><CatalogObjectMenu item={item} label="Validation and release actions" actionIds={["validate", "fix", "publish", "export-release"]} fallbackActions={[validateAction, fixAction, packExportAction]} /></>}><PackWorkflow key={item.id} item={item} api={api} onPrepare={onPrepare} /></WorkspaceSection></div>}
-      {item.kind !== "scenario" && <WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse assets · draft edits keep the same draft</span>} expanded={expanded.includes("assets")} onToggle={() => toggle("assets")} actions={<><ActionShortcut action={addAssetAction} /><ObjectMenu label="Assets section actions" actions={[assetsAction, addAssetAction]} /></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} embedded /></WorkspaceSection>}
+      </WorkspaceSection></div>
+      {item.kind !== "scenario" && <div data-workspace-section="validation" hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validation & release" icon={<ShieldCheck size={19} />} summary={<span>Check catalogs and dependencies · export a portable release</span>} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<><ActionShortcut action={validateAction} /><CatalogObjectMenu item={item} label="Validation and release actions" actionIds={["validate", "fix", "publish", "export-release"]} fallbackActions={[validateAction, fixAction, packExportAction]} /></>}><PackWorkflow key={item.id} item={item} api={api} onPrepare={onPrepare} /></WorkspaceSection></div>}
+      {item.kind !== "scenario" && <div data-workspace-section="assets" hidden={!!tab && tab !== "assets"}><WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse assets · draft edits keep the same draft</span>} expanded={tab === "assets"} onToggle={() => toggle("assets")} actions={<><ActionShortcut action={addAssetAction} /></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} embedded /></WorkspaceSection></div>}
       {item.kind === "scenario" && <>
-        <div data-workspace-section="environment" aria-busy={environmentRefreshing}><WorkspaceSection title="Environment" keepMounted icon={<OperationStatus status={environmentState(health, environmentRefreshing)} focusable={false} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={expanded.includes("environment")} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} /><ObjectMenu label="Environment actions" actions={[environmentAction]} /></>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
+        <div data-workspace-section="environment" aria-busy={environmentRefreshing} hidden={!!tab && tab !== "environment"}><WorkspaceSection title="Environment" keepMounted icon={<Boxes size={19} />} status={stepPill(steps[1], "Environment")} summary={<HeaderSummary summary={environmentInfo} />} expanded={tab === "environment"} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} /></>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
           <EnvironmentView embedded onInspection={setEnvironmentInspection} refreshVersion={environmentRefresh + (catalog?.environmentRefreshVersion?.(item) || 0)} dependencyHealth={health} onImportPacks={onImportPacks} onOpenPack={onOpenPack} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario")} dependencyFingerprint={health?.fingerprint} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
-        <div data-workspace-section="validation" aria-busy={validating}><WorkspaceSection title="Validation" icon={<OperationStatus status={validationStatus} focusable={false} />} summary={<HeaderSummary summary={validationInfo} />} expanded={expanded.includes("validation")} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && <ActionShortcut action={fixAction} />}<ActionShortcut action={validateAction} /><ObjectMenu label="Validation actions" actions={[validateAction, fixAction]} /></>}>
+        <div data-workspace-section="validation" aria-busy={validating} hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validation" icon={<ShieldCheck size={19} />} status={stepPill(steps[2], "Validation")} summary={<HeaderSummary summary={validationInfo} />} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && promoted !== fixAction.id && <ActionShortcut action={fixAction} />}{promoted !== validateAction.id && <ActionShortcut action={validateAction} />}</>}>
           {validating ? <div className="validation-progress" role="status"><LoaderCircle size={18} aria-hidden="true" />Validating current scenario…</div> : validationFailed ? <><p className="error-text" role="alert">{validationActivity.error}</p>{validation && <><p className="muted">Previous validation results:</p><ValidationPanel result={validation} embedded /></>}</> : validationDetails ? <ValidationPanel result={validation} embedded /> : undefined}
         </WorkspaceSection></div>
-        <div data-workspace-section="runs"><WorkspaceSection title="Runs" icon={<span className="run-outcome-icons"><OperationStatus status={latestRunState("Generation", latestGeneration, latestIsCurrent)} focusable={false} /><OperationStatus status={latestRunState("Evaluation", latestEvaluation, latestIsCurrent)} focusable={false} /></span>} summary={<HeaderSummary summary={runInfo} />} expanded={expanded.includes("runs")} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} /><ActionShortcut action={generateAction} /><ObjectMenu label="Runs actions" actions={[forecastAction, generateAction]} /></>} footer={!expanded.includes("runs") && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
+        <div data-workspace-section="runs" hidden={!!tab && tab !== "runs"}><WorkspaceSection title="Runs" icon={<Play size={19} />} status={<>{stepPill(steps[3], "Generation")}{stepPill(steps[4], "Evaluation")}</>} summary={<HeaderSummary summary={runInfo} />} expanded={tab === "runs"} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} />{promoted !== generateAction.id && <ActionShortcut action={generateAction} />}</>} footer={tab !== "runs" && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
           {runCount ? <ScenarioRuns jobs={jobs} imports={imports} sizes={sizes} item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} focusJobId={focusJobId} focusVersion={runFocusVersion} /> : undefined}
         </WorkspaceSection></div>
       </>}
     </div>
     <div className="workspace-chat-focus" hidden={!chatFocus}>
       <div className="workspace-chat-toolbar"><button className="button-quiet" onClick={() => onNavigate("overview", focusJobId)}><ArrowLeft size={16} /> Back to workspace</button><button className="button-quiet" aria-label={sidebarCollapsed ? "Show conversation list" : "Hide conversation list"} aria-expanded={!sidebarCollapsed} onClick={toggleChatSidebar}><MessageSquareText size={16} />{sidebarCollapsed ? "Show chats" : "Hide chats"}</button><ActionShortcut action={conversationAction} /></div>
-      <div className={`conversation-layout ${sidebarCollapsed ? "rail-collapsed" : ""}`}><aside hidden={sidebarCollapsed} className="conversation-rail"><div className="rail-header"><span>CONVERSATIONS</span><ObjectMenu label="Conversation rail actions" actions={[continueAction, conversationAction]} /></div><div className="rail-create"><ActionShortcut action={conversationAction} /></div>{conversationList}</aside>
+      <div className={`conversation-layout ${sidebarCollapsed ? "rail-collapsed" : ""}`}><aside hidden={sidebarCollapsed} className="conversation-rail"><div className="rail-header"><span>CONVERSATIONS</span></div>{conversationList}</aside>
         {selected && <ChatView followupMode={snapshot.settings.chat_followup_mode || "queue"} item={item} conversation={selected} codexHealth={codexHealth} api={api} subscribeEvents={subscribeEvents} initialDraft={initialDraft} onRenamed={onChanged} onDraftSubmitted={onDraftSubmitted} onError={onError} />}
       </div>
     </div>

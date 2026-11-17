@@ -99,6 +99,9 @@ ShellLauncher: four forks/six execs. Login's setuid/drop, controlling terminal, 
 and app-specific descriptor layouts are explicit. Existing active shells are reused.
 New windows/restored jobs in an already running app remain separately unsupported.
 
+Complete native Mac launch preflight includes the installed bootstrap shell for a modeled
+pre-existing root foothold. Retain required OS software when restricting application deployment.
+
 Select the terminal through existing `environment.deployment_overrides.user_applications`
 assignments. If both are eligible, Apple Terminal is the stable default. Profiled literal
 local commands use the same canonical process owner and can emit ES, eCAR and history.

@@ -179,6 +179,24 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_external_parser)
 
 
+@pytest.fixture(scope="session")
+def _empty_example_collection(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """An intentionally empty bundled-example collection shared by the session."""
+    return tmp_path_factory.mktemp("no-bundled-examples")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bundled_examples(
+    _empty_example_collection: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep Studio tests from installing the shipped examples into their workspaces.
+
+    First-run enrollment still creates the Example Scenarios project, but installs nothing.
+    Subprocess helpers inherit the override. Example tests unset it to use their collections.
+    """
+    monkeypatch.setenv("EFORGE_STUDIO_EXAMPLES_DIR", str(_empty_example_collection))
+
+
 @pytest.fixture(autouse=True)
 def _reset_rng():
     """Reset all RNG state before each test for deterministic results.

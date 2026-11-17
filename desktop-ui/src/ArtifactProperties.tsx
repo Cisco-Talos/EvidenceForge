@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Dialog } from "radix-ui";
-import { FileText, GitBranch, Info, Layers3, LoaderCircle, Pencil, Sparkles, X } from "lucide-react";
+import { Modal } from "./Modal";
+import { FileText, GitBranch, Info, Layers3, LoaderCircle, Pencil, Sparkles, X, FolderOpen } from "lucide-react";
 import type { CatalogItem, StudioApi, StudioSnapshot } from "./api";
 import type { components } from "./generated/studio";
 import { artifactTitle, suggestedIdentifier, artifactNameError } from "./artifactNaming";
@@ -8,6 +8,9 @@ import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { DisplayNameField } from "./DisplayNameField";
 import { ReleaseNotesField } from "./ReleaseNotesField";
 import { Help, formatBundleSize } from "./components";
+import { ErrorBanner } from "./Feedback";
+import { canReveal, revealLabel, revealPath } from "./RevealInFinder";
+import { CopyPathButton } from "./CopyPathButton";
 
 export type PropertiesSection = "general" | "versions" | "dependencies" | "technical";
 type Properties = components["schemas"]["ArtifactProperties"];
@@ -33,12 +36,11 @@ function PropertiesShell({ title, section, onSection, onClose, children, footer,
 }) {
   const [discard, setDiscard] = useState(false);
   function close() { if (busy) return; if (dirty) setDiscard(true); else onClose(); }
-  return <Dialog.Root open onOpenChange={(open) => { if (!open) close(); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="properties-dialog" onPointerDownOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { event.preventDefault(); close(); }}>
-    <header className="properties-heading"><div><span className="eyebrow">PROPERTIES</span><Dialog.Title title={title}>{title}</Dialog.Title></div><button className="icon-button" aria-label="Close properties" disabled={busy} onClick={close}><X size={19} /></button></header>
-    <Dialog.Description className="sr-only">Inspect this artifact and edit its available draft properties.</Dialog.Description>
+  return <Modal title={title} hideTitle size="xl" className="properties-dialog" busy={busy} onClose={close}>
+    <header className="properties-heading"><div><span className="properties-kicker">Properties</span><h2 className="modal-title" title={title}>{title}</h2></div><button className="icon-button" aria-label="Close properties" disabled={busy} onClick={close}><X size={19} /></button></header>
     <div className="settings-layout properties-layout"><nav className="settings-nav" aria-label="Properties sections">{tabs.filter((tab) => !bundle || tab.id !== "versions").map((tab) => <button key={tab.id} className={section === tab.id ? "active" : ""} aria-current={section === tab.id ? "page" : undefined} onClick={() => onSection(tab.id)}><tab.icon size={17} /><span>{bundle && tab.id === "dependencies" ? "Captured inputs" : tab.label}</span></button>)}</nav><div className="properties-content">{children}</div></div>
     <footer className="properties-footer">{discard ? <><span>Discard unsaved property changes?</span><button className="button-quiet" onClick={() => setDiscard(false)}>Keep editing</button><button className="button-danger" onClick={onClose}>Discard changes</button></> : <>{footer}<button className="button-quiet" disabled={busy} onClick={close}>Close</button></>}</footer>
-  </Dialog.Content></Dialog.Portal></Dialog.Root>;
+  </Modal>;
 }
 
 function Property({ label, help, children }: { label: string; help: string; children: ReactNode }) {
@@ -124,7 +126,7 @@ export function ArtifactPropertiesDialog({ item, initialSection = "general", sna
   }
   const open = async (path: string) => { onClose(); await onOpen(path); };
   return <PropertiesShell title={artifactTitle(item)} section={section} onSection={setSection} onClose={onClose} dirty={dirty} busy={busy} footer={<>{dirty && <span className="muted small">Unsaved changes</span>}{editable && <button className="button-primary" disabled={busy || !dirty} onClick={() => void save()}>Save properties</button>}</>}>
-    {error && <p className="error-text" role="alert">{error}<button className="button-quiet" disabled={busy || dirty} onClick={() => setRefresh((value) => value + 1)}>Refresh properties</button></p>}{status && <p className="property-status" role="status">{status}</p>}
+    {error && <ErrorBanner retryLabel="Refresh properties" busy={busy || dirty} onRetry={() => setRefresh((value) => value + 1)}>{error}</ErrorBanner>}{status && <p className="property-status" role="status">{status}</p>}
     {!properties ? <p className="muted">Reading properties…</p> : <>
       {section === "general" && <><h2>General</h2>{!editable && <div className="properties-readonly"><span>{properties.lifecycle?.status === "published" ? "Published release · read-only" : "Legacy source · read-only"}</span><ArtifactLifecycle item={item} api={api} onChanged={onChanged} onOpen={open} compact /></div>}
         <DisplayNameField value={displayName} onChange={setDisplayName} label="Display name" placeholder={properties.name} disabled={busy || !editable} api={api} source={{ item_id: item.id, expected_digest: properties.digest }} allowReplacement previewRequired help="Optional friendly title. It does not change the identifier, references or file names." />
@@ -141,7 +143,7 @@ export function ArtifactPropertiesDialog({ item, initialSection = "general", sna
         {!!properties.lifecycle?.parents?.length && <details className="properties-lineage"><summary>Parents · {properties.lifecycle.parents.length}</summary>{properties.lifecycle.parents.map((parent) => <article key={parent.digest}><strong>{parent.publisher || "anonymous"}/{parent.name} · {parent.version || "Draft / legacy source"}</strong><small className="property-code">{parent.digest}</small>{(properties.comparisons || []).find((comparison) => comparison.parent.digest === parent.digest)?.status === "available" && <details><summary>Compare authored files</summary>{Object.entries((properties.comparisons || []).find((comparison) => comparison.parent.digest === parent.digest)?.changes || {}).map(([name, changes]) => <div key={name}><strong>{name}</strong><pre>{changes}</pre></div>)}</details>}</article>)}</details>}
       </>}
       {section === "dependencies" && <><h2>Dependencies</h2>{(properties.dependencies || []).length ? (properties.dependencies || []).map((dependency, index) => <article className="property-dependency" key={index}><strong>{String(dependency.publisher || "anonymous")}/{String(dependency.name || "Dependency")} · {String(dependency.version || "draft")}</strong>{!!dependency.digest && <small className="property-code">{String(dependency.digest)}</small>}{!!dependency.source && <span className="muted small">{String(dependency.source)}</span>}</article>) : <p className="muted">No resolved pack dependencies.</p>}{(properties.findings || []).map((finding) => <p className="error-text" key={finding}>{finding}</p>)}</>}
-      {section === "technical" && <><h2>Technical details</h2><Property label="Kind" help="Document family determines its schema and lifecycle operations.">{properties.kind}</Property><Property label="Schema" help="The format version, separate from the content release version. Upgrade creates a linked draft."><span>{properties.schema_version}</span>{properties.upgrade_available && <ArtifactLifecycle item={item} api={api} onChanged={onChanged} onOpen={open} compact disabled={dirty} />}</Property>
+      {section === "technical" && <><h2>Technical details</h2><Property label="Kind" help="Document family determines its schema and lifecycle operations.">{properties.kind}</Property><Property label="Source file" help="The authored YAML Studio reads for this artifact."><div className="path-with-copy"><code className="path-value" title={item.path}>{item.path}</code><CopyPathButton path={item.path} label={item.kind === "scenario" ? "Copy scenario path" : "Copy pack path"} onError={setError} />{canReveal() && <button type="button" className="copy-path-button" aria-label={revealLabel()} title={revealLabel()} onClick={() => void revealPath(item.path).catch((failure) => setError(String(failure)))}><FolderOpen size={14} aria-hidden="true" /></button>}</div></Property><Property label="Schema" help="The format version, separate from the content release version. Upgrade creates a linked draft."><span>{properties.schema_version}</span>{properties.upgrade_available && <ArtifactLifecycle item={item} api={api} onChanged={onChanged} onOpen={open} compact disabled={dirty} />}</Property>
         <Property label="Validated with" help="Engine that successfully checked these exact inputs. Editing sources, dependencies or configuration makes a draft's check stale. This does not promise support on older engines."><span>{properties.validated_with ? `EvidenceForge ${properties.validated_with.evidenceforge_version} · ${new Date(properties.validated_with.completed_at).toLocaleString()}${properties.validated_with.warnings ? ` · ${properties.validated_with.warnings} warnings` : ""}` : "No recorded validation for these inputs"}</span><button className="button-quiet" disabled={busy || dirty} onClick={() => void validate()}>Validate</button></Property>
         <Property label="Content digest" help="Integrity identity for the complete source snapshot or published release."><code>{properties.digest}</code></Property>{properties.semantic_digest && <Property label="Generation digest" help="Generation-relevant content identity excludes notes and lineage."><code>{properties.semantic_digest}</code></Property>}{properties.lifecycle?.draft_id && <Property label="Draft identity" help="Unique draft identity stays the same across editing sessions."><code>{properties.lifecycle.draft_id}</code></Property>}<Property label="Source files" help="Authoritative YAML and includes. Published releases also retain frozen inputs and configuration."><ul>{(properties.source_files || []).map((path) => <li key={path}><code>{path}</code></li>)}</ul></Property>{properties.requires_evidenceforge && <details><summary>Advanced metadata</summary><Property label="Declared engine compatibility" help="Existing authored declaration, preserved as metadata. It is not inferred from every feature in the artifact."><code>{properties.requires_evidenceforge}</code></Property></details>}
       </>}

@@ -39,12 +39,10 @@ Do not pipe its JSON through Python merely to regroup or reprint issues.
 eforge validate <absolute-scenario-path> --json [--checkpoint-hours <hours>]
 ```
 
-For a repair-oriented display, omit `--json`. Text output preserves severity, field paths,
-messages, suggestions, and exit status.
-
 For a resolved document, use `eforge validate <absolute-RESOLVED_SCENARIO.yaml> --json` and omit `--project-root`.
 
-Use text output only when the installed CLI does not support `--json`. Preserve the exit status:
+Omit `--json` for a repair-oriented display or when the installed CLI does not support it. Text
+output preserves severity, field paths, messages, and suggestions. Preserve the exit status:
 
 - `0`: valid, possibly with warnings or informational notes.
 - `1`: input failure such as unreadable/malformed YAML or invalid `--oob-host`.
@@ -76,15 +74,11 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Repair and revalidate errors before warnings. Warnings do not block generation; after errors
   reach zero, group warnings by cause and identify intentional exceptions.
 - Info notes are observations, not warnings. Mention them only when useful.
-- Coverage checks consider selected source formats and their host platforms. Missing unrequested
-  alternatives and generic runtime uncertainty do not require extra sensors or formats. Explicit
-  loss, disabled collection and unobservable important facts still produce findings. Both `ssl`
-  and `https` are opaque to Zeek HTTP inspection; retain an intentional visibility warning when
-  the authored HTTP result has no application-side observer.
-- Executable location warnings compare genuine catalog/system-binary mappings, never a guessed
-  `/usr/bin` or System32 fallback for an unknown executable. Preserve intentional staged paths.
-- Complete native Mac launch preflight includes the installed bootstrap shell for a modeled
-  pre-existing root foothold. Retain required OS software when restricting application deployment.
+- Coverage checks use the selected formats and host platforms; unrequested alternatives need no
+  extra sensors, but explicit loss or unobservable important facts still produce findings.
+  `ssl`/`https` are opaque to Zeek HTTP, so keep an intentional visibility warning when an
+  authored HTTP result has no application-side observer. Executable-location warnings compare
+  real catalog/system-binary mappings, never a guessed fallback; keep intentional staged paths.
 - Endpoint coverage is evaluated per host from effective source deployment, capabilities,
   enablement, missingness, and collection windows. No OS requires every native format or a
   particular endpoint format: eCAR applies across Windows, Linux, and macOS. Missing endpoint
@@ -92,9 +86,8 @@ Inspect only the implicated authored fragment rather than loading every include 
   behavior with no supported evidence projection remains a warning (or an error when a runtime
   prerequisite requires it). A limited native or history source does not imply complete process,
   session, or file coverage, and format selection does not guarantee rows.
-- Generation targets must be allowlisted. Only macOS 27 arm64 workstations currently qualify
-  for Mac generation; all other Mac releases fail regardless of output selection. Historical
-  decoding does not enable a target. Report the error without silently changing the declared OS.
+- Generation targets must be allowlisted (the macOS reference names the only Mac target); other
+  Mac releases fail regardless of output selection. Report it without changing the declared OS.
 - On a clean pass, state that the scenario is valid; add counts or topology only if useful or requested.
 - Resource forecasts are advisory and model the 24-hour checkpoint default; pass the intended `--checkpoint-hours` value (`0` disables it) when overriding that cadence.
   Distinguish final output from peak working disk; do not use hidden workload override flags.

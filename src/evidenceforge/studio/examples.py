@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +17,15 @@ from evidenceforge.studio.state_records_v4 import ExampleInstallation, Installed
 from evidenceforge.studio.store import Project, StudioStore
 
 logger = logging.getLogger(__name__)
+
+EXAMPLES_DIRECTORY_ENV = "EFORGE_STUDIO_EXAMPLES_DIR"
+"""Developer and test override for the bundled collection Studio installs from."""
+
+
+def _collection_root() -> Path:
+    """Return the overridden collection, else the distribution's bundled examples."""
+    override = os.environ.get(EXAMPLES_DIRECTORY_ENV)
+    return Path(override).resolve() if override else examples_directory()
 
 
 class ExamplesStatus(BaseModel):
@@ -121,7 +131,7 @@ def install_examples(store: StudioStore, workspace: Path, *, manual: bool = Fals
         state.error = ""
         # The stable ID and enrollment must survive an interrupted empty/partial install.
         store.save_example_installation(state)
-        examples = discover_examples()
+        examples = discover_examples(_collection_root())
         existing = {item.path: item for item in store.items(workspace, "scenario")}
         for example in examples:
             if example.family in state.excluded:
@@ -179,7 +189,7 @@ def examples_status(store: StudioStore, workspace: Path) -> ExamplesStatus:
     """Describe failures without preventing normal Studio use."""
     state = store.example_installation(workspace)
     try:
-        root = examples_directory()
+        root = _collection_root()
         count = len(discover_examples(root))
         error = state.error if state else ""
     except (OSError, ValueError, EvidenceForgeError) as exc:

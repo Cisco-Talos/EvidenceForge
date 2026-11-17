@@ -4,8 +4,10 @@ import { FileCode2, X } from "lucide-react";
 import type { ExportProgress, StudioApi, TextPreview } from "./api";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
+import { Modal } from "./Modal";
 import { ExportStatus } from "./ExportStatus";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { revealAction, SavedPath } from "./RevealInFinder";
 
 export interface BundleFiles {
   root: string;
@@ -152,8 +154,9 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
     return [
       { id: "open", label: "Open", group: "inspect", run: () => open(false) },
       ...(markdown ? [{ id: "rendered", label: "Rendered view", group: "inspect" as const, run: () => open(false) }, { id: "source", label: "View source", group: "inspect" as const, run: () => open(true) }] : []),
-      ...(kind !== "declarations" ? [{ id: "copy", label: "Copy path", group: "reuse" as const, run: () => writePathToClipboard(`${files.root.replace(/[\\/]$/, "")}/${path}`).catch((reason) => onError(String(reason))) }] : []),
-      { id: "save", label: isTauri() ? "Save a copy…" : "Download file", group: "reuse", disabled: exporting, reason: "A file export is in progress", run: () => saveSelectedFile(path) },
+      ...(kind !== "declarations" ? revealAction(`${files.root.replace(/[\\/]$/, "")}/${path}`, onError) : []),
+      ...(kind !== "declarations" ? [{ id: "copy", label: "Copy path", group: "locate" as const, run: () => writePathToClipboard(`${files.root.replace(/[\\/]$/, "")}/${path}`).catch((reason) => onError(String(reason))) }] : []),
+      { id: "save", label: isTauri() ? "Export file…" : "Download file", group: "manage", disabled: exporting, reason: "A file export is in progress", run: () => saveSelectedFile(path) },
     ];
   }
   const allLines = preview?.text.split("\n") || [];
@@ -168,14 +171,14 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
   }, [preview, targetLine, showSource]);
   const language = languageFor(selected || "", preview?.text || "");
   const title = kind === "items" ? "Source YAML" : kind === "environment" ? "Configuration overlay" : kind === "declarations" ? "Declaring YAML" : "Bundle files";
-  return <div className="modal-backdrop"><div className={`close-modal bundle-browser ${kind === "items" || kind === "declarations" ? "source-file-browser" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+  return <Modal title={title} hideTitle size="full" dismissOnOutside className={`bundle-browser ${kind === "items" || kind === "declarations" ? "source-file-browser" : ""}`} onClose={onClose}>
     <div className="bundle-browser-heading"><div><h2>{title}</h2><div className="path-with-copy"><span className="path-value source-path" title={files.root}>{files.root}</span>{kind !== "declarations" && <CopyPathButton path={files.root} label={kind === "items" ? "Copy source folder path" : "Copy bundle path"} onError={onError} />}</div></div><button className="icon-button" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={18} /></button></div>
     <div className="bundle-browser-layout"><nav className="bundle-file-list" aria-label="Bundle file list">{files.files.length ? files.files.map((file) => <div className="bundle-file-entry" key={file.path}><button className={`bundle-file-row ${selected === file.path ? "selected" : ""}`} onClick={() => { setSourcePath(null); setSelected(file.path); }}><FileCode2 size={15} /><span title={file.path}>{file.path}</span><small>{file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}</small></button><ObjectMenu label={`Actions for file ${file.path}`} actions={fileActions(file.path)} /></div>) : <p className="muted">This bundle has no files yet.</p>}{files.truncated && <p className="muted">Showing the first 500 files.</p>}</nav>
       <div className="bundle-preview"><div className="bundle-preview-heading"><div className="path-with-copy bundle-selected-path"><strong className="path-value" title={selected || undefined}>{selected ? kind === "declarations" ? selected.split("/").slice(1).join("/") : selected : "Choose a file"}</strong>{selected && kind !== "declarations" && <CopyPathButton path={`${files.root.replace(/[\\/]$/, "")}/${selected}`} label="Copy file path" onError={onError} />}</div>{selected && <><ActionShortcut action={fileActions(selected).find((action) => action.id === "save")!} /><ObjectMenu label={`Actions for file ${selected}`} actions={fileActions(selected)} /></>}</div>
         {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
-        {savedExport && <div className="path-with-copy bundle-preview-message"><span className="path-value muted" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved file path" onError={onError} /></div>}
-        {loading ? <p className="muted bundle-preview-message">Loading preview…</p> : error ? <p className="error-text bundle-preview-message">{error}</p> : preview?.binary ? <p className="muted bundle-preview-message">This file is binary. {isTauri() ? "Save a copy" : "Download it"} to inspect it.</p> : selected && preview ? <>{language === "markdown" && !showSource ? <article className="bundle-markdown" aria-label={`Preview of ${selected}`}><ChatMarkdown text={lines.join("\n")} /></article> : <SourceTextPreview path={selected} text={preview.text} lines={lines} firstLine={firstLine} targetLine={lineAvailable ? targetLine : null} viewportRef={sourceViewport} contextRef={contextLine} />}{targetLine && <p className="bundle-line-location" role="status">{lineAvailable ? `Declaration at line ${targetLine} · highlighted` : `Line ${targetLine} is outside this preview.`}</p>}{(preview.truncated || allLines.length > lines.length) && <p className="bundle-preview-limit">Showing lines {firstLine + 1}–{firstLine + lines.length}{preview.truncated ? " of a truncated preview" : ` of ${allLines.length}`}. {isTauri() ? "Save a copy" : "Download the file"} for the rest.</p>}</> : <p className="muted bundle-preview-message">Select a file to view it.</p>}
+        {savedExport && <SavedPath path={savedExport} onError={onError} className="bundle-preview-message" />}
+        {loading ? <p className="muted bundle-preview-message">Loading preview…</p> : error ? <p className="error-text bundle-preview-message">{error}</p> : preview?.binary ? <p className="muted bundle-preview-message">This file is binary. {isTauri() ? "Export it" : "Download it"} to inspect it.</p> : selected && preview ? <>{language === "markdown" && !showSource ? <article className="bundle-markdown" aria-label={`Preview of ${selected}`}><ChatMarkdown text={lines.join("\n")} /></article> : <SourceTextPreview path={selected} text={preview.text} lines={lines} firstLine={firstLine} targetLine={lineAvailable ? targetLine : null} viewportRef={sourceViewport} contextRef={contextLine} />}{targetLine && <p className="bundle-line-location" role="status">{lineAvailable ? `Declaration at line ${targetLine} · highlighted` : `Line ${targetLine} is outside this preview.`}</p>}{(preview.truncated || allLines.length > lines.length) && <p className="bundle-preview-limit">Showing lines {firstLine + 1}–{firstLine + lines.length}{preview.truncated ? " of a truncated preview" : ` of ${allLines.length}`}. {isTauri() ? "Export the file" : "Download the file"} for the rest.</p>}</> : <p className="muted bundle-preview-message">Select a file to view it.</p>}
       </div>
     </div>
-  </div></div>;
+  </Modal>;
 }

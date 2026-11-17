@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, ArrowUpRight, Check, Folder, MessageSquareText } from "lucide-react";
+import { Activity, Check, Folder, FolderOpen, MessageSquareText, Palette } from "lucide-react";
+import { setThemePreference, useThemePreference, type ThemePreference } from "./theme";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
@@ -9,9 +10,9 @@ import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
 import { codexAccountIdentity, useCodexAccount, type CodexStatus } from "./CodexAccount";
 
-type Tab = "workspace" | "jobs" | "tools";
+type Tab = "workspace" | "jobs" | "tools" | "appearance";
 
-export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus, api, onSaved, onError }: {
+export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus, api, onSaved, onError, onNotice = () => undefined }: {
   settings: StudioSettings;
   paths: { data: string; logs: string };
   runtimeCleanup?: RuntimeCleanupReport | null;
@@ -19,8 +20,11 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
   api: StudioApi;
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
+  /** Success toast for completed actions such as installing examples. */
+  onNotice?: (message: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("workspace");
+  const appearance = useThemePreference();
   const [draft, setDraft] = useState<StudioSettings>(settings);
   const [savedSettings, setSavedSettings] = useState<StudioSettings>(settings);
   const [saving, setSaving] = useState(false);
@@ -134,21 +138,27 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
       <button className={tab === "workspace" ? "active" : ""} onClick={() => setTab("workspace")}><Folder size={16} /> Workspace</button>
       <button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}><Activity size={16} /> Jobs</button>
       <button className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><MessageSquareText size={16} /> Authoring & tools</button>
+      <button className={tab === "appearance" ? "active" : ""} onClick={() => setTab("appearance")}><Palette size={16} /> Appearance</button>
     </div>
     <div className="settings-main">
+      {tab === "appearance" && <>
+        <div className="section-heading"><div><h2>Appearance</h2><p>How Studio looks on this Mac. Changes apply immediately to every Studio window.</p></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Theme</strong><Help text="System follows the macOS light or dark setting and switches when it changes." /></div>
+          <div className="segmented" role="radiogroup" aria-label="Theme">{(["system", "light", "dark"] as ThemePreference[]).map((value) => <button key={value} type="button" role="radio" aria-checked={appearance === value} aria-pressed={appearance === value} onClick={() => setThemePreference(value)}>{value === "system" ? "System" : value === "light" ? "Light" : "Dark"}</button>)}</div></div>
+      </>}
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
         <PublisherSetup key={settings.workspace} workspace={settings.workspace} status={publisherStatus} api={api} onSaved={onSaved} />
-        <ExampleSettings key={`examples:${settings.workspace}`} workspace={settings.workspace} api={api} onSaved={onSaved} onOpenFolder={openLocalFolder} onError={onError} />
+        <ExampleSettings key={`examples:${settings.workspace}`} workspace={settings.workspace} api={api} onSaved={onSaved} onOpenFolder={openLocalFolder} onError={onError} onNotice={onNotice} />
         <div className="setting-row"><div className="setting-copy"><strong>Remember library views</strong><Help text="Restore the last project, search, filters, and sorting for scenarios and packs in this workspace. Turning this off opens each library with its default view." /></div><input className="visible-check" type="checkbox" aria-label="Remember library views" disabled={!libraryReady} checked={rememberView} onChange={(event) => setRememberView(event.target.checked)} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Search matches per item</strong><Help text="Show this many matching fields or source lines (five by default). Names and descriptions rank first, then YAML values, keys, and comments. Substring matching is unchanged; extra matches are counted." /></div><input className="setting-number" type="number" min={1} max={50} aria-label="Search matches per item" value={draft.search_match_limit ?? 5} onChange={(event) => setDraft({ ...draft, search_match_limit: Number(event.target.value) })} onBlur={() => setDraft((current) => ({ ...current, search_match_limit: Math.min(50, Math.max(1, current.search_match_limit || 5)) }))} /></div>
-        <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><FolderOpen size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>Generated runs folder</strong><Help text="Applies to new runs in this workspace. Existing runs stay where they are. Leave empty to use the workspace's runs folder." /></div><div className="setting-control path-control"><input aria-label="Generated runs folder" placeholder={`${settings.workspace.replace(/[\\/]$/, "")}/runs`} value={draft.output_parents[settings.workspace] || ""} onChange={(event) => { const parents = { ...draft.output_parents }; if (event.target.value.trim()) parents[settings.workspace] = event.target.value; else delete parents[settings.workspace]; setDraft({ ...draft, output_parents: parents }); }} /></div></div>
         <p className="muted">Use a local disk for active work and large generated datasets. Cloud-synced folders such as OneDrive can cause sync contention and bulk-deletion prompts during generation and cleanup. Back up completed work separately. Changing a location does not move existing files.</p>
-        <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored files stay in your workspace; generated runs use the selected destination." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openLocalFolder(paths.data)}><ArrowUpRight size={16} /></button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored files stay in your workspace; generated runs use the selected destination." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openLocalFolder(paths.data)}><FolderOpen size={16} /></button></div></div>
         {runtimeCleanup?.unavailable_reason && <p role="status">{runtimeCleanup.unavailable_reason}</p>}
         <div className="setting-row"><div className="setting-copy"><strong>Keep previous app runtime (days)</strong><Help text="Keep the previous successfully launched runtime for this many days after replacement (30 by default). Zero removes the extra rollback period. Other unused runtimes have a 24-hour grace period. Current and running runtimes are protected. Saving applies cleanup immediately; authored packs, scenarios, conversations, and bundles are preserved." /></div><input className="setting-number" type="number" min={0} max={3650} disabled={Boolean(runtimeCleanup?.unavailable_reason)} aria-label="Keep previous app runtime (days)" value={runtimeDays} onChange={(event) => setRuntimeDays(Number(event.target.value))} onBlur={() => setRuntimeDays((current) => Math.min(3650, Math.max(0, Math.trunc(current))))} /></div>
-        <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openLocalFolder(paths.logs)}><ArrowUpRight size={16} /></button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openLocalFolder(paths.logs)}><FolderOpen size={16} /></button></div></div>
       </>}
       {tab === "jobs" && <>
         <div className="section-heading"><div><h2>Job capacity</h2><p>Control job concurrency and checkpoint frequency. Evaluations automatically use temporary disk storage when needed.</p></div></div>
@@ -177,7 +187,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
         <div className="setting-row"><div className="setting-copy"><strong>Codex executable</strong><Help text="Automatic checks PATH, common CLI install locations for your account, and the Codex desktop app on macOS and Windows. Available models come from the selected Codex version. After changing this path, save and reconnect Codex using the status dot in the header." /></div><input value={draft.codex_path || ""} onChange={(event) => setDraft({ ...draft, codex_path: event.target.value || null })} placeholder="Automatic" /></div>
         <div className="setting-row"><div className="setting-copy"><strong>eforge executable</strong><Help text="Leave empty to use this Python environment's eforge CLI." /></div><input value={draft.eforge_path || ""} onChange={(event) => setDraft({ ...draft, eforge_path: event.target.value || null })} placeholder="Automatic" /></div>
       </>}
-      <div className="settings-footer"><span role="status" className="settings-save-status">{saveStatus}</span><button className="button-primary" disabled={!dirty || saving} onClick={() => void save()}><Check size={16} /> {saving ? "Saving…" : "Save settings"}</button></div>
+      {tab !== "appearance" && <div className="settings-footer"><span role="status" className="settings-save-status">{saveStatus}</span><button className="button-primary" disabled={!dirty || saving} onClick={() => void save()}><Check size={16} /> {saving ? "Saving…" : "Save settings"}</button></div>}
     </div>
   </div>;
 }

@@ -12,7 +12,6 @@ from evidenceforge.artifacts.lifecycle import inspect_artifact
 from evidenceforge.artifacts.removal import remove_scenario, review_scenario_deletion
 from evidenceforge.composition.publisher import PublisherIdentity, set_publisher
 from evidenceforge.desktop.library import discover_scenarios
-from evidenceforge.examples import discover_examples
 from evidenceforge.studio import examples as module
 from evidenceforge.studio.examples import enroll_examples, install_examples, reconcile_examples
 from evidenceforge.studio.service import StudioService, create_app
@@ -40,8 +39,7 @@ def releases(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def collection(tmp_path: Path, releases: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "examples"
     root.mkdir()
-    monkeypatch.setattr(module, "discover_examples", lambda directory=None: discover_examples(root))
-    monkeypatch.setattr(module, "examples_directory", lambda: root)
+    monkeypatch.setenv(module.EXAMPLES_DIRECTORY_ENV, str(root))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "unused-home")
     return root
 

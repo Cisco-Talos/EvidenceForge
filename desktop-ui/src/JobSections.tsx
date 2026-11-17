@@ -9,18 +9,32 @@ import { completedSuccessfully } from "./jobOutcomes";
 
 const finishedStatuses = ["completed", "failed", "stopped", "cancelled"];
 
-export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId, kinds = ["generation", "evaluation"], onNavigateJob, manageHistory = false, removedJobIds = [], flat = false }: {
+type ClearKind = "generation" | "evaluation" | "all";
+const kindNames: Record<ClearKind, string> = { generation: "generations", evaluation: "evaluations", all: "jobs" };
+
+/** "Today", "Yesterday" or a short date for a timeline heading. */
+function dayLabel(seconds: number): string {
+  if (!seconds) return "Undated";
+  const day = new Date(seconds * 1000); const today = new Date();
+  const start = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const diff = Math.round((start(today) - start(day)) / 86_400_000);
+  return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : day.toLocaleDateString(undefined, { month: "short", day: "numeric", year: day.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+}
+
+export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId, kinds = ["generation", "evaluation"], onNavigateJob, manageHistory = false, removedJobIds = [], flat = false, timeline = false }: {
   jobs: StudioJob[]; nameFor: (job: StudioJob) => string | undefined; api: StudioApi;
   onError: (message: string) => void; onChanged: () => Promise<void>; focusJobId?: string | null;
   kinds?: ("generation" | "evaluation")[];
   onNavigateJob?: (job: StudioJob) => void;
   manageHistory?: boolean; removedJobIds?: string[]; flat?: boolean;
+  /** One newest-first list of generations and evaluations under day headings. */
+  timeline?: boolean;
 }) {
   const [openKinds, setOpenKinds] = useState<Record<string, boolean>>({});
   const [highlightedJobId, setHighlightedJobId] = useState<string | null>(null);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [removed, setRemoved] = useState<string[]>([]);
-  const [confirmClear, setConfirmClear] = useState<{ kind: "generation" | "evaluation"; mode: "completed" | "finished" } | null>(null);
+  const [confirmClear, setConfirmClear] = useState<{ kind: ClearKind; mode: "completed" | "finished" } | null>(null);
   const [clearing, setClearing] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string[]>([]);
   const [pendingJobId, setPendingJobId] = useState<string | null>(null);
@@ -36,9 +50,22 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     } catch (error) { onError(String(error)); return false; }
   }
 
-  async function clearHistory(kind: "generation" | "evaluation", mode: "completed" | "finished") {
+  async function clearHistory(kind: ClearKind, mode: "completed" | "finished") {
+    if (kind === "all") {
+      setClearing(kind);
+      try { for (const each of ["generation", "evaluation"] as const) await clearOne(each, mode); await onChanged(); setConfirmClear(null); }
+      catch (error) { onError(String(error)); }
+      finally { setClearing(null); }
+      return;
+    }
     setClearing(kind);
-    try {
+    try { await clearOne(kind, mode); await onChanged(); setConfirmClear(null); }
+    catch (error) { onError(String(error)); }
+    finally { setClearing(null); }
+  }
+
+  async function clearOne(kind: "generation" | "evaluation", mode: "completed" | "finished") {
+    {
       const result = await api.request<{ job_ids: string[] }>(`/v1/jobs/history/clear-${mode}`, "POST", { kind });
       // A source link can reveal an already-cleared job. Hide it again only if
       // it still meets this action's criteria; fresh removals come from the API.
@@ -47,10 +74,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
       const cleared = new Set([...result.job_ids, ...previouslyCleared.map((job) => job.id)]);
       setRemoved((current) => [...current, ...cleared]);
       setRevealed((current) => current.filter((id) => !cleared.has(id)));
-      await onChanged();
-      setConfirmClear(null);
-    } catch (error) { onError(String(error)); }
-    finally { setClearing(null); }
+    }
   }
 
   useEffect(() => () => {
@@ -81,7 +105,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
       onError("The selected job is no longer in this run history.");
       return;
     }
-    const group = source.closest(".job-group");
+    const group = source.closest("details.job-group");
     if (group instanceof HTMLDetailsElement) {
       group.open = true;
       const kind = jobs.find((job) => job.id === jobId)?.kind;
@@ -95,6 +119,23 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     source.scrollIntoView?.({ block: "center", behavior: "auto" });
   }
 
+  const confirmation = confirmClear && <RemovalConfirmation title={`Clear ${confirmClear.mode} ${kindNames[confirmClear.kind]}?`} label={`Clear ${confirmClear.mode}`} busy={clearing !== null} onCancel={() => setConfirmClear(null)} onConfirm={() => clearHistory(confirmClear.kind, confirmClear.mode)}><p>{confirmClear.mode === "completed" ? "Successful completed jobs will be removed from Activity. Failed and unrated evaluations remain visible." : "Completed, failed, stopped and cancelled jobs will be removed from Activity. Queued, running and paused jobs remain visible."} Bundles and saved scorecards are kept.</p></RemovalConfirmation>;
+  if (timeline) {
+    const entries = recentJobs(visibleJobs);
+    const can = (kind: "generation" | "evaluation", mode: "completed" | "finished") => entries.some((job) => job.kind === kind && (mode === "completed" ? completedSuccessfully(job) : finishedStatuses.includes(job.status)));
+    const clearAction = (kind: ClearKind, mode: "completed" | "finished"): ObjectAction => {
+      const possible = kind === "all" ? can("generation", mode) || can("evaluation", mode) : can(kind, mode);
+      return { id: `${mode}-${kind}`, label: `Clear ${mode} ${kindNames[kind]}`, group: "remove", disabled: clearing !== null || !possible, reason: clearing !== null ? "History cleanup is in progress" : `No ${mode === "completed" ? "successful completed" : "finished"} ${kindNames[kind]} to clear`, description: "Keep bundles and scorecards", run: () => setConfirmClear({ kind, mode }) };
+    };
+    const historyActions = (["completed", "finished"] as const).flatMap((mode) => (["generation", "evaluation"] as const).map((kind) => clearAction(kind, mode)));
+    const days = [...new Set(entries.map((job) => dayLabel(jobSubmittedAt(job))))];
+    return <><section className="job-timeline" aria-label="History">
+      {manageHistory && <header className="job-timeline-header"><strong>History</strong><span>{entries.length}</span>
+        <div className="job-history-actions"><ActionShortcut action={{ ...clearAction("all", "completed"), label: "Clear completed" }} className="clear-completed" ariaLabel="Clear completed jobs" /><ObjectMenu label="History actions" actions={historyActions} /></div>
+      </header>}
+      {days.map((day) => <div className="job-timeline-day" key={day}><h3 className="job-timeline-heading">{day}</h3><div className="job-list">{entries.filter((job) => dayLabel(jobSubmittedAt(job)) === day).map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} onDeleteHistory={manageHistory ? () => removeHistory(job.id) : undefined} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />)}</div></div>)}
+    </section>{confirmation}</>;
+  }
   return <><div className="job-sections">{kinds.map((kind) => {
     const entries = recentJobs(visibleJobs.filter((job) => job.kind === kind));
     const latest = entries[0];
@@ -112,5 +153,5 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
       </div>}</summary>
       <div className="job-list">{entries.length ? entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} onDeleteHistory={manageHistory ? () => removeHistory(job.id) : undefined} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />) : <p className="muted job-group-empty">No {kind === "generation" ? "generations" : "evaluations"} in this list.</p>}</div>
     </details>;
-  })}</div>{confirmClear && <RemovalConfirmation title={`Clear ${confirmClear.mode} ${confirmClear.kind === "generation" ? "generations" : "evaluations"}?`} label={`Clear ${confirmClear.mode}`} busy={clearing !== null} onCancel={() => setConfirmClear(null)} onConfirm={() => clearHistory(confirmClear.kind, confirmClear.mode)}><p>{confirmClear.mode === "completed" ? "Successful completed jobs will be removed from Job center. Failed and unrated evaluations remain visible." : "Completed, failed, stopped and cancelled jobs will be removed from Job center. Queued, running and paused jobs remain visible."} Bundles and saved scorecards are kept.</p></RemovalConfirmation>}</>;
+  })}</div>{confirmation}</>;
 }

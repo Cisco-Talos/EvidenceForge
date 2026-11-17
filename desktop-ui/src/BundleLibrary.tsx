@@ -5,12 +5,18 @@ import { ChevronRight, ChevronDown, FolderOpen, FolderPlus, Search } from "lucid
 import type { CatalogItem, ImportedBundle, StudioApi, StudioSnapshot } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { ActionShortcut, ObjectMenu, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
+import { Modal } from "./Modal";
+import { LibraryFilters, LibraryToolbar, ViewsMenu } from "./LibraryToolbar";
+import type { LibrarySort } from "./LibraryTable";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
-import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
+import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard } from "./components";
+import { JobStatusPill } from "./StatusPill";
+import { EmptyState } from "./Feedback";
 import { bundleSummary, orderedBundles } from "./workspaceSummaries";
 import { HeaderSummary } from "./WorkspaceSection";
 import { capturedVersion, groupBundles, type BundleGroup } from "./bundleGrouping";
+import { revealAction, SavedPath } from "./RevealInFinder";
 
 export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
   bundle: ImportedBundle; api: StudioApi; onError: (message: string) => void; onChanged: () => Promise<void>;
@@ -49,15 +55,16 @@ export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
   }
   const actions: ObjectAction[] = [
     { id: "open", label: "Open details", group: "inspect", run: () => { if (row.current) row.current.open = true; } },
-    { id: "properties", label: "Properties…", group: "inspect", run: () => setPropertiesOpen(true) },
+    { id: "properties", label: "Properties…", group: "locate", run: () => setPropertiesOpen(true) },
     { id: "files", label: "View files", group: "inspect", run: openFiles },
-    { id: "export", label: "Export ZIP…", group: "reuse", disabled: working, reason: "An operation is in progress", run: exportZip },
-    { id: "copy", label: "Copy path", group: "reuse", run: () => writePathToClipboard(bundle.root).catch((error) => onError(String(error))) },
-    { id: "remove", label: "Remove from Studio", group: "remove", disabled: working, reason: "An operation is in progress", description: "Keep external files in their original location", run: () => setConfirmRemove(true) },
+    { id: "export", label: "Export bundle…", group: "manage", disabled: working, reason: "An operation is in progress", run: exportZip },
+    ...revealAction(bundle.root, onError),
+    { id: "copy", label: "Copy path", group: "locate", run: () => writePathToClipboard(bundle.root).catch((error) => onError(String(error))) },
+    { id: "remove", label: "Remove from Studio…", group: "remove", disabled: working, reason: "An operation is in progress", description: "Keep external files in their original location", run: () => setConfirmRemove(true) },
   ];
   return <details ref={row} className="job-row imported-bundle-row" id={`bundle-${bundle.id}`}>
-    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="scenario-version" title="Scenario identity captured by this bundle">{capturedVersion(bundle.scenario_source)}</span><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><StatusBadge status="Completed" /><span className="job-row-result">Read-only in Studio</span><span className="job-row-controls"><span className="job-row-shortcuts"><ActionShortcut action={actions[2]} /><ActionShortcut action={actions[3]} /></span><ChevronDown size={16} className="job-row-chevron" /><BundleOptionsMenu id={bundle.id} onProperties={() => setPropertiesOpen(true)} actions={actions} /></span></summary>
-    <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={bundle.root}>{bundle.root}</span><CopyPathButton path={bundle.root} label="Copy bundle path" onError={onError} /></div><p className="muted small">Studio did not create this bundle. Removing it from the library leaves its files on disk.</p>{working && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}{savedPath && <div className="path-with-copy muted small"><span className="path-value">Saved to {savedPath}</span><CopyPathButton path={savedPath} label="Copy saved ZIP path" onError={onError} /></div>}</div>
+    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="scenario-version" title="Scenario identity captured by this bundle">{capturedVersion(bundle.scenario_source)}</span><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><JobStatusPill status="Completed" /><span className="job-row-result">Read-only in Studio</span><span className="job-row-controls"><span className="job-row-shortcuts"><ActionShortcut action={actions[2]} /><ActionShortcut action={actions[3]} /></span><ChevronDown size={16} className="job-row-chevron" /><BundleOptionsMenu id={bundle.id} onProperties={() => setPropertiesOpen(true)} actions={actions} /></span></summary>
+    <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={bundle.root}>{bundle.root}</span><CopyPathButton path={bundle.root} label="Copy bundle path" onError={onError} /></div><p className="muted small">Studio did not create this bundle. Removing it from the library leaves its files on disk.</p>{working && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}{savedPath && <SavedPath path={savedPath} onError={onError} />}</div>
     {propertiesOpen && <BundlePropertiesDialog id={bundle.id} imported api={api} onClose={() => setPropertiesOpen(false)} />}
     {files && <BundleFileBrowser jobId={bundle.id} kind="bundles" files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
     {confirmRemove && <RemovalConfirmation title="Remove from Studio?" label="Remove from Studio" busy={working} onCancel={() => setConfirmRemove(false)} onConfirm={remove}><p>This bundle disappears from the library. Its files remain at their current path and can be imported again.</p></RemovalConfirmation>}
@@ -86,6 +93,8 @@ function BundleGroupRow({ group, snapshot, sizes, api, onError, onChanged, onOpe
     { id: "collapse", label: "Collapse all runs", group: "inspect", disabled: !listExpanded, reason: "Expand the run list first", run: () => expand("none") },
     { id: "scenario", label: "Open scenario", group: "inspect", disabled: !sourceActions.length, reason: "The original scenario is no longer in the library", ...(sourceActions.length > 1 ? { children: sourceActions } : { run: sourceActions[0]?.run }) },
   ];
+  // Groups start expanded; collapsing one is the reader's choice for this session.
+  useEffect(() => { if (row.current) row.current.open = true; }, []);
   return <details ref={row} className="bundle-group job-group" onToggle={(event) => setListExpanded(event.currentTarget.open)}>
     <summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{group.name}{disambiguate && group.publisher && <small className="bundle-publisher">{group.publisher}</small>}</strong><span>{group.jobs.length + group.imports.length}</span><small className="group-summary"><HeaderSummary summary={bundleSummary(group.jobs, group.imports, sizes)} /></small><ObjectMenu label={`Bundle group actions for ${group.name}${disambiguate ? ` (${group.publisher || "unassigned"})` : ""}`} actions={actions} /></summary>
     <div className="job-list">{orderedBundles(group.jobs, group.imports).map((entry) => entry.kind === "job"
@@ -94,8 +103,8 @@ function BundleGroupRow({ group, snapshot, sizes, api, onError, onChanged, onOpe
   </details>;
 }
 
-export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenario }: {
-  snapshot: StudioSnapshot; api: StudioApi; onError: (message: string) => void;
+export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onOpenScenario }: {
+  snapshot: StudioSnapshot; api: StudioApi; onError: (message: string) => void; onNotice: (message: string) => void;
   onChanged: () => Promise<void>; onOpenScenario: (item: CatalogItem) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -104,6 +113,8 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
   const [sizes, setSizes] = useState<Record<string, number | null>>({});
   const [importPath, setImportPath] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  /** `updated` lists every run newest first; `project` groups runs under their scenario family. */
+  const [order, setOrder] = useState<LibrarySort>("updated");
   const generations = snapshot.jobs.filter((job) => job.kind === "generation");
   const imports = snapshot.imported_bundles || [];
   const sizeKey = generations.map((job) => `${job.id}:${job.status}`).sort().join("|");
@@ -132,6 +143,12 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
     })).filter((group) => group.jobs.length || group.imports.length)
       .sort((left, right) => (orderedBundles(right.jobs, right.imports)[0]?.time || 0) - (orderedBundles(left.jobs, left.imports)[0]?.time || 0) || left.name.localeCompare(right.name) || left.key.localeCompare(right.key));
   }, [snapshot.jobs, snapshot.imported_bundles, snapshot.items, snapshot.source_paths, snapshot.artifact_groups, search, status, project]);
+  const flatEntries = groups.flatMap((group) => orderedBundles(group.jobs, group.imports).map((entry) => ({ entry, group })))
+    .sort((a, b) => b.entry.time - a.entry.time || a.entry.id.localeCompare(b.entry.id));
+  const scenarioActions = (group: BundleGroup): ObjectAction[] => {
+    const choices: ObjectAction[] = group.items.map((item) => ({ id: item.id, label: snapshot.artifact_groups?.[item.id]?.published_version ? `v${snapshot.artifact_groups[item.id].published_version}` : item.version === "Draft" ? "Draft" : "Legacy scenario", group: "inspect", run: () => onOpenScenario(item) }));
+    return [{ id: "scenario", label: "Open scenario", group: "inspect", disabled: !choices.length, reason: "The original scenario is no longer in the library", ...(choices.length > 1 ? { children: choices } : { run: choices[0]?.run }) }];
+  };
   const visibleCount = groups.reduce((count, group) => count + group.jobs.length + group.imports.length, 0);
   async function importBundle() {
     if (!importPath?.trim()) return;
@@ -148,7 +165,7 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
     try {
       const result = await api.request<{ imported: number }>("/v1/bundles/discover", "POST");
       await onChanged();
-      onError(result.imported ? `Found ${result.imported} complete bundle${result.imported === 1 ? "" : "s"} in this workspace.` : "No additional complete bundles found under workspace runs.");
+      onNotice(result.imported ? `Found ${result.imported} complete bundle${result.imported === 1 ? "" : "s"} in this workspace.` : "No additional complete bundles found under workspace runs.");
     } catch (error) { onError(String(error)); }
     finally { setWorking(false); }
   }
@@ -159,9 +176,20 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
     } catch (error) { onError(String(error)); }
   }
 
-  return <div className="page bundle-page"><div className="page-intro"><div><span className="eyebrow">GENERATED OUTPUT</span><h1>Bundles</h1><p>Inspect, export, and manage Studio runs and imported CLI bundles.</p></div><div className="bundle-page-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={16} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={17} /> Import bundle</button></div></div>
-    <div className="bundle-toolbar"><div className="search-box"><Search size={17} /><input aria-label="Search bundles" placeholder="Search scenarios or run IDs…" value={search} onChange={(event) => setSearch(event.target.value)} /></div><label>Status<select aria-label="Filter bundles by status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label><label>Project<select aria-label="Filter bundles by project" value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All projects</option><option value="ungrouped">Ungrouped</option>{snapshot.projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><span className="result-count">{visibleCount} {visibleCount === 1 ? "bundle" : "bundles"}</span></div>
-    {groups.length ? <div className="bundle-groups">{groups.map((group) => <BundleGroupRow key={group.key} group={group} snapshot={snapshot} sizes={sizes} api={api} onError={onError} onChanged={onChanged} onOpenScenario={onOpenScenario} disambiguate={groups.filter((entry) => entry.name === group.name).length > 1} />)}</div> : <div className="empty-panel"><FolderOpen size={28} /><h3>{generations.length + imports.length ? "No matching bundles" : "No bundles yet"}</h3><p>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</p></div>}
-    {importPath !== null && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Import bundle" onSubmit={(event) => { event.preventDefault(); void importBundle(); }}><h2>Import an existing bundle</h2><p>Choose a complete EvidenceForge generation folder. Studio indexes it for viewing and export; its files remain where they are.</p><label className="modal-field">Bundle folder<input autoFocus aria-label="Bundle folder" name="bundle-folder" autoComplete="off" value={importPath} onChange={(event) => setImportPath(event.target.value)} /></label>{isTauri() && <button type="button" className="button-quiet" onClick={() => void chooseFolder()}><FolderOpen size={16} /> Browse…</button>}<div className="close-modal-actions"><button type="button" className="button-quiet" disabled={working} onClick={() => setImportPath(null)}>Cancel</button><button type="submit" className="button-primary" disabled={working || !importPath.trim()}>{working ? "Importing…" : "Import bundle"}</button></div></form></div>}
+  return <div className="page bundle-page">
+    <LibraryToolbar search={search} onSearch={setSearch} searchLabel="Search bundles" placeholder="Search scenarios or run IDs…" count={visibleCount} noun={["bundle", "bundles"]}
+      filters={<LibraryFilters label="Filter bundles" onReset={() => { setStatus("all"); setProject("all"); }} facets={[
+        { id: "status", label: "Bundle status", allLabel: "All statuses", value: status === "all" ? "" : status, options: [{ value: "complete", label: "Complete" }, { value: "incomplete", label: "Incomplete" }], onChange: (value) => setStatus(value || "all") },
+        { id: "project", label: "Bundle project", allLabel: "All projects", value: project === "all" ? "" : project, options: [{ value: "ungrouped", label: "Ungrouped" }, ...snapshot.projects.map((entry) => ({ value: entry.id, label: entry.name }))], onChange: (value) => setProject(value || "all") },
+      ]} />}
+      views={<ViewsMenu sort={order} onSort={setOrder} options={["updated", "project"]} labels={{ updated: "Newest first", project: "Group by scenario" }} />}>
+      <div className="toolbar-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={15} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={15} /> Import bundle</button></div>
+    </LibraryToolbar>
+    {groups.length ? order === "project" ? <div className="bundle-groups">{groups.map((group) => <BundleGroupRow key={group.key} group={group} snapshot={snapshot} sizes={sizes} api={api} onError={onError} onChanged={onChanged} onOpenScenario={onOpenScenario} disambiguate={groups.filter((entry) => entry.name === group.name).length > 1} />)}</div>
+      : <div className="job-list bundle-flat-list" aria-label="Bundles">{flatEntries.map(({ entry, group }) => entry.kind === "job"
+        ? <JobCard key={entry.id} job={entry.job} name={group.name} sourceLabel={capturedVersion(entry.job.scenario_source)} sizeBytes={sizes[entry.id]} extraActions={scenarioActions(group)} api={api} onError={onError} onChanged={onChanged} />
+        : <ImportedBundleRow key={entry.id} bundle={entry.bundle} api={api} onError={onError} onChanged={onChanged} />)}</div>
+      : <EmptyState icon={<FolderOpen size={28} />} title={generations.length + imports.length ? "No matching bundles" : "No bundles yet"}>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</EmptyState>}
+    {importPath !== null && <Modal title="Import an existing bundle" ariaLabel="Import bundle" description="Studio indexes a complete generation folder for viewing and export; its files stay where they are." busy={working} onClose={() => setImportPath(null)} onSubmit={() => void importBundle()} actions={<><button type="button" className="button-quiet" disabled={working} onClick={() => setImportPath(null)}>Cancel</button><button type="submit" className="button-primary" disabled={working || !importPath.trim()}>{working ? "Importing…" : "Import bundle"}</button></>}><label className="modal-field">Bundle folder<input autoFocus aria-label="Bundle folder" name="bundle-folder" autoComplete="off" value={importPath} onChange={(event) => setImportPath(event.target.value)} /></label>{isTauri() && <button type="button" className="button-quiet" onClick={() => void chooseFolder()}><FolderOpen size={16} /> Browse…</button>}</Modal>}
   </div>;
 }

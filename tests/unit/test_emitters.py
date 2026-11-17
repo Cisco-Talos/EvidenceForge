@@ -781,10 +781,10 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
 
-    def test_browser_process_termination_is_not_rendered_as_security_4689(
+    def test_browser_process_termination_renders_security_4689_like_other_processes(
         self, format_def, temp_output
     ):
-        """Long-lived browser exits should not create brittle Security/Sysmon death conflicts."""
+        """Source eligibility is owned by declared policy, not a hidden browser-name exclusion."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         host = HostContext(
             hostname="WS-01",
@@ -813,7 +813,9 @@ class TestWindowsEventEmitter:
         emitter.emit(event)
         emitter.close()
 
-        assert not temp_output.exists() or "<EventID>4689</EventID>" not in temp_output.read_text()
+        rendered = temp_output.read_text()
+        assert "<EventID>4689</EventID>" in rendered
+        assert "msedge.exe" in rendered
 
     def test_non_browser_process_termination_still_renders_security_4689(
         self, format_def, temp_output

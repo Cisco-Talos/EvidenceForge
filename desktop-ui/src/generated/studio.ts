@@ -1365,6 +1365,23 @@ export interface paths {
         patch: operations["edit_chat_message_v1_conversations__conversation_id__messages__message_id__patch"];
         trace?: never;
     };
+    "/v1/conversations/{conversation_id}/messages/{message_id}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Steer Queued Chat Message */
+        post: operations["steer_queued_chat_message_v1_conversations__conversation_id__messages__message_id__steer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/conversations/{conversation_id}/queue/resume": {
         parameters: {
             query?: never;
@@ -8634,6 +8651,40 @@ export interface operations {
                 "application/json": components["schemas"]["ChatQueuedUpdate"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatInput"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    steer_queued_chat_message_v1_conversations__conversation_id__messages__message_id__steer_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

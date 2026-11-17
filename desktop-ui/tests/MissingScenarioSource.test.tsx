@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { MissingScenarioSource } from "../src/MissingScenarioSource";
@@ -29,13 +29,13 @@ test("missing entry opens a recovery page and locates a selected source", async 
 
 test("removing a registration requires the explicit removal action", async () => {
   const { user, request, onRemoved } = fixture();
-  await user.click(screen.getByRole("button", { name: "Remove from library" }));
+  await user.click(screen.getByRole("button", { name: "Remove from Studio…" }));
   expect(request).not.toHaveBeenCalled();
-  expect(screen.getByText(/Saved conversations will no longer appear/)).toBeVisible();
+  expect(screen.getByText(/conversations no longer appear under this entry/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(request).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Remove from library" }));
-  await user.click(screen.getAllByRole("button", { name: "Remove from library" }).at(-1)!);
+  await user.click(screen.getByRole("button", { name: "Remove from Studio…" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Remove from Studio?" })).getByRole("button", { name: "Remove from Studio" }));
   expect(request).toHaveBeenCalledWith("/v1/scenarios/missing/registration", "DELETE");
   expect(onRemoved).toHaveBeenCalled();
 });
@@ -49,7 +49,7 @@ test("recovery error is shown and an active chat prevents changes", async () => 
   cleanup();
   fixture(undefined, true);
   expect(screen.getByRole("button", { name: "Locate source" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Remove from library" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Remove from Studio…" })).toBeDisabled();
 });
 
 test("retained runs remain associated with previous source paths", () => {

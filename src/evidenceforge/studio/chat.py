@@ -477,6 +477,40 @@ class ChatRuntime:
                 return entry
             return await self._dispatch(current, entry)
 
+    async def steer_queued(self, conversation: Conversation, message_id: str) -> ChatInput:
+        """Send a queued message into the active turn now instead of waiting for it to end.
+
+        The conversion happens under the conversation lock so automatic queue dispatch cannot
+        deliver the same message twice. If Codex rejects the steer (for example because the
+        turn just finished), the message returns to the queue rather than being lost.
+        """
+        async with self.lock(conversation.id):
+            entry = self.store.input(message_id)
+            if entry is None or entry.conversation_id != conversation.id:
+                raise HTTPException(404, "Queued message not found")
+            if entry.state != "queued":
+                raise HTTPException(409, "This message has already been dispatched")
+            if entry.skill_name:
+                raise HTTPException(400, "Messages that choose a skill must start their own turn")
+            current = self.studio.store.conversation(conversation.id) or conversation
+            active_turn = self.active_id(current.id)
+            if not active_turn:
+                raise HTTPException(409, "No turn is running to steer; the message stays queued")
+            if any(
+                other.state in {"dispatching", "uncertain"}
+                for other in self.store.inputs(current.id)
+            ):
+                raise HTTPException(409, "An earlier message is still being reconciled")
+            entry.mode, entry.expected_turn_id, entry.error = "steer", active_turn, None
+            try:
+                return await self._dispatch(current, entry)
+            except HTTPException:
+                if entry.state == "rejected":
+                    entry.mode, entry.expected_turn_id, entry.state = "queue", None, "queued"
+                    self.store.save_input(entry)
+                    await self.studio.emit(current.id, "chat.updated", {})
+                raise
+
     async def _dispatch(self, conversation: Conversation, entry: ChatInput) -> ChatInput:
         entry.state = "dispatching"
         self.store.save_input(entry)

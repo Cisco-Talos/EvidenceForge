@@ -4,6 +4,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { SettingsView } from "../src/SettingsView";
 import type { StudioApi, StudioSettings } from "../src/api";
 import { Tooltip } from "radix-ui";
+import "@testing-library/jest-dom/vitest";
+import { setThemePreference, THEME_STORAGE_KEY } from "../src/theme";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(), openUrl: vi.fn() }));
@@ -154,4 +156,27 @@ test("a separate run destination preserves other workspaces and clearing restore
   await user.clear(input);
   await user.click(screen.getByRole("button", { name: "Save settings" }));
   await waitFor(() => expect(request).toHaveBeenLastCalledWith("/v1/settings", "PUT", expect.objectContaining({ output_parents: { other: "D:\\other-runs" } })));
+});
+
+test("Appearance applies the chosen theme immediately without saving service settings", async () => {
+  const settings = {
+    workspace: "/tmp/EvidenceForge", recent_workspaces: [], output_parents: {},
+    max_concurrent_generations: 2, checkpoint_hours: 24, search_match_limit: 5,
+    quit: { action: "continue", continue_queued_generations: true, continue_evaluations: "continue", pause_close_timing: "handoff", pause_evaluations: "finish", kill_incomplete_bundles: "preserve", authoring_turns: "stop" },
+    skill_install_scope: "global", skill_install_agent: "all", codex_path: null, eforge_path: null,
+  } as StudioSettings;
+  const request = vi.fn(async (path: string) => path === "/v1/codex/status" ? { available: false } : {});
+  render(<Tooltip.Provider><SettingsView settings={settings} paths={{ data: "/tmp/data", logs: "/tmp/logs" }} api={{ request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi} onSaved={async () => undefined} onError={vi.fn()} /></Tooltip.Provider>);
+  const user = userEvent.setup();
+  try {
+    await user.click(screen.getByRole("button", { name: "Appearance" }));
+    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    expect(screen.getByRole("radio", { name: "System" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("radio", { name: "Dark" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(screen.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+    expect(theme).toBeVisible();
+    expect(request.mock.calls.some(([path, method]) => path === "/v1/settings" && method)).toBe(false);
+  } finally { setThemePreference("system"); }
 });

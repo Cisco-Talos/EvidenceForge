@@ -1,31 +1,36 @@
 import { belongsToScenario } from "./scenarioSources";
 import { artifactTitle, draftTitle } from "./artifactNaming";
-import { artifactGroup, artifactGroupLabel } from "./artifactGrouping";
+import { artifactFamilies, isDraftItem, type ArtifactFamily } from "./artifactGrouping";
 import { Fragment, type DragEvent, useEffect, useState } from "react";
-import { ChevronRight, FileCode2, Folder, GripVertical } from "lucide-react";
+import { ChevronRight, FileCode2, Folder, GripVertical, PencilLine } from "lucide-react";
 import type { CatalogItem, Conversation, Project, StudioApi, StudioSnapshot } from "./api";
 import { formatBundleSize, formatTime } from "./components";
 import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
 import { DraftObjectMenu } from "./DraftObjectMenu";
-import { ScenarioStates, scenarioStates } from "./ScenarioStates";
-
+import { ScenarioStatusPill, scenarioStates } from "./ScenarioStates";
 import { SearchExcerpts } from "./SearchExcerpts";
 import { generationIsCurrent } from "./ScenarioStates";
 import { currentPrediction } from "./ResourceForecastPanel";
-import { countLabel } from "./workspaceSummaries";
-import { HeaderSummary } from "./WorkspaceSection";
+import { StatusPill } from "./StatusPill";
+import { groupRows, LibraryGroupHeading, LibraryTable, sortRows, type LibraryColumn, type LibrarySort } from "./LibraryTable";
 
-export type ScenarioSort = "name" | "updated" | "project";
+export type ScenarioSort = LibrarySort;
 
-export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, onProperties, onOpenDraft, onClone,
+const columns: LibraryColumn[] = [
+  { key: "drag", label: "" }, { key: "expand", label: "" }, { key: "name", label: "Name", sort: "name" }, { key: "project", label: "Project", sort: "project" },
+  { key: "status", label: "Status" }, { key: "size", label: "Size" }, { key: "updated", label: "Updated", sort: "updated" }, { key: "actions", label: "" },
+];
+
+export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, expandedFamilies, onToggleFamily, onOpen, onProperties, onOpenDraft, onClone,
   onExport, onHide, onDelete, onMove, onMoveDraft, onNewProject, onRenameDraft,
-  onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, expandedGroups, onToggleGroup, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop }: {
-  expandedGroups: string[]; onToggleGroup: (id: string, open: boolean) => void;
+  onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop }: {
   dropTargetId: string | null;
+  /** Open family keys; a family row lists its other versions and drafts beneath it. */
+  expandedFamilies: string[]; onToggleFamily: (key: string, open: boolean) => void;
   onProjectDragOver: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
   onProjectDragLeave: (event: DragEvent<HTMLElement>) => void;
   onProjectDrop: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
-  items: CatalogItem[]; drafts: Conversation[]; snapshot: StudioSnapshot; api: StudioApi; sort: ScenarioSort;
+  items: CatalogItem[]; drafts: Conversation[]; snapshot: StudioSnapshot; api: StudioApi; sort: ScenarioSort; onSort: (sort: ScenarioSort) => void;
   onOpen: (item: CatalogItem) => void; onProperties?: (item: CatalogItem) => void; onOpenDraft: (draft: Conversation) => void;
   onClone: (item: CatalogItem) => void; onExport: (item: CatalogItem) => void;
   onUnavailableExport: () => void; onHide: (item: CatalogItem) => void; onDelete: (item: CatalogItem) => void;
@@ -46,11 +51,13 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     return () => { cancelled = true; };
   }, [api, snapshot.settings.workspace, completedKey]);
   const projectName = (id: string | null) => snapshot.projects.find((project: Project) => project.id === id)?.name || "Ungrouped";
-  const rows = [
-    ...items.map((item) => ({ id: item.id, name: artifactTitle(item), updated: item.modified_at, project: projectName(item.project_id), groupId: snapshot.projects.some((project) => project.id === item.project_id) ? item.project_id! : "ungrouped", item, draft: null })),
-    ...drafts.map((draft) => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: snapshot.projects.some((project) => project.id === draft.draft_project_id) ? draft.draft_project_id! : "ungrouped", item: null, draft })),
-  ].sort((a, b) => (sort === "updated" ? b.updated - a.updated : sort === "project" ? a.project.localeCompare(b.project) : 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  const renderRow = ({ id, name, updated, project, item, draft }: typeof rows[number]) => {
+  type Row = { id: string; name: string; updated: number; project: string; groupId: string; item: CatalogItem | null; draft: Conversation | null; family: ArtifactFamily | null; child?: boolean };
+  const itemRow = (item: CatalogItem, family: ArtifactFamily | null, child = false): Row => ({ id: item.id, name: artifactTitle(item), updated: family ? Math.max(family.primary.modified_at, ...family.others.map((other) => other.modified_at)) : item.modified_at, project: projectName(item.project_id), groupId: snapshot.projects.some((project) => project.id === item.project_id) ? item.project_id! : "ungrouped", item, draft: null, family, child });
+  const rows = sortRows<Row>([
+    ...artifactFamilies(items, snapshot.artifact_groups).map((family) => itemRow(family.primary, family)),
+    ...drafts.map((draft): Row => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: snapshot.projects.some((project) => project.id === draft.draft_project_id) ? draft.draft_project_id! : "ungrouped", item: null, draft, family: null })),
+  ], sort);
+  const renderRow = ({ id, name, updated, project, item, draft, family, child }: Row) => {
     const missing = !!item && snapshot.missing_sources?.includes(item.id);
     const available = !!item && snapshot.jobs.some((job) => belongsToScenario(job, item, snapshot) && job.status === "completed");
     const freshRun = item && snapshot.jobs.filter((job) => belongsToScenario(job, item, snapshot) && job.status === "completed" && generationIsCurrent(job, item, snapshot)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
@@ -60,55 +67,63 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     const prediction = item ? currentPrediction(item, snapshot) : undefined;
     const estimatedSize = prediction?.result.forecast?.final_output.expected_bytes ?? forecast?.final_output?.expected_bytes;
     const drag = (event: DragEvent<HTMLElement>) => item ? onDragStart(event, item) : onDraftDragStart(event, draft!);
-    return <li className={`scenario-row ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
-      <span className="scenario-drag-handle" aria-hidden="true" title={`Drag ${name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); drag(event); }}><GripVertical size={14} /></span>
-      <button className="scenario-open" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
-        <span className="scenario-symbol"><FileCode2 size={18} /></span>
+    const open = !!family && expandedFamilies.includes(family.key);
+    return <li className={`scenario-row library-row-grid ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""} ${child ? "family-member" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
+      <span className="scenario-drag-handle col-drag" aria-hidden="true" title={`Drag ${name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); drag(event); }}><GripVertical size={14} /></span>
+      <span className="col-expand">{family && family.others.length > 0 && <FamilyToggle name={name} count={family.others.length} open={open} onToggle={() => onToggleFamily(family.key, !open)} />}</span>
+      <button className="scenario-open col-name" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
+        <span className={`scenario-symbol ${draft ? "draft" : ""}`}>{draft ? <PencilLine size={16} /> : <FileCode2 size={16} />}</span>
         <span className="scenario-row-copy">
-          <span className="scenario-row-title"><strong title={name}>{name}</strong><span className="scenario-project" title={`Project: ${project}`}><Folder size={12} /><span>{project}</span></span>{draft && <span className="draft-chip">Draft</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
+          <span className="scenario-row-title"><strong title={name}>{name}</strong>{item && (isDraftItem(item, snapshot.artifact_groups)
+            ? <DraftCount count={family ? family.drafts : 1} self />
+            : <><span className="scenario-version">{item.version}</span>{family && family.drafts > 0 && <DraftCount count={family.drafts} />}</>)}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
           {item && <SearchExcerpts item={item} />}
-          <span className="scenario-mobile-meta">{missing ? "Source missing" : item?.version || "Draft"} · Updated {formatTime(updated)}</span>
         </span>
       </button>
-      <div className="scenario-row-status">{missing ? <span className="field-error">Source missing</span> : item ? <ScenarioStates item={item} snapshot={snapshot} compact /> : <span className="muted">Not authored yet</span>}</div>
-      <span className="scenario-row-size" title={actualSize != null ? "Measured size of the latest completed bundle for this revision" : estimatedSize != null ? "Estimated generated data size; actual output may differ" : "No current size estimate yet"}>{actualSize != null ? formatBundleSize(actualSize) : estimatedSize != null ? <>{formatBundleSize(estimatedSize)}<small>Estimated</small></> : "—"}</span>
-      <div className="scenario-row-meta"><span>{item?.version || "Draft"}</span><time dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time></div>
-      <div className="scenario-row-actions">{item ? <CatalogObjectMenu item={item} fallbackActions={[
+      <span className="scenario-project col-project" title={`Project: ${project}`}><Folder size={13} aria-hidden="true" /><span>{project}</span></span>
+      <div className="scenario-row-status col-status">{missing ? <StatusPill tone="err" label="Source missing" /> : item ? <ScenarioStatusPill item={item} snapshot={snapshot} /> : <StatusPill tone="neutral" label="Draft" detail="Not authored yet" />}</div>
+      <span className="scenario-row-size col-size" title={actualSize != null ? "Measured size of the latest completed bundle for this revision" : estimatedSize != null ? "Estimated generated data size; actual output may differ" : "No current size estimate yet"}>{actualSize != null ? formatBundleSize(actualSize) : estimatedSize != null ? <>{formatBundleSize(estimatedSize)}<small>Estimated</small></> : "—"}</span>
+      <time className="scenario-row-updated col-updated" dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time>
+      <div className="scenario-row-actions col-actions">{item ? <CatalogObjectMenu item={item} fallbackActions={[
         { id: "open", label: "Open", group: "inspect", run: () => onOpen(item) },
-        { id: "properties", label: "Properties…", group: "inspect", disabled: missing, reason: "Recover the missing source first", run: () => onProperties?.(item) },
+        { id: "properties", label: "Properties…", group: "locate", disabled: missing, reason: "Recover the missing source first", run: () => onProperties?.(item) },
         ...(missing ? [{ id: "recover", label: "Recover missing source…", group: "work" as const, run: () => onOpen(item) }] : []),
-        { id: "clone", label: "Clone…", group: "reuse", disabled: missing, reason: "Recover the missing source first", run: () => onClone(item) },
-        { id: "export", label: "Export bundle…", group: "reuse", disabled: !available, reason: "Complete a generation before exporting", run: () => onExport(item) },
+        { id: "clone", label: "Duplicate…", group: "manage", disabled: missing, reason: "Recover the missing source first", run: () => onClone(item) },
+        { id: "export", label: "Export bundle…", group: "manage", disabled: !available, reason: "Complete a generation before exporting", run: () => onExport(item) },
         projectAssignmentAction(snapshot.projects, (projectId) => onMove(item, projectId), () => onNewProject(item)),
         { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: () => onHide(item) },
-        { id: "delete", label: "Delete scenario", group: "remove", run: () => onDelete(item) },
+        { id: "delete", label: "Delete scenario…", group: "remove", run: () => onDelete(item) },
       ]} /> : <DraftObjectMenu draft={draft!} projects={snapshot.projects} onOpen={() => onOpenDraft(draft!)} onRename={() => onRenameDraft(draft!)} onMove={(projectId) => onMoveDraft(draft!, projectId)} onDelete={() => onDeleteDraft(draft!)} />}</div>
     </li>;
   };
-  const grouped = new Map<string, { id: string; name: string; updated: number; rows: typeof rows }>();
-  for (const row of rows) {
-    const group = grouped.get(row.groupId) || { id: row.groupId, name: row.project, updated: 0, rows: [] };
-    group.rows.push(row);
-    group.updated = Math.max(group.updated, row.updated);
-    grouped.set(row.groupId, group);
-  }
-  const groups = [...grouped.values()].sort((a, b) => (sort === "updated" ? b.updated - a.updated : 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  function groupSummary(group: typeof groups[number]) {
-    const paths = new Set(group.rows.flatMap((row) => row.item ? [row.item.path] : []));
-    const ids = new Set(group.rows.map((row) => row.id));
-    const working = snapshot.jobs.filter((job) => job.kind === "generation" && paths.has(job.scenario || "") && ["running", "queued", "paused"].includes(job.status));
-    const attention = group.rows.filter((row) => row.item && (snapshot.dependencies?.[row.id]?.ready === false || scenarioStates(row.item, snapshot).some((state) => ["error", "warning"].includes(state.state))));
-    const chats = snapshot.conversations.filter((chat) => (ids.has(chat.item_id || "") || ids.has(chat.id)) && chat.active);
-    return { headline: [countLabel(group.rows.length, "scenario"), working.length && `${countLabel(working.length, "generation")} active or queued`, chats.length && countLabel(chats.length, "active chat"), attention.length && `${attention.length} need review`].filter(Boolean).join(" · "), detail: `Updated ${formatTime(group.updated)}` };
-  }
-  return <div className="scenario-groups" aria-label="Scenario library">{groups.map((group) => <details className={`job-group scenario-group ${dropTargetId === group.id ? "drop-target" : ""}`} key={group.id} open={expandedGroups.includes(group.id)} onToggle={(event) => onToggleGroup(group.id, event.currentTarget.open)} onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave} onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)}>
-    <summary aria-label={`${group.name} · ${group.rows.length} scenario${group.rows.length === 1 ? "" : "s"}`}><ChevronRight size={17} className="disclosure-chevron" /><Folder size={16} /><strong>{group.name}</strong><span>{group.rows.length}</span><small className="group-summary"><HeaderSummary summary={groupSummary(group)} /></small></summary>
-    <ul className="scenario-list" aria-label={`Scenarios in ${group.name}`}>{[...new Set(group.rows.map((row) => row.item ? artifactGroup(row.item, snapshot.artifact_groups).key : row.id))].map((identity) => {
-      const members = group.rows.filter((row) => (row.item ? artifactGroup(row.item, snapshot.artifact_groups).key : row.id) === identity);
-      const family = members[0].item ? artifactGroup(members[0].item, snapshot.artifact_groups) : null;
-      const duplicateName = group.rows.some((row) => row.item && family && row.item.name === family.name && artifactGroup(row.item, snapshot.artifact_groups).key !== identity);
-      return <Fragment key={identity}>{family && (members.length > 1 || duplicateName) && <li className="artifact-identity-heading">{artifactGroupLabel(family)}{members.length > 1 ? " · drafts & releases" : ""}</li>}{members.map(renderRow)}</Fragment>;
-    })}</ul>
-  </details>)}</div>;
+  const renderRows = (members: Row[]) => members.map((row) => <Fragment key={row.id}>
+    {renderRow(row)}
+    {row.family && expandedFamilies.includes(row.family.key) && row.family.others.map((other) => renderRow(itemRow(other, null, true)))}
+  </Fragment>);
+  return <LibraryTable label="Scenario library" className="scenario-table" columns={columns} sort={sort} onSort={onSort}>
+    {groupRows(rows, sort).map((group) => <Fragment key={group.id || "all"}>
+      {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}
+        onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave}
+        onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)} />}
+      {renderRows(group.rows)}
+    </Fragment>)}
+  </LibraryTable>;
+}
+
+/** Expands a family row to list its other versions and drafts. */
+export function FamilyToggle({ name, count, open, onToggle }: { name: string; count: number; open: boolean; onToggle: () => void }) {
+  return <button type="button" className="family-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} ${count} other ${count === 1 ? "version" : "versions"} of ${name}`} title={`${count} other ${count === 1 ? "version" : "versions"}`} onClick={onToggle}>
+    <ChevronRight size={13} aria-hidden="true" className={open ? "open" : ""} /><span>+{count}</span>
+  </button>;
+}
+
+/**
+ * Orange marker for unpublished work. On a draft itself it reads "Draft" (or "N drafts" when its
+ * family holds more); on a released row it counts the drafts tucked inside the family.
+ */
+export function DraftCount({ count, self = false }: { count: number; self?: boolean }) {
+  const label = self && count === 1 ? "Draft" : `${count} ${count === 1 ? "draft" : "drafts"}`;
+  const title = self && count === 1 ? "Not published yet" : `${count} unpublished ${count === 1 ? "draft" : "drafts"}; expand the row to open ${count === 1 ? "it" : "them"}`;
+  return <span className="draft-count" title={title}>{label}</span>;
 }

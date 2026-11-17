@@ -25,20 +25,27 @@ function fixture(): StudioSnapshot {
   } as StudioSnapshot;
 }
 
-function setup(snapshot = fixture()) {
+function setup(snapshot = fixture(), grouped = true) {
   const request = vi.fn(async (path: string) => path === "/v1/jobs/bundle-sizes" ? { latest: 2048 } : { available: true, tail: "Saved generator log", log_path: "/runs/generation.log" });
   const onOpenScenario = vi.fn();
   const api = { request } as unknown as StudioApi;
-  const view = render(<Tooltip.Provider><BundleLibrary snapshot={snapshot} api={api} onOpenScenario={onOpenScenario} onError={vi.fn()} onChanged={async () => undefined} /></Tooltip.Provider>);
-  return { ...view, onOpenScenario, request };
+  const view = render(<Tooltip.Provider><BundleLibrary snapshot={snapshot} api={api} onOpenScenario={onOpenScenario} onError={vi.fn()} onNotice={vi.fn()} onChanged={async () => undefined} /></Tooltip.Provider>);
+  return { ...view, onOpenScenario, request, grouped };
+}
+
+/** Switch the bundle list to its per-scenario family view. */
+async function groupByScenario() {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  await user.click(await screen.findByRole("menuitemradio", { name: "Group by scenario" }));
 }
 
 test("versions, relocated draft runs and imports share one family with captured version labels", async () => {
   const { container } = setup();
+  await groupByScenario();
   expect(container.querySelectorAll(".bundle-group")).toHaveLength(1);
   const group = container.querySelector<HTMLDetailsElement>(".bundle-group")!;
-  expect(group.open).toBe(false);
-  await userEvent.setup().click(group.querySelector("summary")!);
+  expect(group.open).toBe(true);
   const labels = [...group.querySelectorAll(".job-row .scenario-version")].map((node) => node.textContent);
   expect(labels).toEqual(["v2.0.0", "v1.0.0", "v1.0.0", "Draft", "v1.0.0"]);
   expect(screen.getByText("5 bundles")).toBeVisible();
@@ -50,10 +57,11 @@ test("versions, relocated draft runs and imports share one family with captured 
 
 test("bundle group menus contain navigation and disclosure actions and leave generation actions on each run", async () => {
   const { container } = setup();
+  await groupByScenario();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Bundle group actions for test-1" }));
   expect(screen.getAllByRole("menuitem").map((item) => item.getAttribute("aria-label"))).toEqual(["Open latest run", "Expand all runs", "Collapse all runs", "Open scenario"]);
-  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).not.toHaveAttribute("data-disabled");
   expect(screen.queryByRole("menuitem", { name: /Validate|Forecast|Generate|Publish|Delete scenario|New conversation/ })).toBeNull();
   await user.click(screen.getByRole("menuitem", { name: "Expand all runs" }));
   expect([...container.querySelectorAll<HTMLDetailsElement>(".job-list > .job-row")].every((row) => row.open)).toBe(true);
@@ -73,6 +81,7 @@ test("bundle group menus contain navigation and disclosure actions and leave gen
 
 test("collapse all folds Studio and imported runs while keeping the group open, and is disabled for a closed list", async () => {
   const { container } = setup();
+  await groupByScenario();
   const user = userEvent.setup();
   const group = container.querySelector<HTMLDetailsElement>(".bundle-group")!;
   const menu = screen.getByRole("button", { name: "Bundle group actions for test-1" });
@@ -112,6 +121,7 @@ test("same-name scenarios from different publishers stay distinct, and retired s
   snapshot.jobs.push(run("other-run", other.path, { ...source("1.0.0"), publisher: "other" }));
   snapshot.jobs.push(run("retired", "/retired/source/scenario.yaml", { name: "retired-scenario", status: "legacy" }));
   const { container } = setup(snapshot);
+  await groupByScenario();
   expect(container.querySelectorAll(".bundle-group")).toHaveLength(3);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Bundle group actions for retired-scenario" }));
@@ -123,4 +133,17 @@ test("an unrelated anonymous draft never adopts a publisher only because its nam
   const snapshot = fixture();
   snapshot.jobs.push(run("unrelated", "/unrelated/source/scenario.yaml", { name: "test-1", status: "draft", draft_id: "unrelated" }));
   expect(groupBundles(snapshot)).toHaveLength(2);
+});
+
+test("bundles default to one newest-first list of runs with Open scenario on each row", async () => {
+  const { container, onOpenScenario } = setup(fixture(), false);
+  expect(container.querySelector(".bundle-group")).toBeNull();
+  const rows = [...container.querySelectorAll(".bundle-flat-list > .job-row")];
+  expect(rows.length).toBe(5);
+  const user = userEvent.setup();
+  const options = within(rows[0] as HTMLElement).getAllByRole("button").find((button) => button.getAttribute("aria-label")?.startsWith("Bundle options"))!;
+  await user.click(options);
+  const open = screen.getByRole("menuitem", { name: /Open scenario/ });
+  expect(open).toBeVisible();
+  expect(onOpenScenario).not.toHaveBeenCalled();
 });

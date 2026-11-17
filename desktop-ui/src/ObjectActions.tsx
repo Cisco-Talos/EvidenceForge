@@ -1,8 +1,10 @@
-import { Fragment, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { Fragment, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { MoreHorizontal, Trash2 } from "lucide-react";
-import { Dialog, DropdownMenu } from "radix-ui";
+import { DropdownMenu } from "radix-ui";
+import { ConfirmModal } from "./Modal";
 
-export type ActionGroup = "inspect" | "work" | "reuse" | "organize" | "remove";
+/** Menu sections, in display order: open/view, task actions, manage, locate, organize, remove. */
+export type ActionGroup = "inspect" | "work" | "manage" | "locate" | "organize" | "remove";
 
 export interface ObjectAction {
   id: string;
@@ -15,7 +17,7 @@ export interface ObjectAction {
   children?: ObjectAction[];
 }
 
-const groups: ActionGroup[] = ["inspect", "work", "reuse", "organize", "remove"];
+const groups: ActionGroup[] = ["inspect", "work", "manage", "locate", "organize", "remove"];
 
 function ActionLabel({ action }: { action: ObjectAction }) {
   return <>{action.group === "remove" && <Trash2 size={15} aria-hidden="true" />}<span className="object-action-copy"><span>{action.label}</span>{(action.disabled ? action.reason : action.description) && <small>{action.disabled ? action.reason : action.description}</small>}</span></>;
@@ -58,6 +60,5 @@ export function RemovalConfirmation({ title, children, label, busy = false, onCa
   title: string; children: ReactNode; label: string; busy?: boolean;
   onCancel: () => void; onConfirm: () => void | Promise<void>;
 }) {
-  const descriptionId = useId();
-  return <Dialog.Root open onOpenChange={(open) => { if (!open && !busy) onCancel(); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="close-modal removal-dialog" aria-describedby={descriptionId} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}><Dialog.Title>{title}</Dialog.Title><div id={descriptionId}>{children}</div><div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={onCancel}>Cancel</button><RemovalButton disabled={busy} onClick={() => void onConfirm()}>{label}</RemovalButton></div></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  return <ConfirmModal title={title} confirmLabel={label} busy={busy} onCancel={onCancel} onConfirm={onConfirm}>{children}</ConfirmModal>;
 }

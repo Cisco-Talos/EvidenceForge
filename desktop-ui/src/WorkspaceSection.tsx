@@ -8,8 +8,10 @@ export function HeaderSummary({ summary }: { summary: SectionSummary }) {
 }
 
 /** Workspace headers remain useful even when their optional details are folded. */
-export function WorkspaceSection({ title, summary, icon, actions, expanded, onToggle, children, footer, keepMounted = false }: {
-  title: string; summary: ReactNode; icon?: ReactNode; actions?: ReactNode; expanded: boolean;
+export function WorkspaceSection({ title, summary, icon, status, actions, expanded, onToggle, children, footer, keepMounted = false }: {
+  title: string; summary: ReactNode; icon?: ReactNode;
+  /** Labeled status pills, shown beside the toggle (never inside it). */
+  status?: ReactNode; actions?: ReactNode; expanded: boolean;
   onToggle: () => void; children?: ReactNode; footer?: ReactNode; keepMounted?: boolean;
 }) {
   const bodyId = useId();
@@ -21,6 +23,7 @@ export function WorkspaceSection({ title, summary, icon, actions, expanded, onTo
       {children ? <button className="workspace-section-toggle" aria-label={title} aria-describedby={summaryId} aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
         <ChevronRight size={17} className={`disclosure-chevron ${expanded ? "expanded" : ""}`} />{icon}<span><strong>{title}</strong><small id={summaryId}>{summary}</small></span>
       </button> : <div className="workspace-section-static">{icon}<span><strong>{title}</strong><small id={summaryId}>{summary}</small></span></div>}
+      {status && <div className="workspace-section-status">{status}</div>}
       <div className="workspace-section-actions">{actions}</div>
     </header>
     {footer}

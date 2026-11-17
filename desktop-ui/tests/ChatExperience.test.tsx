@@ -259,3 +259,20 @@ test("verified results show grouped file details without shortcut actions", asyn
   expect(request.mock.calls.some(([path]) => path === "/v1/validate")).toBe(false);
   expect(request.mock.calls.some(([path]) => path.includes("/results/"))).toBe(false);
 });
+
+test("a queued message can be sent into the running turn with Steer now", async () => {
+  const queue = [{ id: "q1", text: "Also check DNS", state: "queued" }, { id: "q2", text: "Use the skill", state: "queued", skill_name: "eforge" }];
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/chat")) return { seq: 1, turns: [seed], active_turn_id: "turn", queue, queue_paused: false, view: emptyView };
+    if (path.endsWith("/pending")) return [];
+    if (path.endsWith("/access")) return { mode: "draft" };
+    if (path.endsWith("/steer")) return { id: "q1", state: "accepted", mode: "steer", turn_id: "turn" };
+    return { available: true, account_ready: true };
+  });
+  render(<ChatView item={{ name: "Pack", kind: "industry_pack" }} conversation={{ ...conversation, active: true }} codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi} subscribeEvents={() => () => undefined} onError={vi.fn()} />);
+  const steer = await screen.findAllByRole("button", { name: "Steer current work with this message" });
+  // Messages that choose a skill must start their own turn, so only the plain message can steer.
+  expect(steer).toHaveLength(1);
+  await userEvent.setup().click(steer[0]);
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/conversations/chat/messages/q1/steer", "POST"));
+});

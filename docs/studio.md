@@ -319,14 +319,16 @@ where Studio was launched. Projects organize library entries within a workspace.
 
 Each OS user's first Studio launch creates an **Example Scenarios** project in their initial
 default workspace. The collection may be empty in releases before examples are contributed.
-Existing Studio users can add it through **Settings → Workspace → Install/update examples**.
+Existing Studio users can add it through **Settings → Workspace → Install examples** (shown as
+**Update examples** once the examples project receives automatic updates).
 The same action installs the current collection in any selected workspace and restores removed
-examples or a deleted examples project. **Open bundled examples folder** opens the ordinary files.
+examples or a deleted examples project. The folder icon beside the bundled examples path opens the
+ordinary files.
 
 Examples are published scenarios under the `evidenceforge` publisher. Like Packs, the library
-shows the latest installed release by default; **Show previous versions** and **Versions** retain
-access to earlier releases and their runs. **New draft** and **Clone** offer a destination project, defaulting
-to Ungrouped, and uses your configured publisher or an anonymous draft until publication.
+shows the latest installed release by default; its **+N** expander and **Versions** retain
+access to earlier releases and their runs. **New draft** and **Duplicate…** offer a destination project,
+defaulting to Ungrouped, and use your configured publisher or an anonymous draft until publication.
 Official sources and exact ancestry stay intact.
 
 Product updates add bundled scenarios and versions automatically only in the initial default
@@ -335,6 +337,9 @@ deleting it stops them. Deleting an individual example suppresses future automat
 that scenario until manual installation. Custom workspaces remain manual-only even after manual
 installation. Existing versions, user drafts and runs are preserved. Deleting a project retains
 its scenario files as ungrouped entries, following the ordinary project behavior.
+
+For development and tests, the `EFORGE_STUDIO_EXAMPLES_DIR` override points Studio at another
+example collection, such as an empty folder; the test suite uses this to keep workspaces isolated.
 
 CLI and native-skill users can browse the same collection without Studio. See the
 [example collection guide](../examples/README.md) for locations, editing and contribution steps.
@@ -367,15 +372,60 @@ preserved by clean uninstall and should be managed/backed up separately.
 For a first run:
 
 1. Import an existing scenario, or use **New scenario** to begin a Codex-assisted conversation.
-2. Open its **Environment** section to inspect systems, users, configuration, and exact pack
+2. Open its **Environment** tab to inspect systems, users, configuration, and exact pack
    dependencies. Import any missing packs before generation.
 3. Validate the scenario and review the resource forecast and available disk space.
-4. Start generation from **Runs**, then monitor it there or in the job center.
+4. Start generation from **Runs**, then monitor it there or in **Activity**, which lists every
+   generation, evaluation and authoring turn newest first. Use its filter to show Running, Queued,
+   Needs attention or Done; **Clear completed** and the History menu remove finished entries
+   without deleting bundles or scorecards.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
 
-Libraries support projects, search, filters, sorting, cloning, and remembered expanded/collapsed
-views. Scenario conversations open a dedicated chat view. The **Properties…** menu exposes
-scenario, pack, and bundle metadata, titles, notes, version history, and validation provenance.
+A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Environment →
+Validate → Generate → Evaluate**, each with its current state, and one button for the next useful
+step, such as **Validate**, **Generate** with its size estimate, **Evaluate** for the latest completed
+run, or **Export bundle…**. If an evaluation job fails, the button offers **Re-evaluate**; a failed
+acceptance instead opens the run's scorecard, since evaluating again gives the same result. Select a step
+to open its tab. Overview summarizes each section as a card; a card or tab opens that section on its
+own. The source file path, schema and digests are in **Properties… → Technical details**.
+
+The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
+or drag a row onto a project to move it there. **Scenarios** and **Packs** are single sortable tables:
+click a column heading, or use **Views** to sort by name, by most recently updated, or grouped by
+project. Groups are headings, never collapsed folders. **Filter** holds every filter for the current
+library, including hidden items and pack type, author, version and location. Each scenario or pack
+appears once, headlined by its newest release; select its **+N** expander to list its other versions
+and drafts. An orange **N draft** badge marks rows that hold unpublished drafts. Library counts count
+these rows, not individual versions.
+**Views** also applies and saves named views of a search, its filters, the ordering and the project.
+Studio rescans workspace files when you open a library or return to the app; use **Refresh library**
+in the command menu (⌘K) to rescan immediately. Bundles and asset lists use the same Search, Filter
+and count toolbar. Scenario conversations open a dedicated chat view. The **Properties…** menu
+exposes scenario, pack, and bundle metadata, titles, notes, version history, and validation
+provenance.
+
+### Appearance and conventions
+
+Studio follows the macOS light or dark appearance by default. Choose **Settings → Appearance** to
+keep it Light or Dark on this Mac; the choice applies immediately to every Studio window. Each library row
+shows one status label summarizing validation, generation, and evaluation, such as **Valid**,
+**2 warnings**, **Generating**, **Passed · 91**, or **Failed acceptance**. Hover or focus the
+label for the full details of each stage.
+
+Every object menu lists its actions in the same order: open and work actions; **Rename…**,
+**Duplicate…**, **Move to project**, and **Export…**; **Properties…**, **Reveal in Finder**, and
+**Copy path**; **Hide from library**; then removal. Action names mean the same thing everywhere:
+
+| Action | Effect |
+|--------|--------|
+| **Duplicate…** | Creates an independent copy with its own identity. |
+| **New draft** | Creates an editable draft from a published release. |
+| **Export…** | Writes a file outside Studio. A confirmation offers **Reveal in Finder**. |
+| **Remove from Studio…** | Forgets a library entry, conversation, or history record. Files are kept. |
+| **Delete…** | Permanently deletes files after you review what is affected. |
+
+Dialogs close with Esc unless an operation is in progress. Form dialogs do not close when you
+click outside them, so typed input is not lost.
 
 ## Import scenarios, packs, and bundles
 
@@ -402,23 +452,26 @@ frozen content and configuration rather than becoming editable workspace files.
 
 ### Generated bundles
 
-The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
+**Bundles** lists every run and imported bundle newest first; choose **Views → Group by scenario**
+to see each scenario's versions together. The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
 versions. These imports are read-only: removing one from Studio's index leaves the external
 files in place. Incomplete external bundles with checkpoints are not yet importable; Studio-owned
 incomplete jobs already appear in Bundles.
 
 ## Author, revise, and share
 
-Use conversations to create or revise scenario and pack content. **Packs → New** creates either
+Use conversations to create or revise scenario and pack content. A message sent while Codex is
+working waits in the queue; select **Steer now** on a queued message to send it into the running
+turn immediately. It returns to the queue if the turn has already finished. **Packs → New** creates either
 industry or organization content. **Assets** offers structured editing for supported categories;
-Schema 3 draft edits retain the same draft identity. Use **Clone** for a separate identity.
+Schema 3 draft edits retain the same draft identity. Use **Duplicate…** for a separate identity.
 
 **New scenario** immediately creates a managed Schema 3 YAML scaffold and binds its conversation
 to that source. Authoring and resumed conversations edit this exact draft in place. Keep its
 `draft.json`, includes and companion files together; moving only the YAML can leave an orphaned
 managed receipt.
 
-An untouched scaffold shows **Ready to author** and **Continue authoring**. Generate and Publish
+An untouched scaffold shows **Author: Not started** and **Continue authoring** in the readiness strip. Generate and Publish
 remain disabled, and automatic resource forecasts wait until its authored content changes.
 This check uses the managed scaffold's content fingerprint, not its inline user/system counts:
 pack-based scenarios can obtain their entities from dependencies. Existing unmodified scaffolds
@@ -432,7 +485,7 @@ explicit validation findings remain available separately.
 ### Missing or moved scenario sources
 
 Studio retains a missing source as **Source missing** instead of discarding its history.
-Opening it offers **Locate source** and **Remove library entry…**. Locating requires the original
+Opening it offers **Locate source** and **Remove from Studio…**. Locating requires the original
 draft ID, or identical file bytes for a legacy scenario, and an authored YAML inside the current
 workspace. Finish active chats and jobs before reconnecting or removing the entry.
 
@@ -440,10 +493,10 @@ Refresh automatically reconnects one missing Schema 3 draft to one live draft wi
 It keeps the original library ID, project assignment, conversations, and historical run paths.
 Multiple candidates, conflicting project assignments, independent same-name drafts, and active
 work require manual resolution. Files and captured generation inputs are never rewritten by
-relinking. Draft editing remains distinct from cloning or creating an independent draft.
+relinking. Draft editing remains distinct from duplicating or creating an independent draft.
 
-**Remove library entry…** archives the missing registration without deleting YAML, receipts,
-generated bundles, saved conversations, or Codex threads. Runs remain in Job center. Conversations
+**Remove from Studio…** archives the missing registration without deleting YAML, receipts,
+generated bundles, saved conversations, or Codex threads. Runs remain in Activity. Conversations
 stop appearing under the removed entry; restoring the same original source path and identity then
 refreshing recovers its registration and conversation associations.
 
@@ -510,8 +563,8 @@ creates a release in the local workspace; it does not upload to GitHub or a remo
 The release replaces its completed draft in the library, keeping the same project assignment,
 conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
 that revision creates another immutable version. Independent drafts remain available. Libraries
-show the latest published version by default. Return to the **Scenarios** or **Packs** library and
-select **Show previous versions (N)** beside the search/filter controls to reveal older versions.
+show one row per scenario or pack, headlined by the latest published version. Select the row's **+N**
+expander in **Scenarios** or **Packs** to reveal its drafts and older versions.
 Open an older version's row to inspect it, discuss it read-only, run it or create a new draft.
 The toggle appears when the current library filters include multiple published versions in the
 same family; it does not change their files or dependency references.
@@ -551,7 +604,7 @@ findings are unchanged. If validation cannot finish, the failure message appears
 with any previous results labeled separately.
 
 Pack validation and Environment refresh use the same spinner and check-time feedback.
-Library refresh keeps the list visible and confirms completion. Resource-forecast and
+Library refresh keeps the list visible; a refresh started from the command menu confirms completion. Resource-forecast and
 log refreshes retain the previous estimate or preview, label it while updating, and
 show failures inline. Import review and optional prepared-scenario validation hide
 superseded findings while checking; reviews show **Ready to import** or **Needs attention**.
@@ -568,7 +621,7 @@ Studio retains the latest valid completed evaluation report for each run. An int
 unreadable evaluation preserves the previous score; a completed report replaces it even if
 quality checks fail. Resource estimates and process completion are separate from quality scores.
 
-If generation stops, expand the run in **Runs** or **Job center**. A recorded CLI error
+If generation stops, expand the run in **Runs** or **Activity**. A recorded CLI error
 appears in the run details; **View log** shows its captured output, and **Refresh log**
 updates the preview. Long logs show their last 32 KiB with a copyable path to the full
 file. A **Stopped** status means the process exited without a completed bundle; it
@@ -788,7 +841,7 @@ the per-action agreement scores with equal weight.
 Studio shows up to 100 representative messages, with complete totals and explicit truncation.
 Category/search counts describe the displayed examples when the report is truncated. New
 evaluations give related messages an exact check ID; earlier reports group their available
-action/occurrence/source/format identities and disclose that limitation. Export report JSON for
+action/occurrence/source/format identities and disclose that limitation. **Export report…** (JSON) gives
 complete per-action counts and the same bounded examples; it is not a complete findings export.
 Historical feature-bundle verification limitations are displayed explicitly. Legitimate
 zero-check actions score 100% explicitly.
